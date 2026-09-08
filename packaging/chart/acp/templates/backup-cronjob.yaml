@@ -1,0 +1,258 @@
+{{- if .Values.backup.enabled }}
+{{/*
+The database backup, as a CronJob — and the two numbers this chart REFUSES to choose for you.
+
+WHAT IT BACKS UP, AND WHAT IT DELIBERATELY DOES NOT. Postgres only. PRD S16 names four backup
+targets and this covers one of them, for reasons that are properties of the system rather than
+omissions:
+
+  Postgres        the only authoritative application state, and the only one this chart can reach
+                  with nothing but the connection string it already has. This job.
+  Redis           scan progress, worker leases and live events — reconstructable by design
+                  (acpctl.inventory says exactly that where the dependency is declared), so it is
+                  not a backup target on its own.
+  object storage  remediated output (ADR 0010). Lives in a provider bucket this chart does not
+                  own, holds no credentials for, and cannot enumerate. Versioning and lifecycle
+                  there belong to the infrastructure adapter, which is where the document's
+                  `data.objectStorage.retentionDays` is spent.
+  configuration   the deployment document. A file in a repository, not cluster state.
+
+Stated here rather than in a runbook, because a job called "backup" that quietly covers a quarter
+of what its operator assumes is exactly the shape of a restore that fails at 3am.
+
+TWO VALUES HAVE NO DEFAULT, AND THE RENDER FAILS WITHOUT THEM.
+
+  backup.schedule       how much work an installation may lose. That is its RPO.
+  backup.retentionDays  how far back it may recover from. A data-retention decision, and for a
+                        regulated installation a compliance one.
+
+Neither is a tuning knob and neither has a value that is right by default. A chart shipping
+`"0 2 * * *"` and `7` would be choosing an RPO and a retention policy on the operator's behalf and
+recording that choice nowhere they would ever read it — and both are decisions the contract
+already makes a document state (`data.postgres.backupRetentionDays`, which the regulated and
+production profiles enforce floors on). So this fails the render naming the key, the way every
+other missing decision in this chart does.
+
+THE DESTINATION IS A PVC, AND A PVC DOES NOT SURVIVE THE CLUSTER. That is the honest limit of what
+a chart can do while holding no cloud credentials: the dumps land on a volume in the same cluster
+as the database, which covers accidental deletion, a bad migration and a failed upgrade — and does
+not cover the region or cluster loss PRD S16 also names. Copying the volume off-cluster is the
+adapter's job. An installation whose only backup is this one has a recovery story that stops at
+the cluster boundary; `backup.storage.existingClaim` pointing at a claim that outlives the cluster
+is what changes that.
+
+A DUMP NOBODY CAN READ IS NOT A BACKUP, so the job does not stop at `pg_dump` exiting 0. It lists
+the archive it just wrote and requires a non-empty table of contents, then publishes the count and
+the size in `latest.json` beside the dumps — which is what PRD S14's "backup age" can be read from
+without granting anybody database access. `pg_dump` reporting success over a truncated file is not
+hypothetical; a full volume is the ordinary way to get one.
+*/}}
+{{- if not .Values.backup.schedule }}
+{{- fail (join "\n" (list
+  "backup.enabled is true and backup.schedule is empty."
+  ""
+  "The schedule is this installation's RECOVERY POINT OBJECTIVE — the amount of work it may lose"
+  "— and this chart does not choose one for you. Set it to a cron expression, evaluated in the"
+  "cluster's timezone rather than the operator's: \"0 2 * * *\" is a nightly backup at 02:00."
+)) }}
+{{- end }}
+{{- if not .Values.backup.retentionDays }}
+{{- fail (join "\n" (list
+  "backup.enabled is true and backup.retentionDays is not set."
+  ""
+  "How long backups are kept is a retention decision, and for a regulated installation a"
+  "compliance one — the contract already makes the document state it"
+  "(data.postgres.backupRetentionDays: at least 30 days for the regulated profile, 7 for standard"
+  "and high-availability). Set backup.retentionDays to that same number, so the job that deletes"
+  "dumps and the document that promises them cannot disagree."
+)) }}
+{{- end }}
+{{- if and (not .Values.backup.storage.existingClaim) (not .Values.backup.storage.size) }}
+{{- fail "backup.enabled is true, but neither backup.storage.existingClaim nor backup.storage.size is set: the dumps have nowhere to go." }}
+{{- end }}
+{{- if not .Values.backup.storage.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "acp.fullname" . }}-backups
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+  {{- /*
+    THE CLAIM OUTLIVES THE RELEASE, WHICH IS THE ENTIRE POINT OF IT. `helm uninstall` deletes
+    every resource in the release, and losing the backups to the uninstall that made somebody
+    want them is the worst available time. `resource-policy: keep` leaves the claim behind — a
+    deliberate, visible orphan an operator deletes with one kubectl command once they are sure,
+    rather than an irreversible side effect of a command about something else.
+  */}}
+  annotations:
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes:
+    - {{ .Values.backup.storage.accessMode }}
+  {{- with .Values.backup.storage.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.storage.size | quote }}
+---
+{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "acp.fullname" . }}-backup
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  {{- /*
+    Forbid, because two pg_dumps of one database at once is twice the load for one usable result
+    — and the second is running precisely because the first has not finished, which is the moment
+    least able to absorb it.
+
+    startingDeadlineSeconds so a controller outage or a cordoned node does not silently skip the
+    window: Kubernetes starts the job late instead, and a late backup is worth strictly more than
+    no backup. (Past roughly 100 missed windows the controller gives up scheduling altogether,
+    which this bound stays comfortably inside.)
+  */}}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ .Values.backup.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit }}
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "acp.labels" . | nindent 8 }}
+        app.kubernetes.io/component: backup
+    spec:
+      backoffLimit: {{ .Values.backup.backoffLimit }}
+      template:
+        metadata:
+          labels:
+            {{- include "acp.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+          {{- with .Values.podAnnotations }}
+          annotations:
+            {{- include "acp.stringMap" . | nindent 12 }}
+          {{- end }}
+        spec:
+          restartPolicy: Never
+          {{- /*
+            No ServiceAccount and no token: this pod talks to Postgres and to a volume, and to
+            nothing else. Same reasoning as the migration hook, without the hook-ordering problem
+            that forced it.
+          */}}
+          automountServiceAccountToken: false
+          {{- with .Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- include "acp.stringMap" . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: backup
+              image: {{ include "acp.backupImage" . | quote }}
+              imagePullPolicy: {{ .Values.backup.image.pullPolicy }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              command: ["/bin/sh", "-eu", "-c"]
+              args:
+                - |
+                  # NO `set -x` ANYWHERE IN HERE. The connection string is a credential, and a
+                  # trace would print it into the pod log — which is what a support bundle
+                  # collects and what an operator pastes into a ticket.
+                  umask 077
+                  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+                  partial="$BACKUP_DIR/.partial-$ts.dump"
+                  final="$BACKUP_DIR/acp-$ts.dump"
+
+                  # --format=custom is the one pg_restore can both verify and restore
+                  # selectively. --no-owner/--no-privileges because the role names that matter
+                  # are the restore target's, supplied by the adapter, not this dump's.
+                  pg_dump --format=custom --no-owner --no-privileges \
+                          --file="$partial" "$DATABASE_URL"
+
+                  # THE CHECK THAT MAKES THIS A BACKUP RATHER THAN A FILE. A truncated archive —
+                  # the ordinary result of a full volume — is unreadable here and perfectly fine
+                  # by pg_dump's exit status.
+                  objects="$(pg_restore --list "$partial" | grep -c '^[0-9]' || true)"
+                  if [ "$objects" -lt 1 ]; then
+                    echo "FAILED: the archive lists no restorable objects; not publishing it" >&2
+                    rm -f "$partial"
+                    exit 1
+                  fi
+
+                  mv "$partial" "$final"
+                  bytes="$(wc -c < "$final" | tr -d ' ')"
+                  echo "wrote $final ($bytes bytes, $objects objects)"
+
+                  # Retention. `-mtime +N` is strictly older than N days, so a retention of 1
+                  # keeps yesterday's. Partials from a killed run are swept after a day.
+                  find "$BACKUP_DIR" -maxdepth 1 -name 'acp-*.dump' \
+                       -mtime "+$RETENTION_DAYS" -print -delete
+                  find "$BACKUP_DIR" -maxdepth 1 -name '.partial-*.dump' -mtime +1 -delete
+
+                  kept="$(find "$BACKUP_DIR" -maxdepth 1 -name 'acp-*.dump' | wc -l | tr -d ' ')"
+
+                  # What PRD S14's "backup age" is read from. Carries no connection detail, no
+                  # hostname and no row content, deliberately: it sits on a volume other jobs
+                  # mount and that a support bundle collects.
+                  cat > "$BACKUP_DIR/latest.json" <<JSON
+                  {"completedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","file":"acp-$ts.dump","bytes":$bytes,"objects":$objects,"retentionDays":$RETENTION_DAYS,"kept":$kept}
+                  JSON
+                  # Read it back. The manifest is written by a heredoc inside a YAML block
+                  # scalar, which is two layers of indentation away from being garbled by an
+                  # edit — and a manifest nothing parses is how "backup age" comes to be read
+                  # off a file that has said the same thing for a month.
+                  grep -q "\"file\":\"acp-$ts.dump\"" "$BACKUP_DIR/latest.json" || {
+                    echo "FAILED: latest.json did not come back with the file it just wrote" >&2
+                    cat "$BACKUP_DIR/latest.json" >&2
+                    exit 1
+                  }
+                  echo "retention ${RETENTION_DAYS}d, $kept backup(s) on the volume"
+              env:
+                {{- /*
+                  ONE CREDENTIAL, NOT `acp.commonEnv`. Every other workload in this chart takes
+                  the shared block, and that block projects EVERY entry of secrets.refs: the AI
+                  provider keys, both Langfuse keys, the telemetry salt. This pod dumps one
+                  database onto a volume that another job mounts and a support bundle collects.
+                  Handing it the installation's entire credential set to do that is reach it has
+                  no use for, and the blast radius of a backup image is not something this chart
+                  should be enlarging.
+                */}}
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "acp.secretName" . }}
+                      key: database-url
+                - name: BACKUP_DIR
+                  value: {{ .Values.backup.mountPath | quote }}
+                - name: RETENTION_DAYS
+                  value: {{ .Values.backup.retentionDays | quote }}
+                - name: PGCONNECT_TIMEOUT
+                  value: "30"
+                {{- /* UID 10001 has no passwd entry in this image either; see acp.commonEnv. */}}
+                - name: HOME
+                  value: {{ .Values.scratch.mountPath | quote }}
+              volumeMounts:
+                - name: backups
+                  mountPath: {{ .Values.backup.mountPath }}
+                {{- include "acp.scratchMount" . | nindent 16 }}
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ include "acp.backupClaimName" . }}
+            {{- include "acp.scratchVolume" . | nindent 12 }}
+{{- end }}

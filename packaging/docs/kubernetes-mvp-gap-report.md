@@ -522,9 +522,16 @@ vacuously, renders correctly and spreads nothing.
 `test_every_spread_constraint_selects_the_pods_it_is_attached_to` asserts each selector is a
 subset of the labels its own pod template carries.
 
-**What is missing.** No PersistentVolumeClaim and no volumes at all —
-worker scratch is the node's ephemeral storage, bounded only by the limit above. No
-backup or restore Job, which PRD S5.2 lists as part of the Kubernetes package. Langfuse is deployed
+**What is missing.** Worker scratch is an `emptyDir` bounded by the tier's `ephemeral-storage`
+limit and nothing else; the application itself claims no persistent volume, which is correct while
+every authoritative artifact belongs in object storage. The backup and restore Jobs PRD S5.2 names
+now exist — `templates/backup-cronjob.yaml` and `templates/restore-job.yaml`, both off by default,
+both exercised end to end on the reference cluster (write a row, back up, delete it, restore, prove
+it is back). What they do **not** cover is recorded beside them rather than left to be assumed:
+Postgres only, onto a claim in the same cluster, so region or cluster loss is still the
+infrastructure adapter's problem and an installation whose only backup is this one has a recovery
+story that stops at the cluster boundary. They are also not yet declarable in a deployment
+document — see the next step. Langfuse is deployed
 ungated by Compose and rendered by nothing in the chart — asserted, deliberately, by
 `test_packaging_chart.py::test_compose_deploys_what_the_chart_omits`.
 
@@ -557,10 +564,21 @@ document has ever been scanned or remediated on this cluster — that is workstr
 `ACP_BLOB_ACCOUNT` defect (an installation that produced remediated documents and dropped them)
 is the reminder of what that gap can hide.
 
-**Next step.** Not another cluster capability. The remaining workstream B items are each blocked
-on a decision rather than on work: `readOnlyRootFilesystem` on moving the rubric write out of the
-container, a backup/restore Job on RTO/RPO and retention, and a supported-distribution claim on
-PRD §4.
+**Next step.** Not another cluster capability. Two of the three workstream B items that were
+blocked on a decision have been unblocked by doing the work the decision was not actually needed
+for: `readOnlyRootFilesystem` needed the rubric write moved out of the container, and the
+backup/restore Jobs needed the chart to stop trying to choose an RPO — `backup.schedule` and
+`backup.retentionDays` have no defaults and the render fails naming them, so the operator makes
+the decision the chart cannot.
+
+**What is still an owner decision, and it is one question, not three.** Should a deployment
+document carry the in-cluster backup at all? Every production example sets
+`data.postgres.mode: managed`, where the provider's own point-in-time recovery already covers this
+ground and `data.postgres.backupRetentionDays` describes IT — so adding a schema field would put a
+second, weaker copy beside the first and give an operator two retention numbers that can disagree.
+Until that is answered the Jobs stay chart-values-only: `acpctl values` does not emit them, so a
+values file regenerated from a document loses the block. That is stated in `values.yaml` where
+somebody would hit it. The remaining item is unchanged: a supported-distribution claim, PRD §4.
 
 ---
 
@@ -716,6 +734,6 @@ evidence about a released artifact.
 | Workstream | State | Evidence | Blocker | Next action |
 |---|---|---|---|---|
 | **A. Release artifacts and supply chain** | in progress | The `ACPRelease` contract, `acpctl release verify`, and `--release` on `values`/`plan` (`tests/test_packaging_release.py`), which reconcile the plan's eight names, the chart's four references and the one application artifact — and render every image by digest | Nothing builds, signs, SBOMs or scans an artifact, so no real manifest exists and CI has no release to fail on | Build the release images in CI and emit a signed manifest from that build |
-| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; zone spreading is soft on every profile and unprovable on a one-node cluster, `readOnlyRootFilesystem` is ON for every ACP workload, with Ollama and Grafana exempt and recorded, no backup/restore Job | A backup/restore Job, which needs RTO/RPO and retention decided first |
+| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`); a backup CronJob and a restore Job, both off by default, both run end to end on the disposable cluster — including the refusal that stops a restore under a live application | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; zone spreading is soft on every profile and unprovable on a one-node cluster, `readOnlyRootFilesystem` is ON for every ACP workload, with Ollama and Grafana exempt and recorded; the backup covers Postgres onto an in-cluster claim, so cluster loss stays the adapter's problem, and it is not declarable in a deployment document | Whether a deployment document should carry an in-cluster backup at all, given every production example is `postgres.mode: managed` with provider PITR; then a supported-distribution claim (PRD S4) |
 | **C. Portable acceptance suite** | not started | None — no `packaging/tests/`; the preflight hook DOES gate the install (Helm has no hook failure policy and the container exits 1), which is not what this row used to say | Eight of ten scenarios need `acpctl install`, which exits 2; the first two need only a cluster and images | Define the structured report format and emit it from the two readiness scenarios |
 | **D. `acpctl` lifecycle** | in progress | Eight read-only commands with documented exit codes; write-refusal and kubectl-verb allow-list both tested; the seven lifecycle commands refuse rather than no-op (`cli.py:27-35`) | `install` has nothing to pin to: the release contract exists but no build produces a manifest, so there are no real digests and no signature to verify | Hold `install` until a build emits a manifest; `support-bundle` is the one command with no upstream dependency |

@@ -484,9 +484,20 @@ jobs:
           done
           python -m acpctl values packaging/examples/standard-production.acp-deployment.yaml \
             > /tmp/full-values.yaml
+          # BACKUP AND RESTORE ARE OFF BY DEFAULT AND ARE NOT IN A DEPLOYMENT DOCUMENT, so the
+          # values above render neither. Without these flags the CronJob, its PVC and the restore
+          # Job would be the only objects in the chart never submitted to an API server — which is
+          # the exact gap this step was added to close for ollama and grafana.
           helm template acp packaging/chart/acp \
             -f /tmp/full-values.yaml \
             -f packaging/reference/kind/runner-resources.yaml \
+            --set backup.enabled=true \
+            --set backup.schedule='0 2 * * *' \
+            --set backup.retentionDays=35 \
+            --set restore.enabled=true \
+            --set restore.file=acp-20260908T020000Z.dump \
+            --set restore.runId=dryrun \
+            --set restore.confirm=acp \
             --set image.pullPolicy=Never > /tmp/full.yaml
           python - <<'PY'
           import sys, yaml
@@ -495,9 +506,13 @@ jobs:
           # Named rather than counted, because a render that stopped producing them would leave
           # this step passing over a smaller set and reporting nothing about it.
           NEEDED_CRDS = {"ExternalSecret", "ScaledObject", "TriggerAuthentication"}
+          # The same reasoning for the objects that exist only behind a flag: they are rendered
+          # by the --set block above, and a chart that stopped producing them would leave this
+          # step green while covering less than it says.
+          NEEDED_OPTIONAL = {"CronJob", "PersistentVolumeClaim"}
           docs = [d for d in yaml.safe_load_all(open("/tmp/full.yaml")) if d]
           kinds = {d["kind"] for d in docs}
-          missing = sorted(NEEDED_CRDS - kinds)
+          missing = sorted((NEEDED_CRDS | NEEDED_OPTIONAL) - kinds)
           if missing:
               print(f"the render no longer produces {missing}, so this step covers less than it "
                     f"claims. Either the chart changed or the example did; do not simply drop "
@@ -569,6 +584,129 @@ jobs:
           kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/component=api \
             -o jsonpath='{.items[*].metadata.annotations.upgrade-probe}' \
             | grep -q "$GITHUB_RUN_ID"
+
+      - name: Is the backup restorable, or only written?
+        # PRD S16: "A backup is not considered healthy until a restore test has succeeded within
+        # the customer-defined interval." A CronJob that writes dumps nobody ever reads is exactly
+        # the thing an installation believes in until the incident, so the restore is the half
+        # that gets tested here — against the schema the migration hook really applied, on a
+        # cluster that is deleted at the end of the run.
+        #
+        # WHAT THIS ESTABLISHES, IN ORDER, and none of it is visible to `helm template`:
+        #
+        #   * the CronJob's pod is ADMITTED under the restricted Pod Security Standard and can
+        #     reach Postgres with the one credential it is given;
+        #   * `pg_dump` produces an archive `pg_restore` can list — the chart's own check, run
+        #     against a real database rather than asserted;
+        #   * the restore REFUSES while the application is up. That guard runs before anything is
+        #     dropped, so exercising it costs nothing and leaving it unexercised would make it a
+        #     comment;
+        #   * with the tiers scaled to zero, the restore puts back a row that was deleted after
+        #     the backup was taken. That is the only statement here that a dump nobody can read
+        #     would fail to make.
+        #
+        # THE REFUSAL IS RUN FIRST, DELIBERATELY. A restore that succeeds tells you nothing about
+        # whether the guard works, and the guard is what stands between an operator and a
+        # `--clean` under three live worker tiers.
+        run: |
+          set -euo pipefail
+          # Turn the backup on. Everything the upgrade step passes, plus the two decisions the
+          # chart refuses to make: a schedule (that will not fire inside this run — the job below
+          # is created from the CronJob by hand) and a retention.
+          helm upgrade acp packaging/chart/acp \
+            --namespace "$NAMESPACE" \
+            -f /tmp/values.yaml \
+            -f packaging/reference/kind/runner-resources.yaml \
+            --set image.repository="${IMAGE%%:*}" \
+            --set image.workerRepository="${IMAGE%%:*}" \
+            --set image.tag="${IMAGE##*:}" \
+            --set image.pullPolicy=Never \
+            --set secrets.existingSecret=acp-secrets \
+            --set podAnnotations.upgrade-probe="$GITHUB_RUN_ID" \
+            --set backup.enabled=true \
+            --set backup.schedule='0 2 * * *' \
+            --set backup.retentionDays=7 \
+            --set backup.storage.size=1Gi \
+            --wait --timeout 10m
+
+          # The row the backup must carry and the restore must bring back. A table of its own
+          # rather than an application row, because what is being tested is that the dump/restore
+          # pair round-trips the database's contents — not that the API can write.
+          kubectl -n "$NAMESPACE" exec deployment/acp-postgres -- psql -U acp -d acpdb -c \
+            "create table acp_restore_drill(note text); insert into acp_restore_drill values ('$GITHUB_RUN_ID');"
+
+          kubectl -n "$NAMESPACE" create job acp-backup-drill --from=cronjob/acp-backup
+          kubectl -n "$NAMESPACE" wait --for=condition=complete job/acp-backup-drill --timeout=300s
+          kubectl -n "$NAMESPACE" logs job/acp-backup-drill | tee /tmp/backup.log
+          grep -q "retention 7d" /tmp/backup.log
+          DUMP="$(sed -n 's#^wrote /backups/\(acp-[^ ]*\.dump\) .*#\1#p' /tmp/backup.log)"
+          test -n "$DUMP" || { echo "the backup job named no dump file"; exit 1; }
+          echo "the dump to restore is $DUMP"
+
+          # THE GUARD, EXERCISED. The application is still running, so this restore must fail —
+          # and must fail for the stated reason rather than for any other.
+          helm template acp packaging/chart/acp \
+            -f /tmp/values.yaml \
+            -f packaging/reference/kind/runner-resources.yaml \
+            --set secrets.existingSecret=acp-secrets \
+            --set restore.enabled=true \
+            --set restore.file="$DUMP" \
+            --set restore.runId=refusal \
+            --set restore.confirm=acp \
+            -s templates/restore-job.yaml | kubectl -n "$NAMESPACE" apply -f -
+          kubectl -n "$NAMESPACE" wait --for=condition=failed job/acp-restore-refusal --timeout=300s
+          kubectl -n "$NAMESPACE" logs job/acp-restore-refusal | tee /tmp/refusal.log
+          grep -q "REFUSING:" /tmp/refusal.log
+          # And it refused BEFORE dropping anything: the row is still there.
+          kubectl -n "$NAMESPACE" exec deployment/acp-postgres -- psql -U acp -d acpdb -tAc \
+            "select note from acp_restore_drill" | grep -q "$GITHUB_RUN_ID"
+
+          # Now the runbook's own first step. Replica counts are read off the cluster rather than
+          # hardcoded, because they come from the deployment document and this step must not
+          # quietly rewrite the topology the rest of the job installed.
+          kubectl -n "$NAMESPACE" get deploy -l app.kubernetes.io/part-of=acp \
+            -o jsonpath='{range .items[*]}{.metadata.name} {.spec.replicas}{"\n"}{end}' > /tmp/replicas.txt
+          cat /tmp/replicas.txt
+          kubectl -n "$NAMESPACE" scale deployment -l app.kubernetes.io/part-of=acp --replicas=0
+          # Wait on the database's own view of it, which is the precondition the job checks —
+          # not on pods, which can be Terminating with their connection still open.
+          for _ in $(seq 60); do
+            OPEN="$(kubectl -n "$NAMESPACE" exec deployment/acp-postgres -- psql -U acp -d acpdb -tAc \
+              "select count(*) from pg_stat_activity where datname = 'acpdb' and pid <> pg_backend_pid()" | tr -d '[:space:]')"
+            [ "$OPEN" = "0" ] && break
+            sleep 5
+          done
+          test "$OPEN" = "0" || { echo "still $OPEN session(s) on the database"; exit 1; }
+
+          # Destroy what the backup holds, then get it back.
+          kubectl -n "$NAMESPACE" exec deployment/acp-postgres -- psql -U acp -d acpdb -c \
+            "drop table acp_restore_drill;"
+          helm template acp packaging/chart/acp \
+            -f /tmp/values.yaml \
+            -f packaging/reference/kind/runner-resources.yaml \
+            --set secrets.existingSecret=acp-secrets \
+            --set restore.enabled=true \
+            --set restore.file="$DUMP" \
+            --set restore.runId=drill \
+            --set restore.confirm=acp \
+            -s templates/restore-job.yaml | kubectl -n "$NAMESPACE" apply -f -
+          kubectl -n "$NAMESPACE" wait --for=condition=complete job/acp-restore-drill --timeout=600s
+          kubectl -n "$NAMESPACE" logs job/acp-restore-drill
+          BACK="$(kubectl -n "$NAMESPACE" exec deployment/acp-postgres -- psql -U acp -d acpdb -tAc \
+            "select note from acp_restore_drill" | tr -d '[:space:]')"
+          test "$BACK" = "$GITHUB_RUN_ID" \
+            || { echo "the restore did not bring the row back (got '$BACK')"; exit 1; }
+          echo "restored: acp_restore_drill.note = $BACK"
+
+          # Put the installation back the way the document describes it, so a green run does not
+          # leave a topology nothing declared.
+          while read -r deploy replicas; do
+            kubectl -n "$NAMESPACE" scale "deployment/$deploy" --replicas="$replicas"
+          done < /tmp/replicas.txt
+          kubectl -n "$NAMESPACE" rollout status deployment/acp-api --timeout=300s
+          for role in discover assess remediate; do
+            kubectl -n "$NAMESPACE" rollout status "deployment/acp-worker-$role" --timeout=300s
+          done
 
       # ── evidence, and then nothing survives ────────────────────────────────
       - name: What the cluster looked like

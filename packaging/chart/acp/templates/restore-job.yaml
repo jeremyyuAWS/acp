@@ -1,0 +1,196 @@
+{{- if .Values.restore.enabled }}
+{{/*
+The restore, as a Job an operator runs deliberately — the half PRD S16 actually grades.
+
+"A backup is not considered healthy until a restore test has succeeded within the customer-defined
+interval" (PRD S16). A backup job on its own satisfies nobody's audit and, worse, is the thing
+people believe in: the dumps accumulate, nothing reads them, and the first read is during the
+incident. So this exists to be RUN, not merely to exist, and the reference cluster's workflow runs
+it end to end on every push — write a row, back up, delete the row, restore, prove the row is back.
+
+NOT A HELM HOOK, AND NOT PART OF THE ORDINARY RELEASE. Restoring a database is an operator action
+taken during an incident, not a step in a deploy. A hook would tie it to `helm upgrade`, which is
+the one command whose whole job is to bring the application back UP while this needs it down.
+The supported way to run it renders exactly this object and nothing else:
+
+    kubectl scale deploy -l app.kubernetes.io/instance=<release> --replicas=0
+    helm template <release> packaging/chart/acp -f values.yaml \
+      --set restore.enabled=true \
+      --set restore.file=acp-20260908T020000Z.dump \
+      --set restore.runId=incident-4711 \
+      --set restore.confirm=<release fullname> \
+      -s templates/restore-job.yaml | kubectl apply -f -
+    kubectl wait --for=condition=complete job/<release>-restore-incident-4711 --timeout=30m
+    kubectl scale deploy -l app.kubernetes.io/instance=<release> --replicas=<n>
+
+THREE VALUES WITH NO DEFAULTS, EACH REFUSING A DIFFERENT ACCIDENT.
+
+  restore.file     which dump. There is no "latest", deliberately: the newest backup is not the
+                   one you want after a bad migration that ran two hours ago, and a job that
+                   picks for you picks wrong exactly when it matters.
+  restore.runId    part of the Job's name. A completed Job is immutable, so a values file left
+                   with `restore.enabled: true` re-applies an IDENTICAL object on the next
+                   `helm upgrade` — a no-op patch, not a second restore. A new restore needs a new
+                   id, which is a deliberate act rather than a leftover.
+  restore.confirm  must equal this release's full name. Not a yes/no token: the accident worth
+                   refusing is a production restore run with a staging values file, and a token
+                   that reads the same in both environments refuses nothing.
+
+TWO RUNTIME GUARDS, BOTH ABLE TO FAIL.
+
+  A LIVE APPLICATION ABORTS THE RESTORE. `--clean` drops every object the dump recreates; doing
+  that under running API replicas and three worker tiers means dropping tables mid-transaction and
+  restoring over concurrent writes. The job counts the other sessions on the database and refuses
+  while any exist, naming the count — which turns the scale-down step above from a line in a
+  runbook somebody skipped into a precondition.
+
+  THE ARCHIVE IS READ BEFORE ANYTHING IS DROPPED. A truncated or wrong-format file is discovered
+  while the database is still intact, not after `--clean` has emptied it.
+
+AND `--single-transaction`, so a restore that fails part-way leaves the database exactly as it
+was. The alternative — a half-restored schema and an operator who now has neither the old state
+nor the new one — is the failure that turns a bad hour into a bad week.
+*/}}
+{{- if not .Values.restore.file }}
+{{- fail (join "\n" (list
+  "restore.enabled is true and restore.file is empty."
+  ""
+  "Name the dump to restore, as it appears on the backup volume (acp-<timestamp>.dump). There is"
+  "deliberately no \"latest\": after a bad migration the newest backup is the one you do not want."
+)) }}
+{{- end }}
+{{- if not .Values.restore.runId }}
+{{- fail (join "\n" (list
+  "restore.enabled is true and restore.runId is empty."
+  ""
+  "The run id names the Job, so each restore is a distinct object with its own logs. It also"
+  "makes a values file left with restore.enabled=true harmless: the next helm upgrade re-applies"
+  "an identical, already-completed Job instead of running a second restore."
+)) }}
+{{- end }}
+{{- if ne .Values.restore.confirm (include "acp.fullname" .) }}
+{{- fail (printf (join "\n" (list
+  "restore.confirm must be %q, and it is %q."
+  ""
+  "A restore DROPS AND RECREATES every object in the target database. The confirmation is this"
+  "release's own full name rather than a yes/no token because the accident worth refusing is a"
+  "production restore run with a staging values file — and a token that reads the same in both"
+  "environments refuses nothing."
+)) (include "acp.fullname" .) .Values.restore.confirm) }}
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-restore-%s" (include "acp.fullname" .) .Values.restore.runId | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: restore
+spec:
+  {{- /*
+    NO RETRY. A restore that failed did so for a reason an operator has to read — a wrong file, a
+    live connection, a disk — and re-running it unattended against a database the first attempt
+    may have started rewriting is the opposite of what anybody wants at that moment. The
+    --single-transaction below means the first attempt left nothing behind; a retry would only
+    hide why.
+  */}}
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "acp.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: restore
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- include "acp.stringMap" . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: restore
+          image: {{ include "acp.backupImage" . | quote }}
+          imagePullPolicy: {{ .Values.backup.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          command: ["/bin/sh", "-eu", "-c"]
+          args:
+            - |
+              # NO `set -x`: DATABASE_URL is a credential and this log is collected.
+              umask 077
+              file="$BACKUP_DIR/$RESTORE_FILE"
+
+              if [ ! -f "$file" ]; then
+                echo "no such backup on the volume: $RESTORE_FILE" >&2
+                echo "what is there:" >&2
+                find "$BACKUP_DIR" -maxdepth 1 -name 'acp-*.dump' | sed 's#.*/##' | sort >&2
+                exit 1
+              fi
+
+              # READ THE ARCHIVE BEFORE DROPPING ANYTHING. A wrong or truncated file is found
+              # here, while the database is still intact.
+              objects="$(pg_restore --list "$file" | grep -c '^[0-9]' || true)"
+              if [ "$objects" -lt 1 ]; then
+                echo "FAILED: $RESTORE_FILE lists no restorable objects" >&2
+                exit 1
+              fi
+              echo "$RESTORE_FILE lists $objects restorable objects"
+
+              # REFUSE UNDER A LIVE APPLICATION. --clean drops what it is about to recreate.
+              others="$(psql "$DATABASE_URL" -tAc "select count(*) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid()")"
+              if [ "$others" -ne 0 ]; then
+                echo "REFUSING: $others other session(s) are connected to this database." >&2
+                echo "Scale the application to zero first:" >&2
+                echo "  kubectl scale deploy -l app.kubernetes.io/instance=$RELEASE --replicas=0" >&2
+                exit 1
+              fi
+
+              # --single-transaction so a failure leaves the database as it was, rather than
+              # half-dropped. It implies --exit-on-error.
+              pg_restore --clean --if-exists --no-owner --no-privileges \
+                         --single-transaction --dbname "$DATABASE_URL" "$file"
+
+              # An exit status is not a result. Say what is actually in there now.
+              tables="$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema = 'public'")"
+              echo "restored $RESTORE_FILE: $tables table(s) in the public schema"
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "acp.secretName" . }}
+                  key: database-url
+            - name: BACKUP_DIR
+              value: {{ .Values.backup.mountPath | quote }}
+            - name: RESTORE_FILE
+              value: {{ .Values.restore.file | quote }}
+            - name: RELEASE
+              value: {{ .Release.Name | quote }}
+            - name: PGCONNECT_TIMEOUT
+              value: "30"
+            - name: HOME
+              value: {{ .Values.scratch.mountPath | quote }}
+          volumeMounts:
+            - name: backups
+              mountPath: {{ .Values.backup.mountPath }}
+              {{- /* Nothing here writes to the backup volume, and a restore that could delete a
+                     dump is a restore that can destroy the thing it failed to apply. */}}
+              readOnly: true
+            {{- include "acp.scratchMount" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.backup.resources | nindent 12 }}
+      volumes:
+        - name: backups
+          persistentVolumeClaim:
+            claimName: {{ include "acp.backupClaimName" . }}
+            readOnly: true
+        {{- include "acp.scratchVolume" . | nindent 8 }}
+{{- end }}

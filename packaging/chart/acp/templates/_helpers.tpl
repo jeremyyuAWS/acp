@@ -422,3 +422,45 @@ so a single large document would OOM-kill the worker instead of filling a disk i
 - name: scratch
   mountPath: {{ .Values.scratch.mountPath }}
 {{- end -}}
+
+
+{{/*
+The image the backup and restore Jobs run, and why it is not the application image.
+
+`pg_dump`, `pg_restore` and `psql` are not in the ACP image, and should not be: deploy/public/
+Dockerfile.base-api installs curl, ca-certificates, libicu and tesseract, and adding a Postgres
+client to it would grow every API and worker container in the estate so that one CronJob can run
+eight times a month.
+
+THE MAJOR VERSION IS THE OPERATOR'S TO SET, AND GETTING IT WRONG FAILS LOUDLY. `pg_dump` refuses
+to dump a server NEWER than itself ("aborting because of server version mismatch"), so this tag
+must be at least the major version of the server the deployment document points at. That refusal
+is the whole reason this is a value rather than a constant — and it is a good failure: the job
+stops before writing anything, rather than producing an archive whose unrestorability is
+discovered later, by somebody restoring it.
+*/}}
+{{- define "acp.backupImage" -}}
+{{- $img := .Values.backup.image -}}
+{{- $base := $img.repository -}}
+{{- if $img.registry -}}
+{{- $base = printf "%s/%s" $img.registry $img.repository -}}
+{{- end -}}
+{{- if $img.digest -}}
+{{- printf "%s@%s" $base $img.digest -}}
+{{- else -}}
+{{- printf "%s:%s" $base $img.tag -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The claim the dumps live on. ONE definition, because the CronJob that writes and the Job that
+reads must not be able to disagree about where the backups are: a restore pointed at the wrong
+volume reports "no such backup", which is indistinguishable from a backup that never ran.
+*/}}
+{{- define "acp.backupClaimName" -}}
+{{- if .Values.backup.storage.existingClaim -}}
+{{- .Values.backup.storage.existingClaim -}}
+{{- else -}}
+{{- printf "%s-backups" (include "acp.fullname" .) -}}
+{{- end -}}
+{{- end -}}
