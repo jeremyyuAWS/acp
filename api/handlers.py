@@ -4840,13 +4840,15 @@ def _apply_one_value_kind(
         *, scan_id: str, filename: str, working: bytes,
         values: dict[str, str], scs_to_clear: set[str],
         write_fn, diff_rule_id: str, credit_rule_ids: tuple[str, ...],
-        noun: str, job: dict, extra_work: bool = False,
+        noun: str, job: dict, pending_credits: list, extra_work: bool = False,
         residual_state: dict | None = None) -> tuple[bytes, bool]:
     """Shared write → verify → credit sequence for one kind of approved value (alt text or
     link text) applied on top of `working`. Returns (new_working, uploaded_this_kind).
 
     The values are NOT credited on a successful write. They are credited when a re-scan of the
-    written bytes shows the criterion no longer failing, exactly as `verified_diffs` credits an
+    written bytes shows the criterion no longer failing AND the caller durably uploads them.
+    Successful lanes append a callback to pending_credits; the caller commits those callbacks
+    with the artifact fingerprint after storage succeeds, exactly as `verified_diffs` credits an
     automatic fix. A write that does not clear the criterion leaves the row unapplied and the
     file uncertified, which is the honest outcome: something about the document still fails.
 
@@ -4981,48 +4983,48 @@ def _apply_one_value_kind(
                        regressions=regressions)
         return working, False
 
-    try:
+    if residual_state is not None:
+        # These bytes are the next lane's `working`; its regressions are measured from here.
+        residual_state["verification"] = verification
+
+    def commit_credit():
         existing = core.store.get_remediation_diffs(scan_id, filename) or []
         core.store.record_remediation_diffs(scan_id, filename, list(existing) + [
             {"rule_id": diff_rule_id, "before": a["before"], "after": a["after"],
              "note": f"approved by a reviewer · {a['locator']}"} for a in applied])
-    except Exception:
-        swallowed("_apply_one_value_kind: recording the reviewer-approved remediation diffs failed", scan_id)
 
-    for rule_id in credit_rule_ids:
-        for item_id in core.store.approved_unapplied_item_ids(scan_id, filename, rule_id):
+        for item_id in review_item_ids:
             core.store.mark_row_applied(item_id)
-    if regressions:
-        # ONLY here, on the credited path. The two branches above return `working` — the bytes as
-        # they were BEFORE this lane — so a regression observed in a write they discarded is
-        # evidence about the draft (recorded on its outcome row above) and NOT a fact about the
-        # document. Logging or queueing it there would block a file over damage it never took.
+        if regressions:
+            # ONLY here, on the credited path. The two branches above return `working` — the bytes as
+            # they were BEFORE this lane — so a regression observed in a write they discarded is
+            # evidence about the draft (recorded on its outcome row above) and NOT a fact about the
+            # document. Logging or queueing it there would block a file over damage it never took.
+            core.store.log_decision(
+                "system", "apply.regression", scan_id=scan_id, file=filename,
+                detail=f"writing {len(applied)} {noun} value(s) made {regressions} fail on re-scan; "
+                       f"none of them failed before the write")
+            # The reviewer's way out. Certification is blocked by store.unresolved_regression until
+            # one of these is approved; queueing is best-effort because a failed write here must not
+            # lose the corrected copy, and the gate fails CLOSED on a missing row rather than open.
+            try:
+                core.store.queue_regression_review(scan_id, filename, regressions)
+            except Exception:
+                swallowed("_apply_one_value_kind: queueing the regression review failed", scan_id)
+            _model_outcome("verified_regressed",
+                           f"cleared on re-scan: {sorted(scs_to_clear)}; newly failing: {regressions}"
+                           + unresolved_note,
+                           regressions=regressions)
+        else:
+            _model_outcome("verified_cleared",
+                           f"cleared on re-scan: {sorted(scs_to_clear)}" + unresolved_note,
+                           regressions=regressions)
         core.store.log_decision(
-            "system", "apply.regression", scan_id=scan_id, file=filename,
-            detail=f"writing {len(applied)} {noun} value(s) made {regressions} fail on re-scan; "
-                   f"none of them failed before the write")
-        # The reviewer's way out. Certification is blocked by store.unresolved_regression until
-        # one of these is approved; queueing is best-effort because a failed write here must not
-        # lose the corrected copy, and the gate fails CLOSED on a missing row rather than open.
-        try:
-            core.store.queue_regression_review(scan_id, filename, regressions)
-        except Exception:
-            swallowed("_apply_one_value_kind: queueing the regression review failed", scan_id)
-        _model_outcome("verified_regressed",
-                       f"cleared on re-scan: {sorted(scs_to_clear)}; newly failing: {regressions}"
-                       + unresolved_note,
-                       regressions=regressions)
-    else:
-        _model_outcome("verified_cleared",
-                       f"cleared on re-scan: {sorted(scs_to_clear)}" + unresolved_note,
-                       regressions=regressions)
-    if residual_state is not None:
-        # These bytes are the next lane's `working`; its regressions are measured from here.
-        residual_state["verification"] = verification
-    core.store.log_decision(
-        "system", "apply.applied", scan_id=scan_id, file=filename,
-        detail=f"wrote {len(applied)} reviewer-approved {noun} value(s); "
-               f"{sorted(scs_to_clear)} cleared on re-scan")
+            "system", "apply.applied", scan_id=scan_id, file=filename,
+            detail=f"wrote {len(applied)} reviewer-approved {noun} value(s); "
+                   f"{sorted(scs_to_clear)} cleared on re-scan")
+
+    pending_credits.append(commit_credit)
     return fixed, True
 
 
@@ -5096,6 +5098,7 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     # re-scan that cannot run is Verification(ok=False)), so this cannot block the write.
     _phase(job, "re-scanning the copy before writing (regression baseline)")
     residual_state = {"verification": _verify_residual(working, filename)}
+    pending_credits = []
 
     # ADR 0055: a described-not-replaced row carries the 1.4.5 card's own 'image N' locator — a
     # media index, which apply_alt cannot read at all (parse_locator requires a '#'). Translate
@@ -5151,7 +5154,7 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         # doing everything else right.
         diff_rule_id="1.1.1", noun="description", job=job,
         credit_rule_ids=("1.1.1", f"1.1.1{core.store.DESCRIBED_RULE_SUFFIX}"),
-        residual_state=residual_state)
+        residual_state=residual_state, pending_credits=pending_credits)
 
     # 4.1.2 form-field accessible names. PDF keys on `pdf:field:…` and writes /TU; Word keys
     # on `docx:sdt:…` and writes w:alias. One lane, one criterion, the writer chosen by format.
@@ -5169,7 +5172,7 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             scan_id=scan_id, filename=filename, working=working,
             values=field_values, scs_to_clear={"4.1.2"}, write_fn=field_write_fn,
             diff_rule_id="4.1.2", credit_rule_ids=("4.1.2",), noun="field name", job=job,
-            residual_state=residual_state)
+            residual_state=residual_state, pending_credits=pending_credits)
 
     link_uploaded = False
     if link_values:
@@ -5182,7 +5185,7 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             scan_id=scan_id, filename=filename, working=working,
             values=link_values, scs_to_clear=set(link_scs), write_fn=link_write_fn,
             diff_rule_id="2.4.4", credit_rule_ids=link_scs, noun="link text", job=job,
-            residual_state=residual_state)
+            residual_state=residual_state, pending_credits=pending_credits)
 
     # 1.3.3 sensory rewrites and 3.1.2 language marks (Word). Two lanes, not one, even though a
     # single module writes both: each lane may only credit the criterion its OWN re-scan saw
@@ -5195,7 +5198,7 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             scan_id=scan_id, filename=filename, working=working,
             values=sensory_values, scs_to_clear={"1.3.3"}, write_fn=sensory_write_fn,
             diff_rule_id="1.3.3", credit_rule_ids=("1.3.3",), noun="rewrite", job=job,
-            residual_state=residual_state)
+            residual_state=residual_state, pending_credits=pending_credits)
 
     language_uploaded = False
     if language_values:
@@ -5205,7 +5208,7 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             scan_id=scan_id, filename=filename, working=working,
             values=language_values, scs_to_clear={"3.1.2"}, write_fn=language_write_fn,
             diff_rule_id="3.1.2", credit_rule_ids=("3.1.2",), noun="language mark", job=job,
-            residual_state=residual_state)
+            residual_state=residual_state, pending_credits=pending_credits)
 
     structure_label_uploaded = False
     if structure_label_values:
@@ -5221,7 +5224,7 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             write_fn=_struct_write_fn,
             diff_rule_id="2.4.6", credit_rule_ids=("2.4.6",),
             noun="structure label", job=job,
-            residual_state=residual_state)
+            residual_state=residual_state, pending_credits=pending_credits)
 
     # 1.4.5 images of text. The approved transcript replaces the picture with a real text box and
     # the image is deleted, so the words become selectable, resizable text and the raster the
@@ -5241,7 +5244,7 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             write_fn=apply_pptx_image_replacement,
             diff_rule_id="1.4.5", credit_rule_ids=_IMAGE_OF_TEXT_SCS,
             noun="image-of-text replacement", job=job,
-            residual_state=residual_state)
+            residual_state=residual_state, pending_credits=pending_credits)
 
     if not (alt_uploaded or link_uploaded or field_uploaded
             or sensory_uploaded or language_uploaded or structure_label_uploaded
@@ -5249,17 +5252,27 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         return
 
     _phase(job, "storing the corrected copy")
-    _blob.upload_remediated(owner, scan_id, filename, working, _OFFICE_ALT_MIME.get(ext, "application/pdf"))
+    blob_url = _blob.upload_remediated(
+        owner, scan_id, filename, working, _OFFICE_ALT_MIME.get(ext, "application/pdf"))
+    if not blob_url:
+        raise RuntimeError("approved values were verified but durable storage is unavailable")
+    # Upload first: failed storage must leave every approval retryable. The database commit
+    # then binds its evidence to these exact bytes; no credit survives a metadata failure.
+    record = core.store.get_remediation_urls(scan_id, filename) or {}
+    with core.store.transaction():
+        core.store.record_remediation(
+            scan_id, filename, drive_write_url=record.get("drive_write_url"),
+            blob_url=blob_url, corrected_sha256=_hashlib.sha256(working).hexdigest(),
+            corrected_bytes=len(working))
+        for commit_credit in pending_credits:
+            commit_credit()
 
-    # The file may now be fully resolved. This is the same seam routes/hitl.py runs on every
-    # approval; it was returning False for this file until the values actually landed.
-    try:
+        # Keep certification in the same transaction: a failed reconciliation must leave
+        # approvals pending for retry, rather than returning early next time with no work.
         if core.store.mark_file_compliant_if_reviewed(scan_id, filename):
             core.store.log_decision(
                 "system", "revalidate.certified", scan_id=scan_id, file=filename,
                 detail="all findings resolved (auto-fixed + approved values written) — advanced to Publish")
-    except Exception:
-        swallowed("_apply_approved_values: marking the file compliant after revalidation failed", scan_id)
 
 
 @handler("deliver_corrected_copy")
