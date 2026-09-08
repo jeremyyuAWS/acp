@@ -54,7 +54,7 @@
 .remediation-impact__details > summary { cursor: pointer; font-weight: 650; padding: 8px 0; }
 .remediation-impact__details > summary span { display: block; margin-top: 4px; font-size: 12px; font-weight: 400; color: var(--muted); }
 
-.remediation-impact__startbar { position: sticky; top: 8px; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-block: 12px 20px; padding: 12px 16px; border: 1px solid #d8ccdf; border-radius: 10px; background: #fff; box-shadow: 0 4px 16px #39254312; }
+.remediation-impact__startbar { position: sticky; top: 64px; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-block: 12px 20px; padding: 12px 16px; border: 1px solid #d8ccdf; border-radius: 10px; background: #fff; box-shadow: 0 4px 16px #39254312; }
 .remediation-impact__start-summary { display: grid; gap: 3px; min-width: 0; font-size: 12px; color: #65576d; }
 .remediation-impact__start-summary strong { font-size: 14px; color: #332b3a; }
 .remediation-impact__startbar .remediation-impact__run { flex-shrink: 0; }
