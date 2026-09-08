@@ -158,6 +158,15 @@ describe('canonical stage card', () => {
     vi.useRealTimers()
   })
 
+  it('renders stage state and current ownership as quiet metadata', () => {
+    const html = renderToStaticMarkup(createElement(WorkflowStageStack, {
+      lineage: { workflow_id: 'workflow-status', stages: [SNAPSHOT] },
+    }))
+    expect(html).toContain('workflow-stage-stack__state')
+    expect(html).toContain('workflow-stage-stack__ownership')
+    expect(html).toContain('Current')
+  })
+
   it('omits future stages until the workflow creates them', () => {
     const html = renderToStaticMarkup(createElement(WorkflowStageStack, {
       lineage: { workflow_id: 'workflow-locked', stages: [{ ...SNAPSHOT, stage: 'discover' }] },
