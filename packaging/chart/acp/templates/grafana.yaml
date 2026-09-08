@@ -64,8 +64,24 @@ spec:
         - name: grafana
           image: {{ include "acp.image" (dict "root" $ "component" "grafana") | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- /*
+            readOnlyRootFilesystem is pinned false for this container, for the same shape of
+            reason as Ollama's and with the same `deepCopy`+`set` rather than `merge` (mergo
+            overwrites a destination value that is its type's zero, and `false` is one).
+
+            Grafana writes `grafana.db` and its plugin state directly under /var/lib/grafana, and
+            THE IMAGE BAKES DASHBOARDS INTO /var/lib/grafana/dashboards — so an emptyDir there
+            would make it writable and mask the dashboards, which is the same trap that stops
+            `/app/config` being masked for the rubric. Redirecting it with GF_PATHS_DATA would
+            work, and is not done here because it could not be VALIDATED here: the reference
+            cluster runs neither Grafana nor Ollama, so a read-only claim for either would be a
+            claim about a render. PRD S4's rule is that a target is not supported because Helm
+            renders for it.
+          */}}
+          {{- $grafanaSecurity := deepCopy .Values.securityContext }}
+          {{- $_ := set $grafanaSecurity "readOnlyRootFilesystem" false }}
           securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
+            {{- toYaml $grafanaSecurity | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ .Values.observability.grafana.port }}

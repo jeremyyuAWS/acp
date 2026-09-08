@@ -91,6 +91,8 @@ spec:
           command: ["python", "-c", "import store; store.Store(); print('schema current')"]
           env:
             {{- include "acp.commonEnv" . | nindent 12 }}
+          volumeMounts:
+            {{- include "acp.scratchMount" . | nindent 12 }}
           resources:
             requests:
               cpu: "250m"
@@ -98,4 +100,6 @@ spec:
             limits:
               cpu: "1"
               memory: 1Gi
+      volumes:
+        {{- include "acp.scratchVolume" . | nindent 8 }}
 {{- end }}

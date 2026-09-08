@@ -120,10 +120,14 @@ spec:
             claiming?) and belongs with the job log, not here — stated rather than left as an
             apparent omission.
           */}}
+          volumeMounts:
+            {{- include "acp.scratchMount" $ | nindent 12 }}
           {{- with $cfg.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      volumes:
+        {{- include "acp.scratchVolume" $ | nindent 8 }}
       {{- if or (gt (int $cfg.replicaCount) 1) $cfg.autoscaling.enabled }}
       {{- include "acp.topologySpread" (dict "root" $ "selector"
             (dict "app.kubernetes.io/component" "worker" "acp.mova.io/worker-role" $role)) | nindent 6 }}
