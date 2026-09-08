@@ -289,6 +289,59 @@ jobs:
           print(json.dumps(drift[0], indent=2))
           PY
 
+      - name: The manifests this install never creates
+        # WHAT THE REFERENCE DOCUMENT LEAVES UNTESTED, counted rather than guessed at. It renders
+        # NetworkPolicy, PodDisruptionBudget, ServiceAccount, one Service, four Deployments and
+        # two Jobs. The standard-production example renders all of that PLUS a
+        # HorizontalPodAutoscaler, an Ingress, an ExternalSecret, two ScaledObjects, a
+        # TriggerAuthentication, two more Services and the Ollama and Grafana Deployments.
+        #
+        # None of those had ever been submitted to an API server. The annotation-type defect found
+        # on 2026-09-08 was in six render sites and the reference install exercises three of them —
+        # so the same bug in ollama.yaml or grafana.yaml would have shipped.
+        #
+        # A SERVER-SIDE DRY RUN COSTS SECONDS AND IS THE SAME KIND OF EVIDENCE as the install: the
+        # API server validates the schema and runs admission, including Pod Security, so the
+        # namespace carries the restricted label for the same reason the real one does. Nothing is
+        # persisted, so this cannot disturb the release running next door.
+        #
+        # THE THREE CRD-DEPENDENT KINDS ARE SKIPPED, AND THE SKIP IS ASSERTED. ExternalSecret needs
+        # external-secrets.io and ScaledObject/TriggerAuthentication need keda.sh, neither of which
+        # is installed here — `doctor` reports both as blockers on a real cluster, which is its
+        # job. Listing them by name means a NEW kind that depends on a CRD fails this step instead
+        # of being skipped quietly, which is the failure mode the whole job exists to refuse.
+        run: |
+          set -euo pipefail
+          kubectl create namespace acp-dryrun
+          kubectl label namespace acp-dryrun \
+            pod-security.kubernetes.io/enforce=restricted \
+            pod-security.kubernetes.io/enforce-version=latest
+          python -m acpctl values packaging/examples/standard-production.acp-deployment.yaml \
+            > /tmp/full-values.yaml
+          helm template acp packaging/chart/acp \
+            -f /tmp/full-values.yaml \
+            -f packaging/reference/kind/runner-resources.yaml \
+            --set image.pullPolicy=Never > /tmp/full.yaml
+          python - <<'PY'
+          import sys, yaml
+
+          NEEDS_CRD = {"ExternalSecret", "ScaledObject", "TriggerAuthentication"}
+          docs = [d for d in yaml.safe_load_all(open("/tmp/full.yaml")) if d]
+          skipped = sorted({d["kind"] for d in docs if d["kind"] in NEEDS_CRD})
+          if skipped != sorted(NEEDS_CRD):
+              print(f"expected to skip {sorted(NEEDS_CRD)}, actually skipping {skipped} — the "
+                    f"render changed and this step is no longer covering what it claims",
+                    file=sys.stderr)
+              sys.exit(1)
+          keep = [d for d in docs if d["kind"] not in NEEDS_CRD]
+          kinds = sorted({d["kind"] for d in keep})
+          print(f"dry-running {len(keep)} manifests: {kinds}")
+          yaml.safe_dump_all(keep, open("/tmp/dryrun.yaml", "w"))
+          PY
+          kubectl apply --dry-run=server --warnings-as-errors \
+            -n acp-dryrun -f /tmp/dryrun.yaml
+          kubectl delete namespace acp-dryrun --wait=false
+
       - name: Can it be upgraded, or only installed?
         # AN INSTALL THAT CANNOT BE UPGRADED IS A DEMO. Every failure mode below is invisible to
         # both `helm template` and a first install, and each one strands a running installation:

@@ -325,6 +325,26 @@ forced on. The comment beside it claimed the shared context "sets it true", whic
 so — a reader deciding whether this chart hardens its root filesystems would have concluded it
 does.
 
+**What the reference install never creates, counted rather than guessed at.** The reference
+document renders NetworkPolicy, PodDisruptionBudget, ServiceAccount, one Service, four Deployments
+and two Jobs. The standard-production example renders all of that plus a HorizontalPodAutoscaler,
+an Ingress, an ExternalSecret, two ScaledObjects, a TriggerAuthentication, two more Services and
+the Ollama and Grafana Deployments — and none of those had ever been submitted to an API server.
+The annotation-type defect below was in six render sites and this install exercises three of them,
+so the same bug in `ollama.yaml` or `grafana.yaml` would have shipped past a green job.
+
+A server-side dry run of the full-featured render closes that, costs seconds, and is the same kind
+of evidence as the install: the API server validates the schema and runs admission, so the dry-run
+namespace carries the restricted label for the same reason the real one does. Nothing is
+persisted. ExternalSecret, ScaledObject and TriggerAuthentication need CRDs this cluster does not
+have — `doctor` reports both operators as blockers on a real cluster, which is its job — so those
+three are skipped BY NAME, and a kind that starts depending on a CRD fails the step rather than
+being skipped quietly.
+
+What it still does not establish: that these objects DO anything. An Ingress that validates has
+not routed a request, and an HPA that validates has not scaled a tier. Schema and admission are
+what a dry run can answer.
+
 **The upgrade step found a defect on its first run, and it was not an upgrade defect.**
 `toYaml` preserves YAML's types, and both `annotations` and `nodeSelector` are `map[string]string`
 in the Kubernetes API. A value that parses as a number or a boolean renders unquoted, passes
