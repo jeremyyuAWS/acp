@@ -49,6 +49,7 @@ did. That is what this cluster is for.
 | Managed data services | Postgres and Redis are plain Deployments on `emptyDir`. Running a container is not evidence about a managed service's failover or backup behaviour. |
 | Capacity or performance | `runner-resources.yaml` lowers requests to fit a 4-CPU runner. |
 | Anything about a **release** | The image is built from the checkout and loaded by tag. It carries no digest, no signature and no SBOM, so a green run is evidence about a commit, not about a release (PRD §5.1). |
+| **Artifact persistence** | The document names no storage account, and `api/blob.py` has no implementation for anywhere but Azure Blob. A remediation run here would produce corrected documents and drop them, so acceptance scenario 4's persistence half cannot be exercised on this cluster at all. `acpctl validate` warns on the document rather than leaving it implied. |
 
 A pass here is **not** a support claim. Support needs the full acceptance suite, an upgrade from
 the previous release, a real restore, and recovery testing. `kubernetes` stays `planned` in

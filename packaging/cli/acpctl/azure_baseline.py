@@ -218,6 +218,23 @@ def secret_names(text: str | None = None) -> set[str]:
     return {m["name"] for m in _SECRETREF.finditer(body)}
 
 
+def blob_account(text: str | None = None) -> str | None:
+    """The storage account production keeps remediated output in, from deploy.sh's own default.
+
+    DERIVED, NOT DECLARED, for the reason every other number in this module is: a value typed into
+    the contract by hand describes what somebody believed, and this describes what the script sets.
+    `deploy.sh` reads `BLOB_ACCOUNT="${ACP_BLOB_ACCOUNT:-...}"` and projects it as
+    ACP_BLOB_ACCOUNT onto both the API and the worker apps — which is the whole of the wiring that
+    makes `api/blob.py` do anything at all. Without it that module is a no-op and remediated
+    documents are produced and dropped, so this is the field whose absence a derived document has
+    to be able to show.
+    """
+    body = text if text is not None else _text(DEPLOY_SH)
+    defaults = dict(re.findall(
+        r'^\s*(\w+)="\$\{[A-Z_]+:-([\w.-]+)\}"', body, re.MULTILINE))
+    return defaults.get("BLOB_ACCOUNT")
+
+
 def baseline() -> dict[str, AzureApp]:
     """One record per app: sizing from the reviewed baseline, posture from the create script."""
     apps = parse_rightsize()

@@ -155,6 +155,29 @@ rendered-manifest test compares the chart against itself, so a chart that render
 consistently passes. None was reachable without reading the application the chart deploys, or the
 CNI semantics it depends on — and the fourth was not reachable by reading at all.
 
+**The seam that loses the product's output, found and half-fixed.** `api/blob.py` is the PRIMARY
+store for a remediated file's fixed copy (ADR 0010) and decides whether it exists from one
+variable, `ACP_BLOB_ACCOUNT`. Unset, `_ENABLED` is false and every function returns `None`.
+`deploy/public/deploy.sh:51,411` has always set it on both the API and the worker apps; **this
+chart set nothing**. So a Helm install came up healthy, remediated documents, logged that the
+corrected copy was stored, and kept each one's digest and byte count while dropping the bytes —
+`store.record_remediation` takes the `blob_url is None` branch, there is no BYTEA column (ADR 0010
+rejected one deliberately), and there is no filesystem fallback. That is PRD S20.5's acceptance
+criterion failing in a way worse than the criterion describes: the artifact does not depend on
+ephemeral storage, it reaches no storage at all.
+
+Half-fixed, and the half that is missing is not a packaging problem. The contract now carries
+`data.objectStorage.account`, the chart projects it to every workload that writes, and
+`acpctl validate` warns — naming the consequence rather than a missing field — when a document
+omits it. What no packaging change can supply is an implementation for anywhere but Azure:
+`api/blob.py` builds `https://<account>.blob.core.windows.net` and authenticates with
+`DefaultAzureCredential`, with no endpoint override, no key-based path and no S3 client anywhere in
+`api/`. PRD S7's cloud mapping lists S3 and Cloud Storage for the other platforms; nothing
+implements them, and `boto3` is not in `api/requirements.txt`. So **acceptance scenario 4's
+"artifact persistence" cannot pass on a non-Azure target today**, and the second warning
+(`objectstorage.azure-only`) says so to any document that names an account off Azure. Adding an
+S3-compatible backend is an application change and an owner decision, not one to take from here.
+
 **One more of the same family, analysed and NOT fixed**, because the fix cannot be tested here.
 With `secrets.provider: key-vault` the chart renders an `ExternalSecret`, which is a normal
 resource, and the pre-install hook Jobs mount the Secret the External Secrets Operator syncs from

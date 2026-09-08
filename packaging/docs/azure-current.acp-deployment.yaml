@@ -62,6 +62,7 @@ data:
     mode: managed
   objectStorage:
     mode: managed
+    account: acpremediatedstore
 ai:
   mode: local-only
   ollama:

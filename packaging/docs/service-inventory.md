@@ -86,6 +86,7 @@ Postgres connections at maximum replicas: **1272** of 2000 (728 spare).
 
 > ⚠ platform 'aws' is planned: no reference deployment in this repository runs the contract suite against it yet
 > ⚠ 'cloudwatch' has no implementation in this application — api/telemetry.py configures the Azure Monitor distribution only, so telemetry will be declared and off. Use 'azure-monitor', or accept that this installation collects nothing
+> ⚠ no storage account is named, so ACP_BLOB_ACCOUNT is unset and api/blob.py is a no-op: this installation will produce remediated documents and DROP them, recording each one's digest and length but never its bytes (PRD S20.5, ADR 0010)
 
 ## Profile: regulated (`regulated.acp-deployment.yaml`)
 
@@ -110,6 +111,7 @@ Postgres connections at maximum replicas: **604** of 800 (196 spare).
 
 > ⚠ platform 'kubernetes' is planned: no reference deployment in this repository runs the contract suite against it yet
 > ⚠ 'local' has no implementation in this application — api/telemetry.py configures the Azure Monitor distribution only, so telemetry will be declared and off. Use 'azure-monitor', or accept that this installation collects nothing
+> ⚠ no storage account is named, so ACP_BLOB_ACCOUNT is unset and api/blob.py is a no-op: this installation will produce remediated documents and DROP them, recording each one's digest and length but never its bytes (PRD S20.5, ADR 0010)
 
 ## Profile: standard (`standard-production.acp-deployment.yaml`)
 
@@ -133,5 +135,6 @@ Platform `azure` · release `2026.9` · VALID
 Postgres connections at maximum replicas: **418** of 700 (282 spare).
 
 > ⚠ platform 'azure' is planned: no reference deployment in this repository runs the contract suite against it yet
+> ⚠ no storage account is named, so ACP_BLOB_ACCOUNT is unset and api/blob.py is a no-op: this installation will produce remediated documents and DROP them, recording each one's digest and length but never its bytes (PRD S20.5, ADR 0010)
 
 <!-- END GENERATED: service-inventory -->
