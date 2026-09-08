@@ -162,6 +162,47 @@ function DiscoverStep({ label, kpi, status, sublines = [] }) {
   )
 }
 
+function InventoryDrilldown({ rows }) {
+  if (!Array.isArray(rows) || rows.length === 0) return null
+
+  const folders = new Map()
+  for (const row of rows) {
+    const folder = String(row?.parent_folder || '').trim() || 'Source root'
+    folders.set(folder, (folders.get(folder) || 0) + 1)
+  }
+  const ranked = [...folders.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  const visible = ranked.slice(0, 8)
+  const remainingFiles = ranked.slice(8).reduce((sum, [, count]) => sum + count, 0)
+
+  return (
+    <details style={{ margin: '10px 0 0 26px', fontSize: 12.5 }}>
+      <summary style={{ cursor: 'pointer', fontWeight: 600 }}>View files and folders</summary>
+      <div role="list" aria-label="Discovered files by folder"
+           style={{ marginTop: 8, maxWidth: 620, display: 'grid', gap: 5 }}>
+        {visible.map(([folder, count]) => (
+          <div role="listitem" key={folder}
+               style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 16 }}>
+            <span title={folder} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {folder}
+            </span>
+            <span className="muted" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {n(count)} file{count === 1 ? '' : 's'}
+            </span>
+          </div>
+        ))}
+        {ranked.length > visible.length && (
+          <div role="listitem" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 16 }}>
+            <span>Other ({n(ranked.length - visible.length)} folders)</span>
+            <span className="muted" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {n(remainingFiles)} files
+            </span>
+          </div>
+        )}
+      </div>
+    </details>
+  )
+}
+
 function SharePointLiveSummary({ source, scope, progress, freshness }) {
   if (source !== 'sharepoint' && scope?.kind !== 'sharepoint') return null
 
@@ -706,6 +747,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
                style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
             {steps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
           </div>
+          <InventoryDrilldown rows={inv?.rows} />
           <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 12, marginTop: 14,
                         fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.6 }}>
             No source documents were assessed or changed.
