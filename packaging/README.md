@@ -267,6 +267,29 @@ and is `acpctl install`'s job; leaving that gap explicit is the point.
 `--release` never degrades. A caller who passes a broken manifest gets exit 1 and no output, not
 an unpinned values file that reads exactly like a pinned one.
 
+## What an installation keeps, and the one field that decides it
+
+`data.objectStorage.account` names the storage account holding remediated output. **Omit it and
+the installation keeps nothing.**
+
+`api/blob.py` is the primary store for a remediated file's fixed copy (ADR 0010) and decides
+whether it exists from `ACP_BLOB_ACCOUNT` alone. Unset, every function returns `None` — so ACP
+remediates a document, logs that the corrected copy was stored, and records the digest and the
+byte count while dropping the bytes. There is no database column for them (ADR 0010 rejected one)
+and no filesystem fallback.
+
+The chart set that variable for the first time on 2026-09-08. `deploy/public/deploy.sh` had always
+set it, so Container Apps persisted output and every Helm install silently did not.
+`acpctl validate` now warns when a document omits the account, and the warning names the
+consequence rather than the missing field.
+
+**The only implementation is Azure Blob.** `api/blob.py` builds
+`https://<account>.blob.core.windows.net` and authenticates with `DefaultAzureCredential` — no
+endpoint override, no key-based path, no S3 client anywhere in `api/`. PRD §7 maps object storage
+to S3 and Cloud Storage on the other platforms and nothing implements them, so a non-Azure
+installation naming an account is asking that cluster to reach Azure, and gets a second warning
+saying so. Making that portable is an application change, not a packaging one.
+
 ## The four profiles
 
 | Profile | Platform | Data services | Notable requirements |

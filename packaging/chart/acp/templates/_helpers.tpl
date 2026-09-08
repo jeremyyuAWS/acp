@@ -163,6 +163,32 @@ ACP_WORKER_ROLE) are added by the caller; everything below is identical by const
   value: {{ $v | quote }}
 {{- end }}
 {{- end }}
+{{- if .Values.objectStorage.account }}
+{{- /*
+  THE REMEDIATED-OUTPUT STORE, AND THE SEAM THAT DID NOT MEET UNTIL 2026-09-08.
+
+  `api/blob.py` is the PRIMARY store for a remediated file's fixed copy (ADR 0010) and reads
+  exactly one variable to decide whether it exists: ACP_BLOB_ACCOUNT. Unset, `_ENABLED` is false
+  and every function returns None — so an installation remediates documents, logs "corrected copy
+  stored in ACP", and keeps the digest and the byte count while dropping the bytes
+  (`api/store.py`'s record_remediation takes the `blob_url is None` branch; there is no BYTEA
+  column, which ADR 0010 rejected deliberately).
+
+  This chart set no such variable. `deploy/public/deploy.sh` has always set it on both the API and
+  the worker apps, so the Container Apps deployment persists output and every Helm install
+  silently did not — a deployment that comes up healthy, passes a smoke test, and loses the one
+  artifact ACP exists to produce.
+
+  THE NAME IS THE APPLICATION'S, NOT THIS CHART'S. ACP_BLOB_ACCOUNT is Azure-shaped because
+  api/blob.py is: it builds `https://<account>.blob.core.windows.net` and authenticates with
+  DefaultAzureCredential, with no endpoint override and no key-based path. Renaming it, or making
+  it S3-compatible, is an application change and not a packaging one. What the chart can do is
+  stop the value going unset, which is what this does — and `acpctl validate` warns when the
+  document omits it rather than leaving the gap to be found in a remediation run.
+*/}}
+- name: ACP_BLOB_ACCOUNT
+  value: {{ .Values.objectStorage.account | quote }}
+{{- end }}
 {{- if eq .Values.ai.mode "local-only" }}
 {{- /*
   The regulated profile's central promise: no document content leaves the cluster for a model.

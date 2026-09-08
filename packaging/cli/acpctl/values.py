@@ -254,6 +254,11 @@ def _data_values(cfg: dict, *, in_cluster_chart: str) -> dict[str, Any]:
     }
     if cfg.get("highAvailability"):
         out["architecture"] = "replication"
+    if cfg.get("account"):
+        # objectStorage only. Carried through so the chart can wire the application's
+        # remediated-output store; without it `api/blob.py` is a no-op and corrected documents
+        # are produced and dropped.
+        out["account"] = cfg["account"]
     if cfg.get("storage"):
         out["persistence"] = {"size": cfg["storage"]}
     if cfg.get("backupRetentionDays") is not None:

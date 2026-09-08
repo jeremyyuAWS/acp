@@ -118,6 +118,13 @@ objectStorage:
   enabled: false
   external: true
   chart: null
+  # The storage account holding remediated output. NO DEFAULT ON PURPOSE, and the consequence of
+  # leaving it empty is worth stating: `api/blob.py` is the primary store for a remediated file's
+  # fixed copy and is a no-op without it, so the installation produces corrected documents and
+  # drops them — recording the digest and the length, never the bytes. `acpctl values` fills this
+  # from the deployment document's `data.objectStorage.account`, and `acpctl validate` warns when
+  # the document omits it. A guess here would be a storage account somebody else owns.
+  account: ""
 
 secrets:
   provider: kubernetes

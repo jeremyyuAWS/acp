@@ -500,6 +500,41 @@ def test_private_workers_render_a_policy_that_admits_nothing():
 
 
 @needs_helm
+def test_the_remediated_output_store_reaches_every_workload_that_writes_to_it():
+    """THE SEAM THAT DID NOT MEET UNTIL 2026-09-08, asserted on the render.
+
+    `api/blob.py` is the primary store for a remediated file's fixed copy (ADR 0010) and reads one
+    variable to decide whether it exists: ACP_BLOB_ACCOUNT. This chart set none, while
+    `deploy/public/deploy.sh` has always set it on both the API and the worker apps — so the
+    Container Apps deployment persisted output and every Helm install silently did not, remediating
+    documents and dropping them.
+
+    Asserted on the WORKERS as well as the API, because the remediate tier is what writes: an
+    env var that reached only the API would look wired and lose every corrected file.
+    """
+    doc = load_example("standard-production")
+    doc["data"]["objectStorage"]["account"] = "acpremediatedstore"
+    workloads = app_workloads(render(doc))
+    assert workloads, "nothing rendered; this test would prove nothing"
+    for workload in workloads:
+        env = {e["name"]: e.get("value")
+               for e in workload["spec"]["template"]["spec"]["containers"][0]["env"]}
+        assert env.get("ACP_BLOB_ACCOUNT") == "acpremediatedstore", workload["metadata"]["name"]
+
+
+@needs_helm
+def test_no_account_renders_no_variable_rather_than_an_empty_one():
+    """An empty ACP_BLOB_ACCOUNT and an absent one behave the same in `api/blob.py` — `_ENABLED`
+    is `bool(_ACCOUNT)` either way — but they do not READ the same. An operator seeing the
+    variable set to "" on a running Deployment has been told the store is configured."""
+    doc = load_example("standard-production")
+    assert "account" not in doc["data"]["objectStorage"]
+    for workload in app_workloads(render(doc)):
+        names = {e["name"] for e in workload["spec"]["template"]["spec"]["containers"][0]["env"]}
+        assert "ACP_BLOB_ACCOUNT" not in names, workload["metadata"]["name"]
+
+
+@needs_helm
 def test_no_pre_install_hook_needs_a_resource_the_release_creates_after_it():
     """THE ORDERING RENDERING CANNOT SEE, AND THE ONE THAT MADE THIS CHART UNINSTALLABLE.
 

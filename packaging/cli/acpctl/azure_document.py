@@ -35,7 +35,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import presets
-from .azure_baseline import baseline, secret_names
+from .azure_baseline import baseline, blob_account, secret_names
 
 # Facts about today's Azure that this document states DIFFERENTLY from the deployment, or cannot
 # state at all — each with why. Rendered into the generated report, because a derived document
@@ -83,6 +83,14 @@ class NotExpressible(Exception):
     value is worse than no document: it reads as proof the contract fits, which is the exact claim
     this module exists to test.
     """
+
+
+def _object_storage() -> dict:
+    account = blob_account()
+    block = {"mode": "managed"}
+    if account:
+        block["account"] = account
+    return block
 
 
 def _preset_for(cpu: float | None, memory: str | None, *, app: str) -> str:
@@ -148,7 +156,11 @@ def derive(*, version: str, name: str = "acp-production") -> dict[str, Any]:
             # services in presets.PLATFORM_ADAPTER, all provider-run.
             "postgres": {"mode": "managed", "maxConnections": PRODUCTION_MAX_CONNECTIONS},
             "redis": {"mode": "managed"},
-            "objectStorage": {"mode": "managed"},
+            # The account is DERIVED from deploy.sh's own default rather than declared here.
+            # Without it `api/blob.py` is a no-op and remediated documents are produced and
+            # dropped, so a derived document that omitted it would describe a production that
+            # keeps nothing — which is not what production does.
+            "objectStorage": _object_storage(),
         },
         "ai": {
             "mode": "local-only",
