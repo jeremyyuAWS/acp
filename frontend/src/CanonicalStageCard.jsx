@@ -43,10 +43,10 @@ export default function CanonicalStageCard({ snapshot, onOpen = null, embedded =
             Workflow revision {shown(model.workflowRevision)} · snapshot revision {shown(model.revision)}
           </div>
         </div>
-        <span className="canonical-stage-card__heartbeat">
+        {!terminal && <span className="canonical-stage-card__heartbeat">
           <LiveHeartbeatBars measuredAt={receivedAt} stage={model.stage} historyKey={heartbeatKey}
-            terminal={terminal} showText />
-        </span>
+            showText />
+        </span>}
         {onOpen && <button type="button" className="linklike" onClick={onOpen}>Open details →</button>}
       </div>
 
@@ -126,8 +126,8 @@ export default function CanonicalStageCard({ snapshot, onOpen = null, embedded =
               role="status" aria-label={`${delta} newly reconciled`}>+{delta}</span>}
           </span>
           <span className="canonical-stage-card__hint">View accounting</span>
-          <LiveHeartbeatBars measuredAt={receivedAt} stage={model.stage} historyKey={heartbeatKey}
-            terminal={terminal} showText />
+          {!terminal && <LiveHeartbeatBars measuredAt={receivedAt} stage={model.stage}
+            historyKey={heartbeatKey} showText />}
           <span className="canonical-stage-card__chevron" aria-hidden="true">⌄</span>
           {progress != null && <span className="canonical-stage-card__progress" aria-hidden="true">
             <span style={{ width: `${progress}%` }} />

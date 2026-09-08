@@ -71,9 +71,9 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
               <span className="workflow-stage-stack__label"><b>{model.stageLabel}</b> · {model.stateLabel}</span>
               <span className="workflow-stage-stack__meta">
                 <span className="muted workflow-stage-stack__count">{primaryOutcome(model)}</span>
-                <LiveHeartbeatBars measuredAt={receivedAt} stage={stage}
+                {!terminal(snapshot.state) && <LiveHeartbeatBars measuredAt={receivedAt} stage={stage}
                   historyKey={`${snapshot.workflow_id || lineage?.workflow_id || 'workflow'}:${snapshot.execution_id || stage}`}
-                  terminal={terminal(snapshot.state)} showText />
+                  showText />}
                 {isCurrent && <span className="workflow-stage-stack__ownership">Current</span>}
               </span>
               <span className="workflow-stage-stack__affordance" aria-hidden="true">{open ? '−' : '+'}</span>
