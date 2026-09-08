@@ -1748,7 +1748,8 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
    this product fails its own 1.4.3 audit if a status chip does not clear AA, and 11px/700 is
    small text, so the bar is 4.5:1 not 3:1. */
 .alscs { display: inline-flex; gap: 4px; flex-wrap: wrap; font-size: 11px; }
-.alscs b { font-weight: 700; color: #8A2A20; background: #FBE9E7; border-radius: 4px; padding: 0 5px; }
+.alscs b { font-family: var(--font-mono); font-weight: 650; font-variant-numeric: tabular-nums;
+  color: #8A2A20; background: #FBE9E7; border-radius: 4px; padding: 0 5px; }
 .alclean { font-size: 11px; font-weight: 600; color: var(--success-fg); }
 .assessphase { font-size: 11px; flex-basis: 100%; margin-top: 2px; }
 .assessres { margin-top: 16px; }
