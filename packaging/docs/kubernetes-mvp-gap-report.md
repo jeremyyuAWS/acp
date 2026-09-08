@@ -597,13 +597,19 @@ Ordered, smallest first dependency at the top.
 1. **Something must build the artifacts a release manifest names.** `deploy/public/deploy.sh`
    builds `acp-app` and `acp-grafana` for Container Apps; nothing builds
    `acp-ollama-gateway`. Until an image exists there is nothing to pin, sign or pull.
-2. **A registry the acceptance run can pull from**, and a tag/digest convention for it. The
-   example's `runtime.imageRegistry` is a production ACR; an acceptance run needs a target a CI job
-   can push to and a throwaway cluster can read.
+2. ~~**A registry the acceptance run can pull from.**~~ **Not a prerequisite after all**, which
+   is worth recording because it was listed as one here for a week. `packaging-kind.yml` builds the
+   image in the job, `kind load docker-image`s it into the node's containerd, and sets
+   `image.pullPolicy: Never` — so no registry, and no credentials, are involved anywhere. A
+   registry becomes necessary again only for a release that is PULLED rather than built in place,
+   which is item 3's problem, not this one's.
 3. **A real `ACPRelease` emitted by that build**, with signatures and SBOMs that exist rather than
    are declared. The contract and its checks are in place (§A); the producer is not.
-4. **A disposable cluster in CI.** No `kind`, `k3d` or `minikube` reference exists outside this
-   report; `helm` is installed only to render.
+4. ~~**A disposable cluster in CI.**~~ **Closed by #1799.** `.github/workflows/packaging-kind.yml`
+   creates a `kindest/node:v1.31.4` cluster, supplies Postgres and Redis as the endpoints the chart
+   deliberately does not own, runs `helm install --wait`, and deletes the cluster on the way out.
+   #1809 added an upgrade to it. This was the item everything below waited on, and it is the reason
+   items 5 and 6 are now the top of the list rather than the bottom.
 5. **The acceptance report format and runner** — in flight in #1796. Without it, ten passing
    scenarios produce ten passing scenarios and no artifact anybody can compare across runs.
 6. **`acpctl install` exercised against a cluster** — in flight in #1796, never run against a real
@@ -612,8 +618,10 @@ Ordered, smallest first dependency at the top.
 7. **Signature verification at install time**, which is the point at which the run stops being a
    smoke test and starts being evidence about a specific release.
 
-Items 1-3 are prerequisites for a manual `helm install`. Items 4-7 are what turn that into a
-repeatable acceptance run.
+Items 1 and 3 are prerequisites for a manual `helm install` of a real RELEASE; the reference
+cluster sidesteps both by building the image in the job, which is why it exists and why it cannot
+by itself produce evidence about a release. Items 5-7 are what turn a working install into a
+repeatable acceptance run, and 5 and 6 are the next thing to land.
 
 ---
 
