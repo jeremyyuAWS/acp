@@ -127,6 +127,34 @@ ACP_WORKER_ROLE) are added by the caller; everything below is identical by const
   because a workload carrying both would leave a reader to guess which one is live — and the old
   name was read by nothing, which tests/test_packaging_seams.py had established.
 */}}
+{{- /*
+  WHERE THE CACHES GO WHEN THE ROOT FILESYSTEM IS READ-ONLY.
+
+  `securityContext.readOnlyRootFilesystem` is true, so every runtime write has to land on the
+  scratch volume mounted at /tmp. Python's `tempfile` already resolves there, and the per-document
+  work — the LibreOffice profile, the .NET analyser's output, `remediated-<name>`, tesseract's
+  images — all goes through it. THREE CACHES DO NOT, and each is written by a library rather than
+  by this application, so none of them would fail in a way anyone would attribute to the flag:
+
+    HOME              UID 10001 has no passwd entry (no Dockerfile sets USER, useradd or HOME),
+                      so `expanduser("~")` was resolving somewhere unverified. api/scanner.py
+                      reads `~/.dotnet` when it invokes the Office analyser.
+    XDG_CACHE_HOME    fontconfig, under WeasyPrint/Pango — the default report renderer. An
+                      unwritable cache is a warning and a slow render, not an error.
+    DOTNET_CLI_HOME   the .NET CLI's own first-run state.
+
+  PYTHONDONTWRITEBYTECODE because /app is read-only now: CPython would otherwise attempt a
+  __pycache__ write per module on first import, fail, and carry on silently. Telling it not to
+  try is cheaper than letting it discover that.
+*/}}
+- name: HOME
+  value: {{ .Values.scratch.mountPath | quote }}
+- name: XDG_CACHE_HOME
+  value: {{ printf "%s/.cache" .Values.scratch.mountPath | quote }}
+- name: DOTNET_CLI_HOME
+  value: {{ .Values.scratch.mountPath | quote }}
+- name: PYTHONDONTWRITEBYTECODE
+  value: "1"
 - name: ACP_DEPLOY_ENV
   value: {{ .Values.acpDeployment.environment | quote }}
 - name: ACP_DEPLOY_PROFILE
@@ -364,4 +392,33 @@ quotes to itself.
 {{- range $key, $value := . }}
 {{ $key }}: {{ $value | quote }}
 {{- end }}
+{{- end -}}
+
+
+{{/*
+The one writable path, and the reason the root filesystem can be read-only.
+
+EVERY RUNTIME WRITE THIS APPLICATION MAKES GOES TO $TMPDIR — per-document scratch in
+api/scanner.py, api/handlers.py, api/proposals.py and the PDF engine; the LibreOffice user
+profile; the .NET analyser's `_o.json`; `remediated-<name>` beside its input; tesseract's images;
+and `/tmp/adc.json` from the image entrypoint when ACP_GOOGLE_ADC is set. Python's `tempfile`
+resolves to /tmp, so mounting an emptyDir there covers all of it. The caches that do not live
+under $TMPDIR are redirected into it by `acp.commonEnv` above.
+
+NO sizeLimit, DELIBERATELY. An emptyDir counts against the pod's `ephemeral-storage` LIMIT, which
+this chart already sets per tier from the preset (4Gi for the API, 8Gi for assess and remediate).
+A second, smaller bound here would silently cap a remediate worker below the storage its own
+preset promises it — two numbers for one budget, and the tighter one wins by accident.
+
+WHY THIS IS NOT `medium: Memory`: a memory-backed emptyDir is charged to the pod's MEMORY limit,
+so a single large document would OOM-kill the worker instead of filling a disk it was given.
+*/}}
+{{- define "acp.scratchVolume" -}}
+- name: scratch
+  emptyDir: {}
+{{- end -}}
+
+{{- define "acp.scratchMount" -}}
+- name: scratch
+  mountPath: {{ .Values.scratch.mountPath }}
 {{- end -}}

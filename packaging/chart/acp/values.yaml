@@ -240,9 +240,22 @@ podSecurityContext:
     type: RuntimeDefault
 securityContext:
   allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: false
+  # TRUE SINCE THE RUBRIC WRITE MOVED TO THE DATABASE. It was false because `PUT /rubric` wrote
+  # `config/rubric.active.json` into the image, which a read-only root turns into a 500; that
+  # write is now a database setting, so the last application-side blocker is gone. Everything
+  # else writes under `scratch.mountPath`, which is mounted below.
+  #
+  # Ollama and Grafana pin this back to false in their own templates, each with its reason: both
+  # are third-party images that write outside /tmp, and neither runs on the reference cluster, so
+  # a read-only claim for them could not be validated where the others are.
+  readOnlyRootFilesystem: true
   capabilities:
     drop: ["ALL"]
+
+# The single writable path. See `acp.scratchVolume` in templates/_helpers.tpl for why it has no
+# sizeLimit and is not memory-backed.
+scratch:
+  mountPath: /tmp
 nodeSelector: {}
 tolerations: []
 affinity: {}

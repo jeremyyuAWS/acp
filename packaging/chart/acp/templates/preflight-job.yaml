@@ -110,6 +110,8 @@ spec:
               print("preflight: readyz reachable")
           env:
             {{- include "acp.commonEnv" . | nindent 12 }}
+          volumeMounts:
+            {{- include "acp.scratchMount" . | nindent 12 }}
           resources:
             requests:
               cpu: "100m"
@@ -117,4 +119,6 @@ spec:
             limits:
               cpu: "500m"
               memory: 512Mi
+      volumes:
+        {{- include "acp.scratchVolume" . | nindent 8 }}
 {{- end }}

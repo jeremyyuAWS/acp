@@ -289,18 +289,38 @@ the apply runs `--warnings-as-errors` so the message that names the fields is th
 fails.
 
 **`readOnlyRootFilesystem` is `false`, and that is now a recorded decision rather than an
-oversight.** Every runtime write the application makes goes to `$TMPDIR` — per-document scratch in
+on now.** Every runtime write the application makes goes to `$TMPDIR` — per-document scratch in
 `api/scanner.py`, `api/handlers.py`, `api/proposals.py` and the PDF engine, the LibreOffice user
-profile (`api/render.py:106`), the .NET analyser's `_o.json`, `remediated-<name>` beside its input,
-tesseract's scratch images — all of which an `emptyDir` at `/tmp` would cover. One write does not:
-`PUT /rubric` used to write `<repo>/config/rubric.active.json` INTO THE IMAGE, so a read-only
-root turned an owner-only admin endpoint into a 500. **THAT WRITE IS GONE**: the rubric is stored
-in `app_settings` now, so the application-side blocker this default existed for no longer exists.
-What remains is packaging work rather than an application change — an `emptyDir` at `/tmp` plus
-`HOME`, `XDG_CACHE_HOME` and `DOTNET_CLI_HOME` pointed into it — and the chart renders no volumes
-at all today. So the default stays `false` until that lands, and
-`test_the_shared_root_filesystem_is_writable_and_that_is_deliberate` pins both halves: the value,
-and the write it exists for.
+profile, the .NET analyser's `_o.json`, `remediated-<name>` beside its input, tesseract's scratch
+images, and `/tmp/adc.json` from the image entrypoint. An `emptyDir` at `/tmp` covers all of it.
+
+Three caches do NOT live under `$TMPDIR`, and each is written by a library rather than by this
+application, so none would have failed in a way anyone attributed to the flag: `HOME` (UID 10001
+has no passwd entry, and `api/scanner.py` reads `~/.dotnet`), `XDG_CACHE_HOME` (fontconfig, under
+the report renderer) and `DOTNET_CLI_HOME`. All three are redirected onto the scratch volume, with
+`PYTHONDONTWRITEBYTECODE` so a read-only `/app` does not take a failed `__pycache__` write per
+module on first import.
+
+The volume carries NO `sizeLimit` and is not memory-backed, both deliberately: an `emptyDir`
+already counts against the pod's `ephemeral-storage` limit, which this chart sets per tier from
+the preset, so a second bound would silently cap a remediate worker below the 8Gi its own preset
+promises; and memory-backing is charged to the memory limit, so one large document would OOM-kill
+the worker instead of filling a disk it was given.
+
+**Ollama and Grafana pin the flag back to false, each with its reason recorded in its template.**
+Both are third-party images that write outside `/tmp` — Grafana keeps `grafana.db` under
+`/var/lib/grafana`, where the image also bakes its dashboards, so an `emptyDir` there would make
+it writable and mask them, the same trap that stops `/app/config` being masked. Redirecting with
+`GF_PATHS_DATA` would work and is not done, because it could not be VALIDATED: **the reference
+cluster runs neither**, so a read-only claim for either would be a claim about a render, which
+PRD §4 is explicit about refusing.
+
+WHY THIS NEEDED THE CLUSTER RATHER THAN A RENDER TEST. Getting it wrong fails SILENTLY. An
+unwritable scratch directory crashes nothing: `render_page_png` and `_office_to_pdf` return `None`
+on any exception and `_analyse_office` turns `OSError` into an engine-error bucket that scores as
+`uncertain`. Office documents would degrade with no startup signal, on an installation that looks
+healthy. The disposable cluster runs the API, all three worker tiers and both hook Jobs with the
+flag on, so the install itself is what establishes the mounts are sufficient.
 
 **THAT WRITE IS ALREADY BROKEN, INDEPENDENTLY OF ANY OF THIS, AND IT IS NOT A KUBERNETES
 PROBLEM.** Tracing it far enough to judge the read-only question turned up something larger.
@@ -696,6 +716,6 @@ evidence about a released artifact.
 | Workstream | State | Evidence | Blocker | Next action |
 |---|---|---|---|---|
 | **A. Release artifacts and supply chain** | in progress | The `ACPRelease` contract, `acpctl release verify`, and `--release` on `values`/`plan` (`tests/test_packaging_release.py`), which reconcile the plan's eight names, the chart's four references and the one application artifact — and render every image by digest | Nothing builds, signs, SBOMs or scans an artifact, so no real manifest exists and CI has no release to fail on | Build the release images in CI and emit a signed manifest from that build |
-| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; zone spreading is soft on every profile and unprovable on a one-node cluster, no `readOnlyRootFilesystem` (the rubric blocker is cleared; it now needs a writable `/tmp` mount), no backup/restore Job | A backup/restore Job, which needs RTO/RPO and retention decided first |
+| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; zone spreading is soft on every profile and unprovable on a one-node cluster, `readOnlyRootFilesystem` is ON for every ACP workload, with Ollama and Grafana exempt and recorded, no backup/restore Job | A backup/restore Job, which needs RTO/RPO and retention decided first |
 | **C. Portable acceptance suite** | not started | None — no `packaging/tests/`; the preflight hook DOES gate the install (Helm has no hook failure policy and the container exits 1), which is not what this row used to say | Eight of ten scenarios need `acpctl install`, which exits 2; the first two need only a cluster and images | Define the structured report format and emit it from the two readiness scenarios |
 | **D. `acpctl` lifecycle** | in progress | Eight read-only commands with documented exit codes; write-refusal and kubectl-verb allow-list both tested; the seven lifecycle commands refuse rather than no-op (`cli.py:27-35`) | `install` has nothing to pin to: the release contract exists but no build produces a manifest, so there are no real digests and no signature to verify | Hold `install` until a build emits a manifest; `support-bundle` is the one command with no upstream dependency |
