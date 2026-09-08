@@ -45,3 +45,31 @@ def test_unsupported_or_invalid_policies_never_save(isolated_store, policy):
     with pytest.raises(ValueError):
         save_impact_policy(isolated_store, 'alice', 'alice', policy, 0)
     assert read_impact_policy(isolated_store, 'alice')['revision'] == 0
+
+
+def test_budget_is_canonical_owner_scoped_and_changes_execution_identity(isolated_store):
+    selected = {'rule_based': 2, 'ai': 1, 'ai_budget_usd': '1.5'}
+    saved = save_impact_policy(isolated_store, 'alice', 'alice', selected, 0)
+    assert saved['policy']['ai_budget_usd'] == '1.50'
+    assert read_impact_policy(isolated_store, 'alice')['ai_budget_usd'] == '1.50'
+    assert 'ai_budget_usd' not in read_impact_policy(isolated_store, 'bob')
+    first = snapshot_impact_policy(isolated_store, 'alice')
+    same = snapshot_impact_policy(isolated_store, 'alice', {**selected, 'ai_budget_usd': '1.50'})
+    changed = snapshot_impact_policy(isolated_store, 'alice', {**selected, 'ai_budget_usd': '2.00'})
+    assert first == same
+    assert first['snapshot_id'] != changed['snapshot_id']
+
+
+@pytest.mark.parametrize('amount', ['', '-1', 'NaN', 'Infinity', '1.001', '1e2', '1000000.01', 1, True, None])
+def test_invalid_budget_rejected_before_policy_persistence(isolated_store, amount):
+    with pytest.raises(ValueError):
+        save_impact_policy(isolated_store, 'alice', 'alice',
+                           {'rule_based': 2, 'ai': 1, 'ai_budget_usd': amount}, 0)
+    assert read_impact_policy(isolated_store, 'alice')['revision'] == 0
+
+
+def test_removing_saved_budget_is_not_an_identical_retry(isolated_store):
+    capped = {'rule_based': 2, 'ai': 1, 'ai_budget_usd': '1.00'}
+    save_impact_policy(isolated_store, 'alice', 'alice', capped, 0)
+    with pytest.raises(ImpactPolicyConflict):
+        save_impact_policy(isolated_store, 'alice', 'alice', {'rule_based': 2, 'ai': 1}, 0)

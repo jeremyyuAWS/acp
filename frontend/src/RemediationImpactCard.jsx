@@ -21,6 +21,7 @@ const OUTLOOKS = [['could_complete', 'Could complete automatically'], ['human_wo
 const number = value => Number.isFinite(value) ? value.toLocaleString() : 'Not yet available'
 const delta = value => Number.isFinite(value) ? `${value > 0 ? '+' : ''}${value.toLocaleString()}` : 'Not yet available'
 const validPolicy = p => Number.isInteger(p?.rule_based) && p.rule_based >= 0 && p.rule_based <= 2 && Number.isInteger(p?.ai) && p.ai >= 0 && p.ai <= 3
+const validBudget = p => p?.ai_budget_usd === undefined || (/^\d{1,7}(?:\.\d{1,2})?$/.test(p.ai_budget_usd) && Number(p.ai_budget_usd) <= 1000000)
 const policyName = p => validPolicy(p) ? `${RULE_STOPS[p.rule_based][0]} · AI: ${AI_STOPS[p.ai][0]}` : 'Not yet available'
 const reasonText = reason => typeof reason === 'string' ? reason.replaceAll('_', ' ') : 'Reason not available'
 const fileType = file => {
@@ -80,15 +81,20 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     if (!runId) { setLoading(false); return }
     setLoading(true); setError('')
     const requestedPolicy = runRef.current === runId ? policy : null
+    if (!validBudget(requestedPolicy)) {
+      setLoading(false); setError('Enter an AI spending limit from $0 to $1,000,000 with at most two decimal places.')
+      return
+    }
     Promise.resolve().then(() => getRemediationImpact(runId, requestedPolicy, scopeKey === null ? undefined : JSON.parse(scopeKey))).then(result => {
       if (cancelled || request !== sequence.current) return
       setData(result)
-    }).catch(err => { if (!cancelled && request === sequence.current) { setData(null); setError(err?.message || 'The preview could not be loaded.') } })
+    }).catch(err => { if (!cancelled && request === sequence.current) { setError(err?.message || 'The preview could not be loaded.') } })
       .finally(() => { if (!cancelled && request === sequence.current) setLoading(false) })
     return () => { cancelled = true }
   }, [runId, policy, refreshKey, reload, scopeKey])
 
-  const selected = policy || (validPolicy(data?.policy) ? data.policy : { rule_based: 0, ai: 0 })
+  const basePolicy = policy || (validPolicy(data?.policy) ? data.policy : { rule_based: 0, ai: 0 })
+  const selected = data?.capabilities?.ai_budget === true ? { ai_budget_usd: '0.00', ...basePolicy } : basePolicy
   const ready = !!data && !loading && !error && data.integrity?.complete === true
   const countDeltas = useForecastDeltas({
     identity: JSON.stringify([runId, scopeKey]), ready,
@@ -146,7 +152,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     </div><div className="remediation-impact__active"><span>Active settings</span><strong>{policyName(data?.active_policy)}</strong></div></header>
     <div className="remediation-impact__split"><div className="remediation-impact__settings">
     <RemediationPlanChoices policy={selected} providers={data?.providers}
-      disabled={!validPolicy(data?.policy) || runBusy} onChange={change} />
+      disabled={!runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true} />
     <details className="remediation-impact__advanced"><summary>Advanced: individual fix permissions</summary>
     <div className="remediation-impact__controls">
       <PolicySlider title="Rule-based fixes" question="What rule-based fixes may ACP apply without approval?" stops={RULE_STOPS}

@@ -8,6 +8,8 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+import re
+from decimal import Decimal
 from datetime import datetime, timezone
 
 DEFAULT_POLICY = {"rule_based": 2, "ai": 1, "revision": 0}
@@ -28,6 +30,13 @@ def normalize_policy(policy):
         if type(value) is not int or not 0 <= value <= maximum:
             raise ValueError(f"{key} must be an integer between 0 and {maximum}.")
         result[key] = value
+    if "ai_budget_usd" in policy:
+        amount = policy["ai_budget_usd"]
+        if not isinstance(amount, str) or not re.fullmatch(r"\d{1,7}(?:\.\d{1,2})?", amount):
+            raise ValueError("AI spending limit must be a USD amount with at most two decimal places.")
+        if Decimal(amount) > Decimal("1000000"):
+            raise ValueError("AI spending limit must not exceed 1,000,000 USD.")
+        result["ai_budget_usd"] = format(Decimal(amount), ".2f")
     return result
 
 
@@ -62,10 +71,10 @@ def save_impact_policy(store, owner, actor, policy, expected_revision):
         current = json.loads(row["value"]) if row else dict(DEFAULT_POLICY)
         if current["revision"] != expected_revision:
             # An exact retry after a lost response has already achieved its requested state.
-            if all(current.get(k) == v for k, v in selected.items()):
+            if normalize_policy(current) == selected:
                 return {"policy": current, "duplicate": True}
             raise ImpactPolicyConflict(current)
-        if row and all(current.get(k) == v for k, v in selected.items()):
+        if row and normalize_policy(current) == selected:
             return {"policy": current, "duplicate": True}
         saved = {**selected, "revision": expected_revision + 1}
         encoded = json.dumps(saved, sort_keys=True)

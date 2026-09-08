@@ -54,24 +54,24 @@ export function RetiredRemediationPlanChoices({ policy, providers, disabled, onC
 }
 
 // The previous detailed panel is retained above for restoration, but is no longer mounted.
-export default function RemediationPlanChoices({ policy, disabled, onChange }) {
+export default function RemediationPlanChoices({ policy, disabled, onChange, budgetSupported = false }) {
   const id = useId()
   return <div className="remediation-plan-choices">
     <fieldset disabled={disabled}>
-      <legend>1. How much automation?</legend>
+      <legend>1. How should fixes be approved?</legend>
       <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
         <label className={policy.rule_based === 0 ? 'is-selected' : ''}>
           <input type="radio" name={`${id}-automation`} checked={policy.rule_based === 0} onChange={() => onChange('rule_based', 0)} />
-          <span><strong>Human review (HITL)</strong><span>Approve proposed changes before they are applied.</span></span>
+          <span><strong>Review before applying</strong><span>Approve proposed changes before they are applied.</span></span>
         </label>
         <label className={policy.rule_based === 2 ? 'is-selected' : ''}>
           <input type="radio" name={`${id}-automation`} checked={policy.rule_based === 2} onChange={() => onChange('rule_based', 2)} />
-          <span><strong>Full automation</strong><span>Apply supported fixes and verify results. AI suggestions and exceptions still need review.</span></span>
+          <span><strong>Apply and verify automatically</strong><span>Apply eligible fixes and verify results. Changes that require human judgment stay in review.</span></span>
         </label>
       </div>
     </fieldset>
     <fieldset disabled={disabled}>
-      <legend>2. Use AI?</legend>
+      <legend>2. Use AI to resolve more issues?</legend>
       <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
         <label className={policy.ai === 0 ? 'is-selected' : ''}>
           <input type="radio" name={`${id}-ai`} checked={policy.ai === 0} onChange={() => onChange('ai', 0)} />
@@ -83,9 +83,14 @@ export default function RemediationPlanChoices({ policy, disabled, onChange }) {
         </label>
       </div>
       {policy.ai > 0 && <div className="simple-remediation-budget">
-        <label htmlFor={`${id}-budget`}>Maximum AI budget for this run (USD)</label>
-        <input id={`${id}-budget`} type="number" min="0" step="0.01" disabled placeholder="Unavailable" aria-describedby={`${id}-budget-note`} />
-        <p id={`${id}-budget-note`}>Spending limits are not enforced yet. Choose Off if you need a firm cap.</p>
+        <label htmlFor={`${id}-budget`}>Maximum AI spend for this run (USD)</label>
+        <input id={`${id}-budget`} type="number" min="0" max="1000000" step="0.01"
+          disabled={disabled || !budgetSupported} value={budgetSupported ? (policy.ai_budget_usd ?? '0.00') : ''}
+          onChange={event => onChange('ai_budget_usd', event.target.value)}
+          placeholder={budgetSupported ? '0.00' : 'Unavailable'} aria-describedby={`${id}-budget-note`} />
+        <p id={`${id}-budget-note`}>{budgetSupported
+          ? 'AI pauses when the remaining budget cannot cover another request. Rule-based fixes continue. $0 permits no paid AI requests. Infrastructure costs are separate.'
+          : 'Spending limits are not available on this server. Choose Off if you need a firm cap.'}</p>
       </div>}
     </fieldset>
   </div>
