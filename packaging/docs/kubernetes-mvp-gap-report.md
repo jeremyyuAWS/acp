@@ -590,12 +590,29 @@ repeatable acceptance run.
 
 ## Summary
 
-`verified` would mean acceptance evidence from a real cluster. Nothing here has any, so nothing here
-is `verified`.
+`verified` would mean acceptance evidence from a real cluster. When this report was written
+nothing had any. That is no longer true, and the correction matters in both directions.
+
+WHAT THE DISPOSABLE CLUSTER NOW ESTABLISHES, on every packaging pull request: the chart installs
+from a document `acpctl` produced; every tier rolls out; the three worker tiers register and
+heartbeat through the API; `acpctl status` reports no drift beyond the one expected release-tag
+difference; the release upgrades to a second revision with the pods actually replaced; every pod
+is admitted by a namespace enforcing the restricted Pod Security Standard; and the manifests this
+install does not create — Ollama, Grafana, the HorizontalPodAutoscaler, the Ingress — pass schema
+validation and admission under a server-side dry run. Four defects were found this way that every
+rendered-manifest test was green on.
+
+WHAT IT STILL DOES NOT ESTABLISH, and none of it should be read as `verified` for a customer:
+`kindest/node:v1.31.4` is a version this chart RUNS on, not one anything is supported on. One node
+means NetworkPolicy is accepted and enforced by nothing, zone spreading has one domain, and the
+PodDisruptionBudget is never tested by a drain. No document has been scanned, assessed or
+remediated on it, so nothing here is evidence about the application doing its work — that is
+workstream C. And the images are built from the checkout under a local tag, so none of this is
+evidence about a released artifact.
 
 | Workstream | State | Evidence | Blocker | Next action |
 |---|---|---|---|---|
 | **A. Release artifacts and supply chain** | in progress | The `ACPRelease` contract, `acpctl release verify`, and `--release` on `values`/`plan` (`tests/test_packaging_release.py`), which reconcile the plan's eight names, the chart's four references and the one application artifact — and render every image by digest | Nothing builds, signs, SBOMs or scans an artifact, so no real manifest exists and CI has no release to fail on | Build the release images in CI and emit a signed manifest from that build |
-| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; zone spreading is soft on every profile and unprovable on a one-node cluster, no `readOnlyRootFilesystem` (blocked on `PUT /rubric` writing into the image), no backup/restore Job | A backup/restore Job, then a PDB outside the high-availability profile |
+| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; zone spreading is soft on every profile and unprovable on a one-node cluster, no `readOnlyRootFilesystem` (blocked on `PUT /rubric` writing into the image), no backup/restore Job | A backup/restore Job, which needs RTO/RPO and retention decided first |
 | **C. Portable acceptance suite** | not started | None — no `packaging/tests/`; the preflight hook is advisory (`backoffLimit: 0`, post-install) | Eight of ten scenarios need `acpctl install`, which exits 2; the first two need only a cluster and images | Define the structured report format and emit it from the two readiness scenarios |
 | **D. `acpctl` lifecycle** | in progress | Eight read-only commands with documented exit codes; write-refusal and kubectl-verb allow-list both tested; the seven lifecycle commands refuse rather than no-op (`cli.py:27-35`) | `install` has nothing to pin to: the release contract exists but no build produces a manifest, so there are no real digests and no signature to verify | Hold `install` until a build emits a manifest; `support-bundle` is the one command with no upstream dependency |
