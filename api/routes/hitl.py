@@ -194,6 +194,38 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         # approved with the resolution — and BEFORE log_decision, so the file certified 100/100
         # with the images untouched, undescribed, and no audit line saying who resolved it or why.
         # Deterministic on retry, too: it 500s forever while the row stays approved.
+        # AND THE IMAGES THEY DESCRIBED MUST BE WRITABLE. `ocr._ooxml_images` walks the whole ZIP
+        # namelist while the appliers reach only the parts in formats/office/images.ALT_TARGETS,
+        # so a media part no alt-bearing part references — a Word footnote image, a VML sheet
+        # graphic — raises 1.4.5 and mints a card that no writer can action. Accepting a described
+        # decision on one recorded an obligation nothing could meet: the row stayed approved and
+        # unapplied forever, count_unapplied_approved_values counted it forever, and the file
+        # could never certify. #1767 made that visible; this is what stops it being accepted.
+        #
+        # Refused when ANY described image is unreachable, not only when all are. A partial
+        # acceptance would resolve the 1.4.5 finding for every image while wedging the file on
+        # the one that cannot be written — the same dead end, reached by a narrower door. The
+        # reviewer describes the ones that can be written, or resolves this row another way.
+        #
+        # `describable` absent means UNKNOWN, and unknown does not refuse: rows enqueued before
+        # handlers._mark_describable existed carry no flag, and refusing them would break
+        # decisions that work today. They keep the pre-#1767 behaviour, which is now at least
+        # visible rather than silent.
+        supplied = body.approved_values or []
+        unwritable = []
+        for i, p in enumerate(item.get("proposals") or []):
+            if not isinstance(p, dict) or p.get("describable") is not False:
+                continue                      # reachable, or unknown (see above)
+            described = str((supplied[i] if i < len(supplied) else "") or "").strip()
+            if described:
+                unwritable.append(str(p.get("locator") or "").strip() or f"image {i + 1}")
+        if unwritable:
+            raise HTTPException(
+                422, f"{Store.DESCRIBED_RESOLUTION} cannot be applied to "
+                     f"{', '.join(unwritable)}: nothing in this document references "
+                     "that image from a part any writer can reach, so a description would be "
+                     "recorded and never written. Describe the images that can be written, or "
+                     "resolve this finding another way.")
         if not [p for p in (item.get("proposals") or [])
                 if isinstance(p, dict) and str(p.get("locator") or "").strip()]:
             raise HTTPException(

@@ -542,7 +542,8 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
     except Exception:
         swallowed("_propose_text_findings: attaching 1.1.1 image evidence failed", scan_id)
     try:
-        _enqueue_proposals(scan_id, filename, "1.4.5", "Images of Text", image_text)
+        _enqueue_proposals(scan_id, filename, "1.4.5", "Images of Text",
+                           _mark_describable(image_text, file_bytes, filename, scan_id))
     except Exception:
         swallowed("_propose_text_findings: enqueueing 1.4.5 Images of Text proposals failed", scan_id)
     # 2.4.4 / 2.4.9 — descriptive link-text proposals for Office hyperlinks (vague text /
@@ -599,6 +600,58 @@ def _record_applied_fixes(scan_id: str, filename: str, fixes: list) -> None:
                 source=fx.get("source"), thumb=fx.get("thumb"), seq=i)
         except Exception:
             swallowed("_record_applied_fixes: recording an applied fix failed", scan_id)
+
+
+def _mark_describable(proposals: list, file_bytes: bytes, filename: str, scan_id: str) -> list:
+    """Stamp each 1.4.5 proposal with whether an applier could ever write alt text to its image.
+
+    ADR 0055 lets a reviewer KEEP an image of text and describe it, which records the description
+    as 1.1.1 alt text the document owes. That is only honest if something can write it. But
+    `ocr._ooxml_images` walks the whole ZIP NAMELIST while the appliers reach only the parts in
+    `formats/office/images.ALT_TARGETS`, so a media part that NO alt-bearing part references — a
+    Word footnote image, a VML sheet graphic — gets a review card no writer can action. #1767
+    widened that reach to layouts and masters and made the remaining wedge VISIBLE; this is what
+    stops it being accepted in the first place.
+
+    THE REACHABILITY QUESTION IS ASKED OF THE RESOLVER ITSELF, never re-implemented. A locator
+    resolves iff `resolve_media_locators` returns placements for it, so the check and the write
+    cannot disagree about what is addressable — the drift CLAUDE.md records this repo losing days
+    to. `describable` is therefore exactly "the translation would produce somewhere to write".
+
+    COMPUTED HERE, WHERE THE BYTES ARE ALREADY OPEN, and that placement is the design. The
+    alternative was a blob read inside the review request, which #1742 deliberately avoided:
+    'image N' is a media INDEX, and resolving it against a copy that is not the one it was minted
+    from can name a DIFFERENT PICTURE. Doing it at propose time removes that risk rather than
+    managing it — the flag describes the same bytes the card does.
+
+    Safe across the original -> remediated hop, and that was checked rather than assumed:
+    remediate_office rebuilds the package from `z.namelist()` and writes every entry back,
+    deleting no media, so the media list the reviewer's card was minted against is the one the
+    apply job resolves. (The 1.4.5 REPLACEMENT lane does delete a media part — but that is a
+    different decision on a different row, and it removes the picture rather than describing it.)
+
+    Best-effort by construction: any failure leaves the proposals unstamped, and an unstamped
+    proposal is treated as describable downstream. That is the pre-#1767 behaviour — the decision
+    is accepted and, if it cannot be written, the reviewer now gets a card saying so — so a
+    broken check degrades to the status quo instead of refusing work that would have succeeded.
+    """
+    if not proposals:
+        return proposals
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    try:
+        from apply_office_image_of_text import SUPPORTED_EXTS, resolve_media_locators
+        if ext not in SUPPORTED_EXTS:
+            return proposals                      # pdf and html mint other locator shapes
+        locators = [str(p.get("locator") or "").strip()
+                    for p in proposals if isinstance(p, dict)]
+        reachable = set(resolve_media_locators(file_bytes, locators, ext))
+    except Exception:
+        swallowed("_propose_text_findings: reading image reachability failed", scan_id)
+        return proposals
+    for p in proposals:
+        if isinstance(p, dict):
+            p["describable"] = str(p.get("locator") or "").strip() in reachable
+    return proposals
 
 
 def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
