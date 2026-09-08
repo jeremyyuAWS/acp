@@ -6,19 +6,27 @@ own cluster — with Docker Compose as the evaluation option. See
 decisions behind it, and [`docs/service-inventory.md`](docs/service-inventory.md) for what an
 installation actually consists of at each profile.
 
-**Still read-only.** `acpctl` provisions nothing and contacts no cluster, and nothing here touches
-the existing Azure Container Apps deployment in `deploy/public/` or the Compose stack in
-`deploy/compose/` — those keep working exactly as they do today and are not retired until a
-replacement demonstrates parity. What phase 2 adds is the **chart** the values were always being
-rendered for: `helm template` produces real manifests, and `helm install` is a decision an
-operator makes, not something a tool here does for them.
+**No longer read-only, and the boundary moved deliberately.** `acpctl install`, `uninstall` and
+`support-bundle` exist now, so the blanket promise this paragraph used to make — "provisions
+nothing and contacts no cluster" — is no longer true of the CLI as a whole. It is still true of
+every command it was true of before: `cluster.py` refuses any kubectl verb that is not a read,
+and doctor, status and support-bundle go through it. What can change a cluster lives in
+`helm.py`, behind its own narrower allow-list, because widening the read-only one would have
+retired that guarantee for every command at once. See
+[`docs/lifecycle.md`](docs/lifecycle.md).
+
+Nothing here touches the existing Azure Container Apps deployment in `deploy/public/` or the
+Compose stack in `deploy/compose/` — those keep working exactly as they do today and are not
+retired until a replacement demonstrates parity. And no deployment target is `supported`: that
+requires an acceptance run against a real cluster, which has not happened.
 
 ## Layout
 
 ```
 packaging/
   schema/acp-deployment.schema.json   the published contract
-  cli/acpctl/                         validate · plan · inventory · values
+  cli/acpctl/                         validate · plan · inventory · values · doctor · status
+                                      · install · uninstall · support-bundle
   chart/acp/                          the Helm chart the values install
   examples/                           one document per deployment profile
   docs/service-inventory.md           GENERATED — scripts/gen_service_inventory.py
@@ -75,11 +83,16 @@ python -m acpctl inventory packaging/examples/regulated.acp-deployment.yaml --js
 python -m acpctl values    packaging/examples/regulated.acp-deployment.yaml
 python -m acpctl doctor    packaging/examples/standard-production.acp-deployment.yaml
 python -m acpctl status    packaging/examples/standard-production.acp-deployment.yaml
+
+# these three reach a cluster; install and uninstall can change one — see docs/lifecycle.md
+python -m acpctl install   <spec> -n acp-prod --release-manifest release.json
+python -m acpctl uninstall <spec> -n acp-prod            # previews; --yes to act
+python -m acpctl support-bundle <spec> -n acp-prod -o ./bundle
 ```
 
-`validate` exits 0 on success and 1 on any error; warnings are printed and never fail. The
-remaining commands from the PRD's command list exit 2 and name the phase they belong to, rather
-than accepting arguments and doing nothing.
+`validate` exits 0 on success and 1 on any error; warnings are printed and never fail. Four
+commands remain unimplemented — upgrade, rollback, backup, restore — and they exit 2 naming the
+phase they belong to, rather than accepting arguments and doing nothing.
 
 ## `init` — start from something valid
 
@@ -120,8 +133,10 @@ valid-but-not-finished: `runtime.publicUrl`, `runtime.imageRegistry` and every e
 
 ## `doctor` — can this cluster run it?
 
-The only command that leaves the machine. It reads a live cluster through `kubectl`, so it
-inherits your kubeconfig, context and credentials, and it **changes nothing**: an allow-list
+One of the commands that leaves the machine, and one of the four that cannot change it —
+`status` and `support-bundle` share this guarantee, `install` and `uninstall` deliberately do
+not. It reads a live cluster through `kubectl`, so it inherits your kubeconfig, context and
+credentials, and it **changes nothing**: an allow-list
 refuses any kubectl verb that is not `version`, `api-resources` or `get`, and that refusal is
 tested against a dozen mutating verbs. Phase 0 kept the read-only promise by patching `open` in a
 test, which cannot see a subprocess — this is the replacement, not an addition to it.
