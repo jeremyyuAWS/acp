@@ -172,6 +172,9 @@ def test_health_reports_one_bounded_export_and_one_coalesced_follow_up(monkeypat
 
 def test_exporter_health_is_disabled_when_langfuse_is_not_configured(monkeypatch):
     monkeypatch.setattr(lf, "_ENABLED", False)
+    # A stale request can survive a runtime disable or a previous concurrent test. It cannot be
+    # serviced while disabled and must not make the public health payload contradict itself.
+    monkeypatch.setattr(lf, "_flush_requested", True)
 
     health = lf.exporter_health()
 
