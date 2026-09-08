@@ -39,7 +39,7 @@ from typing import Any, Callable, Iterable
 
 from .backend import BackendError, HttpResponse
 from .context import ScenarioContext
-from .report import Outcome
+from .report import UNKNOWN, Outcome
 
 # ── the surfaces the suite probes ─────────────────────────────────────────────
 #
@@ -75,7 +75,19 @@ PATH_SCANS = "/scans"                                 # exists — api/routes/sc
 # `queue=true` is the point rather than a convenience: it hands the work to the worker tier, which
 # is the path these scenarios exist to certify. With `queue=false` discovery runs inside the API
 # process and a green report would say nothing about whether any worker ever claimed a job.
-PATH_SCAN_START = "/scans?source=local&queue=true&ai=false&pii=false"
+# `replace_active=true` IS NOT A CONVENIENCE, IT IS HOW THE SUITE GETS PAST ITS OWN FENCE. The
+# application allows ONE active workflow per owner and answers 409 otherwise
+# (`discovery_workflow_active`), and this suite authenticates as one identity throughout — so
+# `worker-restart` alone starts three scans in sequence, each behind the previous one's run. The
+# route's own documentation says what this parameter means: "Re-scan means start fresh,
+# superseding whatever's running", and it supersedes rather than cancels, which is the difference
+# between the replaced run sorting as an ordinary superseded row and it stamping completed_at and
+# reading as the estate's newest, emptiest scan.
+#
+# `_start_scan` still treats a 409 as `unknown` rather than a failure. That is not redundancy: a
+# 409 would mean this suite is racing something else on the target, which says nothing about the
+# target and must not read as one of its defects.
+PATH_SCAN_START = "/scans?source=local&queue=true&ai=false&pii=false&replace_active=true"
 
 # PROGRESS IS `/live`, NOT `/status`. `/scans/{sid}/status` exists and is a different thing: ADR
 # 0026's Accessibility Status roll-up, which answers `{"available": ..., ...}` and never carries
@@ -131,14 +143,25 @@ HEARTBEAT_MAX_SECONDS = 90
 POLL_SECONDS = 5.0
 MAX_POLLS = 24                    # two minutes at the poll interval above
 
-# The run states `/live` reports, copied from api/live_snapshot.py:28-29 rather than guessed. A
-# state in neither set is `unknown` and never a pass: the suite has no idea what the run is doing,
-# and "the application grew a state we do not model" is a fact about the suite that must not be
-# reported as a fact about the target.
-RUN_ACTIVE_STATES = frozenset({"preparing", "running", "degraded", "pausing", "paused",
-                               "finalizing"})
-RUN_SUCCEEDED_STATE = "completed"
-RUN_FAILED_STATES = frozenset({"canceled", "cancelled", "failed"})
+# The run states, taken from what `api/store.py` actually WRITES to `scan_runs.status`. The first
+# real run against a cluster is why this list is not `live_snapshot._ACTIVE_STATES`: copying that
+# set produced `unknown` on a run that was working perfectly, twice.
+#
+# `discovered` IS A TERMINAL SUCCESS, and it is the one that matters here. A Discover-only scan
+# stops at `discovered` with `completed_at` staying NULL until somebody runs Assess
+# (store.py:308, 3343) — so a suite waiting for `completed` waits forever on a scan that finished.
+# The first reference-cluster run reported exactly that, as "the run reports state 'discovered',
+# which this suite does not model", and worker-restart turned it into a lost-work FAILURE about a
+# cluster that had lost nothing.
+#
+# DO NOT DERIVE THIS FROM THE SNAPSHOT'S `active` FIELD. `live_snapshot._ACTIVE_STATES` covers
+# neither `queued` nor `discovered`, so both report `active: false` while being, respectively, not
+# started and finished — opposite conditions that the one boolean cannot tell apart.
+RUN_IN_PROGRESS_STATES = frozenset({"queued", "preparing", "running", "degraded", "pausing",
+                                    "paused", "finalizing"})
+RUN_SUCCEEDED_STATES = frozenset({"discovered", "done", "completed"})
+RUN_FAILED_STATES = frozenset({"failed", "error", "cancelled", "canceled", "interrupted",
+                               "superseded"})
 
 # Storage schemes that are DURABLE. PRD §12: no authoritative output may exist only on ephemeral
 # disk, and §20.5 makes that an acceptance criterion. A remediated file whose only location is
@@ -293,11 +316,11 @@ def _await_scan(ctx: ScenarioContext, sid: str, *, max_polls: int = MAX_POLLS
                 reason=body.get("reason"))
         state = str(body.get("state") or "").strip().lower()
         seen.append(_counts(body)["completed"])
-        if state == RUN_SUCCEEDED_STATE:
+        if state in RUN_SUCCEEDED_STATES:
             return body, None
         if state in RUN_FAILED_STATES:
             return body, Outcome.failed(f"the run ended in state {state!r}", state=state)
-        if state not in RUN_ACTIVE_STATES:
+        if state not in RUN_IN_PROGRESS_STATES:
             return None, Outcome.unknown(
                 f"the run reports state {state!r}, which this suite does not model. That is a gap "
                 f"in the suite, not a finding about the target.", state=state)
@@ -576,8 +599,14 @@ def fixture_workflow(ctx: ScenarioContext) -> Outcome:
     if failure is not None:
         return failure
 
+    # NEITHER CALL TAKES THE BODY THIS USED TO SEND. `assess` declares only query parameters
+    # (`level`, `include_lifecycle_flagged`), so a JSON body is silently ignored — it read as a
+    # scope being honoured and never was. `remediate`'s optional body is
+    # `{"scope": ["file1.html", ...]}`, a LIST of filenames, and its docstring says omitting it
+    # remediates every eligible file, which is exactly what this scenario wants. The old
+    # `{"scope": "all"}` was a string where a list belongs.
     for path, label in ((PATH_SCAN_ASSESS, "assessment"), (PATH_SCAN_REMEDIATE, "remediation")):
-        resp = ctx.post(path.format(sid=sid), {"scope": "all"})
+        resp = ctx.post(path.format(sid=sid))
         bad = _unavailable(resp, path.format(sid=sid))
         if bad is not None:
             return bad
@@ -714,8 +743,16 @@ def worker_restart(ctx: ScenarioContext) -> Outcome:
                 f"so its behaviour under restart was not established", role=role)
         final, failure = _await_scan(ctx, sid)
         if failure is not None:
-            # A scan that never finishes after a restart IS the lost-work failure; report it as
-            # this scenario's finding rather than as a generic timeout.
+            # AN `unknown` IS NOT A LOST-WORK FINDING, and folding it in was a real defect: the
+            # first reference-cluster run reported "work did not complete after the tier
+            # restarted" for all three tiers, on a cluster where all three had completed, because
+            # `_await_scan` came back `unknown` over a run state the suite did not model. The
+            # runner's rule is that nothing about the target is established by a call that could
+            # not be interpreted, so that must propagate as `unknown` and never become a FAIL.
+            if failure.state == UNKNOWN:
+                return failure
+            # A run that genuinely did not finish after a restart IS the lost-work failure;
+            # reported as this scenario's finding rather than as a generic timeout.
             findings.append(f"{role}: work did not complete after the tier restarted "
                             f"({failure.detail})")
             evidence[role] = {"scanId": sid, "completed": False}

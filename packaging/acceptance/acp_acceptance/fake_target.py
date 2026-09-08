@@ -261,12 +261,22 @@ class FakeBackend(ExecutionBackend):
             # asserted, because a stall alone is indistinguishable from a slow cluster.
             return HttpResponse(200, json.dumps(self._snapshot(scan, state="running",
                                                                discovered=total, completed=0)))
+        # THE STATE SEQUENCE THE APPLICATION ACTUALLY WRITES: `queued` before a worker claims the
+        # job, `running` while it works, and `discovered` when a Discover-only scan finishes —
+        # NOT `completed`, which arrives only after Assess (store.py:308, 3343). The fake emitted
+        # `running` then `completed`, so the suite was written against a sequence no scan
+        # produces, and the first real run reported both `queued` and `discovered` as states it
+        # did not model.
         complete = scan.polls >= int(self.world["scan_polls_until_complete"])
-        done = total if complete else min(total, scan.polls)
+        if complete:
+            state, done = "discovered", total
+        elif scan.polls <= 1:
+            state, done = "queued", 0
+        else:
+            state, done = "running", min(total, scan.polls)
         scan.finished_files = done
-        return HttpResponse(200, json.dumps(self._snapshot(
-            scan, state="completed" if complete else "running",
-            discovered=total, completed=done)))
+        return HttpResponse(200, json.dumps(
+            self._snapshot(scan, state=state, discovered=total, completed=done)))
 
     def _snapshot(self, scan, *, state: str, discovered: int, completed: int) -> dict:
         return {
@@ -274,7 +284,11 @@ class FakeBackend(ExecutionBackend):
             "run_id": scan.scan_id,
             "source": "local",
             "state": state,
-            "phase": "complete" if state == "completed" else "assessing",
+            "phase": "complete" if state in ("discovered", "done", "completed") else "assessing",
+            # COPIED FROM live_snapshot._ACTIVE_STATES VERBATIM, INCLUDING ITS GAPS. Neither
+            # `queued` nor `discovered` is in it, so both report `active: false` — one not started
+            # and one finished. The fake reproduces that rather than correcting it, because a
+            # scenario that quietly relies on `active` must fail here and not on a cluster.
             "active": state in ("preparing", "running", "degraded", "pausing", "paused",
                                 "finalizing"),
             "totals": {"discovered": discovered, "eligible": discovered},
@@ -291,9 +305,23 @@ class FakeBackend(ExecutionBackend):
         return HttpResponse(200, "")     # only used via _sse; kept so the route is known
 
     def _route_post_scans_assess(self, params, body) -> HttpResponse:
+        """`assess` declares only QUERY parameters, so FastAPI ignores any JSON body sent to it.
+        The fake refuses one instead of ignoring it: a body here reads as a scope being honoured
+        and never is."""
+        if body is not None:
+            return HttpResponse(422, json.dumps({"detail": "assess takes query parameters only"}))
         return HttpResponse(202, json.dumps({"job_id": f"assess-{params['sid']}"}))
 
     def _route_post_scans_remediate(self, params, body) -> HttpResponse:
+        """`remediate`'s optional body is `{"scope": ["file1.html", ...]}` — a LIST of filenames.
+        Omitting it remediates every eligible file, which is what the fixture workflow wants. A
+        STRING scope is refused: `{"scope": "all"}` would be iterated character by character."""
+        if body is not None:
+            scope = (body or {}).get("scope")
+            if not isinstance(scope, list):
+                return HttpResponse(422, json.dumps({
+                    "detail": "remediate's scope must be a list of filenames; omit the body to "
+                              "remediate everything"}))
         return HttpResponse(202, json.dumps({"job_id": f"remediate-{params['sid']}"}))
 
     def _route_get_scans_jobs(self, params, body) -> HttpResponse:
@@ -352,7 +380,7 @@ class FakeBackend(ExecutionBackend):
                 # One keep-alive, so a scenario that counts frames has to distinguish them from
                 # snapshots rather than counting everything the stream delivered.
                 frames.append({"": "keep-alive", "data": ""})
-        frames.append({"data": self._snapshot(scan, state="completed", discovered=total,
+        frames.append({"data": self._snapshot(scan, state="discovered", discovered=total,
                                               completed=total)})
         return frames[:max_events]
 

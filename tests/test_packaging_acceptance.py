@@ -891,3 +891,69 @@ def test_the_suite_takes_no_reading_through_a_provider_specific_surface():
         f"{offenders}. A portable suite certifying six platforms cannot take a reading through "
         f"a provider adapter — on every non-Azure target that route degrades to an empty block "
         f"and the scenario reports a failure that is about the adapter, not the target.")
+
+
+# ── what the first real reference-cluster run found ───────────────────────────
+#
+# Three defects, all in this suite, none of them visible until it met an API server. Recorded as
+# tests because each one produced a CONFIDENT WRONG STATEMENT ABOUT THE CLUSTER, which is the
+# failure mode a suite whose whole job is honest reporting can least afford.
+
+def test_a_discover_only_run_ending_in_discovered_is_a_success_not_an_unmodelled_state():
+    """`discovered` is where a Discover-only scan STOPS. `completed_at` stays NULL until somebody
+    runs Assess (store.py:308, 3343), so a suite waiting for `completed` waits forever on a scan
+    that finished — which is what the first reference-cluster run reported, twice."""
+    assert "discovered" in scenarios_mod.RUN_SUCCEEDED_STATES
+    backend = fake.FakeBackend(grants=frozenset(CAPABILITIES))
+    from acp_acceptance.context import ScenarioContext
+    ctx = ScenarioContext(target=run_mod.SELF_TEST_TARGET, backend=backend,
+                          artifacts=ArtifactSink())
+    sid, _ = scenarios_mod._start_scan(ctx)
+    snap, failure = scenarios_mod._await_scan(ctx, sid)
+    assert failure is None, failure.detail
+    assert snap["state"] == "discovered", snap["state"]
+
+
+def test_a_queued_run_is_polled_rather_than_reported_unmodelled():
+    """`queued` is the state before a worker claims the job. It is also NOT in
+    `live_snapshot._ACTIVE_STATES`, so the snapshot reports `active: false` for it — which is why
+    this must be modelled explicitly and never derived from that boolean."""
+    assert "queued" in scenarios_mod.RUN_IN_PROGRESS_STATES
+    assert "queued" not in scenarios_mod.RUN_SUCCEEDED_STATES
+    backend = fake.FakeBackend(grants=frozenset(CAPABILITIES))
+    from acp_acceptance.context import ScenarioContext
+    ctx = ScenarioContext(target=run_mod.SELF_TEST_TARGET, backend=backend,
+                          artifacts=ArtifactSink())
+    sid, _ = scenarios_mod._start_scan(ctx)
+    first = json.loads(backend.http("GET", f"/scans/{sid}/live").body)
+    assert first["state"] == "queued" and first["active"] is False, first
+    snap, failure = scenarios_mod._await_scan(ctx, sid)
+    assert failure is None, "a run seen in `queued` was not polled to its terminal state"
+
+
+def test_an_unknown_from_the_restart_scenario_never_becomes_a_failure_about_the_target():
+    """THE WORST OF THE THREE. The first real run reported "work did not complete after the tier
+    restarted" for all three tiers, on a cluster where all three had completed — because
+    `_await_scan` came back `unknown` over a state the suite did not model, and the scenario
+    folded that straight into a lost-work finding."""
+    world = fake.world(faults={"GET /scans/{sid}/live": {"status": 404}})
+    run, _ = run_fake(world=world, scenario_ids=["worker-restart"])
+    entry = entry_for(run.report, "worker-restart")
+    assert entry["state"] == UNKNOWN, (
+        f"an unreadable run state was reported as {entry['state']}: {entry['detail']}")
+
+
+def test_the_fixture_workflow_sends_no_body_to_assess_or_remediate():
+    """`assess` declares only query parameters, so a JSON body is silently ignored — it read as a
+    scope being honoured and never was. `remediate`'s optional body takes a LIST of filenames, and
+    the old `{"scope": "all"}` was a string where a list belongs; omitting it is what its own
+    docstring says remediates everything."""
+    run, backend = run_fake(scenario_ids=["fixture-workflow"])
+    posts = [e for e in backend.log if e["kind"] == "http" and e["method"] == "POST"
+             and ("/assess" in e["path"] or "/remediate" in e["path"])]
+    assert posts, "the scenario never reached assess or remediate"
+    bodies = [json.loads(r.body) for r in [backend.http("POST", p["path"], body={"scope": "all"})
+                                           for p in posts]]
+    assert all(b.get("detail") for b in bodies), (
+        "the fake accepted a `{'scope': 'all'}` body on assess/remediate; the application either "
+        "ignores it or would iterate the string character by character")
