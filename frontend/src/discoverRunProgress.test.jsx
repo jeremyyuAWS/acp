@@ -59,6 +59,26 @@ describe('DiscoverRunProgress renders nothing until a scan is live', () => {
     expect(html).toContain('7 archive review · 3 deletion review · 2 tagged')
     expect(html).toContain('90 new · 8 updated · 2 unchanged')
   })
+
+  it('offers a compact folder drill-down backed by the completed inventory rows', () => {
+    const inv = { total: 3, rows: [
+      { file: 'Policy.docx', parent_folder: '/Clinical/Policies' },
+      { file: 'Form.pdf', parent_folder: '/Clinical/Policies' },
+      { file: 'Readme.txt', parent_folder: null },
+    ] }
+    const html = render({ phase: 'done', files_found: 3, folders_found: 2 }, false,
+      undefined, undefined, inv)
+    expect(html).toContain('View files and folders')
+    expect(html).toContain('/Clinical/Policies')
+    expect(html).toContain('2 files')
+    expect(html).toContain('Source root')
+    expect(html).toContain('1 file')
+  })
+
+  it('does not fabricate a folder drill-down when inventory rows are unavailable', () => {
+    const html = render({ phase: 'done', files_found: 3, folders_found: 2 }, false)
+    expect(html).not.toContain('View files and folders')
+  })
 })
 
 describe('live discovery accounting', () => {
@@ -69,6 +89,28 @@ describe('live discovery accounting', () => {
     expect(html).toMatch(/Documents found<\/dt><dd><span class="livecounter"/)
     expect(html).toMatch(/Folders visited<\/dt><dd><span class="livecounter"/)
     expect(html).toMatch(/Inventory saved<\/dt><dd><span class="livecounter"/)
+  })
+
+  it('shows +X deltas when a live discovery event increases the counts', async () => {
+    const { container, root } = createTestRoot()
+    await act(async () => {
+      root.render(createElement(DiscoverRunProgress, {
+        progress: { phase: 'discovering', files_found: 12, folders_found: 4 }, busy: true,
+      }))
+    })
+    await act(async () => {
+      root.render(createElement(DiscoverRunProgress, {
+        progress: { phase: 'discovering', files_found: 21, folders_found: 7 }, busy: true,
+      }))
+    })
+    const deltas = [...container.querySelectorAll('.stage-live-accounting .livecounter-delta')]
+      .map((node) => node.textContent)
+    expect(deltas).toEqual(['+9', '+3'])
+  })
+
+  it('keeps completed checklist counts static so no frozen live affordance remains', () => {
+    const html = render({ phase: 'done', files_found: 12, folders_found: 4 }, false)
+    expect(html).not.toContain('class="livecounter"')
   })
 })
 
