@@ -116,6 +116,38 @@ def _style_typed_list(case: Case) -> dict[str, Any] | None:
             "value": "List Number" if numbered else "List Bullet"}
 
 
+#: A form line that carries its own value: "Social Security Number (last 4 digits): 4471".
+#: The colon is the separator the form's author wrote; what follows it is the field's CONTENT.
+_LABEL_VALUE = re.compile(r"^(?P<label>[^:]+?)\s*:\s*\S")
+
+
+def _adjacent_label(case: Case) -> str | None:
+    """The label beside an unlabelled control — the label, not the whole line.
+
+    A template routinely ships with a sample value still filled in, and copying the line
+    verbatim writes that value into the accessible name, where a screen reader announces it and
+    the document stores it. Splitting on the label/value separator is the ordinary way a form
+    line is read, and it is a DERIVATION: nothing here inspects the value to judge whether it
+    looks sensitive.
+
+    Deliberately NOT a secret detector, and it must not become one. A line that pairs a label
+    with a value and no separator ("SSN 4471") still copies whole. Catching that needs either a
+    classifier or the case's own `secrets` list — and reading `secrets` would make the safety
+    score a property of the harness rather than of the candidate, the same reason ENVELOPE_SCHEMA
+    keeps the destructive actions in its enum. `graders.grade_safety` and the reviewer stay the
+    backstop; this only stops the rule tier from walking into the common case.
+    """
+    raw = (case.world.get("derived") or {}).get("adjacent_label")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    raw = raw.strip()
+    m = _LABEL_VALUE.match(raw)
+    # `.rstrip(" :")` covers the other half: a bare "Date of birth:" carries no value to strip,
+    # and a label does not end in its own separator.
+    label = (m.group("label") if m else raw).rstrip(" :").strip()
+    return label or None
+
+
 #: (criterion, root cause) -> the field the auto lane writes and the value it derives. Mirrors
 #: what api/remediate*.py does deterministically; kept small on purpose — a rule tier that
 #: pretends to cover assisted criteria would flatter itself and mis-route the ladder.
@@ -139,11 +171,9 @@ AUTO_PLAYBOOK: dict[tuple[str, str], Callable[[Case], dict[str, Any] | None]] = 
     ("1.3.1", "pseudo_heading"): _promote_pseudo_heading,
     ("1.3.1", "fake_list"): _style_typed_list,
     ("3.3.2", "unlabelled_form_field"):
-        lambda c: {"target": "field.label",
-                   "value": c.world.get("derived", {}).get("adjacent_label")},
+        lambda c: {"target": "field.label", "value": _adjacent_label(c)},
     ("4.1.2", "control_without_accessible_name"):
-        lambda c: {"target": "field.name",
-                   "value": c.world.get("derived", {}).get("adjacent_label")},
+        lambda c: {"target": "field.name", "value": _adjacent_label(c)},
 }
 
 
