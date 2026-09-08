@@ -1,5 +1,6 @@
 import './simple-remediation-questions.css'
 import { useId } from 'react'
+import RemediationOptionHelp from './RemediationOptionHelp.jsx'
 
 const MODES = [
   ['Review every change', 'Prepare proposed fixes. A person approves each change before application.'],
@@ -60,27 +61,39 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, bud
     <fieldset disabled={disabled}>
       <legend>1. How should fixes be approved?</legend>
       <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
-        <label className={policy.rule_based === 0 ? 'is-selected' : ''}>
-          <input type="radio" name={`${id}-automation`} checked={policy.rule_based === 0} onChange={() => onChange('rule_based', 0)} />
-          <span><strong>Review before applying</strong><span>Approve proposed changes before they are applied.</span></span>
-        </label>
-        <label className={policy.rule_based === 2 ? 'is-selected' : ''}>
-          <input type="radio" name={`${id}-automation`} checked={policy.rule_based === 2} onChange={() => onChange('rule_based', 2)} />
-          <span><strong>Apply and verify automatically</strong><span>Apply eligible fixes and verify results. Changes that require human judgment stay in review.</span></span>
-        </label>
+        <div className="remediation-plan-option">
+          <label className={policy.rule_based === 0 ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-automation`} checked={policy.rule_based === 0} onChange={() => onChange('rule_based', 0)} />
+            <span><strong>Review before applying</strong><span>Approve proposed changes before they are applied.</span></span>
+          </label>
+          <RemediationOptionHelp label="review before applying">You decide which proposed changes to accept before they are applied. This is sometimes called human-in-the-loop (HITL). AI is a separate choice below: turn it Off to use rule-based fixes only.</RemediationOptionHelp>
+        </div>
+        <div className="remediation-plan-option">
+          <label className={policy.rule_based === 2 ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-automation`} checked={policy.rule_based === 2} onChange={() => onChange('rule_based', 2)} />
+            <span><strong>Apply and verify automatically</strong><span>Apply eligible fixes and verify results. Changes that require human judgment stay in review.</span></span>
+          </label>
+          <RemediationOptionHelp label="apply and verify automatically">ACP applies supported fixes using set rules and checks the result. AI suggestions and issues that need a person’s judgment still go to review.</RemediationOptionHelp>
+        </div>
       </div>
     </fieldset>
     <fieldset disabled={disabled}>
       <legend>2. Use AI to resolve more issues?</legend>
       <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
-        <label className={policy.ai === 0 ? 'is-selected' : ''}>
-          <input type="radio" name={`${id}-ai`} checked={policy.ai === 0} onChange={() => onChange('ai', 0)} />
-          <span><strong>Off</strong><span>Use rule-based fixes only.</span></span>
-        </label>
-        <label className={policy.ai > 0 ? 'is-selected' : ''}>
-          <input type="radio" name={`${id}-ai`} checked={policy.ai > 0} onChange={() => onChange('ai', 1)} />
-          <span><strong>On</strong><span>Prepare AI suggestions for review.</span></span>
-        </label>
+        <div className="remediation-plan-option">
+          <label className={policy.ai === 0 ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-ai`} checked={policy.ai === 0} onChange={() => onChange('ai', 0)} />
+            <span><strong>Off</strong><span>Use rule-based fixes only.</span></span>
+          </label>
+          <RemediationOptionHelp label="AI Off">Use only fixes based on set rules. ACP will not ask AI to write new suggestions for this run. Your approval choice above still applies.</RemediationOptionHelp>
+        </div>
+        <div className="remediation-plan-option">
+          <label className={policy.ai > 0 ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-ai`} checked={policy.ai > 0} onChange={() => onChange('ai', 1)} />
+            <span><strong>On</strong><span>Prepare AI suggestions for review.</span></span>
+          </label>
+          <RemediationOptionHelp label="AI On">AI prepares suggestions for a person to review and edit. Suggestions may be imperfect and do not mean every issue has been fixed.</RemediationOptionHelp>
+        </div>
       </div>
       {policy.ai > 0 && <div className="simple-remediation-budget">
         <label htmlFor={`${id}-budget`}>Maximum AI spend for this run (USD)</label>

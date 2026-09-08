@@ -75,7 +75,7 @@ describe('the three facts that replace the score', () => {
     const c = await mount({ files: ESTATE })
     // The board-4 explainer cell says "No accessibility score" by name; that is a declaration of
     // absence, not a leak. What must never appear is an actual score VALUE.
-    expect(c.textContent).toMatch(/No accessibility score/)
+    expect(c.textContent).toMatch(/Why there is no overall score/)
     expect(c.textContent, 'a score is back on the summary').not.toMatch(/\bscore[d:]?\s*[:=]?\s*\d/i)
     expect(c.textContent).not.toMatch(/\/\s*100\b/)
   })
@@ -258,7 +258,7 @@ describe('one primary action', () => {
 })
 
 describe('the seven screen states — a run that did not complete never reads as one that did', () => {
-  const gridShown = (c) => /Findings by severity/.test(c.textContent)
+  const gridShown = (c) => /How serious are the issues/.test(c.textContent)
 
   describe('state 6 · assessment failed', () => {
     it('renders no metric grid — not even zeros — for an errored run', async () => {
@@ -361,8 +361,8 @@ describe('board 7 state 5 — a gap named at the top, not only in the list at th
 describe('board 4 · the 8th cell names what the score would have been', () => {
   it('states the absence by name, in the metrics grid', async () => {
     const c = await mount({ files: ESTATE })
-    expect(c.textContent).toMatch(/Deliberately absent/)
-    expect(c.textContent).toMatch(/No accessibility score · no percentages · no time-per-person estimate/)
+    expect(c.textContent).toMatch(/Why there is no overall score/)
+    expect(c.textContent).toMatch(/A single score could hide an important issue/)
   })
 })
 
