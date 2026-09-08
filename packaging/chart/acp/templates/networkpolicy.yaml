@@ -124,5 +124,36 @@ spec:
         - port: {{ .port }}
           protocol: {{ .protocol }}
         {{- end }}
+    {{- /*
+      THE CHART'S OWN API, WHICH THIS POLICY BLOCKED UNTIL 2026-09-08.
+
+      The preflight hook reads `http://<release>-api:80/readyz` and carries this chart's selector
+      labels, so this policy applies to it — and neither 80 nor 8077 is in `egressPorts`, which
+      lists the ports ACP needs to leave the CLUSTER on. Its request was dropped, it exited 1, and
+      Helm failed the release:
+
+        Error: INSTALLATION FAILED: failed post-install: job acp-preflight failed:
+               BackoffLimitExceeded
+        [preflight] could not reach http://acp-api:80/readyz: <urlopen error timed out>
+
+      SO `helm install` OF THIS CHART FAILED ON ANY CLUSTER THAT ENFORCES NETWORKPOLICY — which is
+      every production cluster and was not the reference cluster until Calico replaced kindnet.
+      kindnet accepts policies and enforces none, so eleven green runs said nothing about this.
+
+      Scoped to the API pods rather than opening a port globally: `to` plus `ports` is an AND, so
+      this permits ACP's pods to reach ACP's API and nothing else. BOTH ports are named because a
+      ClusterIP connection is DNATed to the backend before it leaves, and which of the two a given
+      CNI matches on is an implementation detail this chart should not depend on.
+    */}}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "acp.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: api
+      ports:
+        - port: {{ .Values.api.port }}
+          protocol: TCP
+        - port: {{ .Values.api.service.port }}
+          protocol: TCP
 {{- end }}
 {{- end }}

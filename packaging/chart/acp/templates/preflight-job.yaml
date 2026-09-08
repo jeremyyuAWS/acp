@@ -1,16 +1,31 @@
 {{- if .Values.preflight.enabled }}
 {{/*
-Post-install verification — a report, deliberately not a gate.
+Post-install verification, and IT DOES BLOCK — this comment used to say it did not.
 
-WHY IT DOES NOT BLOCK. A post-install hook that fails the release triggers a rollback of a
-deployment whose application is already running and already serving requests. So a check that is
-itself broken — a probe with the wrong URL, a dependency that is slow on first boot — takes down
-a working install. The gate that matters ran BEFORE the new code was admitted: the migration
-hook, which does block.
+WHAT WAS WRONG, AND HOW IT WAS FOUND. The text here read "a report, deliberately not a gate",
+reasoning that a post-install failure would roll back a working deployment. Two things are wrong
+with that. Helm has no hook failure policy: a hook that exits non-zero fails the release, full
+stop, and the container below exits 1 when it cannot reach the API. And a rollback only happens
+under `--atomic`; without it the resources stay and the release is simply marked failed. So the
+hook was a gate, described as a report, and nobody had seen it act as one because nothing had ever
+made it fail.
 
-What this reports is what a human should read after an install: whether the API can reach its
-database, its object storage and its renderer. `acpctl status` (phase 2) is the on-demand version
-of the same question; this is the one that runs whether or not anybody remembers to ask.
+On 2026-09-08 something did. Replacing kind's kindnet with Calico made the chart's own
+NetworkPolicies enforceable for the first time, and this hook's request to the API was dropped by
+this chart's own egress policy:
+
+  Error: INSTALLATION FAILED: failed post-install: job acp-preflight failed: BackoffLimitExceeded
+  [preflight] could not reach http://acp-api:80/readyz: <urlopen error timed out>
+
+THE HOOK WAS RIGHT AND THE COMMENT WAS WRONG. It found a defect that would have failed `helm
+install` on every cluster that enforces NetworkPolicy — which is every production cluster — and it
+found it because it blocks. The fix was to the policy (`templates/networkpolicy.yaml`), not to
+this check, and making it exit 0 to match its old description would have converted the one thing
+that caught this into a check that cannot fail.
+
+What it reports is what a human should read after an install: whether the API can reach its
+database, its object storage and its renderer. `acpctl status` is the on-demand version of the
+same question; this is the one that runs whether or not anybody remembers to ask.
 */}}
 apiVersion: batch/v1
 kind: Job

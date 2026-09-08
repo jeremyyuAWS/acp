@@ -325,6 +325,32 @@ forced on. The comment beside it claimed the shared context "sets it true", whic
 so — a reader deciding whether this chart hardens its root filesystems would have concluded it
 does.
 
+**The chart's own network policy blocked the chart's own preflight check, and `helm install`
+failed on any cluster that enforces NetworkPolicy.** Replacing kindnet with Calico made the
+policies enforceable for the first time, and the very next install failed:
+
+    Error: INSTALLATION FAILED: failed post-install: job acp-preflight failed: BackoffLimitExceeded
+    [preflight] could not reach http://acp-api:80/readyz: <urlopen error timed out>
+
+The preflight Job carries this chart's selector labels, so the `-egress` policy applies to it —
+and that policy lists the ports ACP needs to leave the CLUSTER on (53, 443, 5432, 6379, 6380).
+Neither the API's service port nor its container port is among them, because reaching your own API
+is not egress in the sense the list was written for. The request was dropped, the hook exited 1,
+and Helm failed the release. Every production cluster enforces NetworkPolicy; eleven green runs
+said nothing about it because kindnet does not.
+
+The fix is a second egress rule scoped to the API pods rather than a port opened globally — `to`
+plus `ports` is an AND, so ACP's pods may reach ACP's API and nothing else. Both the service port
+and the container port are named: a ClusterIP connection is DNATed to the backend before it
+leaves, and which of the two a given CNI matches on is not something this chart should depend on.
+
+TWO CLAIMS DIED WITH IT. This report's workstream C row called the preflight hook "advisory
+(`backoffLimit: 0`, post-install)", and the hook's own docstring said it was "a report,
+deliberately not a gate" that "does not block". Helm has no hook failure policy: a hook that exits
+non-zero fails the release, and that container exits 1. It is a gate, it always was, and nobody
+had seen it act as one because nothing had ever made it fail. Making it exit 0 to match the
+description would have converted the one thing that caught this into a check that cannot fail.
+
 **What the reference install never creates, counted rather than guessed at.** The reference
 document renders NetworkPolicy, PodDisruptionBudget, ServiceAccount, one Service, four Deployments
 and two Jobs. The standard-production example renders all of that plus a HorizontalPodAutoscaler,
@@ -622,5 +648,5 @@ evidence about a released artifact.
 |---|---|---|---|---|
 | **A. Release artifacts and supply chain** | in progress | The `ACPRelease` contract, `acpctl release verify`, and `--release` on `values`/`plan` (`tests/test_packaging_release.py`), which reconcile the plan's eight names, the chart's four references and the one application artifact — and render every image by digest | Nothing builds, signs, SBOMs or scans an artifact, so no real manifest exists and CI has no release to fail on | Build the release images in CI and emit a signed manifest from that build |
 | **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; zone spreading is soft on every profile and unprovable on a one-node cluster, no `readOnlyRootFilesystem` (blocked on `PUT /rubric` writing into the image), no backup/restore Job | A backup/restore Job, which needs RTO/RPO and retention decided first |
-| **C. Portable acceptance suite** | not started | None — no `packaging/tests/`; the preflight hook is advisory (`backoffLimit: 0`, post-install) | Eight of ten scenarios need `acpctl install`, which exits 2; the first two need only a cluster and images | Define the structured report format and emit it from the two readiness scenarios |
+| **C. Portable acceptance suite** | not started | None — no `packaging/tests/`; the preflight hook DOES gate the install (Helm has no hook failure policy and the container exits 1), which is not what this row used to say | Eight of ten scenarios need `acpctl install`, which exits 2; the first two need only a cluster and images | Define the structured report format and emit it from the two readiness scenarios |
 | **D. `acpctl` lifecycle** | in progress | Eight read-only commands with documented exit codes; write-refusal and kubectl-verb allow-list both tested; the seven lifecycle commands refuse rather than no-op (`cli.py:27-35`) | `install` has nothing to pin to: the release contract exists but no build produces a manifest, so there are no real digests and no signature to verify | Hold `install` until a build emits a manifest; `support-bundle` is the one command with no upstream dependency |
