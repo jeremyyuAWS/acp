@@ -193,6 +193,11 @@ describe('canonical stage card', () => {
     expect(canonicalStageCardModel({ ...SNAPSHOT, state: 'failed' }).stateLabel).toBe('Failed')
   })
 
+  it('uses the concise Complete label once stage processing has finished', () => {
+    expect(canonicalStageCardModel({ ...SNAPSHOT, state: 'processing_complete' }).stateLabel).toBe('Complete')
+    expect(canonicalStageCardModel({ ...SNAPSHOT, state: 'succeeded' }).stateLabel).toBe('Complete')
+  })
+
   it('keeps the canonical partition visible while leased work drains after a stop request', () => {
     const html = render({ ...SNAPSHOT, control: { cancel_requested: true } })
     expect(html).toContain('Stopping safely')
