@@ -1982,13 +1982,20 @@ def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
                 progress_cb({"key": f"{drive_id or 'me'}/{cur or 'root'}",
                              "name": cur_path.rsplit('/', 1)[-1], "path": cur_path,
                              "state": "failed", "started_at": started_at,
-                             "files_found": len(raw) - folder_files_from, "error": str(e)})
+                             "files_found": len(raw) - folder_files_from,
+                             "scannable_found": sum(
+                                 1 for item in raw[folder_files_from:]
+                                 if Path(item.get("name") or "").suffix.lower() in exts),
+                             "error": str(e)})
             raise
         if progress_cb:
             progress_cb({"key": f"{drive_id or 'me'}/{cur or 'root'}",
                          "name": cur_path.rsplit('/', 1)[-1], "path": cur_path,
                          "state": "partial" if truncated else "completed", "started_at": started_at,
-                         "files_found": len(raw) - folder_files_from})
+                         "files_found": len(raw) - folder_files_from,
+                         "scannable_found": sum(
+                             1 for item in raw[folder_files_from:]
+                             if Path(item.get("name") or "").suffix.lower() in exts)})
         if truncated:
             break
     return raw, truncated
@@ -2612,6 +2619,11 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     _sp_active_folders: dict[str, dict] = {}
     _sp_recent_folders: list[dict] = []
     _sp_folders_seen: set[str] = set()
+    # Folder events arrive before their library batch is consumed into `files`. Counting only
+    # `files` therefore leaves the headline at zero while the activity stream visibly discovers
+    # documents. This provisional tally feeds telemetry only; the durable estate still uses the
+    # identity-deduped consumption path below.
+    _sp_folder_scannable: dict[str, int] = {}
     _sp_last_folder_emit = [0.0]
     # Sites a previous ATTEMPT of this scan already listed. On the report, complete, with the
     # counts the caller supplied — see `skip_sites` above for why the counts and not just the ids.
@@ -2640,8 +2652,9 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 _active = [dict(v) for v in _sp_active_folders.values()]
                 _recent = [dict(v) for v in _sp_recent_folders]
                 _folder_count = len(_sp_folders_seen) or None
+                _files_found = max(len(files), sum(_sp_folder_scannable.values()))
             try:
-                progress_cb(len(files), folders=_folder_count, active=_active or None,
+                progress_cb(_files_found, folders=_folder_count, active=_active or None,
                             recent=_recent or None,
                             sites=[dict(v) for v in site_report.values()])
             except TypeError:
@@ -2662,6 +2675,8 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 _sp_active_folders[key] = dict(event)
             else:
                 _sp_active_folders.pop(key, None)
+                if key:
+                    _sp_folder_scannable[key] = int(event.get("scannable_found") or 0)
                 _sp_recent_folders.insert(0, dict(event))
                 del _sp_recent_folders[4:]
             # Match the existing Drive walker: update state for every folder, but bound database
