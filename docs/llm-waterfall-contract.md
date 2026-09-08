@@ -241,3 +241,26 @@ This change wires the provider boundary and facade; worker context establishment
 exception persistence/UI, immutable enqueue policy, and candidate promotion are
 separate parent/sibling integration responsibilities. No deployment or paid API
 validation was performed.
+
+## Integrated worker status (2026-09-08)
+
+The integration branch now establishes `ai_run_policy.run_context` around the
+remediation worker, persists accepted budgets with canonical queued executions,
+and records deferred provider reasons. The planner accepts a USD cap, passes it
+through the sealed run policy, and displays ledger spending separately from the
+forecast. Existing jobs without an explicit cap retain their legacy behavior.
+
+Managed text drafting uses the configured two-model profile. Vision and other
+unbounded paths defer rather than bypass the spending limit. Stable prompt
+identities prevent purchasing the same draft again on a job retry; when a paid
+result is no longer available for reuse, reconciliation is required. Confirmed
+pre-dispatch rejection releases its reservation. Unknown transport outcomes do
+not. These rules concern metered provider charges, not infrastructure costs.
+
+The objective automatic-approval facade still requires a production caller with
+trusted evidence and durable candidate promotion. It is not a general automatic
+approval capability. Semantic drafts remain in human review; deterministic
+remediation does not require configuring AI. Configure the explicitly selected
+provider and `ACP_BOUNDED_TEXT_PROFILE=anthropic-balanced` (or an approved custom
+model snapshot) before positive-budget managed drafts can run. The UI does not
+silently adopt the profile script's suggested $25 cap.
