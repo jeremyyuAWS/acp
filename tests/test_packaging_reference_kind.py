@@ -327,6 +327,63 @@ def test_the_data_services_meet_the_standard_the_namespace_enforces():
                 f"{name} mounts a volume it will not be able to write to")
 
 
+def test_the_doctor_step_asserts_its_findings_rather_than_printing_them():
+    """`acpctl doctor` cannot exit 0 on this cluster, so the step runs it with `|| true` — and on
+    its own that made the step DECORATIVE. It printed a report nothing read, so doctor could have
+    stopped reporting anything at all and the job would have gone green.
+
+    The comment it replaced was wrong in both directions, which is why this is asserted rather
+    than described: it named NetworkPolicy as the expected blocker, and on kind that check is
+    UNKNOWN at WARNING severity (kindnet is in neither CNI list), while the actual blocker —
+    `capacity.floor` — went unmentioned.
+    """
+    script = run_steps()
+    assert "acpctl doctor" in script and "--json" in script
+    assert "capacity.floor" in script and "networkpolicy.enforcement" in script, (
+        "the step must name the findings it expects, or it cannot tell a changed report from a "
+        "report that stopped being produced")
+
+
+@needs_helm
+def test_the_dry_run_covers_the_kinds_the_reference_install_never_creates():
+    """THE PREMISE OF THAT STEP, ASSERTED, because it is a claim about two documents and either
+    can change.
+
+    The reference document deliberately turns most things off — no autoscaling, no public ingress,
+    no Ollama, no Grafana — which is right for a one-node cluster and means whole templates are
+    never submitted to an API server. The annotation-type defect found on 2026-09-08 was in six
+    render sites and this install exercises three of them, so the same bug in `ollama.yaml` or
+    `grafana.yaml` would have shipped.
+
+    If the reference document ever renders everything standard-production does, the dry run adds
+    nothing and this test says so. If it renders something standard-production does not, the dry
+    run has a hole.
+    """
+    from acpctl.values import render_values_yaml
+    from packaging_helpers import load_example
+
+    def kinds(values: str) -> set[str]:
+        proc = subprocess.run([HELM, "template", "acp", str(CHART), "-f", "-", "-f", str(OVERRIDES)],
+                              input=values, capture_output=True, text=True, timeout=120)
+        assert proc.returncode == 0, proc.stderr
+        return {d["kind"] for d in yaml.safe_load_all(proc.stdout) if d}
+
+    installed = kinds(render_values_yaml(document()))
+    full = kinds(render_values_yaml(load_example("standard-production")))
+    assert installed < full, (
+        f"the reference document no longer renders strictly less than standard-production: "
+        f"installed={sorted(installed)} full={sorted(full)}")
+    uncovered = full - installed
+    assert {"HorizontalPodAutoscaler", "Ingress"} <= uncovered, sorted(uncovered)
+    script = run_steps()
+    assert "--dry-run=server" in script and "--warnings-as-errors" in script, (
+        "a dry run that does not run admission proves less than the install beside it")
+    for kind in ("ExternalSecret", "ScaledObject", "TriggerAuthentication"):
+        assert kind in script, (
+            f"{kind} needs a CRD this cluster does not have; the step must name what it skips or "
+            f"a new CRD-dependent kind is skipped silently")
+
+
 def test_the_reference_cluster_upgrades_as_well_as_installs():
     """AN INSTALL THAT CANNOT BE UPGRADED IS A DEMO, and every way this chart could fail to
     upgrade is invisible to `helm template` and to a first install:

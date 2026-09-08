@@ -338,3 +338,30 @@ topologySpreadConstraints:
         {{- toYaml .selector | nindent 8 }}
 {{- end }}
 {{- end -}}
+
+{{/*
+A map Kubernetes will accept where it demands string values.
+
+`toYaml` PRESERVES YAML'S TYPES, AND FOR ANNOTATIONS AND nodeSelector THAT IS WRONG. Both are
+`map[string]string` in the API, so a value that parses as a number or a boolean is rejected — not
+by the template, not by `helm template`, not by `helm lint`, but by the API server, at install or
+upgrade, with:
+
+    cannot patch "acp-api" with kind Deployment: "" is invalid: patch: Invalid value: "{…}":
+    json: cannot unmarshal number into Go struct field ObjectMeta.spec.template.metadata.
+    annotations of type string
+
+FOUND BY THE UPGRADE STEP ON ITS FIRST RUN, 2026-09-08, with a probe annotation set to
+`$GITHUB_RUN_ID`. Nothing about it is upgrade-specific: an install carrying the same value fails
+identically. And `--set-string` is not the fix, because the operator most likely to hit this is
+writing a values FILE — `build-number: 1234` in YAML is an int before helm ever sees it, and there
+is no per-key string flag for a file.
+
+Quoting every value is the whole fix, and it costs nothing: a value that was already a string
+quotes to itself.
+*/}}
+{{- define "acp.stringMap" -}}
+{{- range $key, $value := . }}
+{{ $key }}: {{ $value | quote }}
+{{- end }}
+{{- end -}}

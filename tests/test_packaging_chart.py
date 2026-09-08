@@ -773,6 +773,46 @@ def test_the_gpu_count_is_a_values_knob():
 
 
 @needs_helm
+def test_a_numeric_annotation_is_rendered_as_a_string():
+    """FOUND BY THE UPGRADE STEP ON ITS FIRST RUN, and by nothing else that exists.
+
+    `toYaml` preserves YAML's types. Annotations and `nodeSelector` are `map[string]string` in the
+    Kubernetes API, so a value that parses as a number or a boolean is rejected — not by the
+    template, not by `helm template`, not by `helm lint`, but by the API SERVER:
+
+        cannot patch "acp-api" with kind Deployment: "" is invalid: patch: Invalid value: "{…}":
+        json: cannot unmarshal number into Go struct field
+        ObjectMeta.spec.template.metadata.annotations of type string
+
+    Nothing about it is upgrade-specific; an install carrying the same value fails identically.
+    The reason it surfaced on an upgrade is that the CI step sets a probe annotation to
+    `$GITHUB_RUN_ID`, which is all digits.
+
+    `--set-string` is not the fix. The operator most likely to hit this is writing a values FILE,
+    where `build-number: 1234` is an int before helm sees it and there is no per-key string flag.
+    So the chart quotes, and the CI step deliberately keeps using plain `--set` so it goes on
+    exercising the numeric path.
+    """
+    manifests = render(load_example("standard-production"), extra=[
+        "--set", "podAnnotations.build-number=1234",
+        "--set", "podAnnotations.rollout-forced=true",
+        "--set", "nodeSelector.pool-index=3",
+    ])
+    checked = 0
+    for workload in manifests:
+        if workload["kind"] != "Deployment":
+            continue
+        template = workload["spec"]["template"]
+        name = workload["metadata"]["name"]
+        for field, block in (("annotations", template["metadata"].get("annotations") or {}),
+                             ("nodeSelector", template["spec"].get("nodeSelector") or {})):
+            for key, value in block.items():
+                assert isinstance(value, str), f"{name}.{field}.{key} is {type(value).__name__}"
+                checked += 1
+    assert checked, "nothing carried an annotation or selector; this test would prove nothing"
+
+
+@needs_helm
 def test_no_selector_label_changes_between_two_releases():
     """`spec.selector` IS IMMUTABLE ON A DEPLOYMENT, and this is the one immutability the chart
     can break silently.
