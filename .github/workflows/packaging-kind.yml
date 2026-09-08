@@ -204,10 +204,18 @@ jobs:
       # ── evidence, and then nothing survives ────────────────────────────────
       - name: What the cluster looked like
         if: always()
+        # EVENTS AND JOBS, NOT ONLY PODS. The first run of this job failed with a pre-install hook
+        # stuck at 0/1 and NO POD AT ALL — the ServiceAccount admission plugin had rejected the
+        # pod, so `describe pods` printed the two data services and nothing else, and the reason
+        # was in the Job's events, which nothing printed. A diagnostic step that cannot name the
+        # failure it is there for costs a whole run.
         run: |
           kubectl -n "$NAMESPACE" get all -o wide || true
+          kubectl -n "$NAMESPACE" describe jobs || true
           kubectl -n "$NAMESPACE" describe pods || true
+          kubectl -n "$NAMESPACE" get events --sort-by=.lastTimestamp || true
           kubectl -n "$NAMESPACE" logs -l app.kubernetes.io/part-of=acp --all-containers --tail=200 --prefix || true
+          kubectl -n "$NAMESPACE" logs -l batch.kubernetes.io/job-name --all-containers --tail=200 --prefix || true
 
       - name: Delete the cluster
         if: always()

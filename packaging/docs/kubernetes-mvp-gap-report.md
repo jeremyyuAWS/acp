@@ -105,8 +105,9 @@ Grafana, Ollama and KEDA `ScaledObject`s. Concretely, from the standard-producti
   missing External Secrets Operator are blockers, and a check that could not run is a blocker rather
   than a pass (`packaging/cli/acpctl/doctor.py`; `tests/test_packaging_doctor.py`, 35 cases).
 
-**Two defects the rendered-manifest tests were green on**, found on 2026-09-08 by reading the
-application against the chart rather than the chart against itself, and fixed:
+**Four defects the rendered-manifest tests were green on**, found on 2026-09-08, and fixed. The
+first three by reading the application against the chart rather than the chart against itself; the
+fourth by installing it:
 
 - **Worker Deployments ran the API.** The worker container set no `command`, so it inherited the
   application image's CMD, which starts uvicorn (`deploy/public/Dockerfile`). A worker pod started,
@@ -121,11 +122,48 @@ application against the chart rather than the chart against itself, and fixed:
   neither of the others can be. `test_the_api_gets_both_probes_and_they_are_not_the_same_endpoint`
   passed because it pinned the path the chart had, not a path that can return 503.
 
-Both are one line of template each. What is worth keeping from them is the shape: a rendered-manifest
-test compares the chart against itself, so a chart that renders the wrong thing consistently passes.
-Neither defect was reachable without reading the application the chart deploys, and neither would
-have survived one `helm install` on a real cluster — which is the argument for the blocking gap
-below, made from the inside.
+- **Default-deny denied DNS, and the egress policy did not open the database.** The
+  `-default-deny` policy adds `Egress` to its policyTypes with no egress rule, which denies every
+  outbound packet from every ACP pod. The companion `-egress` policy that lets anything back out
+  rendered only `if allowedEgress` was non-empty — and even then opened 53 and 443 only, never
+  5432 or 6379. So on a cluster that ENFORCES policy, a document with no external sources resolved
+  nothing at all, and one with external sources still could not reach Postgres or Redis. The
+  installation cannot start either way. Nothing caught it because no cluster anybody had tested on
+  enforces NetworkPolicy — and `acpctl doctor` treats a CNI that does **not** enforce as a
+  blocker, so the chart required exactly the environment in which it could not run. The reference
+  cluster below cannot catch it either (kind's CNI does not enforce), which is why its README
+  lists NetworkPolicy enforcement as untested.
+
+- **Every `helm install` of this chart failed, and had always failed.** Helm runs `pre-install`
+  hooks BEFORE it creates the release's own resources. Both hook Jobs named the chart's
+  ServiceAccount, which is one of those resources — so the ServiceAccount admission plugin
+  rejected the Job's pod, the Job controller created none, and Helm gave up after ten minutes on a
+  Job at `0/1` with **no pod at all**:
+
+  ```
+  Error: INSTALLATION FAILED: failed pre-install: 1 error occurred:
+          * timed out waiting for the condition
+  ```
+
+  This is the one no amount of reading would have found, and the reason the reference cluster
+  below exists: a rendered manifest has no ordering, so `helm template` was clean throughout. It
+  was the FIRST thing the first install hit. The hooks now run as `default` and drop the token
+  they never used; neither touches the Kubernetes API.
+
+All four are a line or two of template each. What is worth keeping from them is the shape: a
+rendered-manifest test compares the chart against itself, so a chart that renders the wrong thing
+consistently passes. None was reachable without reading the application the chart deploys, or the
+CNI semantics it depends on — and the fourth was not reachable by reading at all.
+
+**One more of the same family, analysed and NOT fixed**, because the fix cannot be tested here.
+With `secrets.provider: key-vault` the chart renders an `ExternalSecret`, which is a normal
+resource, and the pre-install hook Jobs mount the Secret the External Secrets Operator syncs from
+it. Same phase ordering, same result: on the ESO path the migration Job starts before the Secret
+exists and, with `backoffLimit: 0`, fails immediately rather than waiting. Making the
+`ExternalSecret` a pre-install hook would order the OBJECT correctly and still lose the race, since
+ESO syncs asynchronously and Helm cannot wait on a CRD it does not understand. The reference
+cluster uses `provider: kubernetes` with an operator-supplied Secret, so it cannot exercise this
+path and a fix shipped from here would be untested. Recorded rather than guessed at.
 
 **What is missing.** No `topologySpreadConstraints` anywhere in the chart. No `seccompProfile`, so
 the rendered pods do not meet the restricted Pod Security Standard as written, and

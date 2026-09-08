@@ -83,6 +83,18 @@ networkPolicy:
   defaultDeny: false
   workerIngress: true
   allowedEgress: []
+  # What default-deny lets back out. NOT A HARDENING KNOB — with `defaultDeny` on and this list
+  # empty, no ACP pod can resolve a hostname or reach its own database, and the installation does
+  # not start. NetworkPolicy matches on IP and never on hostname, so ports are the enforceable
+  # half; `allowedEgress` records the intended destinations for a FQDN-aware policy engine to act
+  # on. Edit this when a data service listens somewhere else.
+  egressPorts:
+    - {port: 53, protocol: UDP}       # DNS. Without it nothing resolves, including Postgres.
+    - {port: 53, protocol: TCP}
+    - {port: 443, protocol: TCP}      # Object storage, OAuth, external AI, telemetry.
+    - {port: 5432, protocol: TCP}     # PostgreSQL.
+    - {port: 6379, protocol: TCP}     # Redis/Valkey.
+    - {port: 6380, protocol: TCP}     # Redis over TLS — Azure Managed Redis' default port.
 
 podDisruptionBudget:
   enabled: false

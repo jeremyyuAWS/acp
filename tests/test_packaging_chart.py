@@ -500,6 +500,125 @@ def test_private_workers_render_a_policy_that_admits_nothing():
 
 
 @needs_helm
+def test_no_pre_install_hook_needs_a_resource_the_release_creates_after_it():
+    """THE ORDERING RENDERING CANNOT SEE, AND THE ONE THAT MADE THIS CHART UNINSTALLABLE.
+
+    Helm runs `pre-install` hooks BEFORE it creates the release's own resources. Until 2026-09-08
+    both hook Jobs named the chart's ServiceAccount, which is one of those resources — so the
+    admission plugin rejected the Job's pod, the Job controller created none, and Helm timed out
+    after ten minutes on a Job at 0/1 with no pod at all:
+
+        Error: INSTALLATION FAILED: failed pre-install: 1 error occurred:
+                * timed out waiting for the condition
+
+    Every `helm install` of this chart failed that way, and `helm template` was clean throughout,
+    because a rendered manifest has no ordering. The first run of the reference cluster is what
+    surfaced it.
+
+    Written as a general rule rather than an assertion about those two Jobs: any future
+    pre-install hook that references a chart-created ServiceAccount fails here instead of after
+    fifteen minutes of image build.
+    """
+    manifests = render(load_example("standard-production"))
+    created_later = {d["metadata"]["name"] for d in manifests
+                     if d["kind"] == "ServiceAccount"
+                     and "helm.sh/hook" not in (d["metadata"].get("annotations") or {})}
+    assert created_later, "the chart creates no ServiceAccount; this test would prove nothing"
+    checked = 0
+    for d in manifests:
+        annotations = d["metadata"].get("annotations") or {}
+        phases = set(annotations.get("helm.sh/hook", "").split(","))
+        if not phases & {"pre-install", "pre-upgrade"}:
+            continue
+        checked += 1
+        pod = d["spec"]["template"]["spec"]
+        name = pod.get("serviceAccountName")
+        assert name not in created_later, (
+            f"{d['metadata']['name']} is a pre-install hook naming ServiceAccount {name!r}, "
+            f"which Helm does not create until after the hooks have run")
+    assert checked, "no pre-install hook was rendered; this test would prove nothing"
+
+
+@needs_helm
+def test_the_hook_jobs_drop_the_service_account_token_they_do_not_use():
+    """The companion to the rule above: running as `default` is only safe because neither hook
+    touches the Kubernetes API. Asserted rather than assumed, so a hook that grows an API call
+    has to say so."""
+    for name in ("-migrate", "-preflight"):
+        job = named(render(load_example("standard-production")), "Job", name)
+        assert job["spec"]["template"]["spec"]["automountServiceAccountToken"] is False, name
+
+
+@needs_helm
+def test_default_deny_always_lets_the_pods_reach_their_own_data_services():
+    """DEFAULT-DENY WITH NO EGRESS RULE DENIES DNS.
+
+    Adding `Egress` to a policyType with no egress rule denies every outbound packet from every
+    ACP pod. Until 2026-09-08 the companion policy that lets anything back out rendered only when
+    `allowedEgress` was non-empty, and even then opened 53 and 443 only — so on a cluster that
+    ENFORCES policy, a document with no external sources resolved nothing at all, and one with
+    external sources still could not reach Postgres on 5432 or Redis on 6379. The installation
+    cannot start either way.
+
+    Nothing caught it because no cluster anybody tested on enforces NetworkPolicy — and
+    `acpctl doctor` treats a CNI that does not enforce as a BLOCKER, so the chart required exactly
+    the environment in which it could not run.
+
+    Asserted for BOTH shapes of document, because the empty-`allowedEgress` case is the one that
+    rendered nothing and the one a regulated installation is most likely to have.
+    """
+    for profile in RENDERABLE:
+        doc = load_example(profile)
+        for allowed in ([], ["googleapis.com"]):
+            doc["network"]["allowedEgress"] = allowed
+            manifests = render(doc)
+            deny = named(manifests, "NetworkPolicy", "-default-deny")
+            assert "Egress" in deny["spec"]["policyTypes"], "this test would prove nothing"
+            policy = named(manifests, "NetworkPolicy", "-egress")
+            ports = {(p["port"], p["protocol"])
+                     for rule in policy["spec"]["egress"] for p in rule["ports"]}
+            assert (53, "UDP") in ports, f"{profile}/{allowed}: no DNS, so nothing resolves"
+            assert (5432, "TCP") in ports, f"{profile}/{allowed}: Postgres unreachable"
+            assert (6379, "TCP") in ports or (6380, "TCP") in ports, (
+                f"{profile}/{allowed}: Redis unreachable")
+
+
+@needs_helm
+def test_the_egress_ports_are_a_values_knob_and_not_a_hardcoded_list():
+    """An installation whose Postgres listens somewhere else edits values rather than discovering
+    at rollout that its database is unreachable."""
+    manifests = render(load_example("standard-production"),
+                       extra=["--set", "networkPolicy.egressPorts[0].port=15432",
+                              "--set", "networkPolicy.egressPorts[0].protocol=TCP"])
+    policy = named(manifests, "NetworkPolicy", "-egress")
+    ports = {p["port"] for rule in policy["spec"]["egress"] for p in rule["ports"]}
+    assert ports == {15432}
+
+
+@needs_helm
+def test_the_egress_policy_still_records_the_destinations_it_cannot_enforce():
+    """NetworkPolicy matches on IP, never on hostname, so the allow-list survives as an annotation
+    for a FQDN-aware policy engine to act on. Opening the ports must not have quietly dropped the
+    statement of intent, which is the only record of what the ports are FOR."""
+    doc = load_example("standard-production")
+    policy = named(render(doc), "NetworkPolicy", "-egress")
+    annotations = policy["metadata"]["annotations"]
+    assert annotations["acp.mova.io/intended-egress"] == ",".join(doc["network"]["allowedEgress"])
+    assert "FQDN-aware" in annotations["acp.mova.io/egress-enforcement"]
+
+
+@needs_helm
+def test_no_default_deny_renders_no_egress_policy():
+    """The companion, so the assertions above cannot pass for an unrelated reason: a chart that
+    rendered the egress policy unconditionally would satisfy them while saying nothing about
+    default-deny."""
+    manifests = render(load_example("standard-production"),
+                       extra=["--set", "networkPolicy.defaultDeny=false"])
+    assert not [d for d in manifests
+                if d["kind"] == "NetworkPolicy" and d["metadata"]["name"].endswith("-egress")]
+
+
+@needs_helm
 def test_local_only_ai_is_visible_on_the_workload():
     """The regulated profile's central promise is that document content does not leave the cluster
     for a model. A promise nobody can read off the running Deployment is one nobody can audit."""
