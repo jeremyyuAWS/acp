@@ -1,3 +1,4 @@
+import sharePointLogo from './assets/sharepoint-logo.svg'
 import { useState, useEffect, useRef } from 'react'
 import { getConfig, listFolders, listSpFolders, getScanLocations, setScanLocations } from './api.js'
 import { SIM } from './sim.js'
@@ -76,8 +77,8 @@ const G = (d) => (
 
 const LOGO = {
   google_drive: <Tile bg="#fff"><DriveMark /></Tile>,
-  onedrive: <Tile bg="#fff"><OneDriveMark /></Tile>,
-  sharepoint: <Tile bg="#036C70"><b style={{ fontSize: 15 }}>S</b></Tile>,
+  onedrive: <Tile bg="#fff"><img src={sharePointLogo} alt="" width="40" height="40" /></Tile>,
+  sharepoint: <Tile bg="#fff"><img src={sharePointLogo} alt="" width="40" height="40" /></Tile>,
   confluence: <Tile bg="#1868DB"><b style={{ fontSize: 15 }}>C</b></Tile>,
   box: <Tile bg="#0061D5"><b style={{ fontSize: 12 }}>box</b></Tile>,
   web: <Tile bg="#5F6B7A">{G('M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M3 12h18M12 3c2.5 2.5 2.5 15.5 0 18M12 3c-2.5 2.5-2.5 15.5 0 18')}</Tile>,
@@ -86,7 +87,7 @@ const LOGO = {
 // Always-present connectable sources — shown in connect or scan state
 const CONNECTABLE = [
   { id: '_gdrive', type: 'google_drive', name: 'Google Drive' },
-  { id: 'sp-root', type: 'onedrive',     name: 'OneDrive'     },
+  { id: 'sp-root', type: 'onedrive',     name: 'SharePoint'   },
 ]
 
 const CUSTOMER_SHAREPOINT_URL = 'https://fgxlxj.sharepoint.com/Shared%20Documents/Forms/AllItems.aspx?viewid=394d7651%2D488f%2D43e3%2D86b6%2D626214684979&FolderCTID=0x012000B50522C7BE203F4BAA10F38DCC812F75'
@@ -109,7 +110,6 @@ export function sourceManagementDestination(source = {}) {
 }
 
 const FUTURE = [
-  { name: 'SharePoint',  logo: <Tile bg="#036C70"><b style={{ fontSize: 15 }}>S</b></Tile> },
   { name: 'File Shares', logo: <Tile bg="#E8A400">{G('M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z')}</Tile> },
   { name: 'S3 / Blob',   logo: <Tile bg="#2E72C9"><b style={{ fontSize: 12 }}>S3</b></Tile> },
 ]
@@ -403,10 +403,10 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
           <div className="intsources">
             {connectedSources.map((src) => {
               const isGdrive  = src.type === 'google_drive'
-              const typeLabel = isGdrive ? 'Google Drive' : 'OneDrive'
+              const typeLabel = isGdrive ? 'Google Drive' : 'SharePoint'
               // The connected tenant's own label, appended only when more than one is configured
               // — a single-tenant deployment (still every deployment today) sees no change here,
-              // since "OneDrive" alone was never ambiguous until a second tenant existed to
+              // since the provider label alone was never ambiguous until a second tenant existed to
               // confuse it with.
               const connectedTenant = !isGdrive && microsoftTenants.length > 1
                 ? microsoftTenants.find((t) => t.key === sessionStorage.getItem('sp_tenant_key'))

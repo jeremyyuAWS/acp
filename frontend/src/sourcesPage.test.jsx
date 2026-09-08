@@ -13,6 +13,7 @@
  * whatever worktree you are in (see CLAUDE.md), so a browser check would exercise code that does not
  * contain this change. Everything here mounts the component and asserts against the rendered DOM.
  */
+import sharePointLogo from './assets/sharepoint-logo.svg'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
@@ -77,6 +78,14 @@ const click = async (el) => { await act(async () => { el.click() }); await act(a
 const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
 
 describe('the Sources page', () => {
+  it('brands the connected Microsoft tile as SharePoint with the supplied logo', async () => {
+    const c = await mount(baseProps({ hasDriveToken: false, hasSPToken: true, sources: [], scans: [] }))
+    const card = c.querySelector('.srccard--on')
+    expect(card.querySelector('.srccard-name').textContent).toBe('SharePoint')
+    expect(card.querySelector('.srccard-logo img').getAttribute('src')).toBe(sharePointLogo)
+    expect(btn(card, /Run first discovery/)).toBeTruthy()
+  })
+
   it('renders the page header with a New scan button', async () => {
     const c = await mount(baseProps())
     expect(c.textContent).toMatch(/Content Sources/)
@@ -161,13 +170,15 @@ describe('the Sources page', () => {
       })
   })
 
-  it('lists OneDrive under AVAILABLE SOURCES and the future connectors as a muted line', async () => {
+  it('lists SharePoint with the supplied logo under AVAILABLE SOURCES', async () => {
     const c = await mount(baseProps())
     expect(c.textContent).toMatch(/AVAILABLE SOURCES/)
     expect(btn(c, /Connect Microsoft/)).toBeTruthy()
     const soon = c.querySelector('.intsoon-line')
     expect(soon.textContent).toMatch(/More sources coming soon/)
-    expect(soon.textContent).toMatch(/SharePoint/)
+    expect(soon.textContent).not.toMatch(/SharePoint/)
+    const card = [...c.querySelectorAll('.srccard')].find(el => el.querySelector('.srccard-name')?.textContent === 'SharePoint')
+    expect(card.querySelector('img').getAttribute('src')).toBe(sharePointLogo)
     // The future connectors are NOT rendered as big cards.
     expect(c.querySelector('.soonchip')).toBeNull()
   })
