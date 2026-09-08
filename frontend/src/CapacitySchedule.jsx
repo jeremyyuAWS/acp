@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getCapacitySchedule } from './api.js'
 import CapacityScheduleEditor from './CapacityScheduleEditor.jsx'
+import './capacity-schedule.css'
 
 /**
  * Settings → Scheduling, READ-ONLY (Phase 2 of docs/prd-capacity-scheduling.md).
@@ -172,7 +173,7 @@ export default function CapacitySchedule({ me = null } = {}) {
     ? 'Holiday exception' : 'Saved weekly schedule'
 
   return (
-    <div style={{ display: 'grid', gap: 12 }}>
+    <div className="capacity-schedule" style={{ display: 'grid', gap: 12 }}>
       {/* §5.1's status summary. The first line says which schedule this IS, because every other
           number on the page is meaningless if it is read as the live one. */}
       <section className="panel" style={{ padding: 16 }} aria-labelledby="capacity-schedule-status">
