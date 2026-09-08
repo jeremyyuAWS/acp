@@ -37,9 +37,10 @@ const lab = { fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.35 }
 const val = { fontSize: 26, fontWeight: 700, fontVariantNumeric: 'tabular-nums', marginTop: 5, lineHeight: 1 }
 const sub = { fontSize: 11.5, color: 'var(--muted)', marginTop: 5, lineHeight: 1.45 }
 
-function Metric({ label, value, unit, children, tone }) {
+function Metric({ label, value, unit, children, tone, onClick }) {
+  const Tag = onClick ? 'button' : 'div'
   return (
-    <div style={card}>
+    <Tag type={onClick ? "button" : undefined} onClick={onClick} style={{ ...card, textAlign: 'left' }}>
       <div style={lab}>{label}</div>
       {value !== undefined && (
         <div style={{ ...val, color: tone }}>
@@ -48,7 +49,7 @@ function Metric({ label, value, unit, children, tone }) {
         </div>
       )}
       <div style={sub}>{children}</div>
-    </div>
+    </Tag>
   )
 }
 
@@ -113,7 +114,7 @@ function EmptyState({ discovered, onChangeScope }) {
  */
 export default function AssessSummary({ files, cap, assessment, criteria, level = 'AA',
                                         assessedAt, notStarted, run, discovered, integrityCaveat = null,
-                                        onRemediate, onRunDetails, onReconnect, onChangeScope }) {
+                                        onRemediate, onRunDetails, onReconnect, onChangeScope, remediationForecast }) {
   // The run's own status decides two of the seven screen states the file list cannot: a run of
   // 'error' is `failed` even with a stray record, and one 'cancelled'/'interrupted' is `partial`
   // even before the not-started count is known. 'done'/absent leaves classification to the findings.
@@ -326,13 +327,14 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           )}
         </div>
 
-        <Metric label="Auto-fix available" value={m.autoFixAvailable} tone="#2F7D32">
-          Findings with a deterministic remediation. Excludes AI-drafted suggestions, which need
-          approval and are counted under review.
+        <Metric label={remediationForecast ? "Auto-fix available · plan preview" : "Auto-fix available"} value={remediationForecast ? remediationForecast.automatic : m.autoFixAvailable} tone="#2F7D32"
+                onClick={remediationForecast?.onAutomatic}>
+          {remediationForecast ? <>Live forecast for the selected remediation scope and settings. Eligible for application without approval. {remediationForecast.onAutomatic && <b>View details →</b>}</> : <>Findings with a deterministic remediation. Excludes AI-drafted suggestions, which need approval and are counted under review.</>}
         </Metric>
 
-        <Metric label="Human review required" value={m.humanReviewRequired}>
-          Findings needing a person’s judgement, including every AI-drafted fix awaiting approval.
+        <Metric label={remediationForecast ? "Human review required · plan preview" : "Human review required"} value={remediationForecast ? remediationForecast.human : m.humanReviewRequired}
+                onClick={remediationForecast?.onHuman}>
+          {remediationForecast ? <>Live forecast: proposal approvals and manual work in the selected scope. Blocked findings are listed separately below. {remediationForecast.onHuman && <b>View details →</b>}</> : <>Findings needing a person’s judgement, including every AI-drafted fix awaiting approval.</>}
         </Metric>
 
         <Metric label="Unable to assess" value={m.unableToAssess} unit="checks">
@@ -360,7 +362,7 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
       {/* ── The arithmetic, printed. Either it holds on screen or it is a visible bug. ───── */}
       <div className="muted" style={{ fontSize: 12, marginTop: 12, paddingTop: 10,
                                       borderTop: '1px solid var(--line)', lineHeight: 1.6 }}>
-        <div>{r.findings.line}</div>
+        <div>{remediationForecast ? 'Assessment totals above are historical. The two remediation tiles preview the selected scope; changing permissions does not change assessment results.' : r.findings.line}</div>
         <div>{r.checks.line}</div>
       </div>
 

@@ -6,12 +6,13 @@ const css = readFileSync(join(import.meta.dirname, 'automation-policy.css'), 'ut
 const remediate = readFileSync(join(import.meta.dirname, 'Remediate.jsx'), 'utf8')
 
 describe('automation policy presentation contract', () => {
-  it('remains directly below the prominent Remediate header and before workspace tabs', () => {
+  it('puts the guided plan before the Remediate results header and workspace tabs', () => {
     const header = remediate.indexOf('<RemediationRunHeader')
     const policy = remediate.indexOf('<RemediationImpactCard')
     const tabs = remediate.indexOf('<RemediationWorkspaceTabs')
     expect(header).toBeGreaterThan(-1)
-    expect(policy).toBeGreaterThan(header)
+    expect(policy).toBeGreaterThan(-1)
+    expect(header).toBeGreaterThan(policy)
     expect(tabs).toBeGreaterThan(policy)
   })
 

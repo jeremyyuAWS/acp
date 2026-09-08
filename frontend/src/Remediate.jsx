@@ -1,3 +1,4 @@
+import AssessSummary from './AssessSummary.jsx'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import AssessmentScopeCard from './AssessmentScopeCard.jsx'
 import { Bars } from './charts.jsx'
@@ -1055,11 +1056,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // ORIGINAL document (see RemediationVerify's own footnote), which is not a re-run over the
   // corrected copy. A button claiming otherwise would claim an action ACP cannot perform, so the
   // awaiting-revalidation count is reported as state in the summary line instead.
+  const openRemediationPlan = () => {
+    const plan = document.getElementById('remediation-plan')
+    plan?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    plan?.focus({ preventScroll: true })
+  }
   const primary = readOnly ? null
     : remRunning ? { label: 'Applying fixes…', disabled: true }
     : autoBatch && autoBatch.count > 0
-      ? { label: `Apply ${autoBatch.count} automatic fix${autoBatch.count === 1 ? '' : 'es'}`,
-          onClick: () => runServerRemediation(autoBatch.files), disabled: !runId }
+      ? { label: 'Review remediation plan', onClick: openRemediationPlan, disabled: !runId }
     : reviewCount > 0
       ? { label: 'Review next finding',
           onClick: () => document.getElementById('rem-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
@@ -1442,10 +1447,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 </span>
               )}
             </div>
-            <button disabled={remBusy || !runId || readOnly} onClick={() => runServerRemediation(remediable)}
-                    title="Run deterministic HTML remediation server-side, in the durable worker queue. Fixed copies are written to a Remediated/ folder; results trace to Langfuse."
+            <button disabled={remBusy || !runId || readOnly} onClick={openRemediationPlan}
+                    title="Review permissions and impact before starting remediation."
                     style={{ flexShrink: 0 }}>
-              {remBusy ? '⏳ Enqueueing…' : '⚡ Remediate all (server-side)'}
+              {remBusy ? '⏳ Enqueueing…' : 'Review remediation plan'}
             </button>
             {(serverFixed > 0 || remProg) && <TraceChip scanId={runId} kind="session" label="View scan traces" />}
           </div>
@@ -1689,6 +1694,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         </div>
       )}
 
+      <RemediationImpactCard key={runId || 'current'} runId={runId}
+        runBusy={remBusy} readOnly={readOnly} myEmail={myEmail}
+        scopeFiles={impactScope.map(file => file.file)}
+        refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`}
+        renderAssessment={forecast => <AssessSummary files={files} cap={cap} assessment={assessment}
+          assessedAt={assessedAt} run={run} notStarted={run?.not_assessed?.count}
+          remediationForecast={forecast} />}
+        onRun={readOnly ? undefined : (policy) => runServerRemediation(impactScope, policy)} />
       {/* The automation-first run header (PRD §5.1/§5.2): what ACP already did, what is left for a
           person, and the ONE action this state of the run calls for. Counts come from the same
           derivations the panels under Run details use, and a lane with no data passes nothing rather
@@ -1701,11 +1714,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         primary={primary}
         readOnly={readOnly}
         onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
-      <RemediationImpactCard key={runId || 'current'} runId={runId}
-        runBusy={remBusy} readOnly={readOnly} myEmail={myEmail}
-        scopeFiles={impactScope.map(file => file.file)}
-        refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`}
-        onRun={readOnly ? undefined : (policy) => runServerRemediation(impactScope, policy)} />
       <RemediationWorkspaceTabs
         runId={runId}
         reviewCount={reviewCount}

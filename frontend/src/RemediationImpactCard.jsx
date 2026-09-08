@@ -1,6 +1,8 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import Drawer from './Drawer.jsx'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { getRemediationImpact, saveRemediationImpactPolicy, assignRemediationImpact } from './api.js'
 import './remediation-impact-card.css'
+import RemediationPlanChoices from './RemediationPlanChoices.jsx'
 
 const RULE_STOPS = [
   ['Review first', 'Ask a person to approve rule-based proposals before application.'],
@@ -42,7 +44,7 @@ function PolicySlider({ title, question, stops, value, onChange, disabled, maxLe
   </div>
 }
 
-export default function RemediationImpactCard({ runId, onRun, runBusy = false, myEmail = '', readOnly = false, refreshKey = 0, scopeFiles }) {
+export default function RemediationImpactCard({ runId, onRun, runBusy = false, myEmail = '', readOnly = false, refreshKey = 0, scopeFiles, renderAssessment }) {
   const titleId = useId()
   const assigneeId = useId()
   const [assignmentOpen, setAssignmentOpen] = useState(false)
@@ -63,6 +65,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const [notice, setNotice] = useState('')
   const [saving, setSaving] = useState(false)
   const [filter, setFilter] = useState(null)
+  const closeDetails = useCallback(() => setFilter(null), [])
   const [fileSearch, setFileSearch] = useState('')
   const [fileTypeFilter, setFileTypeFilter] = useState('all')
   useEffect(() => { setSelectedFile(null); setAssignmentOpen(false); setAssignmentResult(null); setAssignmentError(''); setFileSearch(''); setFileTypeFilter('all') }, [filter, scopeKey, runId])
@@ -87,7 +90,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const selected = policy || (validPolicy(data?.policy) ? data.policy : { rule_based: 0, ai: 0 })
   const ready = !!data && !loading && !error && data.integrity?.complete === true
   const change = (key, value) => { setNotice(''); setFilter(null); setPolicy(current => ({ ...(current || selected), [key]: value })) }
-  const categoryFiles = (data?.files || []).filter(file => !filter || filter.type === 'all' || (filter.type === 'outlook' ? file.outlook === filter.key : file[filter.key] > 0))
+  const categoryFiles = (data?.files || []).filter(file => !filter || filter.type === 'all' || (filter.type === 'human' ? file.review > 0 || file.manual > 0 : filter.type === 'outlook' ? file.outlook === filter.key : file[filter.key] > 0))
   const fileTypes = [...new Set(categoryFiles.map(file => fileType(file.file)))].sort()
   const searchText = fileSearch.trim().toLowerCase()
   const filteredFiles = categoryFiles.filter(file =>
@@ -128,11 +131,15 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     finally { setSaving(false) }
   }
 
-  return <section className="remediation-impact" aria-labelledby={titleId} aria-busy={loading}>
+  return <section id="remediation-plan" tabIndex={-1} className="remediation-impact" aria-labelledby={titleId} aria-busy={loading}>
     <header className="remediation-impact__header"><div><span className="remediation-impact__eyebrow">{scopeKey === null ? 'Remediation planner' : 'Selected remediation scope'} · Preview only</span>
-      <h2 id={titleId}>See what ACP can handle</h2>
+      <h2 id={titleId}>Choose your remediation plan</h2>
       <p>{ready ? <><strong>{number(data.open?.findings)} unresolved findings</strong> across <strong>{number(data.open?.files)} files</strong>.</> : 'Preview the current assessment before applying changes.'}</p>
     </div><div className="remediation-impact__active"><span>Active settings</span><strong>{policyName(data?.active_policy)}</strong></div></header>
+    <div className="remediation-impact__split"><div className="remediation-impact__settings">
+    <RemediationPlanChoices policy={selected} providers={data?.providers}
+      disabled={!validPolicy(data?.policy) || runBusy} onChange={change} />
+    <details className="remediation-impact__advanced"><summary>Advanced: individual fix permissions</summary>
     <div className="remediation-impact__controls">
       <PolicySlider title="Rule-based fixes" question="What rule-based fixes may ACP apply without approval?" stops={RULE_STOPS}
         value={selected.rule_based} onChange={value => change('rule_based', value)} disabled={!validPolicy(data?.policy) || runBusy} />
@@ -140,6 +147,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
         value={selected.ai} onChange={value => change('ai', value)} disabled={!validPolicy(data?.policy) || runBusy} maxLevel={data?.capabilities?.ai_automatic === true ? 3 : 1} />
     </div>
     {data?.capabilities?.ai_automatic !== true && <p className="remediation-impact__note">{data?.capabilities?.ai_automatic_reason || 'Automatic application of AI proposals is not available on this execution path. Drafting depends on AI settings and a usable connection.'}</p>}
+    </details>
     <p className="remediation-impact__guard">These controls change remediation permissions, not assessment results or provider credentials. Human-only and subjective decisions stay protected.</p>
     <details className="remediation-impact__providers"><summary>AI connections and model details</summary>
       {data?.providers && <ul>{[['text', 'Text drafting'], ['vision', 'Image drafting']].map(([key, label]) =>
@@ -149,29 +157,47 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       <p>Text and image drafting use their separately configured providers. A drafting opportunity is not a guaranteed resolution.</p>
       {data?.capabilities?.reason && <p>{data.capabilities.reason}</p>}
     </details>
+    </div><div className="remediation-impact__results">
+    {renderAssessment?.({
+      automatic: ready ? number(data.lanes?.automatic?.findings) : 'Not yet available',
+      human: ready && Number.isFinite(data.lanes?.review?.findings) && Number.isFinite(data.lanes?.manual?.findings)
+        ? number(data.lanes.review.findings + data.lanes.manual.findings) : 'Not yet available',
+      onAutomatic: ready ? () => setFilter({ type: 'lane', key: 'automatic', label: 'Auto-fix available' }) : undefined,
+      onHuman: ready ? () => setFilter({ type: 'human', label: 'Human review required' }) : undefined,
+    })}
     <div role="status" aria-live="polite" aria-atomic="true" className="remediation-impact__status">
       {loading ? 'Calculating the impact of these settings…' : error ? `Preview unavailable. ${error}` : !runId ? 'Select an assessment to preview remediation.' : !ready ? 'The preview could not be reconciled. Counts are unavailable.' : `${number(data.lanes?.automatic?.findings)} findings eligible for automatic application. ${number(data.lanes?.review?.findings)} findings require proposal review.`}
       {notice && <span> {notice}</span>}
     </div>
     {ready && <>
-      <h3>Impact vs active settings</h3>
+      <h3>How the findings will be handled</h3>
+      <div className="remediation-impact__routes">{LANES.map(([key, label]) => <button type="button" key={key}
+        className={`remediation-impact__route--${key}`} onClick={() => setFilter({ type: 'lane', key, label })}>
+        <span>{label}</span><strong>{number(data.lanes?.[key]?.findings)}</strong>
+        <span>{({ automatic: 'Eligible fixes without approval', review: 'A person approves a proposed fix', manual: 'Content edits or accessibility judgments', blocked: 'Investigate before remediation' })[key]}</span>
+        <span className="remediation-impact__route-link">View findings →</span>
+      </button>)}</div>
+      <details className="remediation-impact__comparison"><summary>Compare with active settings</summary>
       <div className="remediation-impact__table-wrap"><table><caption className="sr-only">Finding routes for active and preview settings</caption>
         <thead><tr><th scope="col">Finding route</th><th scope="col">Active findings</th><th scope="col">Preview findings</th><th scope="col">Change</th><th scope="col">Affected files</th></tr></thead>
         <tbody>{LANES.map(([key, label]) => <tr key={key} className={`remediation-impact__lane--${key}`}>
           <th scope="row"><button type="button" onClick={() => setFilter({ type: 'lane', key, label })}>{label}</button></th>
           <td>{number(data.active_lanes?.[key]?.findings)}</td><td><strong>{number(data.lanes?.[key]?.findings)}</strong></td>
           <td>{delta(data.lanes?.[key]?.delta)}</td><td>{number(data.lanes?.[key]?.files)}</td>
-        </tr>)}</tbody></table></div>
+        </tr>)}</tbody></table></div></details>
       <p className="remediation-impact__note">Affected-file counts overlap: one file may contain automatic fixes and human work. Finding routes do not overlap.</p>
-      <h3>File outlook</h3><div className="remediation-impact__outlooks">{OUTLOOKS.map(([key, label]) => <button type="button" key={key}
+      <h3>Document outlook</h3><div className="remediation-impact__outlooks">{OUTLOOKS.map(([key, label]) => <button type="button" key={key}
         onClick={() => setFilter({ type: 'outlook', key, label })}><strong>{number(data.file_outlook?.[key]?.files)}</strong><span>{label}</span></button>)}</div>
       <p className="remediation-impact__note">Each file appears in one outlook. Completion is conditional on fixes passing verification and required assessment checks being complete.</p>
-      <details className="remediation-impact__remaining"><summary>Why work remains</summary>
+      <details className="remediation-impact__remaining"><summary>Why human work remains</summary>
         <ul>{reasons.length ? reasons.map(group => <li key={group.reason}>{reasonText(group.reason)} — {number(group.findings)} findings across {number(group.files.size)} files</li>) : <li>No remaining-work reasons were returned.</li>}</ul>
         <p>Review proposals, edit source content, resolve accessibility judgments, or investigate blockers. Assignment does not resolve findings.</p>
       </details>
       <button type="button" onClick={() => setFilter({ type: 'all', label: 'All affected files' })}>Inspect affected files</button>
-      {filter && <div className="remediation-impact__drilldown"><div className="remediation-impact__header"><h3>{filter.label}</h3><button type="button" onClick={() => setFilter(null)}>Close details</button></div>
+      {filter && <Drawer title={filter.label} subtitle="Projected work for the selected scope and settings" onClose={closeDetails}>
+        <div className="remediation-impact__drilldown">
+        <p>{filter.type === 'human' ? 'This includes proposals needing approval and manual work. AI suggestions require approval; accessibility judgments need a person.' : filter.key === 'automatic' ? 'These findings are eligible for automatic application under this plan. They are not fixed yet; completion depends on verification.' : 'Inspect the affected files and select a filename to see reasons and next actions.'}</p>
+        <button type="button" onClick={closeDetails}>Close details</button>
         <div className="remediation-impact__file-filters" role="search" aria-label="Filter affected files">
           <label>Search by name
             <input type="search" value={fileSearch} placeholder="Search files…"
@@ -193,7 +219,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
           <tbody>{filteredFiles.map((file, index) => <tr key={`${file.file}-${index}`}><th scope="row"><button type="button" onClick={() => setSelectedFile(file.file)}>{file.file || 'Unnamed file'}</button></th>
             <td>{number(file.findings)}</td><td>{number(file.automatic)}</td><td>{number(file.review)}</td><td>{number(file.manual)}</td><td>{number(file.blocked)}</td></tr>)}</tbody>
         </table></div> : <p>No files match these filters.</p>}
-        {selectedFile && <div className="remediation-impact__file-findings"><h4>Finding paths: {selectedFile}</h4><ul>{(data.findings || []).filter(row => row.file === selectedFile).map((row, index) => <li key={row.id || index}><strong>{row.rule_id || row.criterion || 'Finding'}</strong> · {number(row.finding_count)} findings → {LANES.find(([key]) => key === row.lane)?.[1] || 'Route unavailable'}<br />{reasonText(row.primary_reason)}. Next action: {row.lane === 'automatic' ? 'Apply the eligible fix, then verify.' : row.lane === 'review' ? 'Review the proposal before application.' : row.lane === 'manual' ? 'Edit the source or request an accessibility judgment.' : 'Investigate the blocker before remediation.'}</li>)}</ul></div>}
+        {selectedFile && <div className="remediation-impact__file-findings"><h4>Finding paths: {selectedFile}</h4><ul>{(data.findings || []).filter(row => row.file === selectedFile && (filter.type === 'human' ? ['review', 'manual'].includes(row.lane) : filter.type === 'lane' ? row.lane === filter.key : true)).map((row, index) => <li key={row.id || index}><strong>{row.rule_id || row.criterion || 'Finding'}</strong> · {number(row.finding_count)} findings → {LANES.find(([key]) => key === row.lane)?.[1] || 'Route unavailable'}<br />{reasonText(row.primary_reason)}. Next action: {row.lane === 'automatic' ? 'Apply the eligible fix, then verify.' : row.lane === 'review' ? 'Review the proposal before application.' : row.lane === 'manual' ? 'Edit the source or request an accessibility judgment.' : 'Investigate the blocker before remediation.'}</li>)}</ul></div>}
         <button type="button" disabled={readOnly || assigning || !humanFiles.length || data?.capabilities?.assign !== true}
           onClick={() => { setAssignmentFiles(humanFiles.map(file => file.file)); setAssignee(myEmail); setAssignmentOpen(true); setAssignmentResult(null); setAssignmentError('') }}>Assign human work</button>
         {data?.capabilities?.assign !== true && <p>Assignment is not available for this preview.</p>}
@@ -213,11 +239,12 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
             <ul>{(assignmentResult.results || []).map((result, index) => <li key={`${result.file}-${index}`}>{result.file}: {result.status}{result.message ? ` — ${result.message}` : ''}</li>)}</ul>
           </div>}
         </form>}
-      </div>}
+      </div></Drawer>}
     </>}
+    </div></div>
     {ready && data?.capabilities?.execute !== true && <p>Execution unavailable: {data?.capabilities?.execute_reason || data?.capabilities?.reason || 'This preview cannot currently be executed.'}</p>}
     <footer className="remediation-impact__actions"><button type="button" className="remediation-impact__run" disabled={readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
-      onClick={() => onRun(selected, data)}>{runBusy ? 'Remediation is running…' : 'Run remediation with these settings'}</button>
+      onClick={() => onRun(selected, data)}>{runBusy ? 'Remediation is running…' : 'Start remediation with this plan'}</button>
       <button type="button" disabled={!validPolicy(data?.active_policy) || runBusy} onClick={() => { setPolicy({ ...data.active_policy }); setFilter(null) }}>Reset to active</button>
       <button type="button" disabled={readOnly || !ready || data?.capabilities?.save_future !== true || saving || runBusy} onClick={save}>{saving ? 'Saving…' : 'Save as default for future runs'}</button>
     </footer>
