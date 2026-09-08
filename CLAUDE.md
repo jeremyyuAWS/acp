@@ -670,7 +670,7 @@ the approved design boards and fails if any is not rendered by some screen. Reti
 not on that list; components that are supposed to be live are.
 
 **Currently retired or unmounted, and mounted nowhere** (frontend/src): `AssessScope`,
-`CanonicalStageCard`, `ConfidenceDashboard`, `ControlPlane`, `Dashboard`,
+`AssessmentReconciliation`, `CanonicalStageCard`, `ConfidenceDashboard`, `ControlPlane`, `Dashboard`,
 `DiscoverCompleteSummary`, `DiscoveryCompleteness`, `Disposition`, `DispositionReviewWorkspace`,
 `EstateCoverage`, `EstateTreemap`, `FileTypeConfig`, `Insight`, `LifecycleOverrideControl`, `LiveAssessment`, `PiiPanel`,
 `ProcessingDetails`, `RemediationApprovals`, `RemediationDocProgress`, `RemediationPreview`, `RemediationRunProgress`, `RemediationTransform`, `RiskScore`, `RolePrivilege`, `Rubric`, `ScanScope`,
