@@ -480,15 +480,37 @@ def test_replicas_are_pinned_exactly_where_no_autoscaler_owns_them():
 # ── the profile guarantees, on the rendered objects ───────────────────────────
 
 @needs_helm
-def test_high_availability_gets_a_disruption_budget_and_standard_does_not():
-    """Anti-affinity is a preference; a PodDisruptionBudget is what survives a node drain. The
-    profile's name is a promise about behaviour, so it is checked on the object that delivers it
-    rather than on the values that requested it."""
-    ha = render(load_example("high-availability"))
-    assert of_kind(ha, "PodDisruptionBudget"), "the HA profile rendered no PDB"
+def test_a_tier_that_runs_more_than_one_replica_gets_a_disruption_budget():
+    """Anti-affinity is a preference; a PodDisruptionBudget is what survives a node drain.
 
-    standard = render(load_example("standard-production"))
-    assert not of_kind(standard, "PodDisruptionBudget")
+    THIS TEST USED TO ASSERT THE DEFECT. It read "high availability gets one and standard does
+    not", which is what `values.py` did — while the comment directly above that line described the
+    rule as replica count, and standard-production runs a FLOOR OF TWO API replicas. `kubectl
+    drain` on the node holding both evicted both, and the cluster autoscaler does exactly that
+    during a routine node upgrade: the failure a second replica is bought to prevent, on the
+    profile most installations will use. A green test named the profile and never asked what the
+    profile actually ran.
+
+    The rule the comment always stated is the rule now, and this asserts it on the object that
+    delivers it rather than on the values that requested it.
+    """
+    for profile in RENDERABLE:
+        doc = load_example(profile)
+        assert doc["api"]["replicas"]["min"] > 1, f"{profile}: this test would prove nothing"
+        budgets = of_kind(render(doc), "PodDisruptionBudget")
+        assert budgets, f"{profile} runs {doc['api']['replicas']['min']} API replicas and no PDB"
+        assert budgets[0]["spec"]["minAvailable"] == 1, (
+            "minAvailable equal to the replica count blocks every drain")
+
+
+@needs_helm
+def test_a_single_replica_tier_gets_no_disruption_budget():
+    """The control, and not a symmetry for its own sake: `minAvailable: 1` against ONE replica
+    permits no evictions at all, so a budget there does not protect the tier — it stops the node
+    being drained. A drain that cannot complete is its own incident."""
+    doc = load_example("standard-production")
+    doc["api"]["replicas"] = {"min": 1, "max": 4}
+    assert not of_kind(render(doc), "PodDisruptionBudget")
 
 
 @needs_helm

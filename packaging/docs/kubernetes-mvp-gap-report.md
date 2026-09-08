@@ -325,6 +325,21 @@ forced on. The comment beside it claimed the shared context "sets it true", whic
 so — a reader deciding whether this chart hardens its root filesystems would have concluded it
 does.
 
+**The disruption budget was gated on the profile name, not on what the profile runs.**
+`values.py` read `"enabled": rt["profile"] == "high-availability"` while the comment directly
+above it described the rule as replica count — and standard-production runs a FLOOR OF TWO API
+replicas. It got no budget, so `kubectl drain` on the node holding both evicted both, which is
+what a cluster autoscaler does during a routine node upgrade: the failure a second replica is
+bought to prevent, on the profile most installations will use. The test covering this asserted the
+defect in its own name — "high availability gets one and standard does not" — and was green
+throughout, because it named the profile and never asked what the profile ran.
+
+It is the replica floor now, which is what the comment always said. A floor of one still gets
+nothing, and that half is not symmetry for its own sake: `minAvailable: 1` against one replica
+permits no eviction at all, so it does not protect the tier, it stops the node being drained. The
+worker tiers still get none, deliberately — a worker evicted mid-document returns its job to the
+queue, and budgeting a tier designed to be interrupted blocks drains for no gain.
+
 **Zone spreading, and what the anti-affinity was not doing.** The API's existing rule is
 `preferredDuringScheduling` across `kubernetes.io/hostname`: it asks for different NODES and says
 nothing about zones, so three replicas can land on three nodes in one availability zone and
@@ -356,10 +371,7 @@ vacuously, renders correctly and spreads nothing.
 subset of the labels its own pod template carries.
 
 **What is missing.** No PersistentVolumeClaim and no volumes at all —
-worker scratch is the node's ephemeral storage, bounded only by the limit above. The PDB renders
-only for the `high-availability` profile and only for the API tier
-(`values.py`: `"enabled": rt["profile"] == "high-availability"`; `templates/pdb.yaml`), which is a
-recorded decision but means a standard-production install has no disruption budget on any tier. No
+worker scratch is the node's ephemeral storage, bounded only by the limit above. No
 backup or restore Job, which PRD S5.2 lists as part of the Kubernetes package. Langfuse is deployed
 ungated by Compose and rendered by nothing in the chart — asserted, deliberately, by
 `test_packaging_chart.py::test_compose_deploys_what_the_chart_omits`.
