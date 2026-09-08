@@ -110,11 +110,11 @@ export default function AutomationPolicyControl({ findings, runId = null, previe
             <div className="automation-policy__source"><span>Open findings</span><b>{forecast.total}</b></div>
             <span className="automation-policy__flow-arrow" aria-hidden="true">→</span>
             <div className="automation-policy__routes">
-              <div className="is-automatic"><span>ACP automates</span><b>{impact(forecast.candidates, forecast.candidateFiles)}</b>
+              <div className="is-automatic"><span>ACP automates</span><b className="automation-policy__route-impact">{impact(forecast.candidates, forecast.candidateFiles)}</b>
                 {level !== DEFAULT_AUTOMATION_LEVEL && candidateDelta !== 0 && <em key={`auto-${level}`} className="automation-policy__delta">{signed(candidateDelta)} vs production</em>}</div>
-              <div className="is-review"><span>Routes to review</span><b>{impact(forecast.review, forecast.reviewFiles)}</b>
+              <div className="is-review"><span>Routes to review</span><b className="automation-policy__route-impact">{impact(forecast.review, forecast.reviewFiles)}</b>
                 {level !== DEFAULT_AUTOMATION_LEVEL && humanDelta !== 0 && <em key={`human-${level}`} className="automation-policy__delta">{signed(humanDelta)} total human decisions</em>}</div>
-              <div className="is-protected"><span>Always requires a person</span><b>{impact(forecast.protected, forecast.protectedFiles)}</b></div>
+              <div className="is-protected"><span>Always requires a person</span><b className="automation-policy__route-impact">{impact(forecast.protected, forecast.protectedFiles)}</b></div>
             </div>
           </div>
           {!policyPreview && forecast.humanCategories.length > 0 && (
