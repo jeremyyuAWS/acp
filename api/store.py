@@ -7801,7 +7801,12 @@ class Store:
             self.transition_finding_disposition(
                 scan_id, batch_id, row["finding_id"], disposition,
                 expected_revision=int(row.get("revision") or 0),
-                event_id=f"{event_key}:{row['finding_id']}",
+                # event_key identifies the producer/action, not one immutable ledger event.
+                # A finding may legitimately return to the same disposition after another
+                # transition (retrying Remediate is the production example). Include the source
+                # revision so that return creates a new append-only event instead of colliding
+                # with the producer's earlier event for this finding.
+                event_id=f"{event_key}:r{int(row.get('revision') or 0)}:{row['finding_id']}",
                 review_item_id=review_item_id, fix_evidence_ids=fix_evidence_ids,
                 verified_at=verified_at)
             moved += 1

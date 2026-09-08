@@ -193,6 +193,40 @@ def test_verified_diff_resolves_all_instances_and_attaches_evidence(isolated_sto
             if r["rule_id"] == "1.1.1"} == {1}
 
 
+def test_group_action_can_legitimately_return_after_an_intervening_transition(isolated_store):
+    """A Remediate replay may route the same card back to review after an approval.
+
+    The producer key is intentionally stable across runs. It must not be mistaken for the full
+    immutable event identity, or the second routing collides with the first and its proposals
+    or proposals are discarded by the caller.
+    """
+    sid = _assessment(isolated_store)
+    batch = _batch(isolated_store, sid)
+    isolated_store.seed_finding_dispositions(sid, batch)
+
+    isolated_store.set_finding_group_disposition(
+        sid, "a.docx", "1.1.1", "awaiting_review", event_key="hitl:review-1:pending",
+        review_item_id="review-1")
+    moved = isolated_store.set_finding_group_disposition(
+        sid, "a.docx", "1.1.1", "approved_pending_verification",
+        event_key="hitl:review-1:approved", review_item_id="review-1")
+    assert moved == 3
+    moved = isolated_store.set_finding_group_disposition(
+        sid, "a.docx", "1.1.1", "awaiting_review", event_key="hitl:review-1:pending",
+        review_item_id="review-1")
+
+    assert moved == 3
+    rows = [r for r in isolated_store.list_finding_dispositions(sid, batch)
+            if r["rule_id"] == "1.1.1"]
+    assert {r["disposition"] for r in rows} == {"awaiting_review"}
+    assert {r["revision"] for r in rows} == {3}
+    for row in rows:
+        events = isolated_store.finding_disposition_events(sid, batch, row["finding_id"])
+        assert [event["to_disposition"] for event in events] == [
+            "awaiting_review", "approved_pending_verification", "awaiting_review"]
+        assert len({event["event_id"] for event in events}) == 3
+
+
 def test_mixed_rule_diff_evidence_uses_per_rule_ordinals(isolated_store):
     sid = _assessment(isolated_store)
     batch = _batch(isolated_store, sid)
