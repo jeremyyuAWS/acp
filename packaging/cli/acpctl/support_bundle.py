@@ -389,9 +389,27 @@ class Redactor:
                 under_exempt = any(child[:len(p)] == p for p in key_exempt_paths)
                 on_the_way = any(p[:len(child)] == child for p in key_exempt_paths)
                 new_key = self.text(key) if isinstance(key, str) else key
-                if not (under_exempt or on_the_way) and self.is_secret_key(key):
+                by_key = not (under_exempt or on_the_way) and self.is_secret_key(key)
+                if by_key and isinstance(item, list):
+                    out[new_key] = [
+                        self.tree(element, path=child, key_exempt_paths=key_exempt_paths)
+                        if isinstance(element, (dict, list))
+                        else self.placeholder(element, str(key))
+                        for element in item]
+                elif by_key and not isinstance(item, dict):
                     out[new_key] = self.placeholder(item, str(key))
                 else:
+                    # A KEY NAME IS A SIGNAL ABOUT A VALUE, AND A MAPPING IS NOT A VALUE. When a
+                    # secret-sounding key holds a whole subtree it is a SECTION name, and
+                    # replacing the section with one placeholder destroys the structure while
+                    # hiding nothing the walk would not reach anyway — every scalar inside is
+                    # still judged on its own key name, its shape and its entropy.
+                    #
+                    # This is not hypothetical tidiness. The shipped standard-production document
+                    # declares a `secrets.refs` entry named `object-storage`, which normalises to
+                    # exactly `data.objectStorage` — so the naive rule replaced that whole block
+                    # (mode, encryption, retentionDays) with a placeholder, in the one file a
+                    # support engineer reads first, to hide three settings that are not secret.
                     out[new_key] = self.tree(
                         item, path=child, key_exempt_paths=key_exempt_paths)
             return out
