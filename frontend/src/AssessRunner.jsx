@@ -184,6 +184,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // fabrication. Found live 2026-07-29 as "Assess produces no score": the catch below computed
   // a result from an empty `files` and rendered a completed 0/100.
   const [scanGone, setScanGone] = useState(null)
+  // A rejected start means nothing was assessed. Keep it distinct from a missing scan and put
+  // the controlled runner back at idle so App re-renders the setup card for a safe retry.
+  const [startError, setStartError] = useState(null)
   const [executionNotice, setExecutionNotice] = useState('')
   // Real-time queue visibility for the deferred model (2026-08-22). Before this, "Opening &
   // assessing 0 of 148…" looked IDENTICAL whether a worker was about to pick the job up or the
@@ -497,6 +500,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     // The effect below remains the durable source for running/done and reload resume.
     onPhase?.('starting')
     setPhase('running'); setResult(null); setProgress(0); setAccessFailed(false); setScanGone(null)
+    setStartError(null)
     setExecutionNotice('')
     setWorkersDown(false); setJobInfo(null); setLiveQueue(null)
     // ADR 0020: in the deferred model the DOWNLOAD happens now, at Assess — but GIS Drive tokens
@@ -531,11 +535,14 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
         try { sessionStorage.removeItem(SKEY(runId)) } catch { /* ignore */ }
         return
       }
-      // On any OTHER error fall back to the immediate behaviour over whatever is already scored.
-      onAssessed?.()
-      const computed = computeResult(level)
-      save({ phase: 'running', startedAt, level, result: computed })
-      runTicker(startedAt, level, computed)
+      // A rejected POST did not assess anything. The old fallback called onAssessed(), hid the
+      // setup card, and animated a result computed from pre-existing rows — a 503 therefore
+      // looked like success and left the controlled runner as an empty panel. Return to idle and
+      // preserve the server's actionable message instead.
+      setPhase('idle'); setProgress(0); setCurrentFile(null); setCurrentPhase('')
+      setStartError(e?.message || 'Assessment could not start. Please try again.')
+      onPhase?.('idle')
+      try { sessionStorage.removeItem(SKEY(runId)) } catch { /* ignore */ }
     })
   }
 
@@ -650,6 +657,12 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       </>)}
 
       <div role="status" aria-live="polite">
+        {startError && (
+          <div role="alert" className="callout danger" style={{ margin: '8px 0' }}>
+            <b>Assessment did not start.</b> {startError} No documents were assessed; review the
+            settings above and try again.
+          </div>
+        )}
         {executionNotice && (
           <div className="callout info" style={{ margin: '8px 0' }}>
             <b>Existing work found.</b> {executionNotice}

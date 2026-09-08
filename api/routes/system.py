@@ -2498,6 +2498,183 @@ def _azure_block():
         return None
 
 
+# Environment variables whose VALUES must never appear in a support bundle. Matched on the NAME,
+# because the value of a variable called ACP_DB_PASSWORD is a secret whatever it looks like, and a
+# scanner that recognised only high-entropy strings would pass a password of "changeme".
+_SECRET_ENV_HINTS = ("secret", "password", "passwd", "token", "key", "credential", "connection",
+                     "conn_str", "connectionstring", "sas", "dsn", "url")
+
+# Names that CONTAIN a hint but are not secrets — public URLs and feature flags. Kept short and
+# explicit; anything not listed is treated as a secret, which is the safe direction.
+_SECRET_ENV_EXEMPT = frozenset({"ACP_PUBLIC_URL", "ACP_BASE_URL", "ACP_SITE_URL"})
+
+
+def _secret_env_values() -> set[str]:
+    """Every environment value this process holds that could be a credential.
+
+    THE ALLOW-LIST IS THE NAME, AND THE CHECK IS THE VALUE. `verify` below greps the ASSEMBLED
+    bundle for each of these literals, which is the only redaction that can be verified rather
+    than promised: field-level care cannot catch a credential that arrives inside a message
+    somebody added last week.
+    """
+    import os
+    out: set[str] = set()
+    for name, value in os.environ.items():
+        v = (value or "").strip()
+        if len(v) < 6 or name in _SECRET_ENV_EXEMPT:
+            # Under six characters a "secret" is more likely to be a substring of ordinary prose
+            # ("true", "1", "acp") and grepping for it would redact the whole bundle.
+            continue
+        if any(h in name.lower() for h in _SECRET_ENV_HINTS):
+            out.add(v)
+    return out
+
+
+def _bundle_leaks(bundle: dict, secrets: set[str]) -> list[str]:
+    """Names of bundle sections containing a literal secret value. Empty is the only good answer."""
+    import json as _json
+    leaked = []
+    for section, payload in bundle.items():
+        try:
+            text = _json.dumps(payload)
+        except (TypeError, ValueError):
+            text = str(payload)
+        if any(sv in text for sv in secrets):
+            leaked.append(section)
+    return sorted(leaked)
+
+
+@router.get("/admin/support-bundle")
+def admin_support_bundle(request: Request, response: Response):
+    """A redacted diagnostics export an operator can attach to a support ticket (PRD §13, §20.6).
+
+    §20.6 IS AN ABSOLUTE: "Secrets never appear in configuration output or support bundles." This
+    route treats that as something to CHECK rather than to intend. The bundle is assembled from an
+    allow-list of readings, and then every value this process holds under a credential-shaped
+    environment name is grepped for in the assembled result. If one is present the bundle is NOT
+    returned — a 500 naming the offending section, and nothing else, because a bundle that leaks
+    is worse than no bundle and an error a developer must fix is better than a quiet redaction
+    that hides the bug.
+
+    AN ALLOW-LIST OF READINGS, NOT A DUMP WITH THINGS REMOVED. Every section below is composed
+    from readings this application already exposes — build provenance, dependency readiness, the
+    audit trail's shape, counts. `os.environ` is never serialised, not even filtered: a filtered
+    environment ships the variable somebody adds tomorrow.
+
+    NO DOCUMENT NAMES, NO USER IDENTITIES. PRD §13 names both. Counts are carried and identities
+    are not, so the bundle says how much work exists without saying whose or about what.
+
+    Admin-only, for the same reason `/admin/audit-events` is.
+    """
+    import datetime as _dt
+    import os
+    _require_admin(request)
+    response.headers["Cache-Control"] = "no-store"
+
+    info = _build_info()
+    try:
+        audit = core.store.list_audit_events(limit=25)
+    except Exception:  # noqa: BLE001 — a diagnostics export must survive a degraded database
+        swallowed("routes.system.admin_support_bundle: reading the audit trail failed")
+        audit = []
+
+    bundle = {
+        "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        # WHICH BYTES ARE RUNNING. The first question any support ticket has to answer, and the
+        # one #1529 added `commit` for.
+        "release": {
+            "version": info.get("version"),
+            "commit": info.get("commit"),
+            "built_at": info.get("built_at"),
+            "version_stamped": info.get("version_stamped"),
+        },
+        # WHERE it is running. Enum-shaped words from the deployment document, never endpoints:
+        # a hostname is not a credential but it is a customer's topology.
+        #
+        # REPORTED VERBATIM, NEVER COMPARED. ADR 0048's rule is that nothing may BRANCH on
+        # `ACP_PLATFORM` — the moment application code did, "one package, four clouds" would stop
+        # being true. Provenance-reporting is the use the variable exists for (and this bundle is
+        # named in that rule's own test), so the values are copied through as-is: normalising
+        # `ACP_AI_LOCAL_ONLY` into a boolean here would be a comparison on a provenance label, and
+        # a support bundle is more useful anyway when it says exactly what the workload was given.
+        "deployment": {
+            "platform": os.environ.get("ACP_PLATFORM") or None,
+            "profile": os.environ.get("ACP_DEPLOY_PROFILE") or None,
+            "environment": os.environ.get("ACP_DEPLOY_ENV") or None,
+            "ai_local_only": os.environ.get("ACP_AI_LOCAL_ONLY") or None,
+        },
+        # WHETHER ITS DEPENDENCIES ARE THERE — presence and reachability as booleans, never the
+        # connection strings that would say where they are.
+        "dependencies": {
+            "database_configured": bool(os.environ.get("DATABASE_URL")),
+            "redis_configured": bool(os.environ.get("REDIS_URL")),
+            # `ACP_BLOB_ACCOUNT` ONLY, and deliberately not `OBJECT_STORAGE`. The chart projects
+            # both, but `tests/test_packaging_seams.py` records OBJECT_STORAGE as DEAD wiring —
+            # required by the contract and read by nothing — so an installation can have it set
+            # and store nothing at all. Reading it here would report object storage as configured
+            # on exactly the installations that silently drop every remediated document.
+            "object_storage_configured": bool(os.environ.get("ACP_BLOB_ACCOUNT")),
+            "pdf_engine": pdf_engine_status().get("available"),
+        },
+        # The audit trail's SHAPE, not its contents beyond the platform events it already scopes
+        # itself to. Types and a count, so a ticket can show that auditing works.
+        "audit": {
+            "recent_event_types": sorted({str(e.get("type")) for e in audit if e.get("type")}),
+            "recent_event_count": len(audit),
+            "covers": sorted(core.store.PLATFORM_AUDIT_PREFIXES),
+        },
+        "redacted": True,
+    }
+
+    secrets = _secret_env_values()
+    leaked = _bundle_leaks(bundle, secrets)
+    if leaked:
+        # NOT REDACTED AND RETURNED. A section that leaked once will leak again in a shape the
+        # scrubber does not recognise; refusing makes it a bug somebody fixes rather than a
+        # silent near-miss. The offending VALUE is never named — that would put it in the error
+        # this route exists to keep it out of.
+        raise HTTPException(500, {
+            "code": "support_bundle_would_leak",
+            "message": "the assembled support bundle contained a credential-shaped environment "
+                       "value and was not returned",
+            "sections": leaked,
+        })
+    return bundle
+
+
+@router.get("/admin/audit-events")
+def admin_audit_events(request: Request, response: Response, limit: int = Query(100, ge=1, le=1000),
+                       since: str | None = Query(None)):
+    """The platform audit trail: deployment, configuration and capacity changes (PRD §13).
+
+    ADMIN-ONLY, ENFORCED HERE. `_require_admin` rather than `_require_user`: an audit log names who
+    changed what and when, and any allow-listed user could otherwise read the platform's whole
+    administrative history. The SPA hiding a tab is not enforcement.
+
+    WHAT IT DELIBERATELY DOES NOT CARRY. `decision_log` holds per-document decisions as well as
+    platform ones, and those rows carry `file` — a customer's document name. PRD §13 requires
+    document names to stay out of exported diagnostics, and an audit export lands in support
+    tickets, so `list_audit_events` filters to an allow-list of platform action prefixes and the
+    shape has no `file` field at all. A prefix allow-list rather than a blocklist, because a
+    blocklist exports document names the day somebody adds an action nobody thought to exclude.
+
+    A FRESH INSTALLATION IS NOT EMPTY. Startup records `deployment.started` (§15, §20.12), so an
+    installation that has changed nothing still answers with the release it is running — which is
+    what makes "no events" mean "audit logging is broken" rather than "nothing has happened yet".
+    """
+    _require_admin(request)
+    response.headers["Cache-Control"] = "no-store"
+    events = core.store.list_audit_events(limit=limit, since=since)
+    return {
+        "events": events,
+        "count": len(events),
+        # Named so a reader can see the boundary rather than inferring it from what happens to be
+        # present, and so a narrowing of the allow-list is visible in the response itself.
+        "covers": sorted(core.store.PLATFORM_AUDIT_PREFIXES),
+        "document_scoped_excluded": True,
+    }
+
+
 @router.get("/admin/activity")
 def admin_activity(request: Request, response: Response):
     """Payload-sanitized cross-user processing topology for signed-in workspace users.

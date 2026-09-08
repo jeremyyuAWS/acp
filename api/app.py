@@ -386,6 +386,27 @@ def _start_job_workers():
                   f"· correlation {_state['correlation']}", flush=True)
     except Exception:  # noqa: BLE001 — never take startup down for telemetry.
         swallowed("app.startup: configuring Application Insights tracing failed")
+    # PRD §15/§20.12: the deployment result belongs in the audit trail. Without it a fresh
+    # installation's audit log is EMPTY, and "no events" cannot be told apart from "audit logging
+    # does not work" — the one ambiguity an auditor cannot afford. Deduped on (version, commit)
+    # inside the store, so replicas and a crash loop do not bury the deployments they record.
+    #
+    # Fail-open, like every other startup side effect here: an installation that cannot write its
+    # own audit row must still serve traffic, and the alternative is a boot loop over bookkeeping.
+    try:
+        from routes.system import _build_info as _bi  # noqa: PLC0415
+        _info = _bi()
+        _recorded = core.store.record_deployment_audit(
+            version=str(_info.get("version") or "dev"),
+            commit=_info.get("commit"),
+            # Passed through as provenance, never compared: ADR 0048 forbids BRANCHING on the
+            # platform, and assigning before the `if` keeps this call out of a condition.
+            platform=os.environ.get("ACP_PLATFORM", "unknown"),
+            profile=os.environ.get("ACP_DEPLOY_PROFILE", "unknown"))
+        if _recorded:
+            print(f"[audit] deployment recorded: {_info.get('version')}", flush=True)
+    except Exception:  # noqa: BLE001 — never take startup down for an audit row.
+        swallowed("app.startup: recording the deployment audit event failed")
     core.reload_scheduler()
     core.start_scheduler()
     # Overrides are Azure policy changes, not merely labels in Settings. The reconciler is

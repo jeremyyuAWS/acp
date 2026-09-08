@@ -3,8 +3,10 @@ import { getDriveFolderName } from './api.js'
 
 export function readableFolderPath(folder) {
   const path = String(folder || '')
-  const withoutGraphRoot = path.replace(/^\/?drive\/root:\/?/i, '')
-  return withoutGraphRoot || 'Drive root'
+  // OneDrive returns /drive/root:/Folder; SharePoint returns
+  // /drives/{opaque-drive-id}/root:/Folder. Neither API routing prefix is a folder name.
+  const withoutGraphRoot = path.replace(/^\/?(?:drive|drives\/[^/]+)\/root:\/?/i, '')
+  return withoutGraphRoot || (/^\/?drives\//i.test(path) ? 'SharePoint root' : 'Drive root')
 }
 
 export default function DiscoveryFolderLabel({ folder, source }) {

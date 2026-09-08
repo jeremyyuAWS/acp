@@ -730,11 +730,14 @@ SUITE_PATHS = [
     ("PATH_SCAN_ASSESS", "post", True),
     ("PATH_SCAN_REMEDIATE", "post", True),
     ("PATH_JOB", "get", True),
-    # PRD §12/§13 surfaces the acceptance criteria need and no build serves yet. Their scenarios
-    # report `unknown`, never a pass — see the kind-cluster job's expected-outcome table.
-    ("PATH_ARTIFACTS", "get", False),
-    ("PATH_AUDIT", "get", False),
-    ("PATH_SUPPORT_BUNDLE", "get", False),
+    # PRD §12/§13 surfaces. Unserved by any build until 2026-09-08, when four reference-cluster
+    # runs had reported their scenarios `unknown` — never a pass, which is the point of the suite
+    # having four states, but also a question no target could answer. THIS GUARD IS WHAT SAID SO:
+    # it fails in both directions, and moving these three from False to True is exactly what it
+    # demanded the moment the routes landed.
+    ("PATH_ARTIFACTS", "get", True),
+    ("PATH_AUDIT", "get", True),
+    ("PATH_SUPPORT_BUNDLE", "get", True),
 ]
 
 

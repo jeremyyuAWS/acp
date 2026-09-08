@@ -56,6 +56,14 @@ it('removes the Graph drive root prefix from displayed folder paths', async () =
   expect(getDriveFolderName).not.toHaveBeenCalled()
   expect(readableFolderPath('/drive/root:')).toBe('Drive root')
 })
+it('removes the opaque SharePoint drive route from displayed folder paths', async () => {
+  const { root, container } = createTestRoot()
+  const path = '/drives/b!C4KL1AKEIU2Bh5cDUao2FK3nO4gYqkJJu_gC8I0_iM/root:/Department Drives/Cardiology'
+  await act(async () => root.render(<DiscoveryFolderLabel source="sharepoint" folder={path} />))
+  expect(container.textContent).toBe('Department Drives/Cardiology')
+  expect(container.textContent).not.toContain('/drives/')
+  expect(container.querySelector('span').title).toBe(path)
+})
 it('bounds the rendered metadata rows while keeping the full search population', async () => {
   const { root, container } = createTestRoot()
   const rows = Array.from({ length: 120 }, (_, i) => ({ file: `Document-${i}.pdf` }))

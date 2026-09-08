@@ -111,6 +111,22 @@ describe('AssessSetup drives the run (approved board 2)', () => {
     expect(assessScan.mock.calls[0][2]).toBe(false)
   })
 
+  it('returns a rejected assessment start to idle instead of claiming it was assessed', async () => {
+    assessScan.mockRejectedValueOnce(new Error('503 — database capacity is temporarily busy'))
+    let start = null
+    const onAssessed = vi.fn()
+    const onPhase = vi.fn()
+    await mount({ controlled: true, onReady: (fn) => { start = fn }, onAssessed, onPhase })
+    await act(async () => { start({ level: 'AA', includeLifecycleFlagged: false }) })
+    await settle()
+
+    expect(onAssessed).not.toHaveBeenCalled()
+    expect(onPhase).toHaveBeenCalledWith('idle')
+    expect(container.textContent).toContain('Assessment did not start')
+    expect(container.textContent).toContain('503 — database capacity is temporarily busy')
+    expect(sessionStorage.getItem('acp-assess-s1')).toBe(null)
+  })
+
   it('refreshes the Drive token before assessing, on the externally-started path too (ADR 0020)', async () => {
     let start = null
     await mount({ controlled: true, onReady: (fn) => { start = fn } })
