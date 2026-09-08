@@ -1,7 +1,7 @@
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import { canonicalStageCardModel } from './canonicalStageCard.js'
 
-const terminal = (state) => ['succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed'].includes(state)
+const terminal = (state) => ['processing_complete', 'succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed'].includes(state)
 const shown = (value) => value == null ? '—' : Number(value).toLocaleString()
 
 export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen }) {

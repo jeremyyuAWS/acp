@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import CompletedStageDetails from './CompletedStageDetails.jsx'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import WorkflowStageActivityCard from './WorkflowStageActivityCard.jsx'
 import { canonicalStageCardModel, canonicalWorkflowStages, currentCanonicalStage,
@@ -7,7 +8,8 @@ import { canonicalStageCardModel, canonicalWorkflowStages, currentCanonicalStage
 const STAGES = ['discover', 'assess', 'remediate', 'release']
 const LABELS = { discover: 'Discover', assess: 'Assess', remediate: 'Remediate', release: 'Release' }
 const destination = { discover: 'discover', assess: 'assess', remediate: 'remediate', release: 'publish' }
-const terminal = (state) => ['succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed'].includes(state)
+const terminal = (state) => ['processing_complete', 'succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed'].includes(state)
+const completed = (state) => ['processing_complete', 'succeeded'].includes(state)
 
 function storageKey(lineage) {
   const workflow = lineage?.workflow_id || lineage?.scan_id || 'workflow'
@@ -81,8 +83,10 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
             </button>}
             {!locked && <div id={bodyId} className="workflow-stage-stack__body" hidden={!open}>
               {detail ? <div className="workflow-stage-stack__live-detail" data-detail-owner="current">{detail}</div>
-                : <WorkflowStageActivityCard snapshot={snapshot} receivedAt={receivedAt}
-                    onOpen={onNavigate ? () => onNavigate(destination[stage]) : null} />}
+                : completed(snapshot.state) && ['discover', 'assess'].includes(stage)
+                  ? <CompletedStageDetails snapshot={snapshot} />
+                  : <WorkflowStageActivityCard snapshot={snapshot} receivedAt={receivedAt}
+                      onOpen={onNavigate ? () => onNavigate(destination[stage]) : null} />}
             </div>}
           </div>
         )

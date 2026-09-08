@@ -101,6 +101,23 @@ describe('canonical stage card', () => {
     expect(html).toContain('Integrity check: 10 of 10 work items accounted for')
   })
 
+  it.each(['succeeded', 'processing_complete'])('uses the rich completed cards without frozen heartbeat bars for %s stages', (state) => {
+    const lineage = { workflow_id: 'provider-neutral', workflow_revision: 3, stages: [
+      { ...SNAPSHOT, stage: 'discover', state, source: 'drive', domain_reconciliation: {
+        unit: 'inventory documents', total: 147, accounted: 147, exact: true,
+        buckets: { Active: 147 },
+      } },
+      { ...SNAPSHOT, stage: 'assess', execution_id: 'assess-complete', state, source: 'sharepoint',
+        domain_reconciliation: { unit: 'eligible documents', total: 147, accounted: 147,
+          exact: true, buckets: { assessed: 147 } } },
+    ] }
+    const html = renderToStaticMarkup(createElement(WorkflowStageStack, { lineage, receivedAt: Date.now() }))
+    expect(html).toContain('Discovery complete')
+    expect(html).toContain('Assessment complete')
+    expect(html).not.toContain('workflow-sse-card')
+    expect(html).not.toContain('live-heartbeat-bars')
+  })
+
   it('keeps retained history mounted while an earlier-stage card collapses and expands', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-07T01:02:03Z'))
