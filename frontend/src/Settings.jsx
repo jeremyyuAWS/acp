@@ -1207,7 +1207,7 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
     <div className="setoverlay" role="dialog" aria-modal="true" aria-label="Platform settings" onClick={onClose}>
       <div className="setpanel" ref={panelRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div className="sethead">
-          <div><b>⚙ Platform settings</b><span className="muted"> · admin · access</span></div>
+          <div><b>⚙ Platform settings</b><span className="muted"> · {me?.is_admin ? 'administrator' : 'view-only'} access</span></div>
           <button className="ghost small" aria-label="Close settings" onClick={onClose}>✕</button>
         </div>
         {/* Above the subtabs on purpose — the SIM badge is true of every write path in this panel

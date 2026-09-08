@@ -61,6 +61,10 @@ describe('scheduling control accessibility contract', () => {
     expect(host.querySelector('[aria-current="step"]').textContent).toContain('When')
     expect(host.querySelector('#cap-tz').getAttribute('aria-describedby')).toBe('cap-tz-help')
     expect(host.querySelector('button[aria-label="Monday"]').getAttribute('aria-pressed')).toBe('true')
+    const preview = host.querySelector('[aria-label="Weekly warm-capacity windows"]')
+    expect(preview.querySelectorAll('[role="listitem"]')).toHaveLength(7)
+    expect(preview.textContent).toContain('Off hours')
+    expect(preview.querySelectorAll('.capacity-week__day--active')).toHaveLength(5)
   })
 
   it('exposes invalid capacity at the affected input and reports validation findings', async () => {

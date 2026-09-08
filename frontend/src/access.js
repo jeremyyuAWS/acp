@@ -150,6 +150,17 @@ export const isAccessPending = (access) => Boolean(access?.pending)
 export const canOpenSettings = (me, access) =>
   Boolean(me?.allow?.includes('settings')) && isVisible(access, 'settings')
 
+/** Preserve identity flags resolved by the provider-neutral workspace bootstrap. */
+export function mergeBootstrapIdentity(current, server) {
+  if (!server) return current
+  const email = server.email || current?.email
+  const isAdmin = server.is_admin === true
+  const isScopeOwner = server.is_scope_owner === true
+  if (current?.email === email && current?.is_admin === isAdmin
+      && current?.is_scope_owner === isScopeOwner) return current
+  return { ...current, email, is_admin: isAdmin, is_scope_owner: isScopeOwner }
+}
+
 export function restrictionReason(access, key, label) {
   const name = label || key
   if (!access?.enforced) return `${name} is not available in this workspace.`
