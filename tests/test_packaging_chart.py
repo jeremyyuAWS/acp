@@ -514,6 +514,59 @@ def test_a_single_replica_tier_gets_no_disruption_budget():
 
 
 @needs_helm
+def test_the_egress_policy_lets_acp_reach_its_own_api():
+    """`helm install` FAILED ON EVERY CLUSTER THAT ENFORCES NETWORKPOLICY, and no render could
+    show it.
+
+    The preflight hook reads `http://<release>-api:80/readyz` and carries this chart's selector
+    labels, so the `-egress` policy applies to it. That policy lists the ports ACP needs to leave
+    the CLUSTER on — 53, 443, 5432, 6379, 6380 — and reaching your own API is not egress in the
+    sense the list was written for, so neither the service port nor the container port was there.
+    The request was dropped, the hook exited 1, and Helm failed the release:
+
+        Error: INSTALLATION FAILED: failed post-install: job acp-preflight failed
+        [preflight] could not reach http://acp-api:80/readyz: <urlopen error timed out>
+
+    Eleven green reference runs said nothing about it, because kindnet accepts NetworkPolicy
+    objects and enforces none of them. It surfaced the first time the cluster ran Calico.
+
+    Asserted as a rule SCOPED TO THE API PODS rather than as a port in the global list, because
+    `to` plus `ports` is an AND: this permits ACP's pods to reach ACP's API and nothing else.
+    Both ports are required — a ClusterIP connection is DNATed to the backend before it leaves,
+    and which one a given CNI matches on is not something this chart should depend on.
+    """
+    doc = load_example("standard-production")
+    manifests = render(doc)
+    policy = named(manifests, "NetworkPolicy", "-egress")
+    scoped = [rule for rule in policy["spec"]["egress"] if rule.get("to")]
+    assert len(scoped) == 1, policy["spec"]["egress"]
+    selector = scoped[0]["to"][0]["podSelector"]["matchLabels"]
+    assert selector.get("app.kubernetes.io/component") == "api", selector
+
+    api = named(manifests, "Deployment", "-api")["spec"]["template"]
+    assert selector.items() <= api["metadata"]["labels"].items(), (
+        f"the rule selects pods the API Deployment does not produce: {selector}")
+
+    allowed = {p["port"] for p in scoped[0]["ports"]}
+    service = named(manifests, "Service", "-api")["spec"]["ports"][0]["port"]
+    container = api["spec"]["containers"][0]["ports"][0]["containerPort"]
+    assert {service, container} <= allowed, (
+        f"the rule allows {sorted(allowed)}; a ClusterIP connection is DNATed to {container} "
+        f"from {service} and either may be what the CNI matches on")
+
+    # The preflight hook is the pod that failed. Its URL must be one this rule admits.
+    preflight = named(manifests, "Job", "-preflight")["spec"]["template"]
+    command = " ".join(preflight["spec"]["containers"][0]["command"])
+    assert f":{service}/readyz" in command, (
+        "the preflight URL no longer uses the service port this rule was written for")
+    egress_applies = {k: v for k, v in preflight["metadata"]["labels"].items()
+                      if k in policy["spec"]["podSelector"]["matchLabels"]}
+    assert egress_applies == policy["spec"]["podSelector"]["matchLabels"], (
+        "the preflight pod is no longer covered by the egress policy; if that is deliberate this "
+        "test is testing nothing")
+
+
+@needs_helm
 def test_private_workers_render_a_policy_that_admits_nothing():
     doc = load_example("standard-production")
     assert doc["network"]["privateWorkers"] is True
@@ -1098,13 +1151,24 @@ def test_default_deny_always_lets_the_pods_reach_their_own_data_services():
 @needs_helm
 def test_the_egress_ports_are_a_values_knob_and_not_a_hardcoded_list():
     """An installation whose Postgres listens somewhere else edits values rather than discovering
-    at rollout that its database is unreachable."""
+    at rollout that its database is unreachable.
+
+    Read off the UNSCOPED rule only. The policy also carries a rule scoped to the API pods with
+    `to`, which exists so ACP can reach its own API and is deliberately NOT operator-tunable: it
+    is the chart's own wiring, not a statement about the network the cluster sits in. Collecting
+    ports across both rules would make this test fail whenever that one changes, and would let
+    the knob be broken as long as the scoped rule happened to carry the right number.
+    """
     manifests = render(load_example("standard-production"),
                        extra=["--set", "networkPolicy.egressPorts[0].port=15432",
                               "--set", "networkPolicy.egressPorts[0].protocol=TCP"])
     policy = named(manifests, "NetworkPolicy", "-egress")
-    ports = {p["port"] for rule in policy["spec"]["egress"] for p in rule["ports"]}
-    assert ports == {15432}
+    unscoped = [rule for rule in policy["spec"]["egress"] if not rule.get("to")]
+    assert len(unscoped) == 1, policy["spec"]["egress"]
+    assert {p["port"] for p in unscoped[0]["ports"]} == {15432}
+    scoped = [rule for rule in policy["spec"]["egress"] if rule.get("to")]
+    assert {p["port"] for p in scoped[0]["ports"]} == {80, 8077}, (
+        "the knob moved a port it does not own; the scoped rule is the chart's own wiring")
 
 
 @needs_helm

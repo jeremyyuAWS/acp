@@ -1,15 +1,23 @@
 {{- if .Values.networkPolicy.enabled }}
 {{/*
-Network posture. Two objects, because "deny everything" and "allow what ACP needs" are separate
-decisions and only the first is safe to get wrong in the tightening direction.
+Network posture. FOUR objects — a default deny, ingress for the API, ingress refused for the
+workers, and the egress allowance — because "deny everything" and "allow what ACP needs" are
+separate decisions and only the first is safe to get wrong in the tightening direction. (This said
+"two objects" until 2026-09-08, having been written when there were two.)
 
 A NETWORKPOLICY IS A CLUSTER CAPABILITY, NOT A GUARANTEE THIS CHART MAKES. Kubernetes silently
 ignores NetworkPolicy objects when the CNI does not implement them — no error, no event, no
 status field saying "unenforced". Flannel is the common case. So a regulated installation can
 render every policy below, pass every review, and be running with completely open pod networking.
 `acpctl doctor` makes that check against a live cluster — by INFERENCE from the CNI, since
-enforcement has no API to query, and it says so rather than implying certainty. It cannot be
-checked here at all, and staying quiet about that would be the more dangerous choice.
+enforcement has no API to query, and it says so rather than implying certainty.
+
+WHAT THE RENDER CANNOT CHECK, SOMETHING NOW DOES. This paragraph used to end "it cannot be checked
+here at all", which was true of the render and read as though nothing checked it. The reference
+cluster runs Calico and installs this chart on every packaging pull request, so these policies are
+enforced there rather than merely accepted — and the first run that enforced them failed, because
+the egress rule below did not admit the chart's own preflight hook. A policy nothing acts on is a
+policy nobody can be wrong about.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -124,5 +132,36 @@ spec:
         - port: {{ .port }}
           protocol: {{ .protocol }}
         {{- end }}
+    {{- /*
+      THE CHART'S OWN API, WHICH THIS POLICY BLOCKED UNTIL 2026-09-08.
+
+      The preflight hook reads `http://<release>-api:80/readyz` and carries this chart's selector
+      labels, so this policy applies to it — and neither 80 nor 8077 is in `egressPorts`, which
+      lists the ports ACP needs to leave the CLUSTER on. Its request was dropped, it exited 1, and
+      Helm failed the release:
+
+        Error: INSTALLATION FAILED: failed post-install: job acp-preflight failed:
+               BackoffLimitExceeded
+        [preflight] could not reach http://acp-api:80/readyz: <urlopen error timed out>
+
+      SO `helm install` OF THIS CHART FAILED ON ANY CLUSTER THAT ENFORCES NETWORKPOLICY — which is
+      every production cluster and was not the reference cluster until Calico replaced kindnet.
+      kindnet accepts policies and enforces none, so eleven green runs said nothing about this.
+
+      Scoped to the API pods rather than opening a port globally: `to` plus `ports` is an AND, so
+      this permits ACP's pods to reach ACP's API and nothing else. BOTH ports are named because a
+      ClusterIP connection is DNATed to the backend before it leaves, and which of the two a given
+      CNI matches on is an implementation detail this chart should not depend on.
+    */}}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "acp.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: api
+      ports:
+        - port: {{ .Values.api.port }}
+          protocol: TCP
+        - port: {{ .Values.api.service.port }}
+          protocol: TCP
 {{- end }}
 {{- end }}

@@ -22,8 +22,11 @@ packaging/
   cli/acpctl/                         validate · plan · inventory · values · release
   chart/acp/                          the Helm chart the values install
   examples/                           one document per deployment profile, plus one release
+  reference/kind/                     the disposable cluster CI installs on — see below
+  docs/application-configuration.md   which variables reach the app, and how to set the rest
   docs/service-inventory.md           GENERATED — scripts/gen_service_inventory.py
-  docs/kubernetes-mvp-gap-report.md   what still blocks a real cluster install
+  docs/kubernetes-mvp-gap-report.md   what the cluster establishes, and what still blocks a
+                                      real release
 ```
 
 ## The chart
@@ -64,6 +67,39 @@ three cases **Kubernetes reports nothing when it cannot**:
 
 Only the third is loud. **`acpctl doctor` is where these become checkable** — run it against
 the target cluster before installing (see below).
+
+### The chart is installed on a real cluster, not only rendered
+
+`packaging/reference/kind/` and `.github/workflows/packaging-kind.yml` install this chart on a
+throwaway `kind` cluster on every packaging pull request: the image is built from the checkout and
+`kind load`ed with no registry, Postgres and Redis are supplied the way an infrastructure adapter
+would, and then the running installation is asked the questions `acpctl` was written to ask.
+
+**A rendered manifest and an accepted one are different claims, and the gap is not theoretical.**
+Three defects were found BY THE INSTALL, each one green under every rendered-manifest test:
+
+| Found by the cluster | Why no render could |
+|---|---|
+| no `helm install` had ever succeeded | Helm runs pre-install hooks before the release's own ServiceAccount exists, so the Job produced no pod at all. Both objects render perfectly; only the install has an ordering. |
+| a numeric annotation was rejected by the API server | `toYaml` preserves YAML's types and annotations are `map[string]string`. A test that parses the render gets the value back as an int and asserts on it happily — the defect is in the type, which is what a round-trip through a parser erases. |
+| `helm install` failed wherever NetworkPolicy is enforced | the chart's own egress policy blocked its own preflight hook. Every policy renders correctly; whether anything acts on them is a property of the CNI. |
+
+A further three were found by reading the application against the chart rather than the chart
+against itself — worker Deployments that inherited the image's CMD and ran the API server, a
+readiness probe pointing at a route that never sets a status code, and a default-deny policy with
+no DNS egress. Those did not need a cluster, only a habit: `docs/application-configuration.md` and
+`tests/test_packaging_seams.py` are what that habit turned into.
+
+The cluster runs Calico rather than kind's kindnet, because kindnet accepts NetworkPolicy objects
+and enforces none of them — the "no error; pod networking stays open" row of the prerequisites
+table above. A cluster that cannot enforce a policy cannot test one. It also enforces the
+restricted Pod Security Standard, so a pod that does not meet it is rejected at
+admission rather than merely looking compliant. And it upgrades the release as well as installing
+it, because an install that cannot be upgraded is a demo.
+
+**What it does not establish** is recorded in `docs/kubernetes-mvp-gap-report.md` in the same
+detail: one node, a Kubernetes version this chart RUNS on rather than one anything is supported
+on, and no document ever scanned or remediated on it.
 
 ## Using it
 
