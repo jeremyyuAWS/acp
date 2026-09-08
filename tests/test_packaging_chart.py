@@ -480,15 +480,37 @@ def test_replicas_are_pinned_exactly_where_no_autoscaler_owns_them():
 # ── the profile guarantees, on the rendered objects ───────────────────────────
 
 @needs_helm
-def test_high_availability_gets_a_disruption_budget_and_standard_does_not():
-    """Anti-affinity is a preference; a PodDisruptionBudget is what survives a node drain. The
-    profile's name is a promise about behaviour, so it is checked on the object that delivers it
-    rather than on the values that requested it."""
-    ha = render(load_example("high-availability"))
-    assert of_kind(ha, "PodDisruptionBudget"), "the HA profile rendered no PDB"
+def test_a_tier_that_runs_more_than_one_replica_gets_a_disruption_budget():
+    """Anti-affinity is a preference; a PodDisruptionBudget is what survives a node drain.
 
-    standard = render(load_example("standard-production"))
-    assert not of_kind(standard, "PodDisruptionBudget")
+    THIS TEST USED TO ASSERT THE DEFECT. It read "high availability gets one and standard does
+    not", which is what `values.py` did — while the comment directly above that line described the
+    rule as replica count, and standard-production runs a FLOOR OF TWO API replicas. `kubectl
+    drain` on the node holding both evicted both, and the cluster autoscaler does exactly that
+    during a routine node upgrade: the failure a second replica is bought to prevent, on the
+    profile most installations will use. A green test named the profile and never asked what the
+    profile actually ran.
+
+    The rule the comment always stated is the rule now, and this asserts it on the object that
+    delivers it rather than on the values that requested it.
+    """
+    for profile in RENDERABLE:
+        doc = load_example(profile)
+        assert doc["api"]["replicas"]["min"] > 1, f"{profile}: this test would prove nothing"
+        budgets = of_kind(render(doc), "PodDisruptionBudget")
+        assert budgets, f"{profile} runs {doc['api']['replicas']['min']} API replicas and no PDB"
+        assert budgets[0]["spec"]["minAvailable"] == 1, (
+            "minAvailable equal to the replica count blocks every drain")
+
+
+@needs_helm
+def test_a_single_replica_tier_gets_no_disruption_budget():
+    """The control, and not a symmetry for its own sake: `minAvailable: 1` against ONE replica
+    permits no evictions at all, so a budget there does not protect the tier — it stops the node
+    being drained. A drain that cannot complete is its own incident."""
+    doc = load_example("standard-production")
+    doc["api"]["replicas"] = {"min": 1, "max": 4}
+    assert not of_kind(render(doc), "PodDisruptionBudget")
 
 
 @needs_helm
@@ -748,6 +770,126 @@ def test_the_gpu_count_is_a_values_knob():
     ollama = named(manifests, "Deployment", "-ollama")
     limits = ollama["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]
     assert limits["nvidia.com/gpu"] == 4
+
+
+@needs_helm
+def test_no_selector_label_changes_between_two_releases():
+    """`spec.selector` IS IMMUTABLE ON A DEPLOYMENT, and this is the one immutability the chart
+    can break silently.
+
+    A selector label that varies with anything — the release version, the image tag, a values
+    checksum — installs perfectly, passes every render test, and makes the FIRST UPGRADE fail:
+
+        cannot patch "acp-api": Deployment.apps "acp-api" is invalid: spec.selector: Invalid
+        value: field is immutable
+
+    An operator reads that on a running installation, with no way forward but deleting the
+    Deployment. `acp.labels` legitimately carries `app.kubernetes.io/version` and
+    `helm.sh/chart`, both of which move with a release — so the risk is one line: a template
+    selecting on `acp.labels` instead of `acp.selectorLabels`, which reads almost identically.
+
+    Rendered twice at different versions rather than inspected, because the property is
+    "unchanged across releases" and a single render cannot express it. The reference cluster now
+    performs a real `helm upgrade`, which is where this would otherwise be found.
+    """
+    doc = load_example("standard-production")
+    older = copy.deepcopy(doc)
+    older["runtime"]["version"] = "2026.1.1"
+    newer = copy.deepcopy(doc)
+    newer["runtime"]["version"] = "2029.12.31"
+
+    def selectors(document):
+        out = {}
+        for workload in render(document):
+            if workload["kind"] in ("Deployment", "StatefulSet"):
+                out[workload["metadata"]["name"]] = workload["spec"]["selector"]["matchLabels"]
+        return out
+
+    before, after = selectors(older), selectors(newer)
+    assert before, "nothing rendered; this test would prove nothing"
+    assert before == after, (
+        "a selector label moves with the release, so the first upgrade of this chart will be "
+        f"refused as an immutable-field change: {before} vs {after}")
+
+
+@needs_helm
+def test_every_spread_constraint_selects_the_pods_it_is_attached_to():
+    """A TOPOLOGY CONSTRAINT WHOSE SELECTOR MATCHES NOTHING IS NOT AN ERROR.
+
+    It is satisfied vacuously: the manifest renders, `kubectl get` shows the constraint, and the
+    scheduler spreads nothing. The first draft of this helper built its selector from
+    `app.kubernetes.io/component`, which is `worker` on all THREE worker Deployments — so every
+    worker constraint would have selected the union of the tiers, and one built per role would
+    have selected none. Neither shows up as a failure anywhere.
+
+    So the assertion is the one that matters: each constraint's `matchLabels` must be a subset of
+    the labels its own pod template carries, and must include whatever distinguishes that
+    Deployment from its siblings. Anything else is a constraint about somebody else's pods.
+    """
+    for profile in RENDERABLE:
+        for workload in render(load_example(profile)):
+            if workload["kind"] != "Deployment":
+                continue
+            spec = workload["spec"]["template"]["spec"]
+            name = workload["metadata"]["name"]
+            for constraint in spec.get("topologySpreadConstraints", []):
+                selector = constraint["labelSelector"]["matchLabels"]
+                pod_labels = workload["spec"]["template"]["metadata"]["labels"]
+                assert selector.items() <= pod_labels.items(), (
+                    f"{name} ({profile}): the constraint selects pods this Deployment does not "
+                    f"produce: {selector} vs {pod_labels}")
+                # The label that tells the three worker Deployments apart. Without it a worker
+                # constraint balances the union of all three tiers, which is not what any of them
+                # asked for and is invisible in the render.
+                if "worker" in name:
+                    assert "acp.mova.io/worker-role" in selector, (
+                        f"{name}: without the role label this constraint covers every worker tier")
+
+
+@needs_helm
+def test_multi_replica_tiers_are_spread_across_zones_and_single_ones_are_not():
+    """WHAT THE EXISTING ANTI-AFFINITY DID NOT DO. It is `preferredDuringScheduling` across
+    `kubernetes.io/hostname`: it asks for different NODES and says nothing about zones, so three
+    API replicas can land on three nodes in one availability zone and satisfy it completely. Losing
+    a zone is the failure a multi-replica tier is bought to survive.
+
+    Rendered only where there is something to spread. A constraint on a one-pod tier is arithmetic
+    on a single pod, and rendering it everywhere would put a scheduling rule on Ollama and Grafana
+    that can never do anything.
+    """
+    manifests = render(load_example("high-availability"))
+    api = named(manifests, "Deployment", "-api")["spec"]["template"]["spec"]
+    constraint = api["topologySpreadConstraints"][0]
+    assert constraint["topologyKey"] == "topology.kubernetes.io/zone"
+    assert constraint["maxSkew"] == 1
+    for suffix in ("-ollama", "-grafana"):
+        single = named(manifests, "Deployment", suffix)
+        assert single["spec"]["replicas"] == 1, "this test would prove nothing"
+        assert "topologySpreadConstraints" not in single["spec"]["template"]["spec"], suffix
+
+
+@needs_helm
+def test_the_spread_falls_back_rather_than_stranding_a_pod():
+    """`DoNotSchedule` IS A CLAIM ABOUT THE CLUSTER, AND ITS FAILURE MODE IS AN OUTAGE.
+
+    Nodes without the topologyKey LABEL are not eligible under `DoNotSchedule`, so on a cluster
+    whose nodes carry no `topology.kubernetes.io/zone` — every kind and k3d cluster, and any
+    single-zone install, the reference cluster this chart is actually installed on included —
+    there is no eligible node and every replica stays Pending forever. And without `matchLabelKeys`
+    (1.27+, against `doctor.MINIMUM_KUBERNETES` of 1.23) the constraint counts the outgoing
+    ReplicaSet during a rolling update, so an update can wedge against its own predecessors.
+
+    PRD S4 is explicit that a target is not supported because Helm renders for it. The chart
+    therefore ships the soft value on every profile, `high-availability` included, and leaves
+    hardening to an operator who knows their nodes are labelled — which this asserts is one value.
+    """
+    for profile in RENDERABLE:
+        api = named(render(load_example(profile)), "Deployment", "-api")["spec"]["template"]["spec"]
+        assert api["topologySpreadConstraints"][0]["whenUnsatisfiable"] == "ScheduleAnyway", profile
+    hardened = render(load_example("high-availability"),
+                      extra=["--set", "topologySpread.whenUnsatisfiable=DoNotSchedule"])
+    api = named(hardened, "Deployment", "-api")["spec"]["template"]["spec"]
+    assert api["topologySpreadConstraints"][0]["whenUnsatisfiable"] == "DoNotSchedule"
 
 
 @needs_helm

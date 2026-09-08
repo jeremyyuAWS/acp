@@ -325,12 +325,68 @@ forced on. The comment beside it claimed the shared context "sets it true", whic
 so — a reader deciding whether this chart hardens its root filesystems would have concluded it
 does.
 
-**What is missing.** No `topologySpreadConstraints` anywhere in the chart. No PersistentVolumeClaim
-and no volumes at all —
-worker scratch is the node's ephemeral storage, bounded only by the limit above. The PDB renders
-only for the `high-availability` profile and only for the API tier
-(`values.py`: `"enabled": rt["profile"] == "high-availability"`; `templates/pdb.yaml`), which is a
-recorded decision but means a standard-production install has no disruption budget on any tier. No
+**The cluster now upgrades as well as installs, which is a different claim.** Every way this
+chart could fail to upgrade is invisible to `helm template` AND to a first install, and each one
+strands a running installation rather than a test cluster. `spec.selector` is immutable, so a
+selector label that moves with the release installs perfectly and makes the first upgrade fail
+with a message about a field that cannot be changed. A hook Job is a named object, so without
+`before-hook-creation` in its delete policy the second release finds the first one's Job still
+there. And the migration hook is `pre-install,pre-upgrade`, so an upgrade runs it against a schema
+it has already applied — a non-idempotent migration fails there and nowhere earlier.
+
+The step changes the pod template rather than re-applying the same values, because `helm upgrade
+--wait` exits 0 for a release that replaced nothing: it sets an annotation, checks the release
+reached revision 2, and then looks for that annotation on the running pods. A render test cannot
+express "unchanged across releases" from one render, so the selector half is also asserted by
+rendering the chart at two different versions and comparing.
+
+**The disruption budget was gated on the profile name, not on what the profile runs.**
+`values.py` read `"enabled": rt["profile"] == "high-availability"` while the comment directly
+above it described the rule as replica count — and standard-production runs a FLOOR OF TWO API
+replicas. It got no budget, so `kubectl drain` on the node holding both evicted both, which is
+what a cluster autoscaler does during a routine node upgrade: the failure a second replica is
+bought to prevent, on the profile most installations will use. The test covering this asserted the
+defect in its own name — "high availability gets one and standard does not" — and was green
+throughout, because it named the profile and never asked what the profile ran.
+
+It is the replica floor now, which is what the comment always said. A floor of one still gets
+nothing, and that half is not symmetry for its own sake: `minAvailable: 1` against one replica
+permits no eviction at all, so it does not protect the tier, it stops the node being drained. The
+worker tiers still get none, deliberately — a worker evicted mid-document returns its job to the
+queue, and budgeting a tier designed to be interrupted blocks drains for no gain.
+
+**Zone spreading, and what the anti-affinity was not doing.** The API's existing rule is
+`preferredDuringScheduling` across `kubernetes.io/hostname`: it asks for different NODES and says
+nothing about zones, so three replicas can land on three nodes in one availability zone and
+satisfy it completely — while losing a zone is the failure a multi-replica tier is bought to
+survive. Every tier that runs more than one pod now carries a `topology.kubernetes.io/zone`
+constraint with `maxSkew: 1`; Ollama and Grafana do not, being one pod by construction.
+
+`whenUnsatisfiable` is `ScheduleAnyway` on every profile, `high-availability` included, and that
+is a deliberate limit rather than a default nobody chose. `DoNotSchedule` excludes nodes that do
+not carry the topologyKey LABEL, so on a cluster whose nodes have no zone label — every kind and
+k3d cluster, any single-zone install, and the reference cluster this chart is installed on — there
+is no eligible node and every replica stays Pending forever. Without `matchLabelKeys` (1.27+,
+against `MINIMUM_KUBERNETES` of 1.23) the constraint also counts the outgoing ReplicaSet during a
+rolling update and can wedge an update against its own predecessors. PRD S4 says a target is not
+supported because Helm renders for it, so the hard value is one `--set` away for an operator who
+knows their nodes are labelled, and the chart asserts no multi-zone survival it has not shown.
+
+**The reference cluster cannot prove any of this, and says so.** One node, no zone labels: the
+constraint renders, admits, and has one domain to balance across. What it proves is that the
+manifests are accepted and the pods still schedule — not that a zone loss is survivable. That
+needs a multi-zone cluster, which is a billable shared environment and an owner decision.
+
+The trap on the way in is worth recording because nothing catches it. The first draft built each
+constraint's selector from `app.kubernetes.io/component`, which is `worker` on all three worker
+Deployments — so the worker constraints would have selected the union of the tiers. A topology
+constraint whose selector matches the wrong pods, or none, is not an error: it is satisfied
+vacuously, renders correctly and spreads nothing.
+`test_every_spread_constraint_selects_the_pods_it_is_attached_to` asserts each selector is a
+subset of the labels its own pod template carries.
+
+**What is missing.** No PersistentVolumeClaim and no volumes at all —
+worker scratch is the node's ephemeral storage, bounded only by the limit above. No
 backup or restore Job, which PRD S5.2 lists as part of the Kubernetes package. Langfuse is deployed
 ungated by Compose and rendered by nothing in the chart — asserted, deliberately, by
 `test_packaging_chart.py::test_compose_deploys_what_the_chart_omits`.
@@ -480,6 +536,6 @@ is `verified`.
 | Workstream | State | Evidence | Blocker | Next action |
 |---|---|---|---|---|
 | **A. Release artifacts and supply chain** | in progress | The `ACPRelease` contract, `acpctl release verify`, and `--release` on `values`/`plan` (`tests/test_packaging_release.py`), which reconcile the plan's eight names, the chart's four references and the one application artifact — and render every image by digest | Nothing builds, signs, SBOMs or scans an artifact, so no real manifest exists and CI has no release to fail on | Build the release images in CI and emit a signed manifest from that build |
-| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; no topology spread, no `readOnlyRootFilesystem` (blocked on `PUT /rubric` writing into the image), no backup/restore Job | Topology spread, then a backup/restore Job |
+| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; zone spreading is soft on every profile and unprovable on a one-node cluster, no `readOnlyRootFilesystem` (blocked on `PUT /rubric` writing into the image), no backup/restore Job | A backup/restore Job, then a PDB outside the high-availability profile |
 | **C. Portable acceptance suite** | not started | None — no `packaging/tests/`; the preflight hook is advisory (`backoffLimit: 0`, post-install) | Eight of ten scenarios need `acpctl install`, which exits 2; the first two need only a cluster and images | Define the structured report format and emit it from the two readiness scenarios |
 | **D. `acpctl` lifecycle** | in progress | Eight read-only commands with documented exit codes; write-refusal and kubectl-verb allow-list both tested; the seven lifecycle commands refuse rather than no-op (`cli.py:27-35`) | `install` has nothing to pin to: the release contract exists but no build produces a manifest, so there are no real digests and no signature to verify | Hold `install` until a build emits a manifest; `support-bundle` is the one command with no upstream dependency |
