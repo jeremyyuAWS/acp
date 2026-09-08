@@ -99,10 +99,33 @@ Grafana, Ollama and KEDA `ScaledObject`s. Concretely, from the standard-producti
 - **No public worker ingress** — no Service is rendered for the worker tiers, and
   `test_packaging_chart.py::test_private_workers_render_a_policy_that_admits_nothing` asserts it.
 - **Probes where they belong** — `test_the_api_gets_both_probes_and_they_are_not_the_same_endpoint`
-  and `test_workers_get_no_http_probes`.
+  and `test_workers_get_no_http_probes`. **Both of those were green while the chart was wrong**, and
+  the paragraph below says how.
 - **Silent prerequisites already fail `acpctl doctor`** — KEDA absent, a non-enforcing CNI, and a
   missing External Secrets Operator are blockers, and a check that could not run is a blocker rather
   than a pass (`packaging/cli/acpctl/doctor.py`; `tests/test_packaging_doctor.py`, 35 cases).
+
+**Two defects the rendered-manifest tests were green on**, found on 2026-09-08 by reading the
+application against the chart rather than the chart against itself, and fixed:
+
+- **Worker Deployments ran the API.** The worker container set no `command`, so it inherited the
+  application image's CMD, which starts uvicorn (`deploy/public/Dockerfile`). A worker pod started,
+  bound its port, reported Ready and claimed no jobs; the Deployment was healthy in every way
+  Kubernetes can see, and the only symptoms were a queue that never drained and a tier that never
+  wrote a heartbeat. `test_workers_get_no_http_probes` passed throughout — it asserts the chart
+  declares no probes, which was true, while the container it rendered was an HTTP server.
+- **The API readiness probe could not fail.** Readiness pointed at `/readyz`, whose handler takes no
+  `Response` and never sets a status, so it answered 200 from a replica that could not reach the
+  database — the exact replica a readiness gate exists to hold traffic away from. `api/routes/
+  system.py` names `/probe/readyz` as "the ONE route a platform probe may point at" and explains why
+  neither of the others can be. `test_the_api_gets_both_probes_and_they_are_not_the_same_endpoint`
+  passed because it pinned the path the chart had, not a path that can return 503.
+
+Both are one line of template each. What is worth keeping from them is the shape: a rendered-manifest
+test compares the chart against itself, so a chart that renders the wrong thing consistently passes.
+Neither defect was reachable without reading the application the chart deploys, and neither would
+have survived one `helm install` on a real cluster — which is the argument for the blocking gap
+below, made from the inside.
 
 **What is missing.** No `topologySpreadConstraints` anywhere in the chart. No `seccompProfile`, so
 the rendered pods do not meet the restricted Pod Security Standard as written, and
