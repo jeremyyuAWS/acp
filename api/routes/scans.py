@@ -1681,6 +1681,48 @@ def put_decision(sid: str, filename: str, request: Request, body: dict,
     return {"ok": True}
 
 
+@router.get("/scans/{sid}/artifacts")
+def scan_artifacts(sid: str, request: Request):
+    """Every remediation artifact this scan produced, and where each one lives (PRD §12, §20.5).
+
+    WHY THIS IS NOT `remediation-status`. That route answers "how many corrected documents are
+    there" and this one answers "does the authoritative copy of each survive the pod that wrote
+    it" — acceptance criterion §20.5, which no count can settle. A remediated file written only
+    to a worker's own disk is produced, downloadable and correct until that pod is replaced, at
+    which point it is silently gone and the scan still reports success.
+
+    THE ENDPOINT IS ALLOWED TO REPORT BADLY. `ephemeral` lists the authoritative artifacts whose
+    location is empty or on no durable scheme, and it is populated on any installation where
+    object storage is unconfigured (`blob.upload_remediated` returns None and the writer falls
+    back to Drive-only). That is a true statement about such an installation, and returning it is
+    the entire point: the portable acceptance suite reads this route, and a version that quietly
+    omitted the ephemeral rows would let every target pass §20.5 by construction.
+
+    Owner-scoped, and the scoping is in SQL. These rows carry filenames and live links to
+    remediated documents; `list_scan_artifacts` filters by owner in the query so a foreign row is
+    never read into memory, the same posture `get_remediation_urls` takes for the same reason.
+
+    Always 200 for a scan this caller owns, including one with no artifacts yet — an empty
+    inventory is a fact, and 404 would make "no remediation has run" indistinguishable from "no
+    such scan" to a client that can see neither.
+    """
+    owner = _owner(request)
+    if core.store.get_scan_head(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    items = core.store.list_scan_artifacts(sid, owner=owner)
+    ephemeral = [a["file"] for a in items if a["authoritative"] and not a["durable"]]
+    return {
+        "scan_id": sid,
+        "artifacts": items,
+        "count": len(items),
+        # Named at the top level so a monitor can alert on it without walking the list, and so the
+        # answer to §20.5 is a field rather than something each reader re-derives.
+        "ephemeral": ephemeral,
+        "all_durable": not ephemeral,
+        "durable_schemes": sorted(core.store.DURABLE_ARTIFACT_SCHEMES),
+    }
+
+
 @router.get("/scans/{sid}/remediation-status")
 def remediation_status(sid: str, request: Request, response: Response):
     """Live remediation progress (in-flight jobs + latest fixed file) for the bar.

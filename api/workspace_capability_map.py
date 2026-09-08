@@ -191,6 +191,12 @@ _map_many([
     # snapshot does. Narrower would let the summary be read where the detail it summarises
     # cannot be; wider would put destination identifiers behind a view-only role's read.
     ("GET", "/scans/{sid}/remediation/exceptions"),
+    # The durable-artifact inventory (PRD §12/§20.5) is the exceptions view's data with the
+    # storage question added: one row per corrected document, carrying the filename AND the exact
+    # location its authoritative copy was written to. That is strictly the same disclosure this
+    # block's comment above already reasons about — "destination identifiers behind a view-only
+    # role's read" — so it takes the same capability rather than a narrower one.
+    ("GET", "/scans/{sid}/artifacts"),
     ("GET", "/scans/{sid}/remediation-diffs"),
     ("GET", "/scans/{sid}/files/{filename:path}/remediation-diffs"),
     ("GET", "/scans/{sid}/files/{filename:path}/remediation-state"),
@@ -266,6 +272,17 @@ _map_many([("GET", "/admin/activity"), ("GET", "/jobs"), ("GET", "/jobs/{job_id}
            ("GET", "/control/estate"), ("GET", "/control/workers/capacity"),
            ("GET", "/control/costs"),
            ("GET", "/control/workers/replicas"), ("GET", "/control/workers/revisions")],
+          {"operations.view"})
+# The platform audit trail and the diagnostics export (PRD §13). Operational visibility, so they
+# sit with Live Operations above — but BOTH ARE GATED TWICE, and the second gate is the load-
+# bearing one: each handler calls `_require_admin`, so a workspace role holding `operations.view`
+# still gets 403 unless the caller is the platform owner or an ACP_ADMIN_EMAILS entry. An audit
+# log names who changed what and when, and a support bundle is composed for a support ticket;
+# neither is something a Live Operations viewer should read by virtue of that role alone.
+#
+# Mapped rather than EXEMPT because an exemption says "this route needs no capability decision",
+# and these needed one.
+_map_many([("GET", "/admin/audit-events"), ("GET", "/admin/support-bundle")],
           {"operations.view"})
 _map_many([("POST", "/admin/jobs/clear-dead"), ("PATCH", "/control/workers/replicas")],
           {"workers.manage"})

@@ -43,8 +43,30 @@ HELM = shutil.which("helm")
 needs_helm = pytest.mark.skipif(HELM is None, reason="helm is not installed")
 
 
+def _strip_comments(text: str) -> str:
+    """Source with `#` comments removed, string literals intact.
+
+    A COMMENT IS NOT A READ. This helper decides whether the application consumes a variable by
+    looking for its name, and on 2026-09-08 a comment in `routes/system.py` explaining why the
+    support bundle deliberately does NOT read `OBJECT_STORAGE` made that dead variable look
+    consumed — the exact opposite of what it said. Prose about a variable must not count as using
+    one, or this test rewards saying nothing.
+
+    STRING LITERALS ARE KEPT, and that is not an oversight: `os.environ.get("ACP_BLOB_ACCOUNT")`
+    is a read whose whole evidence IS a string literal. Stripping those would blind the test to
+    every read it exists to find.
+    """
+    import io
+    import tokenize
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return text                      # unparsable: fall back to the raw text rather than lie
+    return "\n".join(tok.string for tok in tokens if tok.type != tokenize.COMMENT)
+
+
 def _api_source() -> str:
-    return "\n".join(p.read_text(encoding="utf-8", errors="replace")
+    return "\n".join(_strip_comments(p.read_text(encoding="utf-8", errors="replace"))
                      for p in sorted(API.rglob("*.py")))
 
 
@@ -79,15 +101,29 @@ def rendered_env_names() -> set[str]:
 # DERIVED, NOT LISTED — the set is computed from the render and compared with this table, so a
 # variable added to the chart that nothing reads fails here rather than sitting in a Deployment
 # looking like configuration.
+# Provenance the application READS but never DECIDES on. Reporting a label is not branching on
+# it: `GET /admin/support-bundle` copies these through verbatim so a support ticket can say what
+# the workload was given, and `record_deployment_audit` passes two of them into the deployment
+# audit row (PRD §15/§20.12). ADR 0048's rule survives intact and is asserted separately and more
+# sharply than before — `test_acp_platform_is_provenance_not_a_switch` now parses for a CONDITION
+# rather than grepping for the name, and follows one hop of aliasing so that assigning the value
+# first is not a way around it.
+#
+# These sat in UNREAD_BY_THE_APPLICATION until 2026-09-08, which was true and is no longer: the
+# chart was setting four variables that nothing consumed, and three of them now have a reader.
+READ_AS_PROVENANCE_ONLY = {
+    "ACP_DEPLOY_PROFILE": "provenance: which profile installed this; reported, never compared",
+    "ACP_PLATFORM": "provenance: which adapter installed this; reported, never branched on",
+    "ACP_AI_LOCAL_ONLY": "an auditable statement of the regulated profile's promise, readable off "
+                         "the Deployment and echoed verbatim in the support bundle; the AI lane "
+                         "is chosen by ai.mode, not by this",
+}
+
 UNREAD_BY_THE_APPLICATION = {
     # Provenance. Deliberately on the workload so an operator can read what is deployed off the
     # running object; ADR 0048 asserts elsewhere that nothing branches on ACP_PLATFORM, because the
     # moment application code did, "one package, four clouds" would stop being true.
     "ACP_RELEASE": "provenance: which release this workload is",
-    "ACP_DEPLOY_PROFILE": "provenance: which profile installed this",
-    "ACP_PLATFORM": "provenance: which adapter installed this, and nothing may branch on it",
-    "ACP_AI_LOCAL_ONLY": "an auditable statement of the regulated profile's promise, readable off "
-                         "the Deployment; the AI lane is chosen by ai.mode, not by this",
     # Other containers' variables. Read by the image, not by api/.
     "OLLAMA_HOST": "the ollama server's own bind address",
     "GF_SERVER_ROOT_URL": "Grafana's own absolute-link base",
