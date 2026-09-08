@@ -84,7 +84,7 @@ describe('Admin live traffic graph', () => {
   it('exposes named tabs for infrastructure and running jobs', () => {
     expect(source).toContain('aria-label="Live Operations flow views"')
     expect(source).toContain("['infrastructure', 'Infrastructure map']")
-    expect(source).toContain("['jobs', `Running jobs (${summary.active_workflows ?? summary.active_runs ?? 0})`]")
+    expect(source).toContain("['jobs', `Running jobs (${summary.running_workflows ?? summary.active_runs ?? 0})`]")
   })
 
   it('visually and verbally separates active jobs from worker services', () => {
@@ -99,7 +99,7 @@ describe('Admin live traffic graph', () => {
     expect(TILE_KINDS.job.radius).toBe(6)
     expect(TILE_KINDS.service.radius).toBeGreaterThan(TILE_KINDS.job.radius)
     expect(source).toContain('SERVICE</b> · capacity')
-    expect(source).toContain('Running jobs (${summary.active_workflows ?? summary.active_runs ?? 0})')
+    expect(source).toContain('Running jobs (${summary.running_workflows ?? summary.active_runs ?? 0})')
     expect(source).toContain('DATA</b> · sources and outputs')
     expect(source).toContain('aria-label="Map key"')
   })

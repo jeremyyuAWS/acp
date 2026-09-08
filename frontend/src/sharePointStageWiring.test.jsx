@@ -44,10 +44,11 @@ const remediate = () => renderToStaticMarkup(
 )
 
 describe('SharePoint stays identified across the workflow', () => {
-  it('passes the persisted source boundary to the compact Discover card on every tab', () => {
+  it('passes the active source boundary to the compact Discover card on every tab', () => {
     const compactCard = appSource.match(/discover: canonicalStage\?\.stage === 'discover'[\s\S]{0,900}?<DiscoverRunProgress[\s\S]{0,900}?\/>/)?.[0] || ''
-    expect(compactCard).toContain('source={run?.source ?? null}')
-    expect(compactCard).toContain('scope={run?.scope ?? null}')
+    expect(compactCard).toContain('source={progress?.source ?? null}')
+    expect(compactCard).toContain('scope={progress?.scope ?? null}')
+    expect(compactCard).toContain('runStartedAt={progress?.started_at ?? null}')
   })
 
   it('carries the same multi-site estate through Discover, Assess, and Remediate', () => {

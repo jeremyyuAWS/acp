@@ -34,7 +34,8 @@ def test_live_activity_read_is_available_to_any_signed_in_user(monkeypatch):
     assert system.admin_activity(_Request("viewer@example.org"), response) == {
         "runs": [], "workflows": [], "summary": {
             "active_runs": 0, "recent_runs": 0, "active_workflows": 0,
-            "recent_workflows": 0, "active_users": 0, "waiting_users": 0}}
+            "running_workflows": 0, "recent_workflows": 0,
+            "active_users": 0, "waiting_users": 0}}
     assert response.headers["Cache-Control"] == "no-store"
 
 
@@ -474,7 +475,7 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
             "processing": {"alive": False, "pool_size": 4, "age_s": 999, "version": "v9"},
         },
         "worker_capacity_by_role": {},
-        "active_workflows": 0,
+        "active_workflows": 0, "running_workflows": 0,
         "recent_workflows": 0,
         "workflow_correlation": {"attributed_stage_runs": 2,
                                  "unlinked_active_jobs": None, "complete": None},
@@ -509,6 +510,15 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
             "reason": "This deployment's job store does not report per-replica attribution.",
         },
     }
+
+
+def test_running_workflow_count_excludes_terminal_attention_history():
+    workflows = [
+        {"status": "running"}, {"status": "waiting"}, {"status": "stopping"},
+        {"status": "failed"}, {"status": "stopped"}, {"status": "completed"},
+    ]
+
+    assert system._running_workflow_count(workflows) == 3
 
 
 def test_instance_capacity_uses_busy_slots_not_running_rows(monkeypatch):

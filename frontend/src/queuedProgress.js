@@ -22,8 +22,17 @@ import { outcomesFromRun } from './assessmentProgress.js'
 // scan_runs-derived phase for that one tick.
 export function queuedProgress(g, elapsed, job) {
   const run = g && g.run
+  // The selected historical scan can remain on screen until this active run becomes durable.
+  // Carry the active run's context with its progress so the live card never borrows an old
+  // run's clock, source, or scope during that transition.
+  const runContext = run ? {
+    scan_id: run.id,
+    source: run.source,
+    scope: run.scope,
+    started_at: run.started_at,
+  } : {}
   if (job && job.phase && job.phase !== 'queued') {
-    return { ...job, elapsed, outcomes: outcomesFromRun(run), files: (g && g.files) || [],
+    return { ...job, ...runContext, elapsed, outcomes: outcomesFromRun(run), files: (g && g.files) || [],
              inventory: (run && run.scope && run.scope.inventory) || null }
   }
   const total = (run && run.files) || 0
@@ -36,14 +45,14 @@ export function queuedProgress(g, elapsed, job) {
   // refresh would restart from 0 on every reload of a scan that has actually been queued for
   // minutes, which is exactly the kind of dishonest-progress bug this component exists to avoid
   // elsewhere (see DiscoverRunProgress.jsx's own comments on simulated progress).
-  if (run && run.status === 'queued') return { phase: 'queued', elapsed, started_at: run.started_at }
-  if (!total) return { phase: 'discovering', elapsed }        // estate not listed yet
+  if (run && run.status === 'queued') return { phase: 'queued', ...runContext, elapsed }
+  if (!total) return { phase: 'discovering', ...runContext, elapsed } // estate not listed yet
   const phase = done < total ? 'analysing' : 'scoring'
   const pct = Math.round(12 + Math.min(1, done / total) * (95 - 12))
   // Outcome tally, streamed live off the run summary (certifiable/uncertain/error, derived from
   // file_records as each file lands) — so the progress chips show real state, not just a counter.
   // `files` carries the per-file results get_scan streams, for the expandable Processing details table.
-  return { phase, files_found: total, files_done: done, current: null, elapsed, pct,
+  return { phase, ...runContext, files_found: total, files_done: done, current: null, elapsed, pct,
            outcomes: outcomesFromRun(run), files: (g && g.files) || [],
            inventory: (run && run.scope && run.scope.inventory) || null }
 }

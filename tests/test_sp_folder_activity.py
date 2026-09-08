@@ -44,6 +44,27 @@ def test_walk_reports_exact_nested_folder_paths_without_extra_requests(monkeypat
     assert [(event["path"], event["files_found"]) for event in events
             if event["state"] == "completed"] == [
         ("Documents", 1), ("Documents/Clinical", 1), ("Documents/Clinical/Policies", 1)]
+    assert [event["scannable_found"] for event in events if event["state"] == "completed"] == [1, 1, 1]
+
+
+def test_multisite_headline_increments_before_library_consumption(monkeypatch):
+    """Folder ticks must not say files were found while the headline remains zero."""
+    monkeypatch.setattr(scanner, "_sp_drives", lambda _token, _site:
+                        [{"id": "d1", "name": "Documents"}])
+    monkeypatch.setattr(scanner, "_sp_site_name", lambda _token, _site: "Clinical")
+    monkeypatch.setattr(scanner, "_sp_get", lambda _token, _url:
+                        {"value": [_file("one", "one.docx"), _file("image", "photo.png")]})
+    clock = iter(range(3, 300, 3))
+    monkeypatch.setattr(scanner.time, "monotonic", lambda: next(clock))
+    ticks = []
+
+    scanner._sp_list("tok", 20, sites=["s1"], progress_cb=lambda count, **detail:
+                     ticks.append((count, detail)))
+
+    assert any(count == 1 and detail.get("recent")
+               and detail["sites"][0]["status"] != "complete"
+               for count, detail in ticks), "headline must advance while the library is still live"
+    assert not any(count == 2 for count, _detail in ticks), "unsupported files are not assessable"
 
 
 def test_folder_only_never_requests_a_selected_folders_children(monkeypatch):

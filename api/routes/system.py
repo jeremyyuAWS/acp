@@ -1861,6 +1861,12 @@ def _replica_capacity(instances: list[dict], *, now: datetime,
     return per_role
 
 
+def _running_workflow_count(workflows: list[dict]) -> int:
+    """Workflows with queue work that can truthfully appear under Running jobs."""
+    return sum(1 for row in workflows
+               if row.get("status") in ("running", "waiting", "stopping"))
+
+
 def _admin_activity_snapshot() -> dict:
     wt = core.store.worker_tier_status()
     worker_roles = core.store.worker_roles_status()
@@ -2024,6 +2030,10 @@ def _admin_activity_snapshot() -> dict:
     else:
         pressure = "healthy"
     workflows = _workflow_rows(runs, stage_events, _liveops_canonical_lineages(runs, stage_events))
+    # "Running jobs" is a live-work count, not a count of every workflow that did not end in
+    # success. Failed and stopped workflows remain available under their explicit filters, but
+    # counting them in this headline produces a non-zero tab beside an empty Active view.
+    running_workflows = _running_workflow_count(workflows)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runs": runs,
@@ -2047,6 +2057,7 @@ def _admin_activity_snapshot() -> dict:
             "worker_capacity_by_role": per_role,
             "by_stage": by_stage,
             "active_workflows": sum(1 for row in workflows if row["status"] != "completed"),
+            "running_workflows": running_workflows,
             "recent_workflows": sum(1 for row in workflows if row["status"] == "completed"),
             "workflow_correlation": {
                 "attributed_stage_runs": len(runs),
@@ -2451,6 +2462,7 @@ def _scope_activity_snapshot(snapshot: dict, viewer: str) -> dict:
         "active_runs": sum(1 for row in scoped["runs"] if row.get("status") == "active"),
         "recent_runs": sum(1 for row in scoped["runs"] if row.get("status") == "recent"),
         "active_workflows": sum(1 for row in scoped["workflows"] if row.get("status") != "completed"),
+        "running_workflows": _running_workflow_count(scoped["workflows"]),
         "recent_workflows": sum(1 for row in scoped["workflows"] if row.get("status") == "completed"),
         "active_users": 1 if scoped["runs"] else 0,
         "waiting_users": 1 if any(row.get("queued") for row in scoped["runs"]) else 0,
