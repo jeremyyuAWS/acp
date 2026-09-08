@@ -101,7 +101,16 @@ PATH_SCAN_LIVE = "/scans/{sid}/live"                  # exists — api/routes/sc
 PATH_SCAN_EVENTS = "/scans/{sid}/events"              # exists (SSE) — api/routes/scans.py:1253
 PATH_SCAN_ASSESS = "/scans/{sid}/assess"              # exists — api/routes/scans.py:1359
 PATH_SCAN_REMEDIATE = "/scans/{sid}/remediate"        # exists — api/routes/scans.py:647
-PATH_JOB = "/scans/jobs/{jid}"                        # exists — api/routes/scans.py:826
+# `/scans/jobs/{jid}` EXISTS AND CANNOT ANSWER FOR A STAGE JOB, which is why nothing here uses
+# it any more. `POST /scans/{sid}/assess` returns `execution["job_ids"][0]` — a DURABLE
+# stage-execution id — while `GET /scans/jobs/{jid}` resolves through `core.get_job_state`, a
+# Redis `job:{id}` hash belonging to a different id space. The route answered 404 for a job that
+# had been enqueued perfectly, and `_unavailable` read that 404 as "this build does not serve the
+# surface", which was wrong twice over: the route is served, and the job existed.
+#
+# Progress after assess or remediate is read the way the application's own running screen reads
+# it — `/live`, whose `kpis.completed` against `totals.eligible` is the same fact without a second
+# id space to get wrong.
 PATH_ARTIFACTS = "/scans/{sid}/artifacts"             # SUITE REQUIREMENT — the durable-artifact
                                                       # inventory PRD §12 needs; a build without
                                                       # it cannot demonstrate §20.5 at all
@@ -398,6 +407,10 @@ def _await_scan(ctx: ScenarioContext, sid: str, *, max_polls: int = MAX_POLLS
 
 
 def _artifacts(ctx: ScenarioContext, sid: str) -> tuple[list[dict] | None, Outcome | None]:
+    """The artifact inventory. Also stashes the whole body on the context for `_artifacts_body`,
+    because one field of it — `object_storage_configured` — decides whether an empty inventory is
+    a failure or a deployment fact, and threading a second return value through every caller would
+    change four signatures for one reader."""
     path = PATH_ARTIFACTS.format(sid=sid)
     resp = ctx.get(path)
     bad = _unavailable(resp, path)
@@ -408,7 +421,12 @@ def _artifacts(ctx: ScenarioContext, sid: str) -> tuple[list[dict] | None, Outco
     if not isinstance(items, list):
         return None, Outcome.failed(f"{path} answered {resp.status} with no artifact list",
                                     status=resp.status)
+    _LAST_ARTIFACT_BODY[id(ctx)] = body
     return items, None
+
+
+# Keyed by context identity and never read across runs; see `_artifacts`.
+_LAST_ARTIFACT_BODY: dict[int, dict] = {}
 
 
 def _authoritative(items: list[dict]) -> list[dict]:
@@ -680,27 +698,45 @@ def fixture_workflow(ctx: ScenarioContext) -> Outcome:
             return Outcome.failed(
                 f"starting {label} answered {resp.status}: {_detail(resp)}",
                 status=resp.status, body=_detail(resp))
-        job_id = (_json(resp) or {}).get("job_id")
-        if job_id:
-            job_path = PATH_JOB.format(jid=job_id)
-            for _ in range(MAX_POLLS):
-                jr = ctx.get(job_path)
-                bad = _unavailable(jr, job_path)
-                if bad is not None:
-                    return bad
-                status = str((_json(jr) or {}).get("status", ""))
-                if status in ("complete", "completed", "done"):
-                    break
-                if status in ("failed", "error"):
-                    return Outcome.failed(f"the {label} job ended {status!r}", job=job_id)
-                ctx.backend.sleep(POLL_SECONDS)
-            else:
-                return Outcome.failed(f"the {label} job did not finish within "
-                                      f"{MAX_POLLS * POLL_SECONDS:.0f}s", job=job_id)
+        # WAIT ON `/live`, NOT ON A JOB ID. See PATH_JOB's comment: the id `assess` hands back is
+        # a durable stage-execution id and `/scans/jobs/{jid}` resolves a different id space, so
+        # polling it 404s on a job that was enqueued correctly.
+        #
+        # `kpis.completed` REACHING `totals.eligible` is the completion signal, and it has to be
+        # that rather than "the run reached a terminal state": a Discover-only run is ALREADY
+        # terminal at `discovered` (see RUN_SUCCEEDED_STATES), so a terminal-state wait here would
+        # return immediately and report an assessment that had not started as finished.
+        progressed = False
+        for _ in range(MAX_POLLS):
+            snap = ctx.get(PATH_SCAN_LIVE.format(sid=sid))
+            bad = _unavailable(snap, PATH_SCAN_LIVE.format(sid=sid))
+            if bad is not None:
+                return bad
+            body = _json(snap) or {}
+            state = str(body.get("state") or "").strip().lower()
+            if state in RUN_FAILED_STATES:
+                return Outcome.failed(f"the run ended in state {state!r} during {label}",
+                                      state=state, **_counts(body))
+            counts = _counts(body)
+            if counts["eligible"] and counts["completed"] >= counts["eligible"]:
+                progressed = True
+                break
+            if not counts["eligible"] and state in RUN_SUCCEEDED_STATES:
+                # NOTHING ELIGIBLE AND THE RUN IS TERMINAL: there is no work to wait for, and
+                # waiting for zero documents to complete waits forever. The artifact check below
+                # is what then reports the absence, with the reason it deserves.
+                progressed = True
+                break
+            ctx.backend.sleep(POLL_SECONDS)
+        if not progressed:
+            return Outcome.failed(
+                f"{label} did not complete within {MAX_POLLS * POLL_SECONDS:.0f}s",
+                **_counts(_json(ctx.get(PATH_SCAN_LIVE.format(sid=sid))) or {}))
 
     items, failure = _artifacts(ctx, sid)
     if failure is not None:
         return failure
+    items_body = _LAST_ARTIFACT_BODY.get(id(ctx), {})
     authoritative = _authoritative(items or [])
     ephemeral = _ephemeral(items or [])
     manifest = ctx.artifact(
@@ -708,6 +744,22 @@ def fixture_workflow(ctx: ScenarioContext) -> Outcome:
         "\n".join(f"{a.get('file')}\t{a.get('location')}" for a in authoritative),
         scenario_id="fixture-workflow")
     if len(authoritative) < len(FIXTURES):
+        # TWO READINGS OF AN EMPTY INVENTORY THAT LOOK IDENTICAL AND MEAN OPPOSITE THINGS. If the
+        # installation has no object storage configured, nothing here was ever going to keep a
+        # corrected copy, and reporting that as a §20.5 FAILURE would accuse the application of a
+        # defect that belongs to the deployment. If storage IS configured and the artifacts are
+        # still missing, remediation produced nothing and that is a failure.
+        #
+        # The distinction is the target's answer, not a guess: `/artifacts` reports
+        # `object_storage_configured` for exactly this.
+        if not (items_body or {}).get("object_storage_configured", True):
+            return Outcome.unknown(
+                f"the workflow ran and {len(authoritative)} authoritative artifacts exist, and "
+                f"this installation has NO object storage configured — so nothing here was going "
+                f"to keep a corrected copy and §20.5 cannot be evaluated. That is a fact about "
+                f"the deployment, not a defect in remediation.",
+                expected=len(FIXTURES), found=len(authoritative), objectStorage=False
+            ).with_artifacts([manifest])
         return Outcome.failed(
             f"{len(FIXTURES)} synthetic documents produced {len(authoritative)} authoritative "
             f"artifacts", expected=len(FIXTURES), found=len(authoritative)

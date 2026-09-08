@@ -81,6 +81,9 @@ HEALTHY: dict[str, Any] = {
     # that it is more than one, so "poll until terminal" is actually exercised.
     "scan_polls_until_complete": 2,
     "artifact_scheme": "s3",              # where remediated output lands (PRD §12)
+    # Whether the installation has anywhere durable to put one at all. False models a deployment
+    # with no object storage — where an empty inventory says nothing about remediation.
+    "object_storage_configured": True,
     "duplicate_artifacts": False,         # scenario 6's failure mode
     "lose_work_on_restart": False,        # scenario 6's other failure mode
     "drains_on_scale_down": True,         # scenario 8
@@ -342,7 +345,14 @@ class FakeBackend(ExecutionBackend):
                 # The failure scenario 6 exists to catch: a restarted worker re-ran the document
                 # and wrote a SECOND authoritative output. Nothing errors; there are simply two.
                 artifacts.append(dict(entry, location=entry["location"] + ".retry"))
-        return HttpResponse(200, json.dumps({"scan_id": scan.scan_id, "artifacts": artifacts}))
+        return HttpResponse(200, json.dumps({
+            "scan_id": scan.scan_id, "artifacts": artifacts,
+            # The field that decides whether an EMPTY inventory is a defect or a deployment fact.
+            # Modelled here so both readings are exercised without a cluster: with storage
+            # unconfigured the target could never have kept a corrected copy, and reporting that
+            # as a §20.5 failure would accuse the application of the deployment's shortfall.
+            "object_storage_configured": bool(self.world["object_storage_configured"]),
+        }))
 
     def _route_get_admin_audit_events(self, params, body) -> HttpResponse:
         events = [{"type": t, "at": self.utcnow().isoformat(), "actor": "acceptance-suite"}

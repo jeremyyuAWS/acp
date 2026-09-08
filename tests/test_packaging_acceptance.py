@@ -729,7 +729,9 @@ SUITE_PATHS = [
     ("PATH_SCAN_EVENTS", "get", True),
     ("PATH_SCAN_ASSESS", "post", True),
     ("PATH_SCAN_REMEDIATE", "post", True),
-    ("PATH_JOB", "get", True),
+    # PATH_JOB is deliberately absent: `/scans/jobs/{jid}` is served, but it resolves a different
+    # id space than the one `assess` hands back, so the suite stopped probing it. A path the suite
+    # does not probe has no business in a table of paths the suite probes.
     # PRD §12/§13 surfaces. Unserved by any build until 2026-09-08, when four reference-cluster
     # runs had reported their scenarios `unknown` — never a pass, which is the point of the suite
     # having four states, but also a question no target could answer. THIS GUARD IS WHAT SAID SO:
@@ -1014,3 +1016,29 @@ def test_a_failed_request_names_what_the_target_said():
     run, _ = run_fake(world=world, scenario_ids=["fixture-workflow"])
     detail = entry_for(run.report, "fixture-workflow")["detail"]
     assert "WIDGET_EXPLODED" in detail, detail
+
+
+def test_an_empty_inventory_with_no_object_storage_is_unknown_not_a_failure():
+    """TWO READINGS THAT LOOK IDENTICAL AND MEAN OPPOSITE THINGS. Zero authoritative artifacts on
+    an installation with no object storage says nothing about remediation — nothing there was
+    going to keep a corrected copy. Reporting it as a §20.5 FAILURE would accuse the application
+    of the deployment's shortfall, which is the same false-accusation shape as the restart
+    scenario's lost-work finding and the 503."""
+    world = fake.world()
+    world["object_storage_configured"] = False
+    world["local_corpus"] = []                      # nothing to remediate, so nothing is stored
+    run, _ = run_fake(world=world, scenario_ids=["fixture-workflow"])
+    entry = entry_for(run.report, "fixture-workflow")
+    assert entry["state"] == UNKNOWN, f"{entry['state']}: {entry['detail']}"
+    assert "no object storage" in entry["detail"].lower()
+
+
+def test_an_empty_inventory_WITH_object_storage_is_still_a_failure():
+    """The other direction, and the one that keeps the rule from becoming "empty is always fine":
+    storage is configured, the documents went through, and the artifacts are missing. That is
+    remediation producing nothing, and it must fail."""
+    world = fake.world()
+    world["object_storage_configured"] = True
+    world["local_corpus"] = []
+    run, _ = run_fake(world=world, scenario_ids=["fixture-workflow"])
+    assert state_of(run.report, "fixture-workflow") == FAIL

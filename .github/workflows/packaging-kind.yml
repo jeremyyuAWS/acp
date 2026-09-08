@@ -749,7 +749,21 @@ jobs:
               # moves. If the cluster is ever given headroom the scenario will reach `/artifacts`
               # and THIS ASSERTION WILL FAIL — which is the correct outcome and the signal to
               # change this line back.
-              "fixture-workflow": "DB_CAPACITY_BUSY",
+              # MEASURED AGAIN, AND CHANGED AGAIN — which is this assertion earning its place for
+              # the second time. Run 34244922346 got PAST the capacity guard (the 60s retry
+              # budget did its job) and then reported `unknown` for a THIRD reason: the suite was
+              # polling `/scans/jobs/{jid}` for a durable stage-execution id that route cannot
+              # resolve. Fixed by waiting on `/live` like the application's own running screen.
+              #
+              # What is expected now is the honest end state for this target: the workflow runs,
+              # produces no authoritative artifacts, and the installation has NO object storage
+              # configured — so nothing here was ever going to keep a corrected copy and §20.5
+              # cannot be evaluated. `api/blob.py` is Azure-only, so a kind cluster has no way to
+              # be given a durable store today; this is not a gap somebody forgot to fill.
+              #
+              # STILL A PREDICTION until the next run, and the reason assertion is what will say
+              # so if it is wrong again.
+              "fixture-workflow": "no object storage",
               "worker-restart": "no authoritative artifacts",
               "dependency-degradation": "fault-injection",
               "scale-updown": "scale-control",
