@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import './live-heartbeat-bars.css'
 
-export const HEARTBEAT_SLOTS = 12
-export const HEARTBEAT_INTERVAL_MS = 5000
+// Canonical lineage is refreshed every 15 seconds (useCanonicalStageLineage). Match that real
+// sampling cadence instead of implying that ACP observed three times as many five-second windows.
+export const HEARTBEAT_SLOTS = 4
+export const HEARTBEAT_INTERVAL_MS = 15_000
 const histories = new Map()
 
-export function heartbeatBuckets(updates = [], now = Date.now(), slots = 12, bucketMs = 5000) {
+export function heartbeatBuckets(updates = [], now = Date.now(), slots = HEARTBEAT_SLOTS,
+  bucketMs = HEARTBEAT_INTERVAL_MS) {
   const values = Array.from({ length: slots }, () => 0)
   const start = now - slots * bucketMs
   updates.forEach((stamp) => {
@@ -31,7 +34,8 @@ function timestamp(value) {
 
 // A rolling record of successful snapshot heartbeats, not document throughput. Assess can stay
 // live while a large file produces no completed-document delta; this strip still proves that the
-// authenticated feed is answering. Twelve five-second buckets shift left as time advances.
+// authenticated feed is answering. Four fifteen-second buckets cover the last minute, matching
+// the canonical lineage poll that supplies measuredAt.
 function historyFor(key, measuredAt) {
   const stamp = timestamp(measuredAt)
   const current = histories.get(key) || []
@@ -91,16 +95,17 @@ export default function LiveHeartbeatBars({ measuredAt, stage = 'assess', histor
 
   return (
     <span className="live-heartbeat" data-terminal={terminal ? 'true' : 'false'}>
-      <span className="live-heartbeat-bars" data-stage={stage} aria-hidden="true">
+      <span className="live-heartbeat-bars" data-stage={stage} aria-hidden="true"
+        title="Snapshot refreshes in four 15-second windows over the last minute">
         {buckets.map((value, index) => (
-          <i key={index}
-             style={{ height: `${Math.max(2, value / max * 16)}px`, opacity: value ? 1 : 0.2 }} />
+          <i key={index} data-active={value ? 'true' : 'false'}
+             style={{ opacity: value ? Math.max(0.55, value / max) : 0.14 }} />
         ))}
       </span>
       {showText && <span className="live-heartbeat__text">
         {terminal ? 'Final' : 'Live'} · {age}
       </span>}
-      <span className="sr-only">{terminal ? 'Final activity history' : 'Live activity'}, {age}; {total} successful live update{total === 1 ? '' : 's'} in the last 60 seconds. Live events indicate immediacy; totals are from the canonical snapshot.</span>
+      <span className="sr-only">{terminal ? 'Final snapshot refresh history' : 'Snapshot refresh history'}, {age}; {total} successful canonical snapshot refresh{total === 1 ? '' : 'es'} in the last 60 seconds. Four slots represent fifteen seconds each; totals are from the canonical snapshot.</span>
     </span>
   )
 }

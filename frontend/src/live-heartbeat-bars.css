@@ -1,9 +1,9 @@
-.live-heartbeat{display:inline-flex;align-items:center;gap:7px;min-width:57px;min-height:18px}
-.live-heartbeat-bars{--heartbeat-color:var(--success-fg,#397521);display:flex;align-items:flex-end;justify-content:flex-end;gap:3px;width:57px;height:18px;flex:0 0 57px;overflow:hidden}
+.live-heartbeat{display:inline-flex;align-items:center;gap:7px;min-width:44px;min-height:18px}
+.live-heartbeat-bars{--heartbeat-color:var(--success-fg,#397521);display:flex;align-items:stretch;gap:4px;width:44px;height:18px;flex:0 0 44px;overflow:hidden}
 .live-heartbeat-bars[data-stage="discover"]{--heartbeat-color:var(--info-fg,#1f5fa8)}
 .live-heartbeat-bars[data-stage="assess"]{--heartbeat-color:var(--success-fg,#397521)}
 .live-heartbeat-bars[data-stage="remediate"]{--heartbeat-color:var(--amber-ink,#8a5a00)}
 .live-heartbeat-bars[data-stage="release"]{--heartbeat-color:var(--purple,#6f4a78)}
-.live-heartbeat-bars i{display:block;width:2px;flex:0 0 2px;min-height:2px;border-radius:1px 1px 0 0;background:var(--heartbeat-color);transition:height .25s ease,opacity .25s ease}
+.live-heartbeat-bars i{display:block;width:8px;flex:0 0 8px;height:18px;border-radius:2px;background:var(--heartbeat-color);transition:opacity .25s ease}
 .live-heartbeat__text{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
 @media(prefers-reduced-motion:reduce){.live-heartbeat-bars i{transition:none}}
