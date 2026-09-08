@@ -40,7 +40,6 @@ NOT_YET_IMPLEMENTED = {
     "rollback": "phase 5",
     "backup": "phase 5",
     "restore": "phase 5",
-    "support-bundle": "phase 5",
 }
 
 
@@ -560,6 +559,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true",
                    help="print the final installation record as JSON on stdout")
     p.set_defaults(func=cmd_uninstall)
+
+    # REGISTERED FROM ITS OWN MODULE, unlike install and uninstall above. support-bundle has ten
+    # arguments and every one of them is read by support_bundle.py; declaring them here would put
+    # the flags and the code that acts on them in different files, and the failure mode of that
+    # split is a flag that parses and is silently never read. The import is deferred to keep
+    # `acpctl validate` free of it, matching how every other command's module is imported.
+    from . import support_bundle as support_bundle_mod
+    support_bundle_mod.add_parser(sub)
 
     for name, why in sorted(NOT_YET_IMPLEMENTED.items()):
         p = sub.add_parser(name, help=f"not yet implemented — {why}")
