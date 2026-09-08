@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://packaging.acp.mova.io/v1alpha1/acp-acceptance-report.schema.json",
+  "title": "ACPAcceptanceReport",
+  "description": "The result of one run of the portable acceptance suite against one target. A SHARED format: the certification matrix, the support-status table and any release gate read this file rather than the suite's console output, so a field added here is a field consumers may rely on. The load-bearing rule is not structural and cannot be expressed in JSON Schema: supportClaim.mvpEligible is true only when every id in suite.mandatoryForMvp appears in scenarios with state 'pass'. skip and unknown are not passes. See acp_acceptance/report.py and tests/test_packaging_acceptance.py, which is where that rule is enforced and tested.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "target",
+    "release",
+    "suite",
+    "startedAt",
+    "finishedAt",
+    "durationSeconds",
+    "scenarios",
+    "summary",
+    "supportClaim"
+  ],
+  "properties": {
+    "apiVersion": {
+      "description": "Contract version. A breaking change gets a new version rather than a redefined field, so an archived report keeps meaning what it meant when it was written.",
+      "const": "packaging.acp.mova.io/v1alpha1"
+    },
+    "kind": {
+      "const": "ACPAcceptanceReport"
+    },
+    "target": {
+      "$ref": "#/$defs/target"
+    },
+    "release": {
+      "$ref": "#/$defs/release"
+    },
+    "suite": {
+      "$ref": "#/$defs/suite"
+    },
+    "startedAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "finishedAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "durationSeconds": {
+      "description": "Wall-clock duration of the whole run. Present alongside the per-scenario timings because the difference between them is the suite's own overhead, and a certification run that spends most of its time in the harness is a finding of its own.",
+      "type": "number",
+      "minimum": 0
+    },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/scenario"
+      }
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    },
+    "supportClaim": {
+      "$ref": "#/$defs/supportClaim"
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "description": "RFC3339 UTC, ending in Z.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "target": {
+      "description": "What the suite ran against. Deliberately five fields and no more: this block is an ALLOW-LIST built by Target.as_report_block(), not a serialisation of the descriptor, so that a kubeconfig context or a bearer token cannot arrive here by being added to the descriptor later.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "platform", "distribution", "kubernetesVersion", "namespace"],
+      "properties": {
+        "name": {
+          "description": "The operator's name for this target. Appears in the certification matrix, so it must identify one cluster rather than a class of them.",
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "description": "The acp-deployment platform this target belongs to. Same vocabulary as packaging/schema/acp-deployment.schema.json, so a report and a deployment document can be matched up.",
+          "enum": ["azure", "aws", "gcp", "kubernetes", "onprem", "compose"]
+        },
+        "distribution": {
+          "description": "The Kubernetes distribution: aks, eks, gke, k3s, rke2, openshift, kind, or empty for a Compose target. Recorded because PRD S4 excludes 'arbitrary Kubernetes distributions without passing certification tests' — the distribution is part of what was certified, not incidental.",
+          "type": "string"
+        },
+        "kubernetesVersion": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        }
+      }
+    },
+    "release": {
+      "description": "Exactly what was running. PRD S5.1 requires digests rather than mutable tags, and a certification run against a tag certifies whatever was in the registry that afternoon.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "revision", "pinned", "components"],
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "revision": {
+          "description": "The Helm revision, 0 when the target is not a Helm release.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "pinned": {
+          "description": "Every component is referenced by digest. DERIVED from the components below, never declared: a descriptor asserting pinned:true next to a component with no digest would put a false claim in the report a support decision is made from.",
+          "type": "boolean"
+        },
+        "components": {
+          "description": "The release images (PRD S5.1: acp-web-api, acp-discovery-worker, acp-assess-worker, acp-remediate-worker, acp-ollama-gateway, acp-migrations, acp-preflight). Open-ended on purpose: a regulated installation legitimately runs a subset.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/component"
+          }
+        }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest"],
+      "properties": {
+        "repository": {
+          "type": "string"
+        },
+        "digest": {
+          "description": "sha256:... — empty when the target runs an unpinned tag, which is itself the finding.",
+          "type": "string"
+        }
+      }
+    },
+    "suite": {
+      "description": "Which suite produced this report and what it considered mandatory. Archived reports must not silently inherit a later suite's stricter definition of 'supported', so the mandatory lists travel WITH the results rather than being looked up when the report is read.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "scenarioIds", "mandatoryForMvp", "mandatoryForSupported"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scenarioIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "mandatoryForMvp": {
+          "description": "Mandatory for a Kubernetes MVP claim. Empty is not vacuous success — support_claim() reports ineligible when this list is empty, because a claim needs something to check against.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "mandatoryForSupported": {
+          "description": "Additionally mandatory for a `supported` claim. supportedEligible requires BOTH lists: a target that can restore a backup but cannot register a worker is not supported by any reading.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "state", "startedAt", "durationSeconds", "detail", "artifacts", "evidence"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "description": "pass | fail | skip | unknown. skip means the TARGET cannot host this scenario; unknown means the SUITE could not establish an answer. Neither is a pass, and they are separate because an operator does different work about each.",
+          "enum": ["pass", "fail", "skip", "unknown"]
+        },
+        "startedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "durationSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "detail": {
+          "description": "One sentence a reader can act on. For a non-pass state it must say what was expected and what was observed, or the report sends them back to the logs.",
+          "type": "string"
+        },
+        "artifacts": {
+          "description": "Paths RELATIVE to the report's own directory, so a report and its evidence move together and neither carries an absolute path from the machine that produced it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence": {
+          "description": "Whatever a reader needs to believe the state: versions observed, counts compared, artifact locations. Deliberately unconstrained — pinning a shape per scenario here would make adding a scenario a schema change. It must contain no credential, no document content and no document filename; assert_no_secrets() checks the serialised report for the descriptor's own secret values.",
+          "type": "object"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pass", "fail", "skip", "unknown", "mandatoryFailures"],
+      "properties": {
+        "pass": {"type": "integer", "minimum": 0},
+        "fail": {"type": "integer", "minimum": 0},
+        "skip": {"type": "integer", "minimum": 0},
+        "unknown": {"type": "integer", "minimum": 0},
+        "mandatoryFailures": {
+          "description": "Every mandatory scenario id that did not PASS, whatever the reason — skipped and unknown included. The per-scenario state says which it was. Listing only genuine failures here would produce the contradiction that makes a report unreadable: zero failures, no eligibility, and nothing connecting the two.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "supportClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mvpEligible", "supportedEligible", "reason"],
+      "properties": {
+        "mvpEligible": {
+          "description": "Every scenario in suite.mandatoryForMvp has state 'pass'. Nothing else makes this true.",
+          "type": "boolean"
+        },
+        "supportedEligible": {
+          "description": "mvpEligible AND every scenario in suite.mandatoryForSupported has state 'pass'.",
+          "type": "boolean"
+        },
+        "reason": {
+          "description": "Why, naming the scenario ids that stand in the way and what state each reached. A reader who did not run the suite must not have to grep the scenarios array to find out.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
