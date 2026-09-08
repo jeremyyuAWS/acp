@@ -6,9 +6,12 @@ priority guarantee: however large the pool is, enough reads can consume all of i
 """
 from __future__ import annotations
 
+import os
 import sys
 import threading
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 import store  # noqa: E402
@@ -89,27 +92,63 @@ def test_get_burst_leaves_a_physical_connection_for_mutation(monkeypatch):
     adapter._putconn(reads.pop())
 
 
-def test_request_context_defaults_gets_to_read_gate_and_mutations_to_priority(monkeypatch):
-    """HTTP middleware needs one request-scoped switch; workers default to mutation priority.
+def test_request_context_defaults_background_work_to_ordinary_gate(monkeypatch):
+    """Only explicitly classified HTTP mutations may consume the critical reserve.
 
     ContextVar is important here: a module global would let concurrent GET and PUT requests
     overwrite each other's classification in FastAPI's thread pool.
     """
     adapter = _adapter(monkeypatch, capacity=3)
-    assert store.DB_READ_REQUEST.get() is False
+    assert store.DB_MUTATION_REQUEST.get() is False
 
-    token = store.DB_READ_REQUEST.set(True)
+    ordinary = [adapter._getconn(timeout=0.3) for _ in range(2)]
+    token = store.DB_MUTATION_REQUEST.set(True)
     try:
-        reads = [adapter._getconn(timeout=0.3) for _ in range(2)]
+        mutation = adapter._getconn(timeout=0.1)
     finally:
-        store.DB_READ_REQUEST.reset(token)
-
-    # No context marker is the safe default for PUT/POST/DELETE and background workers.
-    mutation = adapter._getconn(timeout=0.1)
-    assert mutation is not None
+        store.DB_MUTATION_REQUEST.reset(token)
 
     adapter._putconn(mutation)
-    for conn in reads:
+    for conn in ordinary:
+        adapter._putconn(conn)
+
+
+def test_concurrent_mutations_serialize_inside_reserved_capacity(monkeypatch):
+    """A mutation burst queues at its own gate instead of consuming ordinary/default slots."""
+    adapter = _adapter(monkeypatch, capacity=3)
+    token = store.DB_MUTATION_REQUEST.set(True)
+    try:
+        first = adapter._getconn(timeout=0.2)
+    finally:
+        store.DB_MUTATION_REQUEST.reset(token)
+
+    started = threading.Event()
+    finished = threading.Event()
+    acquired: list[object] = []
+
+    def second_mutation():
+        local_token = store.DB_MUTATION_REQUEST.set(True)
+        try:
+            started.set()
+            acquired.append(adapter._getconn(timeout=0.5))
+            finished.set()
+        finally:
+            store.DB_MUTATION_REQUEST.reset(local_token)
+
+    thread = threading.Thread(target=second_mutation)
+    thread.start()
+    assert started.wait(timeout=0.2)
+    assert not finished.wait(timeout=0.1), "a second mutation overbooked the reserved slot"
+
+    # Ordinary/default work can still use every non-reserved connection while the first mutation
+    # is in flight; it cannot take the reserved slot from the queued decision.
+    ordinary = [adapter._getconn(timeout=0.2) for _ in range(2)]
+    adapter._putconn(first)
+    assert finished.wait(timeout=0.3)
+    thread.join(timeout=0.2)
+
+    adapter._putconn(acquired.pop())
+    for conn in ordinary:
         adapter._putconn(conn)
 
 
@@ -135,3 +174,30 @@ def test_connection_returns_to_the_exact_pool_that_issued_it(monkeypatch):
 
     assert conn not in issuing_pool.used
     assert replacement_pool.used == set()
+
+
+@pytest.mark.skipif(not os.environ.get("DATABASE_URL"),
+                    reason="needs the Postgres integration service")
+def test_real_postgres_pool_keeps_critical_mutation_capacity_isolated():
+    """Exercise both admission classes against psycopg2's real ThreadedConnectionPool.
+
+    This is non-destructive: the integration job supplies a disposable server, but the test only
+    checks out connections and executes SELECT 1.
+    """
+    adapter = store._PgAdapter(os.environ["DATABASE_URL"])
+    adapter._MAX_CONN = 3
+    ordinary = [adapter._getconn(timeout=0.5) for _ in range(2)]
+    token = store.DB_MUTATION_REQUEST.set(True)
+    try:
+        critical = adapter._getconn(timeout=0.5)
+    finally:
+        store.DB_MUTATION_REQUEST.reset(token)
+
+    with critical.cursor() as cur:
+        cur.execute("SELECT 1")
+        assert cur.fetchone()[0] == 1
+
+    adapter._putconn(critical)
+    for conn in ordinary:
+        adapter._putconn(conn)
+    adapter._get_pool().closeall()

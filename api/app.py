@@ -40,14 +40,16 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
 async def _reserve_database_capacity_for_mutations(request, call_next):
     """Keep read bursts from consuming every local connection needed by a user decision.
 
-    Background workers and non-HTTP callers retain mutation priority by default. Only methods
-    that cannot write are admitted through the bounded read gate in store.py.
+    Only explicitly mutating HTTP methods receive the reserved slot. Background/default callers
+    share the ordinary gate, so forgetting to classify work fails safe instead of stealing the
+    capacity needed to record a user decision.
     """
-    token = _store.DB_READ_REQUEST.set(request.method.upper() in {"GET", "HEAD", "OPTIONS"})
+    token = _store.DB_MUTATION_REQUEST.set(
+        request.method.upper() not in {"GET", "HEAD", "OPTIONS"})
     try:
         return await call_next(request)
     finally:
-        _store.DB_READ_REQUEST.reset(token)
+        _store.DB_MUTATION_REQUEST.reset(token)
 
 # Not every environment has the Postgres driver installed (store.py's SQLite path doesn't need
 # it, and some dev boxes never install it) — guard the import so this module still loads there.

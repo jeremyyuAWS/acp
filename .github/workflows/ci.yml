@@ -430,7 +430,7 @@ jobs:
           ACP_PG_TEST_DESTRUCTIVE: '1'
         run: |
           python -m pytest tests/test_schema_boot_locks.py tests/test_pg_job_queue.py \
-            tests/test_pg_result_fencing.py \
+            tests/test_pg_result_fencing.py tests/test_db_mutation_reserve.py \
             -v --no-header -p no:warnings
 
       - name: Fail if anything in this job skipped instead of running
