@@ -92,11 +92,11 @@ describe('canonical stage card', () => {
     expect(html).toContain('Live · refreshed now')
   })
 
-  it('labels terminal history final and leaves canonical totals authoritative', () => {
+  it('removes heartbeat history from terminal cards and leaves canonical totals authoritative', () => {
     const html = renderToStaticMarkup(createElement(CanonicalStageCard, {
       snapshot: { ...SNAPSHOT, state: 'succeeded' }, receivedAt: Date.now(),
     }))
-    expect(html).toContain('Final · refreshed now')
+    expect(html).not.toContain('live-heartbeat-bars')
     expect(html).toContain('Integrity check: 10 of 10 work items accounted for')
   })
 
@@ -110,15 +110,15 @@ describe('canonical stage card', () => {
     await act(async () => { root.render(createElement(WorkflowStageStack, {
       lineage, view: 'assess', receivedAt: Date.now(),
     })) })
-    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(3)
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(2)
     const summary = container.querySelector('[data-stage="discover"] .workflow-stage-stack__summary')
     await act(async () => { summary.click() })
-    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(3)
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(2)
     await act(async () => { summary.click() })
-    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(3)
-    expect(container.textContent).toContain('Final · refreshed now')
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(2)
+    expect(container.textContent).not.toContain('Final · refreshed now')
     await act(async () => { vi.advanceTimersByTime(10_000) })
-    expect(container.textContent).toContain('Final · refreshed now')
+    expect(container.textContent).not.toContain('Final · refreshed now')
     await act(async () => { root.unmount() })
     vi.useRealTimers()
   })
