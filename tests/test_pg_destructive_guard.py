@@ -225,6 +225,27 @@ def test_the_opt_in_is_required_even_for_a_perfect_target(monkeypatch):
     assert "ACP_PG_TEST_DESTRUCTIVE" in str(e.value)
 
 
+@pytest.mark.parametrize("fixture_name", ["ledger", "postgres_store"])
+def test_budget_fixtures_refuse_before_connecting_without_destructive_opt_in(
+        monkeypatch, tmp_path, fixture_name):
+    """Budget test URLs do not imply consent, including indirect reset_analytics calls."""
+    from types import SimpleNamespace
+    import test_ai_spending_budget as spending_tests
+    import test_ai_run_policy as policy_tests
+    import store
+
+    monkeypatch.setenv("ACP_BUDGET_TEST_PG_URL", "postgresql://postgres@localhost/acp_budget_test")
+    monkeypatch.delenv("ACP_PG_TEST_DESTRUCTIVE", raising=False)
+    def refuse_connection(*args, **kwargs):
+        pytest.fail("budget fixture tried opening a database before checking destructive consent")
+    monkeypatch.setattr(spending_tests, "_PgAdapter", refuse_connection)
+    monkeypatch.setattr(store, "Store", refuse_connection)
+    fixture = (spending_tests.ledger.__wrapped__(tmp_path, SimpleNamespace(param="postgres"))
+               if fixture_name == "ledger" else policy_tests.postgres_store.__wrapped__(monkeypatch))
+    with pytest.raises(RuntimeError, match="ACP_PG_TEST_DESTRUCTIVE"):
+        next(fixture)
+
+
 def test_the_refusal_names_what_to_set(monkeypatch):
     """A guard that refuses without saying why gets disabled by the next person who hits it."""
     monkeypatch.setenv("ACP_PG_TEST_DESTRUCTIVE", "1")

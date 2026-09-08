@@ -218,17 +218,25 @@ def test_owner_reset_removes_only_owners_budget(isolated_store):
 def postgres_store(monkeypatch):
     """Opt-in full versioned Store migration on a disposable local database only."""
     from urllib.parse import urlparse
+    from conftest import require_disposable_postgres
     import store
     url = os.getenv("ACP_BUDGET_TEST_PG_URL")
     if not url:
         pytest.skip("requires disposable local Postgres")
+    require_disposable_postgres(url)
     parsed = urlparse(url)
     assert parsed.hostname in ("localhost", "127.0.0.1") and parsed.path == "/acp_budget_test"
     monkeypatch.setattr(store, "_DATABASE_URL", url)
     result = store.Store()
-    result.reset_analytics()
+    with result.transaction():
+        with result._db.cursor() as cur:
+            require_disposable_postgres(url, conn=cur.connection)
+        result.reset_analytics()
     yield result
-    result.reset_analytics()
+    with result.transaction():
+        with result._db.cursor() as cur:
+            require_disposable_postgres(url, conn=cur.connection)
+        result.reset_analytics()
     if result._db._pool:
         result._db._pool.closeall()
 

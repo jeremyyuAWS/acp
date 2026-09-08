@@ -16,8 +16,10 @@ from store import _SQLiteAdapter, _PgAdapter  # noqa: E402
 @pytest.fixture(params=["sqlite"] + (["postgres"] if os.getenv("ACP_BUDGET_TEST_PG_URL") else []))
 def ledger(tmp_path, request):
     if request.param == "postgres":
+        from conftest import require_disposable_postgres
         from urllib.parse import urlparse
         url = os.environ["ACP_BUDGET_TEST_PG_URL"]
+        require_disposable_postgres(url)
         parsed = urlparse(url)
         assert parsed.hostname in ("127.0.0.1", "localhost")
         assert parsed.path == "/acp_budget_test", "only a dedicated disposable test DB is allowed"
@@ -28,6 +30,7 @@ def ledger(tmp_path, request):
     result.init_schema()
     if request.param == "postgres":
         with adapter.cursor() as cur:
+            require_disposable_postgres(url, conn=cur.connection)
             # The full migration may also have installed run policy references.
             # This fixture is restricted above to a disposable localhost test DB.
             adapter.execute(cur, "TRUNCATE ai_spending_attempts, ai_spending_budgets CASCADE")
