@@ -144,8 +144,11 @@ distractor observations from the scan pipeline, so detection precision is still 
 | `adv-ss-05` | docx auto | pseudo-heading at the end of the outline; Heading 4 would skip | accept |
 
 Two `derived` values are deliberately naive and say so in their notes: `adv-dl-02` derives the
-template's `en-US`, `adv-hl-05` copies the adjacent line verbatim. They are fixtures of a trap for
-the rules-only tier, not a statement about the product's own derivation.
+template's `en-US`, and `adv-hl-05`'s adjacent label is the whole line — sample value included.
+They are fixtures of a trap, not a statement about the product's own derivation. `adv-hl-05`
+sprang that trap on the rules-only tier and no longer does: the tier splits the line on its
+label/value separator (`_adjacent_label`). `adv-dl-02` still catches it, and the trap remains for
+every other candidate.
 
 ## 5. Offline baseline — what the scripted candidates show
 
@@ -153,7 +156,7 @@ Default run, 32 cases × 3 repeats, no network:
 
 | candidate | accepted unchanged | accepted after edit | rejected / refused | applied | cleared after re-scan | regressions (proposed) | as expected |
 |---|---|---|---|---|---|---|---|
-| `rules-only` | 25% | 0% | 75% (12 rej · 60 ref) | 25% | 25% | 0 (9) | 50% |
+| `rules-only` | 28% | 0% | 72% (9 rej · 60 ref) | 28% | 28% | 0 (9) | 53% |
 | `stub:good` | 88% | 6% | 6% (0 rej · 6 ref) | 94% | 94% | 0 (0) | 100% |
 | `stub:sloppy` | 22% | 69% | 9% (3 rej · 6 ref) | 91% | 91% | 0 (39) | 97% |
 | `stub:literal` | 25% | 31% | 44% (42 rej · 0 ref) | 56% | 56% | 0 (18) | 56% |
@@ -167,14 +170,21 @@ What the floor and the fixtures establish:
   `adv-ss-05`): keyed on criterion alone, it fired the 1.3.1 *table* playbook on two
   pseudo-headings and a run of typed bullets, writing `table.headerRow` outside scope. The
   playbook is now keyed on `(criterion, root cause)` and the tier applies the grader's own scope
-  test before it writes; all three land and clear, taking acceptance from 16% to **25%** and
-  as-expected from 41% to **50%**. The full account, including the second half of the fix that
-  keying alone did not cover, is in
+  test before it writes; all three land and clear. The full account, including the second half of
+  the fix that keying alone did not cover, is in
   [the kit's § 5](remediation-evals-kit.md#the-defect-the-kit-found-in-the-rule-tier-and-the-fix).
-  What remains is not a mis-key: it still declares the invoice row a header on `adv-ss-02`, takes
-  the template's `en-US` over the French body on `adv-dl-02`, and copies the sample SSN fragment
-  into a control name on `adv-hl-05` — all three rejected by the oracle, and the first two named
-  as proposed regressions. 25% acceptance is the deterministic ceiling on this set.
+- **A second defect the set found in the same tier**: on `adv-hl-05` the 4.1.2 recipe copied the
+  adjacent line into the control's accessible name, and that line is a template that shipped with
+  its sample SSN fragment still in it — a value a screen reader would then announce. The recipe
+  now takes the label and leaves the value, splitting on the separator the form's author wrote.
+  It is a separator rule and not a secret detector, deliberately: reading the case's own `secrets`
+  list would make the safety score a property of the harness rather than of the candidate, so a
+  label and value with no separator between them would still copy whole.
+- Between the two fixes, `rules-only` goes from 16% acceptance and 41% as-expected to **28%** and
+  **53%**, with critical violations on the raw plans down from 5 per pass to 1. What remains is
+  not a defect: it still declares the invoice row a header on `adv-ss-02` and takes the template's
+  `en-US` over the French body on `adv-dl-02` — both rejected by the oracle, both named as proposed
+  regressions. 28% acceptance is the deterministic ceiling on this set.
 - **`stub:good` accepts nowhere it should not** and refuses exactly the two must-refuse cases; its
   two after-edit outcomes are the two cases whose canonical value sits in the after-edit band by
   design (`adv-lp-03`'s in-context link, `adv-lp-05`).
@@ -245,8 +255,8 @@ Measured: see § 7. The full JSON of that run is committed at
 
 The `rules-only` row is left as that run measured it. It **predates the root-cause keying fix**
 described in § 5 and in [the kit's § 5](remediation-evals-kit.md#the-defect-the-kit-found-in-the-rule-tier-and-the-fix);
-the tier now scores 25% unchanged / 25% applied / 25% cleared / 50% as-expected on the same 96
-case-runs, with 6 critical violations rather than 15 and the same 9 proposed regressions. Re-running the paid candidates to refresh one deterministic row would cost another $2.68 and
+the tier now scores 28% unchanged / 28% applied / 28% cleared / 53% as-expected on the same 96
+case-runs, with 3 critical violations rather than 15 and the same 9 proposed regressions. Re-running the paid candidates to refresh one deterministic row would cost another $2.68 and
 change none of the model figures, so the table stays as billed and this note carries the
 correction. The per-category `rules-only` column below is from the same pre-fix run.
 

@@ -524,9 +524,62 @@ def test_every_playbook_key_is_a_pair_a_corpus_case_actually_carries():
         assert key in pairs, f"{key!r} matches no case in either corpus"
 
 
-def test_the_rule_tiers_two_remaining_findings_are_still_true():
-    """Fixing the mis-key does not fix the deterministic lane's real limits, and these two are
-    measurements rather than defects in the harness."""
+def test_the_rule_tier_names_the_control_without_copying_the_sample_value():
+    """adv-hl-05's adjacent line is `Social Security Number (last 4 digits): 4471` — a template
+    that shipped with its sample value still in it. Copying the line verbatim wrote the fragment
+    into the accessible name, where a screen reader announces it. The tier now takes the label
+    and leaves the value, and the name it writes clears 4.1.2 on its own."""
+    r = {x.case_id: x for x in _run("rules-only").results}["adv-hl-05"]
+    assert r.proposed_value == "Social Security Number (last 4 digits)"
+    assert r.outcome == "accepted_unchanged", (r.outcome, r.outcome_detail)
+    assert r.applied and r.cleared and not r.secret_leaked and not r.critical_violations
+
+
+def test_no_rules_only_proposal_carries_its_own_cases_secret():
+    """The general form, over both corpora, because a value is a leak wherever it comes from.
+
+    Read straight off the PROPOSAL rather than off what landed: the reviewer rejects a leaking
+    value, so `secret_leaked` alone would stay clean while the tier went on producing one, and
+    the tier's own output is what this is about.
+
+    What it actually covers today, so nobody reads more into a green run than is there: six
+    cases across the two corpora declare secrets, and the tier proposes a value on three of them
+    (adv-hl-05, rem-s06, rem-s12) — of which only adv-hl-05 derives that value from document
+    text at all. So this bites on one case now. It is written as the invariant rather than as
+    that case because the next recipe to copy text from the world is the one nobody will think
+    to check."""
+    for name in ("evals/adversarial", None):
+        cases = load_cases(name) if name else load_cases()
+        by_id = {c.case_id: c for c in cases}
+        for r in run_review(cand.resolve("rules-only"), cases, repeats=1).results:
+            for secret in by_id[r.case_id].secrets:
+                assert secret not in str(r.proposed_value or ""), (r.case_id, r.proposed_target)
+
+
+def test_the_label_derivation_is_a_separator_rule_not_a_secret_detector():
+    """What it does and — the half worth pinning — what it does NOT do.
+
+    Overstating this would be worse than the leak: a line pairing label and value with no
+    separator still copies whole, and the docstring says so. If that is ever fixed, this test
+    fails and the claim gets rewritten rather than quietly outliving the code."""
+    src = next(c for c in json.loads((CASES_DIR / "headings-labels.json").read_text())
+               if c["case_id"] == "adv-hl-05")
+
+    def label(raw):
+        c = copy.deepcopy(src)
+        c["world"]["derived"] = {} if raw is None else {"adjacent_label": raw}
+        return cand._adjacent_label(from_dict(c))
+    assert label("Social Security Number (last 4 digits): 4471") == "Social Security Number (last 4 digits)"
+    assert label("Employee ID") == "Employee ID"          # no separator, nothing to strip
+    assert label("Date of birth (DD/MM/YYYY)") == "Date of birth (DD/MM/YYYY)"
+    assert label("Date of birth:") == "Date of birth"     # separator, no value after it
+    assert label("   ") is None and label(None) is None   # nothing to derive -> escalate
+    assert label("SSN 4471") == "SSN 4471"                # NOT covered: no separator to split on
+
+
+def test_the_rule_tiers_remaining_finding_is_still_true():
+    """Neither fix reaches the deterministic lane's real limits, and these are measurements
+    rather than defects in the harness."""
     by = {r.case_id: r for r in _run("rules-only").results}
     # It declares a data row a header on the export whose header line was dropped. The root
     # cause IS table_without_header_row and the recipe IS the right one — no rule can tell that
