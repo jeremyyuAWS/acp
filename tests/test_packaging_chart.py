@@ -51,12 +51,12 @@ def render(doc: dict, *, extra: list[str] | None = None) -> list[dict]:
     return [d for d in yaml.safe_load_all(proc.stdout) if d]
 
 
-def render_error(doc: dict) -> str:
+def render_error(doc: dict, *, extra: list[str] | None = None) -> str:
     """The stderr of a render that MUST fail. Asserting it failed is half the test; the other
     half is that the message says why, since an operator sees only this."""
     from acpctl.values import render_values_yaml
     proc = subprocess.run(
-        [HELM, "template", "acp", str(CHART), "-f", "-"],
+        [HELM, "template", "acp", str(CHART), "-f", "-", *(extra or [])],
         input=render_values_yaml(doc), capture_output=True, text=True, timeout=120,
     )
     assert proc.returncode != 0, "expected the render to fail, and it succeeded"
@@ -71,6 +71,35 @@ def named(manifests: list[dict], kind: str, suffix: str) -> dict:
     matches = [m for m in of_kind(manifests, kind) if m["metadata"]["name"].endswith(suffix)]
     assert len(matches) == 1, f"expected one {kind} ending {suffix!r}, got {len(matches)}"
     return matches[0]
+
+
+def pod_specs(manifests: list[dict]) -> list[tuple[str, dict]]:
+    """(name, pod spec) for every workload the chart renders — Deployments, Jobs and the CronJob's
+    nested job template. Written once because a pod the chart renders and no test walks is a pod
+    whose security context is decided by whoever last edited that file."""
+    out: list[tuple[str, dict]] = []
+    for workload in manifests:
+        name = workload["metadata"]["name"]
+        if workload["kind"] in ("Deployment", "Job"):
+            out.append((name, workload["spec"]["template"]["spec"]))
+        elif workload["kind"] == "CronJob":
+            out.append((name, workload["spec"]["jobTemplate"]["spec"]["template"]["spec"]))
+    return out
+
+
+# Enabling the backup takes a schedule and a retention because the chart refuses to invent either
+# — see templates/backup-cronjob.yaml. These are a test's choices, not defaults.
+BACKUP_ON = [
+    "--set", "backup.enabled=true",
+    "--set", "backup.schedule=0 2 * * *",
+    "--set", "backup.retentionDays=35",
+]
+RESTORE_ON = [
+    "--set", "restore.enabled=true",
+    "--set", "restore.file=acp-20260908T020000Z.dump",
+    "--set", "restore.runId=drill",
+    "--set", "restore.confirm=acp",
+]
 
 
 # ── the environment this file needs ───────────────────────────────────────────
@@ -715,13 +744,17 @@ def test_every_pod_meets_the_restricted_pod_security_standard():
     Asserted on EVERY pod the chart renders, hook Jobs and dependencies included, because
     admission does not exempt the ones that are inconvenient. The reference cluster now enforces
     the label, so this assertion and the API server agree or the install fails.
+
+    THE BACKUP AND RESTORE PODS ARE RENDERED IN HERE ON PURPOSE. They are off by default, so a
+    plain render walks straight past them — and they are the two pods in this chart that run a
+    THIRD-PARTY image (postgres, for pg_dump), which is exactly the kind that defaults to root
+    and gets rejected at admission months after the manifest was reviewed.
     """
-    manifests = render(load_example("standard-production"))
-    pods = [d for d in manifests if d["kind"] in ("Deployment", "Job")]
-    assert pods, "nothing rendered; this test would prove nothing"
-    for workload in pods:
-        spec = workload["spec"]["template"]["spec"]
-        name = workload["metadata"]["name"]
+    manifests = render(load_example("standard-production"), extra=[*BACKUP_ON, *RESTORE_ON])
+    pods = pod_specs(manifests)
+    assert {"CronJob", "Job", "Deployment"} <= {m["kind"] for m in manifests}, (
+        "the render produced no CronJob or Job, so this walks fewer pods than it claims")
+    for name, spec in pods:
         pod_security = spec.get("securityContext", {})
         assert pod_security.get("seccompProfile", {}).get("type") == "RuntimeDefault", name
         assert pod_security.get("runAsNonRoot") is True, name
@@ -2001,3 +2034,254 @@ def test_compose_deploys_what_the_chart_omits():
             f"{closed} is back in NOT_RENDERED — the chart stopped rendering something both "
             f"Compose and production deploy")
     assert {"acp-langfuse"} <= set(NOT_RENDERED), sorted(NOT_RENDERED)
+
+
+# ── backup and restore ────────────────────────────────────────────────────────
+#
+# PRD S5.2 lists "backup and restore Jobs" among what the Kubernetes package is, and PRD S16 says
+# what makes them count: "a backup is not considered healthy until a restore test has succeeded".
+# These tests cover the render; the restore test itself is a step on the disposable reference
+# cluster (`.github/workflows/packaging-kind.yml`), because a dump that pg_restore can read is a
+# claim only a real database can settle.
+
+
+def backup_container(manifests: list[dict]) -> dict:
+    cron = named(manifests, "CronJob", "-backup")
+    return cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+
+
+@needs_helm
+def test_nothing_about_backup_renders_until_somebody_asks_for_it():
+    """OFF BY DEFAULT, and the assertion is on the whole object set rather than on the CronJob
+    alone: the PersistentVolumeClaim is the half that would silently allocate storage in every
+    installation of this chart, and it carries `resource-policy: keep`, so an accidental one
+    would survive the uninstall that removed it."""
+    manifests = render(load_example("standard-production"))
+    kinds = [m["kind"] for m in manifests]
+    assert "CronJob" not in kinds, kinds
+    assert "PersistentVolumeClaim" not in kinds, kinds
+    assert not [m for m in manifests if m["metadata"]["name"].endswith("-backups")]
+
+
+@needs_helm
+def test_a_backup_with_no_schedule_is_a_recovery_objective_nobody_chose():
+    """THE FAILURE THAT MATTERS MOST HERE IS THE ONE THAT DOES NOT HAPPEN.
+
+    A chart shipping `schedule: "0 2 * * *"` renders, installs and backs up nightly — and has
+    chosen this installation's RPO on its operator's behalf, in a file they never opened. Nobody
+    would ever see that decision to disagree with it. So the render fails instead, and the message
+    has to say what the value MEANS rather than that a key is missing, because the operator
+    reading it is being asked to make a decision, not to fill in a blank.
+    """
+    stderr = render_error(load_example("standard-production"),
+                          extra=["--set", "backup.enabled=true"])
+    assert "backup.schedule" in stderr, stderr
+    assert "RECOVERY POINT OBJECTIVE" in stderr, stderr
+
+
+@needs_helm
+def test_a_backup_with_no_retention_points_at_the_document_that_already_states_one():
+    """`data.postgres.backupRetentionDays` is already in the contract, with enforced floors (30
+    days for `regulated`, 7 for the production profiles). A backup job that pruned on its own
+    default would let the document promise 35 days while the cluster kept 7, and the two would
+    not disagree anywhere anybody looks."""
+    stderr = render_error(load_example("standard-production"),
+                          extra=["--set", "backup.enabled=true",
+                                 "--set", "backup.schedule=0 2 * * *"])
+    assert "backup.retentionDays" in stderr, stderr
+    assert "data.postgres.backupRetentionDays" in stderr, stderr
+
+
+@needs_helm
+def test_the_backup_pod_gets_the_database_and_none_of_the_other_credentials():
+    """THE ONE PLACE THIS CHART DOES NOT USE `acp.commonEnv`, and the reason is worth a test.
+
+    That shared block projects EVERY entry of `secrets.refs` as an env var, which is right for the
+    API and the workers and wrong here: this pod's job is to dump one database onto a volume that
+    another Job mounts and a support bundle collects. Taking the shared block would hand it the AI
+    provider keys, both Langfuse keys and the telemetry salt — and it would look like consistency.
+    """
+    manifests = render(load_example("standard-production"), extra=BACKUP_ON)
+    backup_env = {e["name"] for e in backup_container(manifests)["env"]}
+    api_env = {e["name"] for e in named(manifests, "Deployment", "-api")
+               ["spec"]["template"]["spec"]["containers"][0]["env"]}
+
+    assert backup_env == {"DATABASE_URL", "BACKUP_DIR", "RETENTION_DAYS",
+                          "PGCONNECT_TIMEOUT", "HOME"}, sorted(backup_env)
+    # The API's credential set is what this pod would inherit from the shared block, and it is
+    # strictly bigger. Asserting the difference is non-empty stops this passing vacuously on a
+    # document that happens to declare nothing else.
+    assert api_env - backup_env, "the API carries no credential the backup pod lacks"
+    assert "DATABASE_URL" in api_env, "the comparison is not about the same secret projection"
+
+
+@needs_helm
+def test_the_backup_volume_is_not_deleted_by_the_uninstall_that_needed_it():
+    """`helm uninstall` deletes every resource in the release. A backup volume that goes with it
+    is gone at the exact moment somebody wants a backup — so the claim is annotated to survive,
+    which makes it a visible orphan an operator removes deliberately."""
+    manifests = render(load_example("standard-production"), extra=BACKUP_ON)
+    claim = named(manifests, "PersistentVolumeClaim", "-backups")
+    assert claim["metadata"]["annotations"]["helm.sh/resource-policy"] == "keep"
+
+
+@needs_helm
+def test_the_backup_writes_where_the_restore_reads():
+    """A restore pointed at the wrong volume reports "no such backup", which is exactly what a
+    backup that never ran reports. One helper computes the claim name for both Jobs so the two
+    cannot drift into saying that to somebody at 3am."""
+    manifests = render(load_example("standard-production"), extra=[*BACKUP_ON, *RESTORE_ON])
+    cron = named(manifests, "CronJob", "-backup")
+    restore = named(manifests, "Job", "-restore-drill")
+
+    def claim(spec):
+        volumes = {v["name"]: v for v in spec["volumes"]}
+        return volumes["backups"]["persistentVolumeClaim"]["claimName"]
+
+    written = claim(cron["spec"]["jobTemplate"]["spec"]["template"]["spec"])
+    read = claim(restore["spec"]["template"]["spec"])
+    assert written == read == "acp-backups", (written, read)
+
+    # And the mount paths, which are the other half of the same fact.
+    def mount(container):
+        return [m for m in container["volumeMounts"] if m["name"] == "backups"][0]
+
+    assert mount(backup_container(manifests))["mountPath"] == \
+        mount(restore["spec"]["template"]["spec"]["containers"][0])["mountPath"]
+
+
+@needs_helm
+def test_an_existing_claim_replaces_the_charts_own_rather_than_sitting_beside_it():
+    """The supported way to make backups outlive the cluster is a claim backed by storage that
+    does. Setting one must stop the chart creating its own — two claims, one of them silently
+    unused, is how a restore comes to read an empty volume."""
+    manifests = render(load_example("standard-production"),
+                       extra=[*BACKUP_ON, "--set", "backup.storage.existingClaim=acp-offsite"])
+    assert not of_kind(manifests, "PersistentVolumeClaim"), "the chart created a second claim"
+    cron = named(manifests, "CronJob", "-backup")
+    volumes = {v["name"]: v for v in
+               cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]["volumes"]}
+    assert volumes["backups"]["persistentVolumeClaim"]["claimName"] == "acp-offsite"
+
+
+@needs_helm
+def test_a_restore_run_with_another_installations_values_does_not_render():
+    """THE ACCIDENT THIS REFUSES IS NOT "somebody typed yes by mistake".
+
+    It is a production restore run with a staging values file — the same command, the same
+    operator, the wrong cluster. A yes/no confirmation token reads identically in both and refuses
+    nothing; the release's own full name does not.
+    """
+    stderr = render_error(load_example("standard-production"),
+                          extra=["--set", "restore.enabled=true",
+                                 "--set", "restore.file=acp-x.dump",
+                                 "--set", "restore.runId=drill",
+                                 "--set", "restore.confirm=acp-staging"])
+    assert "restore.confirm" in stderr, stderr
+    assert '"acp"' in stderr and '"acp-staging"' in stderr, stderr
+
+
+@needs_helm
+def test_a_restore_needs_a_file_and_a_run_id_before_it_needs_anything_else():
+    """No "latest", deliberately: after a bad migration the newest backup is the one you do not
+    want. And the run id is what makes a values file left with `enabled: true` harmless — the next
+    upgrade re-applies an identical, already-completed Job instead of restoring a second time."""
+    base = ["--set", "restore.enabled=true", "--set", "restore.confirm=acp"]
+    no_file = render_error(load_example("standard-production"), extra=base)
+    assert "restore.file" in no_file, no_file
+    no_id = render_error(load_example("standard-production"),
+                         extra=[*base, "--set", "restore.file=acp-x.dump"])
+    assert "restore.runId" in no_id, no_id
+
+
+@needs_helm
+def test_the_restore_cannot_write_to_the_volume_it_reads():
+    """A restore that can delete a dump can destroy the thing it just failed to apply. Both the
+    mount and the volume say read-only, because the mount alone leaves the claim writable to
+    anything else in the pod."""
+    manifests = render(load_example("standard-production"), extra=[*BACKUP_ON, *RESTORE_ON])
+    spec = named(manifests, "Job", "-restore-drill")["spec"]["template"]["spec"]
+    mount = [m for m in spec["containers"][0]["volumeMounts"] if m["name"] == "backups"][0]
+    volume = [v for v in spec["volumes"] if v["name"] == "backups"][0]
+    assert mount["readOnly"] is True, mount
+    assert volume["persistentVolumeClaim"]["readOnly"] is True, volume
+
+
+@needs_helm
+def test_the_restore_reads_the_archive_and_counts_the_sessions_before_it_drops_anything():
+    """ORDER IS THE WHOLE GUARANTEE, and it is invisible in a diff that reads the script as prose.
+
+    `pg_restore --clean` drops every object it is about to recreate. Both checks — that the
+    archive is readable, and that no other session is on the database — are worth nothing if they
+    run after that: a wrong filename discovered post-drop leaves an operator with neither the old
+    database nor a new one. This asserts the positions rather than the presence.
+
+    THE COMMENTS ARE STRIPPED FIRST, and that is not tidiness. The first draft of this test
+    asserted `"--single-transaction" in script` and passed with the flag deleted from the
+    command — the script's own comment explaining the flag was still there to match. A check that
+    reads a comment is a check that cannot fail.
+    """
+    manifests = render(load_example("standard-production"), extra=[*BACKUP_ON, *RESTORE_ON])
+    raw = named(manifests, "Job", "-restore-drill")[
+        "spec"]["template"]["spec"]["containers"][0]["args"][0]
+
+    def code_only(text: str) -> str:
+        return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+
+    script = code_only(raw)
+    assert any(l.lstrip().startswith("#") for l in raw.splitlines()), \
+        "the script carries no comments, so stripping them proves nothing"
+    assert not any(l.lstrip().startswith("#") for l in script.splitlines())
+
+    listed = script.index("pg_restore --list")
+    sessions = script.index("pg_stat_activity")
+    clean = script.index("pg_restore --clean")
+    assert listed < clean, "the archive is read after the database is dropped"
+    assert sessions < clean, "the live-session check runs after the database is dropped"
+    # --single-transaction is what makes a mid-restore failure leave the database as it was.
+    # Asserted with the next argument attached, so the flag has to be on the command.
+    assert "--single-transaction --dbname" in script
+
+
+@needs_helm
+def test_neither_job_traces_the_connection_string_into_its_own_log():
+    """`set -x` in either script would print DATABASE_URL — password and all — into a pod log that
+    a support bundle collects and an operator pastes into a ticket. Cheap to add by accident while
+    debugging a failing backup, and impossible to un-publish afterwards."""
+    manifests = render(load_example("standard-production"), extra=[*BACKUP_ON, *RESTORE_ON])
+    scripts = {
+        "backup": backup_container(manifests)["args"][0],
+        "restore": named(manifests, "Job", "-restore-drill")[
+            "spec"]["template"]["spec"]["containers"][0]["args"][0],
+    }
+    for name, script in scripts.items():
+        assert not re.search(r"^\s*set\s+-\S*x", script, re.M), name
+        assert not re.search(r"echo[^\n]*\$DATABASE_URL", script), name
+        assert "$DATABASE_URL" in script, f"{name} does not use the credential at all"
+
+
+@needs_helm
+def test_the_backup_prunes_on_the_retention_it_was_given_and_not_on_a_number_of_its_own():
+    """The retention reaches the job as an env var read by `find -mtime`, so the value that
+    deletes dumps is the value the operator set. A literal in the script would keep passing every
+    render test while quietly ignoring the key those tests are about."""
+    manifests = render(load_example("standard-production"),
+                       extra=[*BACKUP_ON[:4], "--set", "backup.retentionDays=91"])
+    container = backup_container(manifests)
+    retention = [e for e in container["env"] if e["name"] == "RETENTION_DAYS"][0]
+    assert retention["value"] == "91", retention
+    assert '-mtime "+$RETENTION_DAYS"' in container["args"][0]
+
+
+@needs_helm
+def test_the_backup_image_is_not_the_application_image():
+    """pg_dump is not in the ACP image and should not be: adding a Postgres client to the base
+    would grow every API and worker container in the estate so one CronJob can run nightly. The
+    consequence is a second image to pin, and an air-gapped bundle that has to carry it — which is
+    a cost worth seeing in the values rather than discovering at install time."""
+    manifests = render(load_example("standard-production"), extra=BACKUP_ON)
+    backup_image = backup_container(manifests)["image"]
+    api_image = named(manifests, "Deployment", "-api")[
+        "spec"]["template"]["spec"]["containers"][0]["image"]
+    assert backup_image != api_image, backup_image
+    assert backup_image.startswith("postgres:"), backup_image

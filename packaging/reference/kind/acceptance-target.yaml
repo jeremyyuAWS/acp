@@ -58,7 +58,15 @@ baseUrl: ${ACP_ACCEPTANCE_BASE_URL}
 #                        not isolated to the scenario that injected it.
 #   previous-release     nothing builds a previous release for this job to upgrade from. The
 #                        chart's own upgrade path is covered by the job's upgrade step instead.
-#   backup-restore       `acpctl backup` and `restore` are unimplemented (PRD §6 step 5).
+#   backup-restore       The CHART now has both (#1822: a backup CronJob and a restore Job,
+#                        proven end to end on this same cluster), so the old reason —
+#                        "unimplemented" — is no longer why. `acpctl backup`/`restore`
+#                        are still stubs (PRD §6 step 5), and this scenario drives the
+#                        Jobs rather than the CLI, so granting it is now a real option
+#                        and a deliberate next step: it needs the Jobs enabled in the
+#                        reference document (both default off) and a run to establish
+#                        what it reports. Withheld until that run exists rather than
+#                        granted on the assumption it would pass.
 capabilities:
   - api
   - kubectl
