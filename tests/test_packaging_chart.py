@@ -218,15 +218,86 @@ def test_acp_platform_is_provenance_not_a_switch():
     behaviour, that belongs in the values as an explicit application setting where the identity
     test can see it.
     """
-    import sys
+    import ast
+    import re
     root = Path(__file__).resolve().parent.parent
-    hits = []
+
+    # THE INVARIANT IS "NOTHING BRANCHES ON IT", NOT "NOTHING MENTIONS IT", and the docstring above
+    # has always said so: the variable "exists for telemetry and support bundles". This test used
+    # to grep for the NAME, which was an adequate proxy only while no support bundle existed. When
+    # `GET /admin/support-bundle` landed on 2026-09-08 and reported the platform as provenance —
+    # the use the rule explicitly permits — the grep failed on the intended behaviour.
+    #
+    # So the check now parses. A read is fine; the value appearing in a CONDITION is not, because
+    # that is the fork `_normalise_workload` would hide: an `if`, a `while`, a comparison, a
+    # boolean operator or a conditional expression. Reporting the value verbatim passes; comparing
+    # it to "azure" does not.
+    # CONDITIONS ONLY, AND THROUGH ONE HOP OF ALIASING. Flagging every mention was the old rule
+    # and it failed on the intended use; flagging every syntactic `or` would fail on `x or None`,
+    # which is a default and not a decision. So the check looks at what a CONDITION is made of —
+    # the test of an if/while/assert/conditional-expression, the subject of a match, and any
+    # comparison anywhere (`is_azure = plat == "azure"` is a decision even outside an `if`).
+    #
+    # Aliasing is followed one hop because `plat = os.environ.get("ACP_PLATFORM")` followed by
+    # `if plat == "azure"` is the obvious way around a rule that only looked for the literal name,
+    # and a guard with an obvious way around it is not a guard.
+    branching = []
     for path in (root / "api").rglob("*.py"):
-        if "ACP_PLATFORM" in path.read_text(encoding="utf-8"):
-            hits.append(path.relative_to(root))
-    assert not hits, (
-        f"application code now reads ACP_PLATFORM ({hits}) — it is no longer provenance, and "
-        "_normalise_workload is hiding a real per-cloud behaviour difference")
+        text = path.read_text(encoding="utf-8")
+        if "ACP_PLATFORM" not in text:
+            continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:                     # not this test's business to report
+            continue
+
+        def _is_platform_read(value) -> bool:
+            """Is this expression the environment read ITSELF, rather than something that merely
+            mentions it?
+
+            `plat = os.environ.get("ACP_PLATFORM")` aliases the platform. `ok = record(...,
+            platform=os.environ.get("ACP_PLATFORM"))` does NOT — `ok` is a boolean about whether a
+            row was written, and treating it as an alias flagged `if ok:` as a per-cloud fork.
+            """
+            while isinstance(value, (ast.BoolOp, ast.IfExp)):
+                value = value.values[0] if isinstance(value, ast.BoolOp) else value.body
+            if isinstance(value, ast.Subscript):                     # os.environ["ACP_PLATFORM"]
+                return "ACP_PLATFORM" in (ast.get_source_segment(text, value) or "")
+            if isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute):
+                if value.func.attr in ("get", "getenv"):
+                    return "ACP_PLATFORM" in (ast.get_source_segment(text, value) or "")
+            return False
+
+        aliases = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                if node.value is None or not _is_platform_read(node.value):
+                    continue
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        aliases.add(target.id)
+
+        def _names(segment: str) -> bool:
+            return "ACP_PLATFORM" in segment or any(
+                re.search(rf"\b{re.escape(a)}\b", segment) for a in aliases)
+
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.If, ast.While, ast.Assert, ast.IfExp)):
+                segment = ast.get_source_segment(text, node.test) or ""
+            elif isinstance(node, ast.Match):
+                segment = ast.get_source_segment(text, node.subject) or ""
+            elif isinstance(node, ast.Compare):
+                segment = ast.get_source_segment(text, node) or ""
+            else:
+                continue
+            if _names(segment):
+                branching.append(f"{path.relative_to(root)}:{node.lineno}")
+    assert not branching, (
+        f"application code now BRANCHES on ACP_PLATFORM ({branching}) — it is no longer "
+        "provenance, and _normalise_workload is hiding a real per-cloud behaviour difference. "
+        "Reading it to report it is fine; deciding on it is not. If behaviour must differ, that "
+        "belongs in the values as an explicit application setting the identity test can see.")
 
 
 @needs_helm

@@ -668,10 +668,22 @@ jobs:
               # live in durable storage" cannot be asked here at all. The suite reports that as
               # `unknown` rather than as a pass, which is the whole reason it has four states.
               "fixture-workflow": "unknown",
-              # Same: `/admin/audit-events` and `/admin/support-bundle` (PRD §13) are unserved.
-              "audit-and-diagnostics": "unknown",
-              # The restart itself happens — three tiers, mid-job — but the finding it exists for
-              # (a duplicate authoritative output) is read from the artifact inventory above.
+              # NOW SERVED. `/admin/audit-events` and `/admin/support-bundle` landed with this
+              # change, and startup records `deployment.started` so even an installation that has
+              # changed nothing has a trail to return — which is what makes "no events" mean
+              # "auditing is broken" rather than "nothing has happened yet".
+              #
+              # A PREDICTION UNTIL THIS JOB'S FIRST RUN, stated as one. It asserts audit events
+              # exist, a bundle is returned, the bundle declares itself redacted, and none of this
+              # run's own credentials appear in it. If the reference cluster disagrees, the run
+              # says so and this line is corrected against what it measured — never widened.
+              "audit-and-diagnostics": "pass",
+              # STILL UNKNOWN, FOR A DIFFERENT AND BETTER REASON. The artifact inventory now
+              # exists, so this scenario reaches it — and finds ZERO artifacts, because the runs
+              # it drives are discover-only. "No duplicate authoritative outputs" is then
+              # vacuously true, and reporting `pass` would be a check that could not have failed.
+              # The lost-work half DID hold and the outcome says so; the duplicate half needs a
+              # target that can complete a remediation, which this cluster cannot (see above).
               "worker-restart": "unknown",
               # The four `supported`-claim scenarios. SKIPPED because the descriptor withholds
               # their capabilities, each for a reason it states; a skip is not a pass and costs
@@ -723,8 +735,7 @@ jobs:
               # and THIS ASSERTION WILL FAIL — which is the correct outcome and the signal to
               # change this line back.
               "fixture-workflow": "DB_CAPACITY_BUSY",
-              "audit-and-diagnostics": "/admin/audit-events",
-              "worker-restart": "/artifacts",
+              "worker-restart": "no authoritative artifacts",
               "dependency-degradation": "fault-injection",
               "scale-updown": "scale-control",
               "upgrade-from-previous": "previous-release",

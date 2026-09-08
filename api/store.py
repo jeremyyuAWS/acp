@@ -9446,6 +9446,71 @@ class Store:
             if cur.rowcount > 0:
                 self._bump_scan_revision(cur, scan_id)
 
+    # Storage schemes that SURVIVE A POD RESCHEDULE. PRD §12 and acceptance criterion §20.5:
+    # no authoritative document or remediation artifact may depend on ephemeral storage. A
+    # corrected file whose only copy is on a worker's own disk is produced, downloadable and
+    # correct right up to the moment that pod is replaced — which on an autoscaled tier is
+    # routine and unannounced. Nothing errors; the file is simply gone.
+    DURABLE_ARTIFACT_SCHEMES = frozenset({"s3", "azblob", "gs", "https", "minio"})
+
+    def list_scan_artifacts(self, scan_id: str, owner: str | None = None) -> list[dict]:
+        """Every remediation artifact this scan produced, and WHERE EACH ONE LIVES.
+
+        THE QUESTION IS THE LOCATION, NOT THE COUNT. Counting corrected documents is already
+        answered by `remediation_status`; this exists because §20.5 asks something that no count
+        can answer — whether the authoritative copy of each one is somewhere that survives the
+        pod that wrote it.
+
+        `authoritative` MEANS ACP IS THE SYSTEM OF RECORD FOR THAT COPY. `remediated_at` is
+        stamped when ACP stores the corrected bytes, so it is the flag; `drive_write_url` records
+        that the copy also reached the customer's own source provider, which is a delivery fact
+        and deliberately NOT what makes it authoritative — a delivery failure leaves ACP holding
+        the only copy, which is exactly when the storage question matters most.
+
+        A NULL `blob_url` IS THE FINDING, NOT A GAP IN THE QUERY. `blob.upload_remediated` returns
+        None when object storage is not configured and the caller falls back to Drive-only, so a
+        row with `remediated_at` set and `blob_url` NULL is a corrected document ACP produced and
+        did not durably keep. This method reports that as an empty location rather than hiding the
+        row, because the row IS the answer §20.5 wants.
+        """
+        sql = ("SELECT file, blob_url, drive_write_url, remediated_at, corrected_sha256, "
+               "corrected_bytes FROM file_records "
+               "WHERE scan_id=%s AND remediated_at IS NOT NULL")
+        params: tuple = (scan_id,)
+        if owner is not None:
+            # Filtered IN SQL, same posture as get_remediation_urls: these rows carry live links
+            # to remediated documents, so a foreign row is never read into memory at all.
+            sql += " AND scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)"
+            params += (owner,)
+        sql += " ORDER BY file"
+        with self._db.cursor() as cur:
+            self._db.execute(cur, sql, params)
+            rows = self._db.fetchall(cur)
+
+        out = []
+        for row in rows:
+            location = (row.get("blob_url") or "").strip()
+            delivered = (row.get("drive_write_url") or "").strip()
+            scheme = location.split("://", 1)[0].lower() if "://" in location else ""
+            out.append({
+                "file": row.get("file"),
+                # ACP's own durable copy. Empty when object storage was not configured when this
+                # document was remediated — see the docstring.
+                "location": location,
+                "storage": scheme or None,
+                "durable": scheme in self.DURABLE_ARTIFACT_SCHEMES,
+                # ONE authoritative artifact PER FILE is the invariant a restarted worker can
+                # break by re-running a document it had already finished. This method reports one
+                # row per file_records row; a duplicate would show as two entries with the same
+                # `file`, which is what makes that detectable from outside.
+                "authoritative": True,
+                "delivered_to_source": bool(delivered),
+                "sha256": row.get("corrected_sha256") or None,
+                "bytes": row.get("corrected_bytes") or None,
+                "remediated_at": row.get("remediated_at"),
+            })
+        return out
+
     def get_remediation_urls(self, scan_id: str, file: str,
                              owner: str | None = None) -> dict | None:
         """blob_url + drive_write_url for a remediated file's download route.
@@ -11595,6 +11660,86 @@ class Store:
                 "INSERT INTO decision_log(id,ts,actor,action,scan_id,file,rule_id,detail) "
                 "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
                 (uuid.uuid4().hex[:12], now, actor, action, scan_id, file, rule_id, detail))
+
+    # The `decision_log` actions that are PLATFORM audit, as opposed to per-document decisions.
+    # PRD §13 asks for deployment, configuration and capacity changes; §11 requires infrastructure
+    # writes to record an audit event; §15 requires an upgrade to record its deployment result.
+    #
+    # A PREFIX ALLOW-LIST, NOT A BLOCKLIST, and that is the whole security design of this pair.
+    # `decision_log` is also where per-document decisions land — rows carrying `file`, a customer's
+    # document name. A blocklist would export those the day somebody adds an action nobody thought
+    # to exclude; an allow-list exports nothing until it is deliberately named here.
+    PLATFORM_AUDIT_PREFIXES = ("deployment.", "settings.", "capacity.", "admin.")
+
+    def record_deployment_audit(self, *, version: str, commit: str | None, platform: str,
+                                profile: str, actor: str = "system") -> bool:
+        """Record that THIS RELEASE is running. Returns True when a row was written.
+
+        PRD §15 wants the deployment result in the audit trail and §20.12 wants every deployment
+        to leave a redacted, immutable record. Without this, a fresh installation's audit trail is
+        empty — and "no events" is indistinguishable from "audit logging does not work", which is
+        exactly the ambiguity an auditor cannot afford.
+
+        DEDUPED ON (version, commit), NOT ON PROCESS START. Every replica runs startup, and a
+        crash-looping pod runs it repeatedly; recording per process would turn an incident into
+        thousands of audit rows and bury the deployments among them. The event being recorded is
+        the RELEASE, so a second replica of the same release adds nothing and writes nothing.
+
+        NO SECRET CAN REACH THIS ROW: the four fields are a version string, a commit sha, and two
+        enum-shaped words from the deployment document. It writes no environment, no connection
+        string and no credential — see PRD §2.5 and §20.6.
+        """
+        marker = f"{version}@{commit or 'unknown'}"
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT detail FROM decision_log WHERE action=%s ORDER BY ts DESC LIMIT 1",
+                ("deployment.started",))
+            last = self._db.fetchone(cur)
+        if last and (last.get("detail") or "").startswith(marker):
+            return False
+        self.log_decision(
+            actor, "deployment.started",
+            detail=f"{marker} platform={platform} profile={profile}")
+        return True
+
+    def list_audit_events(self, limit: int = 100, *, since: str | None = None) -> list[dict]:
+        """Platform audit events, newest first — deployment, configuration and capacity changes.
+
+        DOCUMENT-SCOPED ROWS ARE NOT AUDIT EVENTS HERE, and this is deliberate rather than
+        incidental. `decision_log` holds both, and a per-document decision carries `file` — a
+        customer's document name. PRD §13 requires document names to stay out of exported
+        diagnostics, and this endpoint is admin-readable and lands in support tickets, so the
+        query filters to `PLATFORM_AUDIT_PREFIXES` and the returned shape carries no `file` field
+        at all. A platform row that somehow arrives with one is dropped rather than trusted.
+        """
+        clauses = " OR ".join(["action LIKE %s"] * len(self.PLATFORM_AUDIT_PREFIXES))
+        params: tuple = tuple(f"{p}%" for p in self.PLATFORM_AUDIT_PREFIXES)
+        sql = f"SELECT id,ts,actor,action,scan_id,file,detail FROM decision_log WHERE ({clauses})"
+        if since:
+            sql += " AND ts >= %s"
+            params += (since,)
+        sql += " ORDER BY ts DESC LIMIT %s"
+        params += (max(1, min(int(limit), 1000)),)
+        with self._db.cursor() as cur:
+            self._db.execute(cur, sql, params)
+            rows = self._db.fetchall(cur)
+        out = []
+        for row in rows:
+            if row.get("file"):
+                # A platform-prefixed action should never be document-scoped. If one is, it is
+                # either a mis-named action or a bug at the call site; either way it is not
+                # exported. Dropped rather than stripped, so the count stays honest about what
+                # this endpoint is willing to show.
+                continue
+            out.append({
+                "id": row.get("id"),
+                "type": row.get("action"),
+                "at": row.get("ts"),
+                "actor": row.get("actor"),
+                "scan_id": row.get("scan_id"),
+                "detail": row.get("detail"),
+            })
+        return out
 
     def list_decisions(self, scan_id: str | None = None, limit: int = 500) -> list[dict]:
         with self._db.cursor() as cur:

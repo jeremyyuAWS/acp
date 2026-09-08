@@ -829,9 +829,24 @@ def worker_restart(ctx: ScenarioContext) -> Outcome:
         if failure is not None:
             return failure
         duplicates = _duplicate_outputs(items or [])
+        authoritative = _authoritative(items or [])
         evidence[role] = {"scanId": sid, "completed": True,
-                          "authoritativeArtifacts": len(_authoritative(items or [])),
+                          "authoritativeArtifacts": len(authoritative),
                           "duplicates": duplicates}
+        if not authoritative:
+            # THE DUPLICATE HALF WAS NOT EXERCISED, so this scenario has not proved its claim.
+            # `proves` says the tier "neither loses work NOR produces a duplicate authoritative
+            # output"; with no artifacts at all, "no duplicates" is vacuously true and a `pass`
+            # would be a check that could not have failed. The lost-work half DID hold — the run
+            # completed after the restart — and that is stated rather than discarded.
+            #
+            # Reachable as soon as `/scans/{sid}/artifacts` exists: before it did, this scenario
+            # returned `unknown` at the probe itself and never got here.
+            return Outcome.unknown(
+                f"the {role} tier restarted and its work completed, so no work was lost — but the "
+                f"scan produced no authoritative artifacts, so whether a restart DUPLICATES one "
+                f"was not exercised. A discover-only run cannot answer that half.",
+                role=role, tiers=evidence)
         if duplicates:
             findings.append(f"{role}: {len(duplicates)} document(s) have two authoritative "
                             f"outputs after the restart")
