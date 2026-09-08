@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import LiveCounter from './LiveCounter.jsx'
+import RemediationWaterfallCard from './RemediationWaterfallCard.jsx'
 import { counterRows, secondaryRows, freshness, headline, integrityAffects, partitionSums } from './remediationSnapshot.js'
 import { attemptStage, milestoneCrossings, retrySeconds } from './remediationLivePanel.js'
 import ActivityPulse from './ActivityPulse.jsx'
@@ -280,7 +281,8 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
     <RetryNotice retryAt={snapshot.retry_at} now={clock} />
     <ProgressCue snapshot={snapshot} onViewMonitor={onViewMonitor} />
     <Progress snapshot={snapshot} suspect={documentCountsSuspect} />
-    <FindingReconciliation snapshot={snapshot} />
+    <RemediationWaterfallCard key={`${snapshot.scan_id || snapshot.run_id}:${snapshot.batch_id || "legacy"}`} snapshot={snapshot} paused={paused || hidden} />
+    <details className="wf-accounting"><summary>Detailed accounting and finding evidence</summary><FindingReconciliation snapshot={snapshot} /></details>
     {snapshot.phases?.length > 0 && <Disclosure title="Phases" compact={compact}><Pipeline phases={snapshot.phases} attempts={snapshot.active_attempts || []} moving={connected && snapshot.state !== 'stalled' && (snapshot.active_attempts || []).length > 0} /></Disclosure>}
     <div className="remops-two"><Workstream attempts={snapshot.active_attempts || []} generatedAt={snapshot.generated_at} compact={compact} /><Throughput snapshot={snapshot} frozen={paused || hidden} /></div>
     <Disclosure title="Fix and delivery totals" compact={compact}><Secondary snapshot={snapshot} /></Disclosure>
