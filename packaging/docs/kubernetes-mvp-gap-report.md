@@ -325,6 +325,21 @@ forced on. The comment beside it claimed the shared context "sets it true", whic
 so — a reader deciding whether this chart hardens its root filesystems would have concluded it
 does.
 
+**The cluster now upgrades as well as installs, which is a different claim.** Every way this
+chart could fail to upgrade is invisible to `helm template` AND to a first install, and each one
+strands a running installation rather than a test cluster. `spec.selector` is immutable, so a
+selector label that moves with the release installs perfectly and makes the first upgrade fail
+with a message about a field that cannot be changed. A hook Job is a named object, so without
+`before-hook-creation` in its delete policy the second release finds the first one's Job still
+there. And the migration hook is `pre-install,pre-upgrade`, so an upgrade runs it against a schema
+it has already applied — a non-idempotent migration fails there and nowhere earlier.
+
+The step changes the pod template rather than re-applying the same values, because `helm upgrade
+--wait` exits 0 for a release that replaced nothing: it sets an annotation, checks the release
+reached revision 2, and then looks for that annotation on the running pods. A render test cannot
+express "unchanged across releases" from one render, so the selector half is also asserted by
+rendering the chart at two different versions and comparing.
+
 **The disruption budget was gated on the profile name, not on what the profile runs.**
 `values.py` read `"enabled": rt["profile"] == "high-availability"` while the comment directly
 above it described the rule as replica count — and standard-production runs a FLOOR OF TWO API

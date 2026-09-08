@@ -773,6 +773,46 @@ def test_the_gpu_count_is_a_values_knob():
 
 
 @needs_helm
+def test_no_selector_label_changes_between_two_releases():
+    """`spec.selector` IS IMMUTABLE ON A DEPLOYMENT, and this is the one immutability the chart
+    can break silently.
+
+    A selector label that varies with anything — the release version, the image tag, a values
+    checksum — installs perfectly, passes every render test, and makes the FIRST UPGRADE fail:
+
+        cannot patch "acp-api": Deployment.apps "acp-api" is invalid: spec.selector: Invalid
+        value: field is immutable
+
+    An operator reads that on a running installation, with no way forward but deleting the
+    Deployment. `acp.labels` legitimately carries `app.kubernetes.io/version` and
+    `helm.sh/chart`, both of which move with a release — so the risk is one line: a template
+    selecting on `acp.labels` instead of `acp.selectorLabels`, which reads almost identically.
+
+    Rendered twice at different versions rather than inspected, because the property is
+    "unchanged across releases" and a single render cannot express it. The reference cluster now
+    performs a real `helm upgrade`, which is where this would otherwise be found.
+    """
+    doc = load_example("standard-production")
+    older = copy.deepcopy(doc)
+    older["runtime"]["version"] = "2026.1.1"
+    newer = copy.deepcopy(doc)
+    newer["runtime"]["version"] = "2029.12.31"
+
+    def selectors(document):
+        out = {}
+        for workload in render(document):
+            if workload["kind"] in ("Deployment", "StatefulSet"):
+                out[workload["metadata"]["name"]] = workload["spec"]["selector"]["matchLabels"]
+        return out
+
+    before, after = selectors(older), selectors(newer)
+    assert before, "nothing rendered; this test would prove nothing"
+    assert before == after, (
+        "a selector label moves with the release, so the first upgrade of this chart will be "
+        f"refused as an immutable-field change: {before} vs {after}")
+
+
+@needs_helm
 def test_every_spread_constraint_selects_the_pods_it_is_attached_to():
     """A TOPOLOGY CONSTRAINT WHOSE SELECTOR MATCHES NOTHING IS NOT AN ERROR.
 

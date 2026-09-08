@@ -252,6 +252,51 @@ jobs:
           print(json.dumps(drift[0], indent=2))
           PY
 
+      - name: Can it be upgraded, or only installed?
+        # AN INSTALL THAT CANNOT BE UPGRADED IS A DEMO. Every failure mode below is invisible to
+        # both `helm template` and a first install, and each one strands a running installation:
+        #
+        #   - `spec.selector` is IMMUTABLE on a Deployment. A selector label that varies with
+        #     anything — the release version, a tag, a checksum — installs perfectly and makes
+        #     every later upgrade fail with a message about a field that cannot be changed.
+        #   - A hook Job is a NAMED object. Without `before-hook-creation` in its delete policy
+        #     the second release finds the first one's Job still there and fails to create it.
+        #     Both hooks here carry the policy; this is what proves it rather than reading it.
+        #   - The migration hook runs `pre-upgrade` as well as `pre-install`, so it runs against
+        #     a schema it has already applied. A migration that is not idempotent fails HERE and
+        #     nowhere earlier.
+        #
+        # The upgrade changes the pod template (a podAnnotation) so it is a real rolling update
+        # rather than a no-op Helm reports as deployed. Requests are small enough that the surge
+        # pod fits: 600m of the runner's 4000m is in use.
+        run: |
+          set -euo pipefail
+          helm upgrade acp packaging/chart/acp \
+            --namespace "$NAMESPACE" \
+            -f /tmp/values.yaml \
+            -f packaging/reference/kind/runner-resources.yaml \
+            --set image.repository="${IMAGE%%:*}" \
+            --set image.workerRepository="${IMAGE%%:*}" \
+            --set image.tag="${IMAGE##*:}" \
+            --set image.pullPolicy=Never \
+            --set secrets.existingSecret=acp-secrets \
+            --set podAnnotations."acp\.mova\.io/upgrade-probe"="$GITHUB_RUN_ID" \
+            --wait --timeout 10m
+          kubectl -n "$NAMESPACE" rollout status deployment/acp-api --timeout=300s
+          for role in discover assess remediate; do
+            kubectl -n "$NAMESPACE" rollout status "deployment/acp-worker-$role" --timeout=300s
+          done
+          # `helm upgrade --wait` returns success for a release whose revision did not advance,
+          # so the revision is checked rather than the exit status.
+          helm -n "$NAMESPACE" history acp
+          REVISION="$(helm -n "$NAMESPACE" status acp -o json | python -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
+          test "$REVISION" -ge 2 || { echo "release is still at revision $REVISION"; exit 1; }
+          # The annotation is what made this a real rolling update. If it is not on the running
+          # pods, the upgrade replaced nothing and everything above passed vacuously.
+          kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/component=api \
+            -o jsonpath='{.items[*].metadata.annotations.acp\.mova\.io/upgrade-probe}' \
+            | grep -q "$GITHUB_RUN_ID"
+
       # ── evidence, and then nothing survives ────────────────────────────────
       - name: What the cluster looked like
         if: always()
