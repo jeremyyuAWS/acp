@@ -11,6 +11,14 @@
 # TLS. A restart loses the database, which is correct for a cluster that is deleted at the end of
 # every run and would be indefensible anywhere else. The credentials are created by the workflow
 # at install time, never committed here.
+#
+# THESE PODS CARRY A RESTRICTED SECURITY CONTEXT BECAUSE THE NAMESPACE ENFORCES ONE. The workflow
+# labels the namespace `pod-security.kubernetes.io/enforce=restricted` so the API server, and not
+# a rendered-manifest test, decides whether the chart meets the standard. Admission does not
+# exempt the pods that merely support the run: both of these images default to running as root and
+# were rejected outright the first time the label went on, twenty minutes before anything the
+# label was added to check. Relaxing the label for them would have removed the only thing making
+# the claim real, so they meet the standard instead.
 apiVersion: v1
 kind: Service
 metadata:
@@ -35,9 +43,23 @@ spec:
     metadata:
       labels: {app: acp-postgres}
     spec:
+      # uid 999 is `postgres` in the official image. `fsGroup` is what makes the emptyDir
+      # group-writable so initdb can create PGDATA inside it; without it a non-root postgres
+      # cannot write to its own mount and dies on the first start.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           image: postgres:16
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: POSTGRES_DB
               value: acpdb
@@ -92,9 +114,20 @@ spec:
     metadata:
       labels: {app: acp-redis}
     spec:
+      # uid 999 is `redis` in the alpine image. No volume, so no fsGroup is needed.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: redis
           image: redis:7-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 6379
           readinessProbe:

@@ -128,7 +128,14 @@ jobs:
           kubectl -n "$NAMESPACE" create secret generic acp-reference-data \
             --from-literal=postgres-user="$PGUSER" \
             --from-literal=postgres-password="$PGPASSWORD"
-          kubectl -n "$NAMESPACE" apply -f packaging/reference/kind/data-services.yaml
+          # `--warnings-as-errors` TURNS A LATE TIMEOUT INTO A NAMED FAILURE. Pod Security runs
+          # admission on the POD, so a Deployment whose template violates the standard is created
+          # happily and simply never produces a pod: the run dies three minutes later on
+          # `rollout status` with "0 out of 1 new replicas", and nothing to describe. The API
+          # server does say what is wrong — as a WARNING on the apply, which scrolls past. This
+          # promotes it, so the message that names the missing fields is the message that fails.
+          kubectl -n "$NAMESPACE" apply --warnings-as-errors \
+            -f packaging/reference/kind/data-services.yaml
           kubectl -n "$NAMESPACE" rollout status deployment/acp-postgres --timeout=180s
           kubectl -n "$NAMESPACE" rollout status deployment/acp-redis --timeout=120s
           # The keys are the deployment document's `secrets.refs` names; the chart projects each
