@@ -161,8 +161,9 @@ adapter, and a test must fail when a `workloadIdentity` entry produces no annota
 
 ## B — Hardening
 
-PRD §5.B checklist against the **rendered** output of `standard-production` and
-`high-availability`.
+The workstream-B hardening checklist, run against the **rendered** output of
+`standard-production` and `high-availability` rather than against template text. The requirements
+are the Kubernetes half of PRD §5.2 plus §8 (profiles), §12 (storage) and §13 (security).
 
 | # | Requirement | State | Evidence |
 |---|---|---|---|
@@ -180,7 +181,8 @@ PRD §5.B checklist against the **rendered** output of `standard-production` and
 
 **B-headline — the object-storage seam does not meet, and it fails silently.**
 `_helpers.tpl:175-181` projects each `secrets.refs` key as an uppercased env var, so
-`object-storage` arrives in every container as `OBJECT_STORAGE` (rendered lines 305, 573, 690, 807 — the API and all three workers).
+`object-storage` arrives in every container as `OBJECT_STORAGE` (rendered lines 305, 573, 690
+and 807 — the API and all three worker tiers).
 
 ```
 $ grep -rn OBJECT_STORAGE api/ engine/ deploy/ realtime_gateway/ hub/ ; echo exit=$?
