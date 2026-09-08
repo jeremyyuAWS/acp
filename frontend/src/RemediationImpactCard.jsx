@@ -22,6 +22,7 @@ const OUTLOOKS = [['could_complete', 'Could complete automatically'], ['human_wo
 const number = value => Number.isFinite(value) ? value.toLocaleString() : 'Not yet available'
 const delta = value => Number.isFinite(value) ? `${value > 0 ? '+' : ''}${value.toLocaleString()}` : 'Not yet available'
 const validPolicy = p => Number.isInteger(p?.rule_based) && p.rule_based >= 0 && p.rule_based <= 2 && Number.isInteger(p?.ai) && p.ai >= 0 && p.ai <= 3
+const validBudget = p => p?.ai_budget_usd === undefined || (/^\d{1,7}(?:\.\d{1,2})?$/.test(p.ai_budget_usd) && Number(p.ai_budget_usd) <= 1000000)
 const policyName = p => validPolicy(p) ? `${RULE_STOPS[p.rule_based][0]} · AI: ${AI_STOPS[p.ai][0]}` : 'Not yet available'
 const reasonText = reason => typeof reason === 'string' ? reason.replaceAll('_', ' ') : 'Reason not available'
 const fileType = file => {
@@ -88,15 +89,20 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     if (!runId) { setLoading(false); return }
     setLoading(true); setError('')
     const requestedPolicy = runRef.current === runId ? policy : null
+    if (!validBudget(requestedPolicy)) {
+      setLoading(false); setError('Enter an AI spending limit from $0 to $1,000,000 with at most two decimal places.')
+      return
+    }
     Promise.resolve().then(() => getRemediationImpact(runId, requestedPolicy, scopeKey === null ? undefined : JSON.parse(scopeKey))).then(result => {
       if (cancelled || request !== sequence.current) return
       setData(result)
-    }).catch(err => { if (!cancelled && request === sequence.current) { setData(null); setError(err?.message || 'The preview could not be loaded.') } })
+    }).catch(err => { if (!cancelled && request === sequence.current) { setError(err?.message || 'The preview could not be loaded.') } })
       .finally(() => { if (!cancelled && request === sequence.current) setLoading(false) })
     return () => { cancelled = true }
   }, [runId, policy, refreshKey, reload, scopeKey])
 
-  const selected = policy || (validPolicy(data?.policy) ? data.policy : { rule_based: 0, ai: 0 })
+  const basePolicy = policy || (validPolicy(data?.policy) ? data.policy : { rule_based: 0, ai: 0 })
+  const selected = data?.capabilities?.ai_budget === true ? { ai_budget_usd: '0.00', ...basePolicy } : basePolicy
   const ready = !!data && !loading && !error && data.integrity?.complete === true
   const countDeltas = useForecastDeltas({
     identity: JSON.stringify([runId, scopeKey]), ready,
@@ -154,7 +160,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     </div><div className="remediation-impact__active"><span>Active settings</span><strong>{policyName(data?.active_policy)}</strong></div></header>
     <div className="remediation-impact__split"><div className="remediation-impact__settings">
     <RemediationPlanChoices policy={selected} providers={data?.providers}
-      disabled={!validPolicy(data?.policy) || runBusy} onChange={change} />
+      disabled={!runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true} />
     <details className="remediation-impact__advanced"><summary>Advanced: individual fix permissions</summary>
     <div className="remediation-impact__controls">
       <PolicySlider title="Rule-based fixes" question="What rule-based fixes may ACP apply without approval?" stops={RULE_STOPS}
@@ -186,6 +192,12 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       {loading ? 'Calculating the impact of these settings…' : error ? `Preview unavailable. ${error}` : !runId ? 'Select an assessment to preview remediation.' : !ready ? 'The preview could not be reconciled. Counts are unavailable.' : `${number(data.lanes?.automatic?.findings)} findings eligible for automatic application. ${number(data.lanes?.review?.findings)} findings require proposal review.`}
       {notice && <span> {notice}</span>}
     </div>
+    {data?.ai_spending && <section aria-label="AI spending for the latest remediation run">
+      <h3>AI spending · Latest remediation run</h3>
+      <p>{[['Spent', 'spent_units'], ['Reserved for requests', 'held_units'], ['Remaining', 'available_units'], ['Limit', 'cap_units']].map(([label, key]) =>
+        <span key={key}>{label}: {Number.isSafeInteger(data.ai_spending[key]) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(data.ai_spending[key] / 1000000) : 'Unavailable'}{' · '}</span>)}</p>
+      <p>{data.ai_spending.blocked ? 'AI is paused while an uncertain charge or spending overrun is reconciled.' : 'Reservations cover requests that may still be charged. Infrastructure costs are separate.'}</p>
+    </section>}
     {ready && <>
       <h3>How the findings will be handled</h3>
       <div className="remediation-impact__routes">{LANES.map(([key, label]) => <button type="button" key={key}
@@ -268,7 +280,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     </div></div>
     {ready && data?.capabilities?.execute !== true && <p>Execution unavailable: {data?.capabilities?.execute_reason || data?.capabilities?.reason || 'This preview cannot currently be executed.'}</p>}
     <footer className="remediation-impact__actions"><button type="button" className="remediation-impact__run" disabled={readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
-      onClick={() => onRun(selected, data)}>{runBusy ? 'Remediation is running…' : 'Start remediation with this plan'}</button>
+      onClick={() => onRun(selected, data)}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>
       <button type="button" disabled={!validPolicy(data?.active_policy) || runBusy} onClick={() => { setPolicy({ ...data.active_policy }); setFilter(null) }}>Reset to active</button>
       <button type="button" disabled={readOnly || !ready || data?.capabilities?.save_future !== true || saving || runBusy} onClick={save}>{saving ? 'Saving…' : 'Save as default for future runs'}</button>
     </footer>

@@ -1855,6 +1855,12 @@ if _LEGACY_OWNER and "@" in _LEGACY_OWNER and all(c.isalnum() or c in ".+-_@" fo
     # disagreeing about the same scan's documents.
     _SCHEMA.append(f"UPDATE documents SET owner_email='{_LEGACY_OWNER}' WHERE owner_email IS NULL")
 
+# Managed run policy and reservation tables participate in the versioned migration;
+# dispatch never performs DDL. Kept with the bounded ledger's contract definitions.
+from ai_spending_budget import SCHEMA as _AI_SPENDING_SCHEMA
+from ai_run_policy import RUN_POLICY_SCHEMA as _AI_RUN_POLICY_SCHEMA
+_SCHEMA.extend([*_AI_SPENDING_SCHEMA, _AI_RUN_POLICY_SCHEMA])
+
 # ── Power BI read-only views (Postgres only) ────────────────────────────────
 # Three views that expose ACP scan data for Power BI DirectQuery. They are
 # created by _PgAdapter.init_schema() after the main _SCHEMA tables are ready.
@@ -2441,8 +2447,9 @@ class _PgAdapter:
     # v40 adds fenced pre-write reservations and terminal evidence to provider-effect receipts.
     # v42 adds the tenant policy, exactly-once command receipt, and immutable run-policy
     # snapshot tables. All are additive and ignored by older replicas during rolling deploys.
-    _SCHEMA_VERSION = 43
-    _SCHEMA_CHECKSUM_AT_VERSION = "1fbdfe1f7a3123867fb196e377eac853"
+    # v44 adds durable owner/run provider reservations and immutable spending policy.
+    _SCHEMA_VERSION = 44
+    _SCHEMA_CHECKSUM_AT_VERSION = "04b7282c1d8a00a0eebebe865f5a3a55"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -4741,6 +4748,7 @@ class Store:
                          "org_memory", "remediation_state", "finding_disposition",
                          "finding_disposition_event", "remediation_diff", "applied_fixes",
                          "ai_calls", "ai_validation_outcomes", "second_opinion_reservations",
+                         "ai_spending_attempts", "ai_spending_run_policies", "ai_spending_budgets",
                          "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
                          "scan_folder_completions",  # which folders of a scan were counted done
@@ -4926,6 +4934,9 @@ class Store:
                 cleared.append(t)
             # Policy actions are idempotency/audit receipts for customer changes, not the live
             # policy itself. The policy remains configuration; its historical receipts do not.
+            for t in ("ai_spending_attempts", "ai_spending_run_policies", "ai_spending_budgets"):
+                self._db.execute(cur, f"DELETE FROM {t} WHERE owner_id=%s", (owner_email,))
+                cleared.append(t)
             self._db.execute(cur, "DELETE FROM remediation_policy_action WHERE owner_email=%s",
                              (owner_email,))
             cleared.append("remediation_policy_action")
@@ -14454,6 +14465,9 @@ class Store:
         batch_id = execution_hash[:24]
         now = self._now()
         with self._db.cursor() as cur:
+            if stage == "remediate":
+                from ai_run_policy import persist_payload_policy
+                persist_payload_policy(self._db, cur, owner, scan_id, batch_id, payloads)
             if self._db.supports_skip_locked:
                 self._db.execute(cur,
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",

@@ -291,20 +291,20 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
             they are an OUTCOME of this run — and the "of 22" framing was what made them read as
             one. The count stands alone; the failures are reported below as failures. */}
         <Metric label="Documents assessed" value={m.documentsAssessed}>
-          Files where at least one selected check completed.
+          Documents where at least one accessibility check finished. This does not mean every check passed.
         </Metric>
 
         <Metric label="Documents needing attention" value={m.documentsNeedingAttention}
                 tone={m.documentsNeedingAttention ? '#B3261E' : undefined}>
-          Files with at least one unresolved finding.
+          Documents with at least one issue still to address.
         </Metric>
 
         <Metric label="Total findings" value={m.totalFindings}>
-          Individual instances, not criteria — one criterion can produce many.
+          Issues found across the documents. The same type of issue can appear more than once.
         </Metric>
 
         <div style={card}>
-          <div style={lab}>Findings by severity</div>
+          <div style={lab}>How serious are the issues?</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', marginTop: 9 }}>
             {SEVERITIES.map((s) => (
               <span key={s} style={{ fontSize: 11.5, fontVariantNumeric: 'tabular-nums',
@@ -331,20 +331,20 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           )}
         </div>
 
-        <Metric label={remediationForecast ? "Auto-fix available · plan preview" : "Auto-fix available"} value={remediationForecast ? remediationForecast.automatic : m.autoFixAvailable} tone="#2F7D32"
+        <Metric label={remediationForecast ? "Can be fixed automatically · plan preview" : "Can be fixed automatically"} value={remediationForecast ? remediationForecast.automatic : m.autoFixAvailable} tone="#2F7D32"
                 onClick={remediationForecast?.onAutomatic} delta={remediationForecast?.automaticDelta}>
-          {remediationForecast ? <>Live forecast for the selected remediation scope and settings. Eligible for application without approval. {remediationForecast.onAutomatic && <b>View details →</b>}</> : <>Findings with a deterministic remediation. Excludes AI-drafted suggestions, which need approval and are counted under review.</>}
+          {remediationForecast ? <>Issues this plan can fix using set rules, without asking you to approve each change. These fixes have not been applied yet. {remediationForecast.onAutomatic && <b>View details →</b>}</> : <>Issues with a rule-based fix available. AI suggestions are counted under review instead.</>}
         </Metric>
 
-        <Metric label={remediationForecast ? "Human review required · plan preview" : "Human review required"} value={remediationForecast ? remediationForecast.human : m.humanReviewRequired}
+        <Metric label={remediationForecast ? "Needs your review · plan preview" : "Needs your review"} value={remediationForecast ? remediationForecast.human : m.humanReviewRequired}
                 onClick={remediationForecast?.onHuman} delta={remediationForecast?.humanDelta}>
-          {remediationForecast ? <>Live forecast: proposal approvals and manual work in the selected scope. Blocked findings are listed separately below. {remediationForecast.onHuman && <b>View details →</b>}</> : <>Findings needing a person’s judgement, including every AI-drafted fix awaiting approval.</>}
+          {remediationForecast ? <>Issues that need you to approve a suggestion or make a change yourself. This includes AI suggestions. Items that cannot proceed are listed separately below. {remediationForecast.onHuman && <b>View details →</b>}</> : <>Issues that need a person to decide what to change, including AI suggestions awaiting approval.</>}
         </Metric>
 
-        <Metric label="Unable to assess" value={m.unableToAssess} unit="checks">
-          Selected checks that could not run
-          {m.unassessableCriteria.length > 0 && <> — {m.unassessableCriteria.length} criteria
-            with no method for these formats</>}. Not passes and not failures.
+        <Metric label="Checks not completed" value={m.unableToAssess} unit="checks">
+          Checks ACP could not complete
+          {m.unassessableCriteria.length > 0 && <> — {m.unassessableCriteria.length} {m.unassessableCriteria.length === 1 ? 'check type is' : 'check types are'}
+            not supported for these document formats</>}. These results are unknown, not passed or failed.
         </Metric>
 
         {/* Board 4's 8th cell — the shape of the grid states what is NOT here as loudly as what is.
@@ -352,13 +352,12 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
             and naming the decision on the screen is what stops "where's the percentage?" becoming a
             request to reinstate one. No value — this cell is an explanation, not a metric. */}
         <div style={{ ...card, background: 'transparent', borderStyle: 'dashed' }}>
-          <div style={lab}>Deliberately absent</div>
+          <div style={lab}>Why there is no overall score</div>
           <div style={{ fontSize: 13, marginTop: 8, lineHeight: 1.5 }}>
-            No accessibility score · no percentages · no time-per-person estimate.
+            A single score could hide an important issue.
           </div>
           <div style={sub}>
-            A single score lets a critical failure average away behind passes, and cannot tell
-            “checked and passed” from “not checked” — the one distinction this screen exists to make.
+            We show issues and unfinished checks separately so you can see what still needs attention.
           </div>
         </div>
       </div>

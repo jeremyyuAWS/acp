@@ -130,9 +130,20 @@ def test_langfuse_scope_leaves_blobs_untouched(monkeypatch, isolated_store):
 
 
 def _schema_tables() -> set[str]:
-    """Every table the schema defines, parsed from store.py's CREATE TABLE statements."""
-    src = (Path(store_mod.__file__)).read_text()
+    """Include composed migrations and tables created by Store outside _SCHEMA.
+
+    Imported DDL is part of the actual migration even when its CREATE text is not
+    written literally in store.py. Keep the source scan too: migration bookkeeping
+    tables created outside _SCHEMA must still receive a reset classification.
+    """
+    src = (Path(store_mod.__file__)).read_text() + "\n" + "\n".join(store_mod._SCHEMA)
     return set(re.findall(r"CREATE TABLE (?:IF NOT EXISTS )?([a-zA-Z_]+)", src))
+
+
+def test_schema_inventory_includes_composed_migrations(monkeypatch):
+    monkeypatch.setattr(store_mod, "_SCHEMA", [*store_mod._SCHEMA,
+        "CREATE TABLE IF NOT EXISTS composed_customer_records (id TEXT)"])
+    assert "composed_customer_records" in _schema_tables()
 
 
 def test_reset_leaves_no_customer_data(isolated_store):
@@ -157,7 +168,8 @@ def test_reset_leaves_no_customer_data(isolated_store):
         f"data (add to _ANALYTICS_TABLES) or config (add to _CONFIG_SURVIVORS): {sorted(unclassified)}")
 
     # 3) The data the customer specifically asked to be gone is provably wiped.
-    for must_wipe in ("scan_inventory", "scan_decisions", "disposition_audit", "org_memory"):
+    for must_wipe in ("scan_inventory", "scan_decisions", "disposition_audit", "org_memory",
+                      "ai_spending_attempts", "ai_spending_budgets", "ai_spending_run_policies"):
         assert must_wipe in wiped, f"{must_wipe} must be wiped by RESET but isn't"
 
 

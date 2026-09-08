@@ -21,6 +21,7 @@ class ImpactPreviewRequest(BaseModel):
     scope: list[StrictStr] | None = None
     rule_based: StrictInt | None = Field(default=None, ge=0, le=2)
     ai: StrictInt | None = Field(default=None, ge=0, le=3)
+    ai_budget_usd: StrictStr | None = Field(default=None, pattern=r'^\d{1,7}(?:\.\d{1,2})?$', max_length=10)
 
 
 class ImpactSaveRequest(ImpactPreviewRequest):
@@ -41,8 +42,14 @@ def remediation_impact_preview(sid: str, body: ImpactPreviewRequest, request: Re
     import core
     from remediation_impact import build_run_impact, provider_summary
     selected = body.model_dump(exclude_none=True, exclude={'scope'})
-    if selected and len(selected) != 2:
+    if selected and not {'rule_based', 'ai'}.issubset(selected):
         raise HTTPException(422, 'Both rule_based and ai are required.')
+    if selected:
+        from remediation_impact_settings import normalize_policy
+        try:
+            selected = normalize_policy(selected)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     response.headers['Cache-Control'] = 'no-store'
     try:
         result = build_run_impact(core.store, sid, _impact_owner(request), selected or None, scope=body.scope)
@@ -63,6 +70,21 @@ def remediation_impact_policy(sid: str, request: Request, response: Response):
     return read_impact_policy(core.store, owner)
 
 
+@router.get('/scans/{sid}/remediation/budget/{run_id}')
+def remediation_run_budget(sid: str, run_id: str, request: Request, response: Response):
+    import core
+    from ai_run_policy import read_run_budget
+    owner = _impact_owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, 'scan not found')
+    result = read_run_budget(core.store, owner, sid, run_id)
+    if result is None:
+        raise HTTPException(404, 'Managed AI budget not found for this run.')
+    response.headers['Cache-Control'] = 'no-store'
+    # All amounts are integer micro-USD. No provider credentials are returned.
+    return result
+
+
 @router.post('/scans/{sid}/remediation/impact-policy')
 def save_remediation_impact_policy(sid: str, body: ImpactSaveRequest, request: Request):
     import core
@@ -72,7 +94,7 @@ def save_remediation_impact_policy(sid: str, body: ImpactSaveRequest, request: R
         raise HTTPException(404, 'scan not found')
     try:
         return save_impact_policy(core.store, owner, owner,
-                                  {'rule_based': body.rule_based, 'ai': body.ai}, body.expected_revision)
+                                  body.model_dump(exclude_none=True, exclude={'scope', 'expected_revision'}), body.expected_revision)
     except ImpactPolicyConflict as exc:
         raise HTTPException(409, {'message': 'Policy changed. Reload and try again.', 'current': exc.current}) from exc
     except ValueError as exc:

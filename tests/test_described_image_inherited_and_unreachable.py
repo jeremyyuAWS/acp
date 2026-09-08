@@ -65,7 +65,7 @@ needs_ocr = pytest.mark.skipif(not _ocr_ready(),
 
 def _font():
     from PIL import ImageFont
-    for pat in ("/usr/share/fonts/**/DejaVuSans.ttf", "/usr/share/fonts/**/*.ttf"):
+    for pat in ("/usr/share/fonts/**/DejaVuSans.ttf", "/usr/share/fonts/**/*.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf"):
         hits = glob.glob(pat, recursive=True)
         if hits:
             return ImageFont.truetype(hits[0], 34)
