@@ -20,6 +20,10 @@ const delta = value => Number.isFinite(value) ? `${value > 0 ? '+' : ''}${value.
 const validPolicy = p => Number.isInteger(p?.rule_based) && p.rule_based >= 0 && p.rule_based <= 2 && Number.isInteger(p?.ai) && p.ai >= 0 && p.ai <= 3
 const policyName = p => validPolicy(p) ? `${RULE_STOPS[p.rule_based][0]} · AI: ${AI_STOPS[p.ai][0]}` : 'Not yet available'
 const reasonText = reason => typeof reason === 'string' ? reason.replaceAll('_', ' ') : 'Reason not available'
+const fileType = file => {
+  const match = String(file || '').trim().match(/\.([^.\/]+)$/)
+  return match ? match[1].toLowerCase() : 'other'
+}
 
 function PolicySlider({ title, question, stops, value, onChange, disabled, maxLevel = stops.length - 1 }) {
   const id = useId()
@@ -59,7 +63,9 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const [notice, setNotice] = useState('')
   const [saving, setSaving] = useState(false)
   const [filter, setFilter] = useState(null)
-  useEffect(() => { setSelectedFile(null); setAssignmentOpen(false); setAssignmentResult(null); setAssignmentError('') }, [filter, scopeKey, runId])
+  const [fileSearch, setFileSearch] = useState('')
+  const [fileTypeFilter, setFileTypeFilter] = useState('all')
+  useEffect(() => { setSelectedFile(null); setAssignmentOpen(false); setAssignmentResult(null); setAssignmentError(''); setFileSearch(''); setFileTypeFilter('all') }, [filter, scopeKey, runId])
   const sequence = useRef(0)
   const runRef = useRef(runId)
   // A run switch must not submit the previous run's edited policy.
@@ -81,7 +87,12 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const selected = policy || (validPolicy(data?.policy) ? data.policy : { rule_based: 0, ai: 0 })
   const ready = !!data && !loading && !error && data.integrity?.complete === true
   const change = (key, value) => { setNotice(''); setFilter(null); setPolicy(current => ({ ...(current || selected), [key]: value })) }
-  const filteredFiles = (data?.files || []).filter(file => !filter || filter.type === 'all' || (filter.type === 'outlook' ? file.outlook === filter.key : file[filter.key] > 0))
+  const categoryFiles = (data?.files || []).filter(file => !filter || filter.type === 'all' || (filter.type === 'outlook' ? file.outlook === filter.key : file[filter.key] > 0))
+  const fileTypes = [...new Set(categoryFiles.map(file => fileType(file.file)))].sort()
+  const searchText = fileSearch.trim().toLowerCase()
+  const filteredFiles = categoryFiles.filter(file =>
+    (!searchText || String(file.file || '').toLowerCase().includes(searchText)) &&
+    (fileTypeFilter === 'all' || fileType(file.file) === fileTypeFilter))
   const reasons = Object.values((data?.findings || []).filter(row => row.lane !== 'automatic').reduce((groups, row) => {
     const key = row.primary_reason || 'reason_unavailable'
     const group = groups[key] ||= { reason: key, findings: 0, files: new Set() }
@@ -161,11 +172,27 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       </details>
       <button type="button" onClick={() => setFilter({ type: 'all', label: 'All affected files' })}>Inspect affected files</button>
       {filter && <div className="remediation-impact__drilldown"><div className="remediation-impact__header"><h3>{filter.label}</h3><button type="button" onClick={() => setFilter(null)}>Close details</button></div>
+        <div className="remediation-impact__file-filters" role="search" aria-label="Filter affected files">
+          <label>Search by name
+            <input type="search" value={fileSearch} placeholder="Search files…"
+              onChange={event => setFileSearch(event.target.value)} />
+          </label>
+          <label>File type
+            <select value={fileTypeFilter} onChange={event => setFileTypeFilter(event.target.value)}>
+              <option value="all">All file types</option>
+              {fileTypes.map(type => <option key={type} value={type}>{type === 'other' ? 'Other' : type.toUpperCase()}</option>)}
+            </select>
+          </label>
+          <span className="remediation-impact__file-count" role="status" aria-live="polite">
+            {number(filteredFiles.length)} of {number(categoryFiles.length)} files
+          </span>
+          {(fileSearch || fileTypeFilter !== 'all') && <button type="button" onClick={() => { setFileSearch(''); setFileTypeFilter('all') }}>Clear filters</button>}
+        </div>
         {filteredFiles.length ? <div className="remediation-impact__table-wrap"><table><caption>Files in this preview category</caption>
           <thead><tr><th>File</th><th>Open findings</th><th>Automatic</th><th>Review</th><th>Manual</th><th>Blocked</th></tr></thead>
           <tbody>{filteredFiles.map((file, index) => <tr key={`${file.file}-${index}`}><th scope="row"><button type="button" onClick={() => setSelectedFile(file.file)}>{file.file || 'Unnamed file'}</button></th>
             <td>{number(file.findings)}</td><td>{number(file.automatic)}</td><td>{number(file.review)}</td><td>{number(file.manual)}</td><td>{number(file.blocked)}</td></tr>)}</tbody>
-        </table></div> : <p>No file details were returned for this category.</p>}
+        </table></div> : <p>No files match these filters.</p>}
         {selectedFile && <div className="remediation-impact__file-findings"><h4>Finding paths: {selectedFile}</h4><ul>{(data.findings || []).filter(row => row.file === selectedFile).map((row, index) => <li key={row.id || index}><strong>{row.rule_id || row.criterion || 'Finding'}</strong> · {number(row.finding_count)} findings → {LANES.find(([key]) => key === row.lane)?.[1] || 'Route unavailable'}<br />{reasonText(row.primary_reason)}. Next action: {row.lane === 'automatic' ? 'Apply the eligible fix, then verify.' : row.lane === 'review' ? 'Review the proposal before application.' : row.lane === 'manual' ? 'Edit the source or request an accessibility judgment.' : 'Investigate the blocker before remediation.'}</li>)}</ul></div>}
         <button type="button" disabled={readOnly || assigning || !humanFiles.length || data?.capabilities?.assign !== true}
           onClick={() => { setAssignmentFiles(humanFiles.map(file => file.file)); setAssignee(myEmail); setAssignmentOpen(true); setAssignmentResult(null); setAssignmentError('') }}>Assign human work</button>

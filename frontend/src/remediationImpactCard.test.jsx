@@ -59,6 +59,37 @@ describe('RemediationImpactCard', () => {
     expect(container.querySelector('.remediation-impact__drilldown').textContent).toContain('A.docx')
     expect(container.textContent).toContain('human judgment')
   })
+  it('filters affected files by filename and file type with a visible result count', async () => {
+    getRemediationImpact.mockResolvedValue({ ...result(), files: [
+      { file: 'Clinical Policy.pdf', findings: 3, automatic: 1, review: 2, manual: 0, blocked: 0, outlook: 'human_work' },
+      { file: 'Clinical Training.pptx', findings: 2, automatic: 2, review: 0, manual: 0, blocked: 0, outlook: 'could_complete' },
+      { file: 'Finance Policy.docx', findings: 2, automatic: 0, review: 2, manual: 0, blocked: 0, outlook: 'human_work' },
+    ] })
+    const { container } = await mount()
+    await act(async () => button(container, 'Inspect affected files').click())
+    const search = container.querySelector('input[type=search]')
+    const type = container.querySelector('select')
+    expect([...type.options].map(option => option.textContent)).toEqual(['All file types', 'DOCX', 'PDF', 'PPTX'])
+    expect(container.textContent).toContain('3 of 3 files')
+
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(search, 'clinical')
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.textContent).toContain('2 of 3 files')
+    expect(container.textContent).not.toContain('Finance Policy.docx')
+
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(type, 'pdf')
+      type.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(container.textContent).toContain('1 of 3 files')
+    expect(container.textContent).toContain('Clinical Policy.pdf')
+    expect(container.textContent).not.toContain('Clinical Training.pptx')
+
+    await act(async () => button(container, 'Clear filters').click())
+    expect(container.textContent).toContain('3 of 3 files')
+  })
   it('ignores stale responses from earlier slider positions', async () => {
     const { container } = await mount(); let resolveOld
     getRemediationImpact.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve }))
