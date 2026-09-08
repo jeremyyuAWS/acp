@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from .backend import ExecutionBackend, NotAuthorized
+from .backend import ExecutionBackend, NotAuthorized, SubprocessBackend
 from .context import ArtifactSink, ScenarioContext
 from .report import (Outcome, ScenarioResult, assert_no_secrets, build_report)
 from .scenarios import REGISTRY, Scenario, mandatory_for
@@ -63,6 +63,19 @@ def run_scenario(scn: Scenario, ctx: ScenarioContext) -> ScenarioResult:
         artifacts=tuple(outcome.artifacts), evidence=dict(outcome.evidence))
 
 
+def is_synthetic(backend: ExecutionBackend) -> bool:
+    """Did this run touch a real target?
+
+    THE TEST IS ALLOW-LIST SHAPED — only the backend that actually shells out and speaks HTTP
+    counts as real — because the failure directions are not symmetric. Marking a real run
+    synthetic loses a certification and somebody re-runs it; marking a synthetic run real puts
+    `mvpEligible: true` on a document that measured nothing, and that one is not self-correcting.
+    A future backend (a recorded transcript, a dry-run mode) is therefore synthetic until it is
+    deliberately added here.
+    """
+    return not isinstance(backend, SubprocessBackend)
+
+
 def run_suite(*, target: Target, backend: ExecutionBackend,
               artifacts: ArtifactSink | None = None,
               scenario_ids: Sequence[str] | None = None) -> SuiteRun:
@@ -87,7 +100,8 @@ def run_suite(*, target: Target, backend: ExecutionBackend,
         scenario_ids=[s.id for s in chosen],
         mandatory_for_mvp=mandatory_for("mvp"),
         mandatory_for_supported=mandatory_for("supported"),
-        started_at=started_at, finished_at=finished_at)
+        started_at=started_at, finished_at=finished_at,
+        synthetic=is_synthetic(backend))
 
     # THE LAST THING BEFORE ANYONE SEES IT. Scenario evidence is written by ten functions and may
     # one day carry a response body or a command's stderr; the grep is what catches a credential

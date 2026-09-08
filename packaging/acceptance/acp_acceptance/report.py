@@ -141,8 +141,24 @@ def summarize(results: Sequence[ScenarioResult], mandatory: Iterable[str]) -> di
 
 
 def support_claim(results: Sequence[ScenarioResult], *, mandatory_for_mvp: Sequence[str],
-                  mandatory_for_supported: Sequence[str]) -> dict[str, Any]:
-    """The two eligibility booleans and the reason, derived from states alone.
+                  mandatory_for_supported: Sequence[str],
+                  synthetic: bool = True) -> dict[str, Any]:
+    """The two eligibility booleans and the reason.
+
+    A SYNTHETIC RUN IS NEVER ELIGIBLE, and this is the first thing the function decides. Ten
+    scenarios passing against the fake backend establishes that the suite works; it establishes
+    nothing whatsoever about any target, because there was no target. Yet the artifact it produces
+    is a valid ACPAcceptanceReport, and `supportClaim.mvpEligible: true` is exactly the line
+    somebody pastes into a status update — where the only things marking it as a simulation were
+    a target name and a distribution string that nobody scanning the claim block would read.
+
+    PRD §7 requires a target to pass the acceptance, upgrade, restore and recovery gates before it
+    is called supported. A self-test passes none of them, however green it looks. So `synthetic`
+    forces both booleans false and says why, and it DEFAULTS TO TRUE: if a caller ever leaves the
+    question ambiguous, the safe direction is to under-claim.
+
+    The scenario states stay `pass` — they did pass, and that is the whole point of the self-test.
+    Eligibility is a claim about a target; a state is a fact about a run.
 
     `supportedEligible` requires the MVP set as well as its own: `supported` is a superset claim,
     and a target that could restore a backup but cannot register a worker is not supported by any
@@ -175,6 +191,15 @@ def support_claim(results: Sequence[ScenarioResult], *, mandatory_for_mvp: Seque
     else:
         reason = ("every mandatory scenario passed for both claims on this target and this "
                   "release")
+
+    if synthetic:
+        return {
+            "mvpEligible": False,
+            "supportedEligible": False,
+            "reason": ("ran against the fake backend: this report exercises the report format and "
+                       "the scenario registry, and is not acceptance evidence for any target. "
+                       "What the scenarios themselves did: " + reason),
+        }
     return {"mvpEligible": mvp_eligible, "supportedEligible": supported_eligible, "reason": reason}
 
 
@@ -194,15 +219,26 @@ def _name_states(ids: Sequence[str], by_id: dict[str, str]) -> str:
 
 def build_report(*, target, results: Sequence[ScenarioResult], scenario_ids: Sequence[str],
                  mandatory_for_mvp: Sequence[str], mandatory_for_supported: Sequence[str],
-                 started_at: datetime, finished_at: datetime,
+                 started_at: datetime, finished_at: datetime, synthetic: bool = True,
                  suite_version: str = SUITE_VERSION) -> dict[str, Any]:
-    """Assemble the report. Pure: it reads results and a target, and touches nothing."""
+    """Assemble the report. Pure: it reads results and a target, and touches nothing.
+
+    `synthetic` DEFAULTS TO TRUE, and the default is the safe direction rather than the common
+    one. A caller that forgets the argument produces a report that under-claims; a default of
+    false would produce one that reads as real acceptance evidence because somebody omitted a
+    keyword. The schema makes the field required for the same reason: a consumer must never have
+    to decide what an absent `synthetic` meant.
+    """
     release = target.release
     duration = (finished_at - started_at).total_seconds()
     mandatory_all = list(dict.fromkeys(list(mandatory_for_mvp) + list(mandatory_for_supported)))
     return {
         "apiVersion": REPORT_API_VERSION,
         "kind": REPORT_KIND,
+        # True whenever the run did not touch a real target. Top-level rather than tucked inside
+        # `target`, because it qualifies the whole document — every timing, every piece of
+        # evidence and both eligibility booleans below.
+        "synthetic": bool(synthetic),
         "target": target.as_report_block(),
         "release": {
             "version": release.version,
@@ -223,7 +259,7 @@ def build_report(*, target, results: Sequence[ScenarioResult], scenario_ids: Seq
         "summary": summarize(results, mandatory_all),
         "supportClaim": support_claim(
             results, mandatory_for_mvp=mandatory_for_mvp,
-            mandatory_for_supported=mandatory_for_supported),
+            mandatory_for_supported=mandatory_for_supported, synthetic=bool(synthetic)),
     }
 
 

@@ -17,6 +17,10 @@ EXIT CODES, and the distinction between 1 and 2 is the point:
         retryable one. Same meaning `acpctl doctor` gives its exit 2.
     3   usage error, an unreadable descriptor, or a report that does not satisfy its own schema.
 
+`--self-test` exits 0 when the ten scenarios pass, and that 0 means THE SUITE WORKS — never that
+a target is eligible. A synthetic run's report forces both eligibility booleans false whatever the
+scenarios did; see report.support_claim.
+
 Collapsing 1 and 2 into "non-zero" would make a CI gate treat "your cluster loses work when a
 worker restarts" and "you did not grant fault injection" as the same event, and the second is not
 a defect in anything.
@@ -47,12 +51,14 @@ EXIT_OK, EXIT_MANDATORY_FAILURE, EXIT_COULD_NOT_RUN, EXIT_USAGE = 0, 1, 2, 3
 # execute — the point of the mode is to exercise the WHOLE suite and the report format, including
 # the destructive scenarios that no real target can be asked to host casually.
 #
-# ITS NAME AND DISTRIBUTION SAY WHAT IT IS, in the report's own target block. A self-test report
-# is a valid ACPAcceptanceReport that will happily say `mvpEligible: true` — because the fake
-# target passes — and the only thing standing between that file and somebody pasting it into a
-# certification matrix is that it says `self-test` / `fake-backend` where the cluster's name
-# should be. That is deliberate: the alternative, a self-test that produces an invalid or
-# deliberately-failing report, would not exercise the format at all.
+# ITS NAME AND DISTRIBUTION SAY WHAT IT IS — and that is the WEAKEST of the three markers, which
+# is why there are three. A self-test report is a valid ACPAcceptanceReport, and a reader scanning
+# `supportClaim` would never see a target name; the first draft of this file emitted
+# `mvpEligible: true` from a run that measured nothing. So the report also carries
+# `synthetic: true` at the top level (required by the schema), and support_claim forces both
+# eligibility booleans false while it is set. The scenario states stay `pass`, because they did
+# pass and exercising them is the entire point: a self-test that produced a deliberately-failing
+# report would not exercise the format at all.
 SELF_TEST_TARGET = Target(
     name="self-test",
     platform="kubernetes",
@@ -113,10 +119,18 @@ def _print_registry() -> None:
 
 def _render(report: dict) -> str:
     mark = {"pass": "PASS", "fail": "FAIL", "skip": "SKIP", "unknown": "????"}
-    lines = [f"target: {report['target']['name']} "
+    lines = []
+    if report.get("synthetic", True):
+        # SAID FIRST, AND SAID ON THE TERMINAL. The report file carries `synthetic: true` and a
+        # supportClaim that refuses both claims, but a run is usually read as ten green lines in a
+        # scrollback and remembered an hour later. "mvpEligible: true" glimpsed there is how a
+        # simulation becomes a status update.
+        lines += ["SYNTHETIC RUN — the fake backend, not a cluster. This exercises the suite and "
+                  "the report format; it is not acceptance evidence for any target.", ""]
+    lines += [f"target: {report['target']['name']} "
              f"({report['target']['platform']}/{report['target']['distribution'] or 'n/a'}), "
              f"release {report['release']['version'] or 'unknown'}"
-             f"{'' if report['release']['pinned'] else ' (NOT pinned by digest)'}", ""]
+              f"{'' if report['release']['pinned'] else ' (NOT pinned by digest)'}", ""]
     for entry in report["scenarios"]:
         lines.append(f"  [{mark[entry['state']]}] {entry['id']}: {entry['detail']}")
     s = report["summary"]

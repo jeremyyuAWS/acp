@@ -8,6 +8,7 @@
   "required": [
     "apiVersion",
     "kind",
+    "synthetic",
     "target",
     "release",
     "suite",
@@ -25,6 +26,10 @@
     },
     "kind": {
       "const": "ACPAcceptanceReport"
+    },
+    "synthetic": {
+      "description": "True whenever the run did not touch a real target — a --self-test run against the fake backend, or any other simulated execution. REQUIRED, so a report can never read as real acceptance evidence because a producer omitted the field, and supportClaim.mvpEligible/supportedEligible are forced false while it is true. Ten scenarios passing against a fake backend establishes that the suite works and nothing whatsoever about any target; PRD S7 requires a target to pass the acceptance, upgrade, restore and recovery gates before it is called supported.",
+      "type": "boolean"
     },
     "target": {
       "$ref": "#/$defs/target"
@@ -69,7 +74,13 @@
       "description": "What the suite ran against. Deliberately five fields and no more: this block is an ALLOW-LIST built by Target.as_report_block(), not a serialisation of the descriptor, so that a kubeconfig context or a bearer token cannot arrive here by being added to the descriptor later.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "platform", "distribution", "kubernetesVersion", "namespace"],
+      "required": [
+        "name",
+        "platform",
+        "distribution",
+        "kubernetesVersion",
+        "namespace"
+      ],
       "properties": {
         "name": {
           "description": "The operator's name for this target. Appears in the certification matrix, so it must identify one cluster rather than a class of them.",
@@ -78,7 +89,14 @@
         },
         "platform": {
           "description": "The acp-deployment platform this target belongs to. Same vocabulary as packaging/schema/acp-deployment.schema.json, so a report and a deployment document can be matched up.",
-          "enum": ["azure", "aws", "gcp", "kubernetes", "onprem", "compose"]
+          "enum": [
+            "azure",
+            "aws",
+            "gcp",
+            "kubernetes",
+            "onprem",
+            "compose"
+          ]
         },
         "distribution": {
           "description": "The Kubernetes distribution: aks, eks, gke, k3s, rke2, openshift, kind, or empty for a Compose target. Recorded because PRD S4 excludes 'arbitrary Kubernetes distributions without passing certification tests' — the distribution is part of what was certified, not incidental.",
@@ -96,7 +114,12 @@
       "description": "Exactly what was running. PRD S5.1 requires digests rather than mutable tags, and a certification run against a tag certifies whatever was in the registry that afternoon.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "revision", "pinned", "components"],
+      "required": [
+        "version",
+        "revision",
+        "pinned",
+        "components"
+      ],
       "properties": {
         "version": {
           "type": "string"
@@ -122,7 +145,10 @@
     "component": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["repository", "digest"],
+      "required": [
+        "repository",
+        "digest"
+      ],
       "properties": {
         "repository": {
           "type": "string"
@@ -137,7 +163,12 @@
       "description": "Which suite produced this report and what it considered mandatory. Archived reports must not silently inherit a later suite's stricter definition of 'supported', so the mandatory lists travel WITH the results rather than being looked up when the report is read.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "scenarioIds", "mandatoryForMvp", "mandatoryForSupported"],
+      "required": [
+        "version",
+        "scenarioIds",
+        "mandatoryForMvp",
+        "mandatoryForSupported"
+      ],
       "properties": {
         "version": {
           "type": "string",
@@ -171,7 +202,16 @@
     "scenario": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "state", "startedAt", "durationSeconds", "detail", "artifacts", "evidence"],
+      "required": [
+        "id",
+        "title",
+        "state",
+        "startedAt",
+        "durationSeconds",
+        "detail",
+        "artifacts",
+        "evidence"
+      ],
       "properties": {
         "id": {
           "type": "string",
@@ -183,7 +223,12 @@
         },
         "state": {
           "description": "pass | fail | skip | unknown. skip means the TARGET cannot host this scenario; unknown means the SUITE could not establish an answer. Neither is a pass, and they are separate because an operator does different work about each.",
-          "enum": ["pass", "fail", "skip", "unknown"]
+          "enum": [
+            "pass",
+            "fail",
+            "skip",
+            "unknown"
+          ]
         },
         "startedAt": {
           "$ref": "#/$defs/timestamp"
@@ -212,24 +257,48 @@
     "summary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["pass", "fail", "skip", "unknown", "mandatoryFailures"],
+      "required": [
+        "pass",
+        "fail",
+        "skip",
+        "unknown",
+        "mandatoryFailures"
+      ],
       "properties": {
-        "pass": {"type": "integer", "minimum": 0},
-        "fail": {"type": "integer", "minimum": 0},
-        "skip": {"type": "integer", "minimum": 0},
-        "unknown": {"type": "integer", "minimum": 0},
+        "pass": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fail": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skip": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unknown": {
+          "type": "integer",
+          "minimum": 0
+        },
         "mandatoryFailures": {
           "description": "Every mandatory scenario id that did not PASS, whatever the reason — skipped and unknown included. The per-scenario state says which it was. Listing only genuine failures here would produce the contradiction that makes a report unreadable: zero failures, no eligibility, and nothing connecting the two.",
           "type": "array",
           "uniqueItems": true,
-          "items": {"type": "string"}
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
     "supportClaim": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mvpEligible", "supportedEligible", "reason"],
+      "required": [
+        "mvpEligible",
+        "supportedEligible",
+        "reason"
+      ],
       "properties": {
         "mvpEligible": {
           "description": "Every scenario in suite.mandatoryForMvp has state 'pass'. Nothing else makes this true.",

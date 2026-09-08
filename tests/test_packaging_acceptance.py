@@ -226,12 +226,59 @@ def test_the_synthetic_fixtures_the_suite_names_actually_exist():
 
 # ── the eligibility rule — the point of the whole artifact ────────────────────
 
-def test_all_passing_is_eligible_for_both_claims():
+def test_all_passing_against_a_real_target_is_eligible_for_both_claims():
     claim = support_claim(results(*[PASS] * 10),
                           mandatory_for_mvp=EXPECTED_MVP,
-                          mandatory_for_supported=EXPECTED_SUPPORTED)
+                          mandatory_for_supported=EXPECTED_SUPPORTED,
+                          synthetic=False)
     assert claim == {"mvpEligible": True, "supportedEligible": True, "reason": claim["reason"]}
     assert "passed" in claim["reason"]
+
+
+def test_a_fully_passing_synthetic_run_is_eligible_for_nothing():
+    """THE TEST THAT STOPS SOMEBODY "FIXING" THE APPARENT INCONSISTENCY.
+
+    Ten green scenarios and `mvpEligible: false` looks like a bug until you know what a synthetic
+    run is: the fake backend passing its own fixtures establishes that the suite works and nothing
+    at all about any target. PRD §7 requires a target to pass the acceptance, upgrade, restore and
+    recovery gates before it is called supported, and a self-test passes none of them.
+
+    The first draft of this suite got it wrong in the dangerous direction: a run that measured
+    nothing emitted `mvpEligible: true`, distinguished from real evidence only by a target name
+    that nobody scanning `supportClaim` would read.
+    """
+    run, _ = run_fake()
+    assert run.report["synthetic"] is True
+    assert {e["state"] for e in run.report["scenarios"]} == {PASS}
+    claim = run.report["supportClaim"]
+    assert claim["mvpEligible"] is False
+    assert claim["supportedEligible"] is False
+    assert "fake backend" in claim["reason"]
+    # What the scenarios did is still reported — the states are facts about the run, and the
+    # reason keeps them so the file is not merely a refusal.
+    assert "every mandatory scenario passed" in claim["reason"]
+
+
+def test_synthetic_defaults_to_true_where_it_is_ambiguous():
+    """The safe direction is to under-claim. A caller that forgets the argument produces a report
+    that refuses a claim; a default of false would mint acceptance evidence out of an omission —
+    and the schema makes the field required so a consumer never has to guess what absent meant."""
+    claim = support_claim(results(*[PASS] * 10), mandatory_for_mvp=EXPECTED_MVP,
+                          mandatory_for_supported=EXPECTED_SUPPORTED)
+    assert claim["mvpEligible"] is False
+    assert "synthetic" in report_mod.load_schema()["required"]
+
+
+def test_only_the_real_backend_counts_as_a_non_synthetic_run():
+    """An allow-list, because the two mistakes are not symmetric: marking a real run synthetic
+    loses a certification and somebody re-runs it, while marking a synthetic run real puts
+    `mvpEligible: true` on a document that measured nothing — and that one does not correct
+    itself. A backend added later is synthetic until somebody deliberately says otherwise.
+    """
+    from acp_acceptance.backend import SubprocessBackend
+    from acp_acceptance.runner import is_synthetic
+    assert is_synthetic(fake.FakeBackend(fake.world())) is True
+    assert is_synthetic(SubprocessBackend(base_url="https://acp.invalid")) is False
 
 
 def test_one_mandatory_failure_costs_the_claim():
@@ -370,8 +417,14 @@ def test_a_self_test_run_makes_no_real_subprocess_or_network_call(monkeypatch, t
     code = run_mod.main(["--self-test", "--out", str(out), "--quiet"])
     assert code == 0
     report = json.loads(out.read_text(encoding="utf-8"))
-    assert report["supportClaim"]["mvpEligible"] is True
     assert report_mod.validate_report(report) == []
+    # A synthetic run claims nothing, however green it is — see
+    # test_a_fully_passing_synthetic_run_is_eligible_for_nothing. What this test is about is that
+    # the run happened at all without a cluster, a network, kubectl or helm.
+    assert report["synthetic"] is True
+    assert report["supportClaim"]["mvpEligible"] is False
+    assert report["supportClaim"]["supportedEligible"] is False
+    assert {e["state"] for e in report["scenarios"]} == {PASS}
 
 
 def test_the_backend_refuses_a_mutation_the_descriptor_did_not_grant():
@@ -581,10 +634,17 @@ def test_an_unset_environment_variable_is_an_error_not_an_empty_credential(monke
 # ── the command line ──────────────────────────────────────────────────────────
 
 def test_self_test_exits_zero_and_writes_a_valid_report(tmp_path, capsys):
+    """Exit 0 here means THE SUITE WORKS, not that anything is eligible — and the terminal says
+    which, on its first line, because a run is usually remembered as the green lines somebody
+    glanced at an hour ago."""
     out = tmp_path / "report.json"
     assert run_mod.main(["--self-test", "--out", str(out)]) == 0
-    assert report_mod.validate_report(json.loads(out.read_text(encoding="utf-8"))) == []
-    assert "mvpEligible: true" in capsys.readouterr().out
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report_mod.validate_report(report) == []
+    printed = capsys.readouterr().out
+    assert "SYNTHETIC RUN" in printed
+    assert "mvpEligible: false" in printed
+    assert "fake backend" in printed
 
 
 def test_a_mandatory_failure_and_a_could_not_run_have_different_exit_codes(tmp_path):

@@ -1042,10 +1042,17 @@ def test_install_is_no_longer_advertised_as_unimplemented():
 def test_upgrade_and_rollback_are_still_refused():
     """The phase boundary, asserted rather than trusted. `install` landing must not have quietly
     switched on the phase-5 commands, whose stubs are what stop an operator believing a backup
-    ran."""
+    ran.
+
+    support-bundle WAS in this set and has been removed from it, because it is implemented now
+    (PRD S5.D.6) — not because the assertion was in the way. The distinction matters: the four
+    named below are the ones that would silently mislead if stubbed out badly, and a `backup`
+    that exits 0 having done nothing is the specific failure this guards. support-bundle now has
+    its own tests; leaving it here would assert that a working command is broken.
+    """
     from acpctl.cli import NOT_YET_IMPLEMENTED
-    assert {"upgrade", "rollback", "backup", "restore", "support-bundle"} <= set(
-        NOT_YET_IMPLEMENTED)
+    assert {"upgrade", "rollback", "backup", "restore"} <= set(NOT_YET_IMPLEMENTED)
+    assert "support-bundle" not in NOT_YET_IMPLEMENTED
 
 
 # ── fixtures ─────────────────────────────────────────────────────────────────

@@ -11,8 +11,9 @@ WHAT IT DOES NOT PROVE, stated plainly because it is the limitation that matters
 same one `tests/packaging_kubectl_fake.py` states for kubectl. These responses are what ACP's API
 and kubectl are DOCUMENTED to return, not a recording of a real deployment. They exercise the
 suite's LOGIC, its report format and its eligibility rule; they establish nothing whatsoever about
-any real target, and `--self-test` says so in the report it writes (`target.name: self-test`, and
-the runner refuses to let a self-test report claim eligibility for a real target name).
+any real target, and the report says so rather than leaving it to be inferred: a run through this
+backend is stamped `synthetic: true`, and that alone forces both eligibility booleans false however
+green the ten scenarios came out.
 
 BREAK ONE THING, ASSERT ONE FINDING. `world(...)` returns the healthy target with overrides
 applied, exactly like `packaging_kubectl_fake.shape(...)`, and `faults` lets a test make any single

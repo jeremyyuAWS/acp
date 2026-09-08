@@ -34,7 +34,7 @@ reads six months later when they need to know what "supported on EKS" was actual
 
 | State | Means | Counts as a pass |
 |---|---|---|
-| `pass` | the scenario ran and the target did the right thing | yes |
+| `pass` | the scenario ran and the target did the right thing | yes — unless the whole run is `synthetic`, below |
 | `fail` | the scenario ran and the target did not | no |
 | `skip` | the **target** cannot host this scenario — a capability was not granted | **no** |
 | `unknown` | the **suite** could not establish an answer — a probe errored, a surface is absent, a timeout | **no** |
@@ -111,10 +111,18 @@ network, no `kubectl`, no `helm`. `tests/test_packaging_acceptance.py` asserts t
 `subprocess.run` and `urllib.request.urlopen` raise for the duration of a self-test run.
 
 This is not a demo mode. It is how the report format is exercised: a format debugged during a
-certification window is a format whose bugs are found at the least affordable moment. Its report is
-a valid `ACPAcceptanceReport` and it says `mvpEligible: true`, because the fake target passes — the
-only thing between that file and a certification matrix is that its `target.name` is `self-test`
-and its distribution is `fake-backend`.
+certification window is a format whose bugs are found at the least affordable moment.
+
+**A synthetic run is never eligible for anything.** Its report carries `synthetic: true` at the top
+level — a required field, so a report can never read as real evidence because a producer omitted it
+— and while that is set, `mvpEligible` and `supportedEligible` are **false whatever the scenarios
+did**, with a reason naming the fake backend. The scenario states stay `pass`, because they did
+pass; eligibility is a claim about a target, and a self-test has no target. The terminal summary
+says so on its first line, because a run is usually remembered as the green lines somebody glanced
+at an hour ago.
+
+`--self-test` still exits 0 when the ten scenarios pass. That 0 means *the suite works*, not that
+anything is supported.
 
 What it does **not** prove is anything about any real target. The fake's responses are what ACP's
 API and kubectl are *documented* to return, not a recording of a real deployment — the same
