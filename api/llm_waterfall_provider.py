@@ -97,7 +97,7 @@ class StrictTextGenerator:
             patch = json.loads(result['text'])
         except (ValueError, TypeError):
             patch = {}
-        if not isinstance(patch, dict) or result['bounds_exceeded']:
+        if not isinstance(patch, dict) or result['bounds_exceeded'] or result.get('response_issue'):
             patch = {}
         return Generation(patch, result['cost_usd'], result['call_id'])
 
@@ -147,7 +147,11 @@ class StrictTextGenerator:
             choices = data.get('choices')
             if not isinstance(choices, list) or len(choices) != 1:
                 raise ValueError('expected exactly one completion')
-            text = choices[0].get('message', {}).get('content')
+            message = choices[0].get('message', {})
+            text = message.get('content')
+            finish = choices[0].get('finish_reason')
+            response_issue = ('refused' if message.get('refusal') or finish == 'content_filter'
+                              else 'truncated' if finish == 'length' else None)
         else:
             input_tokens = usage.get('input_tokens')
             output_tokens = usage.get('output_tokens')
@@ -159,13 +163,15 @@ class StrictTextGenerator:
             if not isinstance(blocks, list) or len(blocks) != 1 or blocks[0].get('type') != 'text':
                 raise ValueError('expected exactly one text block')
             text = blocks[0].get('text')
+            response_issue = ('refused' if data.get('stop_reason') == 'refusal'
+                              else 'truncated' if data.get('stop_reason') == 'max_tokens' else None)
         if any(type(n) is not int or n <= 0 for n in (input_tokens, output_tokens)):
             raise ValueError('positive measured token usage required')
         # Return actual cost even on a provider overrun so the ledger records and
         # blocks it. Never clamp usage to the reservation or default missing to zero.
         cost = (Decimal(input_tokens) * _money(spec.input_usd_per_million)
                 + Decimal(output_tokens) * _money(spec.output_usd_per_million)) / 1_000_000
-        return {'text': text if isinstance(text, str) else '',
+        return {'text': text if isinstance(text, str) else '', 'response_issue': response_issue,
                 'cost_usd': str(cost), 'call_id': str(data.get('id') or ''),
                 'model': spec.model, 'provider': spec.provider,
                 'zone': self.providers.zone_for_url(endpoint),
@@ -264,6 +270,13 @@ def managed_text_generate(prompt: str) -> dict:
         if result['bounds_exceeded']:
             attempt['status'] = 'provider_limit_exceeded'
             return defer_managed('provider_limit_exceeded', attempts=attempts)
+        if result.get('response_issue') == 'refused':
+            attempt['status'] = 'refused'
+            return defer_managed('provider_refused', attempts=attempts)
+        if result.get('response_issue'):
+            attempt['status'] = 'unusable_response'
+            attempt['reason'] = result['response_issue']
+            continue
         if result['text'].strip():
             attempt['status'] = 'drafted'
             return {**result, 'attempts': attempts, 'approval_required': True}
@@ -272,7 +285,12 @@ def managed_text_generate(prompt: str) -> dict:
 
 
 def configured_generator() -> StrictTextGenerator:
-    config = json.loads(os.environ.get('ACP_BOUNDED_TEXT_MODELS_JSON', 'null'))
+    raw = os.environ.get('ACP_BOUNDED_TEXT_MODELS_JSON')
+    if raw is None and os.environ.get('ACP_BOUNDED_TEXT_PROFILE'):
+        from ai_model_profiles import model_config
+        config = model_config(os.environ['ACP_BOUNDED_TEXT_PROFILE'])
+    else:
+        config = json.loads(raw or 'null')
     if not isinstance(config, list) or len(config) != 2:
         raise ValueError('two verified model configurations required')
     return StrictTextGenerator(tuple(TextModelSpec(**item) for item in config))
