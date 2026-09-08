@@ -159,6 +159,7 @@ describe('Overview no longer mounts the reconciliation', () => {
     const html = screen({ id: 's3', files: 3, certifiable: 1, scope: { kind: 'local' } }, rows(3, 0))
     expect(html).not.toContain('What was assessed, and what was not')
   })
+
 })
 
 // ── Source-level pins for what the DOM cannot show ────────────────────────────────────────────

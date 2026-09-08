@@ -34,6 +34,14 @@ describe('the gate is composed into the Assess screen', () => {
     expect(app).toMatch(/<AssessRunIntegrity\b/)
   })
 
+  it('keeps the gate with the canonical reconnect card used by SharePoint and Drive', () => {
+    const live = code('LiveAssessmentLive.jsx')
+    expect(live).toMatch(/<AssessRunProgress[\s\S]{0,300}<AssessRunIntegrity/)
+    expect(live).toMatch(/scanId=\{scanId\}/)
+    expect(live).toMatch(/runInFlight=\{!!snapshot\.active\}/)
+    expect(live).not.toMatch(/sharepoint|drive/i)
+  })
+
   it('renders it BEFORE the summary, so the caveat is above the result it qualifies', () => {
     expect(app.indexOf('<AssessRunIntegrity')).toBeLessThan(app.indexOf('<AssessSummary'))
     expect(app.indexOf('<AssessRunIntegrity')).toBeGreaterThan(-1)

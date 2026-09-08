@@ -39,6 +39,21 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('1 document library')
   })
 
+  it('restores the bounded document activity card for SharePoint reconnects', () => {
+    const html = render({ ...SNAP, source: 'sharepoint', documents: {
+      completed: 51, displayed: 2, truncated: true, items: [
+        { file: 'Clinical/History.pdf', score: 100, criteria: [] },
+        { file: 'Clinical/Procedure.pdf', score: 81, criteria: ['1.3.1', '1.4.3'] },
+      ],
+    } })
+    expect(html).toContain('Document activity')
+    expect(html).toContain('Latest 2 of 51 completed')
+    expect(html).toContain('Clinical/History.pdf')
+    expect(html).toContain('100/100')
+    expect(html).toContain('1.3.1')
+    expect(html).toContain('overflow-y:auto')
+  })
+
   it('renders nothing until the live snapshot is available', () => {
     expect(render(null)).toBe('')
     expect(render({ available: false })).toBe('')
