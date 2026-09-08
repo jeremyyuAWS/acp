@@ -339,6 +339,23 @@ too short; it got 20. The two numbers are one decision and are now derived from 
 production's own 60-second headroom (540 inside a 600s grace) as the constant. Leaving the entry in
 the guard failed the guard, which is the loop working.
 
+**One underscore from a security control, fixed.** The chart rendered `ACP_ENVIRONMENT` — a name
+nothing in `api/` reads — while `api/core.py:87` computes `IS_PROD` from `ACP_DEPLOY_ENV`, and
+`IS_PROD` is what forces `TEST_BYPASS_ENABLED` off: the X-E2E-Key and X-Demo-Key gate bypasses are
+refused in production regardless of the opt-in that enables them. That file records the same
+failure happening once already — *"IS_PROD stayed False on the public demo, and the X-E2E-Key
+bypass stayed live"* — because the variable operators were told to set never reached the container.
+The bypass is fail-closed now, so nothing was open; what was true is that an installation enabling
+it for staging and promoting the same values to production kept it, because the chart gave the
+application no way to know which it was. Renamed rather than duplicated, since the old name was
+read by nothing and a workload carrying both would leave a reader guessing which one is live. The
+guard failed in BOTH directions until both of its entries were updated.
+
+That is the third naming near-miss of the day, after `GOOGLE_OAUTH_CLIENT_SECRET` against
+`ACP_GOOGLE_CLIENT_ID` and `OBJECT_STORAGE` against `ACP_BLOB_ACCOUNT`. The pattern is worth
+naming: a chart that invents its own variable names produces workloads that look configured and
+are not, and the resemblance is what stops anybody looking twice.
+
 **Langfuse tracing can never start**, and is next. `api/lf.py` enables it only with host, public key
 AND secret key. The chart projects the secret key alone — so the `langfuse-secret-key` reference the
 contract *requires* buys one of three, and an operator who provisioned Langfuse sees no traces and

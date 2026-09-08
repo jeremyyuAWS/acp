@@ -84,7 +84,6 @@ UNREAD_BY_THE_APPLICATION = {
     # running object; ADR 0048 asserts elsewhere that nothing branches on ACP_PLATFORM, because the
     # moment application code did, "one package, four clouds" would stop being true.
     "ACP_RELEASE": "provenance: which release this workload is",
-    "ACP_ENVIRONMENT": "provenance: which environment the document named",
     "ACP_DEPLOY_PROFILE": "provenance: which profile installed this",
     "ACP_PLATFORM": "provenance: which adapter installed this, and nothing may branch on it",
     "ACP_AI_LOCAL_ONLY": "an auditable statement of the regulated profile's promise, readable off "
@@ -141,9 +140,6 @@ def test_the_dead_wiring_is_named_as_dead():
 # is what the absence COSTS, because that is the judgement a reader needs and the thing a grep
 # cannot supply.
 NOT_WIRED_BY_THE_CHART = {
-    "ACP_DEPLOY_ENV":
-        "IS_PROD stays false, so realtime shadow traffic runs in production and the capacity "
-        "gateway can never arm",
     "LANGFUSE_HOST":
         "api/lf.py enables tracing only with host, public key AND secret key; the chart projects "
         "the secret key alone, so the langfuse-secret-key reference the contract REQUIRES buys "
