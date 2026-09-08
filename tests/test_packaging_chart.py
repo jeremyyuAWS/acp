@@ -751,6 +751,86 @@ def test_the_gpu_count_is_a_values_knob():
 
 
 @needs_helm
+def test_every_spread_constraint_selects_the_pods_it_is_attached_to():
+    """A TOPOLOGY CONSTRAINT WHOSE SELECTOR MATCHES NOTHING IS NOT AN ERROR.
+
+    It is satisfied vacuously: the manifest renders, `kubectl get` shows the constraint, and the
+    scheduler spreads nothing. The first draft of this helper built its selector from
+    `app.kubernetes.io/component`, which is `worker` on all THREE worker Deployments — so every
+    worker constraint would have selected the union of the tiers, and one built per role would
+    have selected none. Neither shows up as a failure anywhere.
+
+    So the assertion is the one that matters: each constraint's `matchLabels` must be a subset of
+    the labels its own pod template carries, and must include whatever distinguishes that
+    Deployment from its siblings. Anything else is a constraint about somebody else's pods.
+    """
+    for profile in RENDERABLE:
+        for workload in render(load_example(profile)):
+            if workload["kind"] != "Deployment":
+                continue
+            spec = workload["spec"]["template"]["spec"]
+            name = workload["metadata"]["name"]
+            for constraint in spec.get("topologySpreadConstraints", []):
+                selector = constraint["labelSelector"]["matchLabels"]
+                pod_labels = workload["spec"]["template"]["metadata"]["labels"]
+                assert selector.items() <= pod_labels.items(), (
+                    f"{name} ({profile}): the constraint selects pods this Deployment does not "
+                    f"produce: {selector} vs {pod_labels}")
+                # The label that tells the three worker Deployments apart. Without it a worker
+                # constraint balances the union of all three tiers, which is not what any of them
+                # asked for and is invisible in the render.
+                if "worker" in name:
+                    assert "acp.mova.io/worker-role" in selector, (
+                        f"{name}: without the role label this constraint covers every worker tier")
+
+
+@needs_helm
+def test_multi_replica_tiers_are_spread_across_zones_and_single_ones_are_not():
+    """WHAT THE EXISTING ANTI-AFFINITY DID NOT DO. It is `preferredDuringScheduling` across
+    `kubernetes.io/hostname`: it asks for different NODES and says nothing about zones, so three
+    API replicas can land on three nodes in one availability zone and satisfy it completely. Losing
+    a zone is the failure a multi-replica tier is bought to survive.
+
+    Rendered only where there is something to spread. A constraint on a one-pod tier is arithmetic
+    on a single pod, and rendering it everywhere would put a scheduling rule on Ollama and Grafana
+    that can never do anything.
+    """
+    manifests = render(load_example("high-availability"))
+    api = named(manifests, "Deployment", "-api")["spec"]["template"]["spec"]
+    constraint = api["topologySpreadConstraints"][0]
+    assert constraint["topologyKey"] == "topology.kubernetes.io/zone"
+    assert constraint["maxSkew"] == 1
+    for suffix in ("-ollama", "-grafana"):
+        single = named(manifests, "Deployment", suffix)
+        assert single["spec"]["replicas"] == 1, "this test would prove nothing"
+        assert "topologySpreadConstraints" not in single["spec"]["template"]["spec"], suffix
+
+
+@needs_helm
+def test_the_spread_falls_back_rather_than_stranding_a_pod():
+    """`DoNotSchedule` IS A CLAIM ABOUT THE CLUSTER, AND ITS FAILURE MODE IS AN OUTAGE.
+
+    Nodes without the topologyKey LABEL are not eligible under `DoNotSchedule`, so on a cluster
+    whose nodes carry no `topology.kubernetes.io/zone` — every kind and k3d cluster, and any
+    single-zone install, the reference cluster this chart is actually installed on included —
+    there is no eligible node and every replica stays Pending forever. And without `matchLabelKeys`
+    (1.27+, against `doctor.MINIMUM_KUBERNETES` of 1.23) the constraint counts the outgoing
+    ReplicaSet during a rolling update, so an update can wedge against its own predecessors.
+
+    PRD S4 is explicit that a target is not supported because Helm renders for it. The chart
+    therefore ships the soft value on every profile, `high-availability` included, and leaves
+    hardening to an operator who knows their nodes are labelled — which this asserts is one value.
+    """
+    for profile in RENDERABLE:
+        api = named(render(load_example(profile)), "Deployment", "-api")["spec"]["template"]["spec"]
+        assert api["topologySpreadConstraints"][0]["whenUnsatisfiable"] == "ScheduleAnyway", profile
+    hardened = render(load_example("high-availability"),
+                      extra=["--set", "topologySpread.whenUnsatisfiable=DoNotSchedule"])
+    api = named(hardened, "Deployment", "-api")["spec"]["template"]["spec"]
+    assert api["topologySpreadConstraints"][0]["whenUnsatisfiable"] == "DoNotSchedule"
+
+
+@needs_helm
 def test_ollamas_root_stays_writable_whatever_the_shared_value_says():
     """A COMMENT THAT DESCRIBED A SETTING NOBODY HAD SET.
 

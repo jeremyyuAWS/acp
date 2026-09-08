@@ -240,3 +240,13 @@ securityContext:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# Zone spreading for tiers that run more than one pod. See the comment on `acp.topologySpread` in
+# templates/_helpers.tpl for why `whenUnsatisfiable` defaults to the soft value and what it costs
+# to harden: `DoNotSchedule` strands every replica on a cluster whose nodes carry no zone label,
+# which includes the reference cluster and every single-zone install.
+topologySpread:
+  enabled: true
+  topologyKey: topology.kubernetes.io/zone
+  maxSkew: 1
+  whenUnsatisfiable: ScheduleAnyway
