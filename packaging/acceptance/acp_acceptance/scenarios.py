@@ -268,7 +268,20 @@ def _unavailable(resp: HttpResponse, path: str) -> Outcome | None:
     return None
 
 
-def _post_with_retry(ctx: ScenarioContext, path: str, *, attempts: int = 4
+# How long to keep asking a target that says it is busy. `app.py`'s capacity guard sets
+# `Retry-After: 5`, so this is twelve of the server's own suggested intervals — and it is a
+# CLIENT-CORRECTNESS number, not a number chosen to make a scenario pass. Giving up after three
+# retries on a server explicitly asking to be asked again under-implements its stated contract,
+# and the third reference-cluster run showed the difference matters: `POST /assess` was refused
+# while the discovery that preceded it was still settling.
+#
+# Bounded, because "retry until it works" is how a suite reports a permanently saturated target
+# as healthy. A 503 that survives the whole budget is `unknown`, and stays `unknown`.
+RETRY_BUSY_SECONDS = 60.0
+
+
+def _post_with_retry(ctx: ScenarioContext, path: str,
+                     attempts: int = int(RETRY_BUSY_SECONDS / POLL_SECONDS)
                      ) -> HttpResponse:
     """POST, retrying only a 503 and only as many times as the application asks.
 

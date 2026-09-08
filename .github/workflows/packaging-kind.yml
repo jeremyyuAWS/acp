@@ -702,7 +702,27 @@ jobs:
           # gone green on a run that established something completely different. Substrings, so
           # wording can change without a false alarm; the cause cannot.
           EXPECTED_REASON = {
-              "fixture-workflow": "/artifacts",
+              # MEASURED, NOT PREDICTED, and this is the reason assertion doing its job on its
+              # first run. The expectation here WAS "/artifacts" — the missing durable-output
+              # inventory. Run 34236164828 showed something else: `POST /scans/{sid}/assess`
+              # answers 503 `DB_CAPACITY_BUSY` and keeps answering it, so the scenario never
+              # reaches the artifact probe at all. A state-only check would have gone green on
+              # that, because `unknown` is `unknown` whatever the cause.
+              #
+              # IT IS THE CLUSTER'S SIZE, AND TWO INDEPENDENT READINGS SAY SO. `capacity.floor`
+              # FAILs in the doctor step above — "needs 5000m, cluster has 4000m allocatable" —
+              # and here the application's own admission gate refuses a mutation after its 5s
+              # timeout. Connections are not the constraint: Postgres serves the document's
+              # declared 200 and each API replica asks for ~20. A one-node runner sharing 4 CPU
+              # between the control plane, Calico, Postgres, Redis, two API replicas and three
+              # workers cannot also run a download-and-analyse fan-out.
+              #
+              # So scenario 4 is UNANSWERABLE on this target, and that is recorded rather than
+              # absorbed: the report says the target was busy, never that it passed, and no claim
+              # moves. If the cluster is ever given headroom the scenario will reach `/artifacts`
+              # and THIS ASSERTION WILL FAIL — which is the correct outcome and the signal to
+              # change this line back.
+              "fixture-workflow": "DB_CAPACITY_BUSY",
               "audit-and-diagnostics": "/admin/audit-events",
               "worker-restart": "/artifacts",
               "dependency-degradation": "fault-injection",

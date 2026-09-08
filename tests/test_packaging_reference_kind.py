@@ -570,6 +570,24 @@ def expected_outcomes() -> dict[str, str]:
     raise AssertionError("the acceptance step no longer declares an EXPECTED table")
 
 
+def expected_reasons() -> dict[str, str]:
+    """The EXPECTED_REASON table, parsed out of the step's assertion script.
+
+    PARSED, NOT REGEXED. The first version of this matched `"fixture-workflow": "..."` with a
+    regular expression and found the key in the EXPECTED table instead — value `"unknown"`, which
+    appears in the gap report for unrelated reasons, so the test passed no matter what. It only
+    surfaced because breaking the gap report on purpose failed to break the test.
+    """
+    import ast
+    import re
+    body = re.search(r"python - <<'PY'\n(.*?)\nPY\n", step_named(ACCEPTANCE_STEP)["run"], re.S)
+    tree = ast.parse(body.group(1))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "EXPECTED_REASON":
+            return ast.literal_eval(node.value)
+    raise AssertionError("the acceptance step no longer declares an EXPECTED_REASON table")
+
+
 def test_the_acceptance_target_describes_this_cluster_and_not_another():
     target = acceptance_target()
     assert target["kind"] == "ACPAcceptanceTarget"
@@ -686,3 +704,35 @@ def test_the_port_forward_is_proved_usable_before_the_suite_runs():
     run = step_named(ACCEPTANCE_STEP)["run"]
     assert "port-forward" in run and "/healthz" in run
     assert "the port-forward never became usable" in run
+
+
+def test_the_clusters_known_limitation_is_recorded_where_a_reader_will_find_it():
+    """The workflow's expected REASON for `fixture-workflow` and the gap report must name the same
+    limitation. They are one fact, and a limitation that lives only in a workflow comment is one
+    nobody reading the gap report will ever see — which is how "the suite passes on kind" becomes
+    a sentence in a status update that means less than it appears to."""
+    cause = expected_reasons()["fixture-workflow"]
+    report = (PACKAGING / "docs" / "kubernetes-mvp-gap-report.md").read_text(encoding="utf-8")
+    assert cause in report, (
+        f"the workflow expects `fixture-workflow` to be explained by {cause!r} and the gap report "
+        f"does not mention it. Update both, or the report describes a cluster that no longer "
+        f"behaves the way it says.")
+
+
+def test_every_expected_reason_names_a_registered_scenario():
+    import sys
+    if str(PACKAGING / "acceptance") not in sys.path:
+        sys.path.insert(0, str(PACKAGING / "acceptance"))
+    from acp_acceptance.scenarios import REGISTRY
+    unknown = sorted(set(expected_reasons()) - set(REGISTRY))
+    assert not unknown, f"EXPECTED_REASON names scenarios that do not exist: {unknown}"
+
+
+def test_every_non_passing_scenario_declares_why():
+    """A scenario expected to skip or come back unknown with no declared reason is one whose cause
+    can change silently — the failure the reason table exists to prevent."""
+    undeclared = sorted(sid for sid, state in expected_outcomes().items()
+                        if state != "pass" and sid not in expected_reasons())
+    assert not undeclared, (
+        f"{undeclared} are expected not to pass and declare no reason, so the step would accept "
+        f"any cause at all for them")
