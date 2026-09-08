@@ -140,7 +140,7 @@ describe('RemediationImpactCard', () => {
     expect(container.textContent).toContain('Selected remediation scope')
     await act(async () => button(container, 'Inspect affected files').click())
     await act(async () => button(container, 'C.docx').click())
-    expect(container.textContent).toContain('Finding paths: C.docx')
+    expect(container.querySelector('.remediation-file-items').textContent).toContain('C.docx')
     expect(container.textContent).toContain('request an accessibility judgment')
   })
   it('assigns selected human files only after an explicit submit and server response', async () => {
@@ -216,11 +216,47 @@ describe('RemediationImpactCard', () => {
     expect(container.querySelector('[role=dialog]').textContent).not.toContain('A.docx')
     await act(async () => button(container, 'C.docx').click())
     expect(container.querySelector('[role=dialog]').textContent).toContain('human judgment')
+    await act(async () => button(container, '← Back to files').click())
     await act(async () => button(container, 'Close details').click())
     await act(async () => button(container, 'Review first').click())
     expect(tile('Auto-fix available').textContent).toContain('0')
     expect(tile('Auto-fix available').querySelector('.remediation-forecast-delta').textContent).toBe('−4')
     expect(historicTotal()).toBe(before)
+  })
+  it('opens every manual rule immediately and returns to the filtered file list with focus restored', async () => {
+    getRemediationImpact.mockResolvedValue({ ...result(), files: [
+      { file: 'A.docx', findings: 40, automatic: 0, review: 3, manual: 37, blocked: 0 },
+      { file: 'B.pdf', findings: 1, automatic: 0, review: 0, manual: 1, blocked: 0 },
+    ], findings: [
+      { file: 'A.docx', lane: 'manual', rule_id: '1.1.1', plain_name: 'Describe images', finding_count: 20, primary_reason: 'ai_disabled' },
+      { file: 'A.docx', lane: 'manual', rule_id: '1.3.1', plain_name: 'Mark table headers', finding_count: 17, primary_reason: 'source_editing' },
+      { file: 'A.docx', lane: 'review', rule_id: '2.4.2', plain_name: 'Review document title', finding_count: 3, primary_reason: 'proposal_approval' },
+      { file: 'B.pdf', lane: 'manual', plain_name: 'Other file item', finding_count: 1 },
+    ] })
+    const { container } = await mount()
+    await act(async () => button(container, 'Inspect affected files').click())
+    const search = container.querySelector('input[type=search]')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(search, 'A.docx')
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const trigger = button(container, 'A.docx')
+    await act(async () => trigger.click())
+    const detail = container.querySelector('.remediation-file-items')
+    expect(detail.querySelector('h3')).toBe(document.activeElement)
+    expect(detail.textContent).toContain('Manual work — 37 findings')
+    expect(detail.querySelectorAll('li')).toHaveLength(2)
+    expect(detail.textContent).toContain('Describe images')
+    expect(detail.textContent).toContain('Mark table headers')
+    expect(detail.textContent).not.toContain('Other file item')
+    expect(detail.textContent).not.toContain('Review document title')
+    expect(search.closest('[hidden]')).not.toBeNull()
+    await act(async () => button(container, 'Proposal review · 3').click())
+    expect(detail.textContent).toContain('Review document title')
+    await act(async () => button(container, '← Back to files').click())
+    expect(container.querySelector('.remediation-file-items')).toBeNull()
+    expect(search.value).toBe('A.docx')
+    expect(document.activeElement).toBe(trigger)
   })
   it('has no automated accessibility violations', async () => {
     const { container } = await mount()

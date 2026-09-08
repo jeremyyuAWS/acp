@@ -45,3 +45,5 @@
 .remediation-forecast-delta{display:inline-block;vertical-align:middle;margin-left:10px;padding:4px 7px;border-radius:6px;background:#eee6f4;color:#513c5e;font-size:13px;font-weight:700;line-height:1.2;animation:remediation-forecast-pop 2.6s ease-out both}
 @keyframes remediation-forecast-pop{0%{opacity:0;transform:translateY(7px) scale(.9)}12%,78%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-5px)}}
 @media(prefers-reduced-motion:reduce){.remediation-forecast-delta{animation:none}}
+
+.remediation-file-items h3{overflow-wrap:anywhere;margin:18px 0 10px}.remediation-file-items__routes{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.remediation-file-items__routes button[aria-pressed=true]{background:#eee6f4;border-color:#76518c;font-weight:700}.remediation-file-items__list{padding:0;list-style:none}.remediation-file-items__list li{margin:12px 0;padding:16px;border:1px solid #e7dfec;border-radius:9px;background:#faf8fc}.remediation-file-items__list h4{margin:0;font-size:15px}.remediation-file-items__list p{overflow-wrap:anywhere}
