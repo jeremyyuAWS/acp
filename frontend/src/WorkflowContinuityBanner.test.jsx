@@ -93,7 +93,7 @@ describe('workflow continuity', () => {
     expect(render({ ...props, canonicalAvailable: true }).innerHTML).toBe('')
   })
 
-  it('draws twelve purple heartbeat bars without a trend line for Release', () => {
+  it('draws four purple snapshot-refresh slots without a trend line for Release', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-06T12:00:00Z'))
     const { container, root } = createTestRoot()
@@ -110,7 +110,7 @@ describe('workflow continuity', () => {
         updated_at: `2026-09-06T12:00:${String(seconds).padStart(2, '0')}Z`,
       } })))
     }
-    expect(container.querySelectorAll('.live-heartbeat-bars i')).toHaveLength(12)
+    expect(container.querySelectorAll('.live-heartbeat-bars i')).toHaveLength(4)
     expect(container.querySelector('[data-stage="release"]')).toBeTruthy()
     expect(container.querySelector('polyline')).toBeNull()
     vi.useRealTimers()

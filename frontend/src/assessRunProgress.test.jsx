@@ -57,7 +57,7 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('Finance/Q3 Board Pack.pdf')
     expect(html).toContain('Describing 6 images that have no alt text')
     expect(html).toContain('Checking Non-text content')
-    expect(html).toContain('successful live update')
+    expect(html).toContain('successful canonical snapshot refresh')
     expect(html).toContain('about 1 min 50s left')
     expect(html).toMatch(/Results appear when the run finishes/)
     expect(html).toContain('Live updates · refreshed 0s ago')
