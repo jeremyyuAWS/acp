@@ -48,6 +48,20 @@ function stubFetch({ putError = false } = {}) {
 }
 
 describe('I.2 — listHitlQueue suppresses items whose PUT is still in flight', () => {
+  it('sends request identity and the exact row version the reviewer saw', async () => {
+    const { resolvePut } = stubFetch()
+    const { updateHitlItem } = await import('./api.js')
+    const pending = updateHitlItem(ITEM.id, 'approved', null, 'Accessible chart', {
+      requestId: 'decision-request-42', expectedVersion: 7,
+    })
+    const [, opts] = fetch.mock.calls.find(([, options]) => options?.method === 'PUT')
+    expect(JSON.parse(opts.body)).toMatchObject({
+      request_id: 'decision-request-42', expected_version: 7,
+    })
+    resolvePut()
+    await pending
+  })
+
   it('sends the exact model-call identifier with the reviewer decision', async () => {
     const { resolvePut } = stubFetch()
     const { updateHitlItem } = await import('./api.js')

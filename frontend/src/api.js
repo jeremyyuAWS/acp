@@ -1466,6 +1466,8 @@ export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValu
   // Register the item SYNCHRONOUSLY before the fetch so that any listHitlQueue call
   // resolving while the PUT is still in flight (the race that caused I.2) filters it out.
   _pendingActs.set(itemId, Date.now())
+  const requestId = opts.requestId || globalThis.crypto?.randomUUID?.()
+    || `hitl-${Date.now()}-${Math.random().toString(16).slice(2)}`
   return fetch(`${BASE}/hitl/queue/${encodeURIComponent(itemId)}`, {
       method: 'PUT',
       headers: headers({ 'Content-Type': 'application/json' }),
@@ -1474,6 +1476,8 @@ export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValu
         edited: !!opts.edited, review_ms: opts.reviewMs ?? null, ai_value: opts.aiValue ?? null,
         model_call_id: opts.modelCallId ?? null,
         model_call_ids: opts.modelCallIds ?? null,
+        request_id: requestId,
+        expected_version: opts.expectedVersion ?? null,
         // Feedback intelligence: WHY a rejection happened (enum; bulk/keyboard paths send 'unspecified')
         reject_reason: opts.rejectReason ?? null,
         // WCAG exception the reviewer applied instead of writing a fix: 'decorative' (1.1.1 — image

@@ -745,7 +745,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       if (item) setDeferredItems((d) => [...d, item])
       setActed((a) => ({ ...a, deferred: a.deferred + 1 }))
       if (!SIM && item?.id) {
-        return updateHitlItem(item.id, 'skipped').catch(
+        return updateHitlItem(item.id, 'skipped', null, null, {
+          expectedVersion: item._raw?.decision_version ?? 0,
+        }).catch(
           (e) => settleActFailure(item, 'deferred', { status: 'skipped' }, e))
       }
       return Promise.resolve()
@@ -770,6 +772,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       const p = updateHitlItem(item.id, apiStatus, null,
                                apiStatus === 'approved' ? (editedValue || null) : null,
                                { approvedValues: apiStatus === 'approved' ? (approvedValues || null) : null,
+                                 expectedVersion: item._raw?.decision_version ?? 0,
                                  // A WCAG-exception / out-of-scope resolution: status stays 'approved'
                                  // but it writes NO value — the reason is persisted on the row.
                                  resolution: apiStatus === 'approved' ? (resolution || null) : null })

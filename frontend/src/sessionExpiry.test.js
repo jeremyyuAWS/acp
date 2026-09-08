@@ -59,7 +59,7 @@ describe('a review decision that fails is not shown as saved', () => {
     // A capacity 503 explicitly reports that the write outcome is unknown. Both paths must
     // inspect the durable row before undoing local state, while settleActFailure retains the
     // rollback + rethrow behavior for a decision proven not to have landed.
-    expect(rem).toMatch(/updateHitlItem\(item\.id, 'skipped'\)\.catch\([\s\S]{0,120}settleActFailure\(item, 'deferred', \{ status: 'skipped' \}, e\)/)
+    expect(rem).toMatch(/updateHitlItem\(item\.id, 'skipped'[\s\S]{0,180}\.catch\([\s\S]{0,120}settleActFailure\(item, 'deferred', \{ status: 'skipped' \}, e\)/)
     expect(rem).toMatch(/\(e\) => settleActFailure\(item, kind, \{[\s\S]{0,300}status: apiStatus/)
     expect(rem).toMatch(/undoAct\(item, kind, err, settled\.outcome\)\s*\n\s*throw err/)
   })

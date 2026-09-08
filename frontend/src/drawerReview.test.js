@@ -25,7 +25,7 @@ describe('review in place — the FileDrawer mounts the real EvidenceCard per fi
   })
 
   it('acting on the card removes the item locally and notifies the bell to reconcile', () => {
-    expect(src).toMatch(/updateHitlItem\(itemId, status, note, approvedValue, telemetry\)/)
+    expect(src).toMatch(/updateHitlItem\(itemId, status, note, approvedValue, \{[\s\S]{0,160}expectedVersion:/)
     expect(src).toMatch(/setHitlItems\(\(cur\) => cur\.filter\(\(h\) => h\.id !== itemId\)\)/)
     expect(src).toMatch(/dispatchEvent\(new Event\('acp:hitl-changed'\)\)/)
   })

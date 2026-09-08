@@ -500,6 +500,12 @@ _SCHEMA = [
     # decorative" — and the file was left owing the document a value nobody ever meant to write.
     "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS resolution TEXT",
     "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS assignee TEXT",
+    # Optimistic concurrency + request replay identity for reviewer decisions. A delayed retry
+    # may arrive after another reviewer has changed the row; versioning makes that a conflict
+    # instead of silently overwriting the newer decision.
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS decision_version INT DEFAULT 0",
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS last_decision_request_id TEXT",
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS last_decision_fingerprint TEXT",
     # Where the finding IS, in words, for the formats that have no page number. `page`/`pages`
     # above are integers and answer this for PDF only; a spreadsheet's answer is "Sheet
     # 'Findings' cell B2" and a deck's is "Slide 3". Without this column the review card's
@@ -2435,8 +2441,8 @@ class _PgAdapter:
     # v40 adds fenced pre-write reservations and terminal evidence to provider-effect receipts.
     # v42 adds the tenant policy, exactly-once command receipt, and immutable run-policy
     # snapshot tables. All are additive and ignored by older replicas during rolling deploys.
-    _SCHEMA_VERSION = 42
-    _SCHEMA_CHECKSUM_AT_VERSION = "0075c2c6dbc6d6e37fa43f31c7b5c595"
+    _SCHEMA_VERSION = 43
+    _SCHEMA_CHECKSUM_AT_VERSION = "1fbdfe1f7a3123867fb196e377eac853"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -10949,7 +10955,9 @@ class Store:
     def complete_hitl_decision(self, item_id: str, status: str, reviewer_note: str | None,
                                approved_value: str | None, *, resolution: str | None,
                                approved_values: list[str | None] | None,
-                               actor: str, detail: str | None) -> tuple[dict | None, bool]:
+                               actor: str, detail: str | None,
+                               request_id: str | None = None,
+                               expected_version: int | None = None) -> tuple[dict | None, bool]:
         """Persist one reviewer decision atomically and make exact PUT replays a no-op.
 
         These writes collectively make the decision true.  Keeping them behind the adapter's
@@ -10958,6 +10966,12 @@ class Store:
         obligation, or durable apply job.
         """
         draft_fallback = resolution != self.DESCRIBED_RESOLUTION
+        import hashlib
+        fingerprint = hashlib.sha256(json.dumps({
+            "status": status, "reviewer_note": reviewer_note,
+            "approved_value": approved_value, "approved_values": approved_values,
+            "resolution": resolution,
+        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
         def _values_match(current: dict) -> bool:
             if approved_values is None:
@@ -10982,6 +10996,13 @@ class Store:
             current = self._get_hitl_item_for_decision(item_id)
             if not current:
                 return None, False
+            if request_id and current.get("last_decision_request_id") == request_id:
+                if current.get("last_decision_fingerprint") != fingerprint:
+                    raise ValueError("decision request id was reused with a different payload")
+                return current, True
+            current_version = int(current.get("decision_version") or 0)
+            if expected_version is not None and int(expected_version) != current_version:
+                raise ValueError("stale decision version")
             replay = (current.get("status") == status
                       and (current.get("reviewer_note") or None) == (reviewer_note or None)
                       and (current.get("resolution") or None) == (resolution or None)
@@ -10993,6 +11014,11 @@ class Store:
 
             updated = self.update_hitl_item(
                 item_id, status, reviewer_note, approved_value, resolution=resolution)
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE hitl_queue SET decision_version=%s, last_decision_request_id=%s, "
+                    "last_decision_fingerprint=%s WHERE id=%s",
+                    (current_version + 1, request_id, fingerprint, item_id))
             self.sync_hitl_finding_dispositions(item_id, status)
             if status == "approved" and approved_values is not None:
                 self.approve_proposal_values(
