@@ -3381,6 +3381,14 @@ html[data-wcag="on"] .wcag-toggle--on {
   font-variant-numeric: tabular-nums;
 }
 .workflow-stage-stack__ownership { flex: 0 0 auto; white-space: nowrap; }
+.workflow-stage-stack__locked-state,
+.workflow-stage-stack__item.is-locked .workflow-stage-stack__ownership {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .01em;
+}
+.workflow-stage-stack__item.is-locked .workflow-stage-stack__summary { min-height: 38px; }
 .workflow-stage-stack__affordance { justify-self: end; }
 .workflow-stage-stack__body { padding: 0 14px 12px 42px; }
 .workflow-stage-stack__body[hidden] { display: none; }
