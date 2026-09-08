@@ -1,8 +1,8 @@
-# Installation lifecycle — `acpctl install` and `acpctl uninstall`
+# Installation lifecycle — `install`, `uninstall`, `backup`, `restore`
 
-What these two commands do, what they refuse to do, what they write down, and what has **not**
-been proven about them. Everything else in PRD §10's command list — `upgrade`, `rollback`,
-`backup`, `restore`, `support-bundle` — still exits 2 and names the phase it belongs to.
+What these commands do, what they refuse to do, what they write down, and what has **not** been
+proven about them. Two entries in PRD §10's command list — `upgrade` and `rollback` — still exit 2
+and name the phase they belong to.
 
 > **No target is `supported`, and nothing here changes that.** These commands have never been run
 > against a real Kubernetes cluster in this repository's tests or CI. Every test below drives them
@@ -26,10 +26,13 @@ verbs in `tests/test_packaging_doctor.py`.
 | Permitted | Why |
 |---|---|
 | `helm install` / `upgrade` / `uninstall` | the install and the removal |
-| `helm get` / `status` / `list` / `history` / `template` | reads |
+| `helm get` / `status` / `list` / `history` / `template` | reads and renders |
 | `kubectl get` | reads |
+| `kubectl logs job/<name>` | what a backup or restore Job says it did — **only** a `job/` target |
 | `kubectl create namespace` \| `configmap` | the install target, and the install record |
-| `kubectl apply -f -` | the install record, from a manifest acpctl builds itself — never from a path |
+| `kubectl create job --from=cronjob/<name>` | running the backup CronJob now — **only** with `--from` |
+| `kubectl apply -f -` | the install record, and the chart's restore Job — stdin only, never from a path |
+| `kubectl scale deployment --replicas=<n>` | quiescing for a restore — never `--all`, never without a count |
 | `kubectl delete configmap acp-installation` | that record, by name |
 | `kubectl delete pvc -l app.kubernetes.io/instance=<release>` | volumes the release owns, by selector — never by name, never `--all` |
 
@@ -40,6 +43,23 @@ unimplemented features is not an allow-list.
 The delete guard is resource-scoped because `helm uninstall` can only remove what a release owns
 while `kubectl delete` can remove anything the kubeconfig can reach, and "the uninstall deleted the
 wrong namespace's database" has no undo.
+
+**Four of those rows arrived with `backup` and `restore`, and the widening is the part worth
+reviewing.** `create job` is permitted *only* with `--from=cronjob/…`, so the pod template comes
+from an object the chart rendered rather than from a command line acpctl assembled — without that
+flag, `kubectl create job --image=… -- <command>` is a shell inside the namespace holding the
+database. `logs` is permitted *only* for a `job/` target, never a pod and never a selector: the two
+Jobs' own output is a far narrower read than application logs, which carry document names and user
+identifiers and are the support bundle's business, where every line goes through the redactor.
+`apply` is unchanged in mechanism and **widened in source** — the manifest may now also be a
+`helm template -s` render of the chart's restore Job, so it is no longer one acpctl authored end to
+end.
+
+`scale` is the broad one, and the honest description of its bound is a split: **the guard bounds
+the kind and forbids `--all`; it cannot see which Deployments a caller picked.** `backup.py` only
+ever names Deployments it read back from `app.kubernetes.io/instance=<release>`, and
+`tests/test_packaging_backup.py::test_quiesce_scales_only_deployments_the_release_owns` is what
+holds it to that. That is a caller discipline asserted by a test, not something the guard proves.
 
 ---
 
@@ -53,7 +73,13 @@ The same three the read-only commands use, for the same reasons.
 | **1** | refused (unpinned, preflight blocker, namespace conflict, cancelled), failed, or **succeeded but could not be verified** | refused, the removal did not complete, or there was nothing here to remove |
 | **2** | usage error, unreachable cluster, or nobody to answer the confirmation prompt | usage error (no `--data-policy`, no `--confirm-name` for a delete) or unreachable cluster |
 
-Two of those are worth spelling out.
+| Code | `backup` | `restore` |
+|---|---|---|
+| **0** | the Job ran and its log **names the dump it wrote** | the preview was printed and nothing changed, or the restore completed and said how many tables it restored |
+| **1** | refused (no release, no backup CronJob), the Job failed, or it **completed naming no dump** | refused, the render failed, or the Job failed — including its own refusal to run under a live application, which changes nothing |
+| **2** | usage, unreachable cluster, or a Job this command stopped watching | usage (no `--from`), unreachable cluster, or a Job this command stopped watching |
+
+Three of those are worth spelling out.
 
 **Success is never inferred from silence.** `helm install` without `--wait` exits zero when the API
 server *accepted* the objects, not when the application came up. `acpctl install` waits, then asks
@@ -64,6 +90,93 @@ written against — and it is the easy failure to fall into, because everything 
 **Nothing to remove is a 1, not a 0.** "We removed nothing" is a different answer from "we removed
 it", and a decommissioning script must not be able to report a namespace clean that it never
 touched.
+
+**A backup this command stopped watching is a 2, not a 1.** A timeout means the Job may still be
+running and may still succeed; the only true statement is that `acpctl` stopped looking. Calling it
+a failure sends an operator to re-run a dump that is in progress, which on a large database is the
+least useful thing available at that moment.
+
+---
+
+## `backup`
+
+One command: run the chart's backup CronJob now, wait, and read back what it produced.
+
+```
+acpctl backup acp.yaml -n acp-production
+acpctl backup acp.yaml -n acp-production --json | jq .file
+```
+
+It **acts immediately** — there is no preview and no `--yes`, unlike every other mutating command
+here. That asymmetry is deliberate: a preview earns its friction where the command destroys
+something, and a backup writes a file.
+
+1. **Find the CronJob by label**, `app.kubernetes.io/instance=<release>,app.kubernetes.io/component=backup`.
+   Not by the name `<release>-backup`: the chart names it `<fullname>-backup`, and the fullname is
+   not the release name whenever `fullnameOverride` is set. A computed name would find nothing and
+   report "this installation takes no backups" about one that does — wrong in the direction where
+   the operator stops looking.
+2. **Refuse if there is none**, naming the three values that enable it, two of which have no
+   default because they are decisions (`backup.schedule` is the RPO; `backup.retentionDays` is the
+   retention policy).
+3. **`kubectl create job --from=cronjob/<name>`.** The pod template comes from the CronJob.
+4. **Wait, then read the Job's log**, and parse the line the backup writes about itself:
+   `wrote /backups/acp-….dump (3138 bytes, 9 objects)`. That record is what `--json` emits, and it
+   is the machine-readable "backup age" PRD §14 asks for.
+5. **A Job that says `Complete` and names no dump exits 1.** Every command this ran returned zero;
+   the log is the only thing that can tell the difference between a backup and an accepted request.
+
+## `restore`
+
+**Previews by default and changes nothing without `--yes`.** It drops and recreates every object in
+the database, so the preview prints what it replaces, what it does *not* — object storage is not
+rewound, so afterwards the database and the artifact store disagree about anything produced between
+the dump and now — and how.
+
+```
+acpctl restore acp.yaml -n acp-production                       # what dumps are there?
+acpctl restore acp.yaml -n acp-production --from acp-….dump     # preview
+acpctl restore acp.yaml -n acp-production --from acp-….dump --quiesce --yes
+```
+
+**There is no `--from latest`.** After a bad migration the newest backup is the one you do not
+want. Run without `--from` and the command lists the dumps the backup Jobs still on the cluster
+reported writing — which is *not* a listing of the volume (the CronJob's history limits bound it),
+and says so, because a name missing from it may still be on the claim.
+
+**`restore.confirm` is read off the cluster, not recomputed.** The chart requires it to equal
+`acp.fullname`; reimplementing helm's fullname rule here would be a second definition of somebody
+else's contract, so it is the CronJob's own name with `-backup` removed.
+
+**The Job is rendered from `helm get values`, not from the document.** An install may have carried a
+release manifest's digests, a `--set`, or a second values file; a Job rendered from the document
+alone can differ from the workloads it is restoring underneath — different image, different secret
+name, different security context.
+
+**And the name it polls for comes back out of the rendered manifest.** `templates/restore-job.yaml`
+truncates to 63 characters, so a recomputed name would agree until a long release name or run id
+crossed that, at which point the command would poll for a Job that does not exist and time out
+while the restore ran perfectly.
+
+### `--quiesce`
+
+The restore Job refuses while any other session is on the database — correct, and the step
+operators skip. `--quiesce` does it properly:
+
+1. Read the release's Deployments and their replica counts, by `app.kubernetes.io/instance` label.
+2. **Write those counts into the install-state ConfigMap before scaling anything.** A run
+   interrupted between the scale-down and the scale-up otherwise leaves an application at zero with
+   nothing on the cluster saying what it should be.
+3. Scale to zero, restore, scale back — **including when the restore failed**. A restore that fails
+   is a bad afternoon; one that fails and leaves the tiers at zero is an outage.
+4. Clear the record on the way out, so the next run does not resume from stale counts.
+
+**It refuses outright when there is nowhere to record the counts** — a release installed by hand
+has no `acp-installation` ConfigMap. That is a legitimate situation and still not one in which this
+command may take the tiers down.
+
+An interrupted run is resumed from its own record rather than from the live counts, which are zero:
+scaling "back" to zero would leave the outage in place.
 
 ---
 

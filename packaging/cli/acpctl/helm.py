@@ -16,14 +16,43 @@ WHAT IS PERMITTED, AND WHY EACH ONE.
   helm template           the render, for a dry run that touches no cluster
 
   kubectl get                     reads
+  kubectl logs job/<name>         the evidence a backup or restore actually produced
   kubectl create namespace        the install target, when it does not exist yet
-  kubectl apply -f -              the install-state ConfigMap, from a manifest THIS FILE builds
+  kubectl create job --from=cronjob/<name>   running the chart's backup CronJob NOW
+  kubectl apply -f -              the install-state ConfigMap, and the chart's own restore Job —
+                                  both from a manifest built here or rendered by `helm template`
+  kubectl scale deployment        quiescing the application for a restore, and putting it back
   kubectl delete configmap/pvc    the install state, and PVCs the release owns — both narrowed
                                   by name or by label selector below
 
 Everything else raises. `helm rollback` in particular is absent even though it is a helm
 subcommand acpctl will eventually need: rollback is a phase-5 command that does not exist yet,
 and an allow-list that already permits the verbs of unimplemented features is not an allow-list.
+
+WHAT `backup` AND `restore` ADDED, AND WHY EACH IS NARROWER THAN IT LOOKS. Four entries above
+arrived with those two commands, and the widening is the part of that change worth reviewing:
+
+  create job    ONLY with `--from=cronjob/<name>`. A bare `kubectl create job` would let acpctl
+                invent a workload out of arguments it assembled; `--from` copies the pod template
+                out of an object the CHART rendered, so what runs is the chart's, sourced from the
+                cluster, and acpctl chooses only when. A `create job` with no `--from` is refused.
+  logs          ONLY for a `job/<name>` target, never a pod, a deployment or `-l`. The backup and
+                restore Jobs print what they did — the dump's name, its object count, the table
+                count after a restore — and a command that ran them and could not read that would
+                be reporting its own exit status as the result. Pod logs in general are a much
+                wider read (they carry application data); this is the two Jobs' own output.
+  apply -f -    unchanged in mechanism, WIDENED IN SOURCE, and this is the honest cost: the input
+                may now also be a `helm template -s` render of the chart's restore Job, not only
+                the ConfigMap this file builds. Still stdin-only, so acpctl cannot be pointed at a
+                path — but the manifest is no longer one this module authored end to end. It is
+                the chart's own object, rendered from the RELEASE's values (`helm get values`), so
+                it matches what is installed rather than what acpctl guessed.
+  scale         ONLY Deployments, never `--all`, and always with an explicit `--replicas`. This
+                one is genuinely broad — scaling the wrong Deployment to zero is an outage — and
+                the guard cannot see WHICH deployments a caller picked. So the bound is split:
+                the guard bounds the KIND and forbids `--all`, and `backup.py` only ever names
+                Deployments it read back from `app.kubernetes.io/instance=<release>`. That second
+                half is a caller discipline, asserted by a test, not something this guard proves.
 
 THE DELETE GUARD IS RESOURCE-SCOPED, WHICH THE HELM ONE DOES NOT NEED TO BE. `helm uninstall`
 can only remove what a release owns. `kubectl delete` can remove anything the operator's
@@ -66,14 +95,19 @@ HELM_SUBCOMMANDS = frozenset({
 })
 
 # kubectl verbs, split so the guard can say which kind of permission a refusal fell foul of and
-# so a reader can see at a glance that exactly four writes exist.
-KUBECTL_READ_VERBS = frozenset({"get", "version", "api-resources"})
-KUBECTL_WRITE_VERBS = frozenset({"create", "apply", "delete"})
+# so a reader can see at a glance exactly which writes exist.
+KUBECTL_READ_VERBS = frozenset({"get", "version", "api-resources", "logs"})
+KUBECTL_WRITE_VERBS = frozenset({"create", "apply", "delete", "scale"})
 
 # Resources `kubectl create` may make. The namespace is the install target; the ConfigMap is the
-# install state. Nothing else — the chart's objects are helm's business, and a `kubectl create`
-# of one would be an object helm does not know it owns and will not clean up.
-CREATABLE = frozenset({"namespace", "ns", "configmap", "cm"})
+# install state; the Job is the chart's backup CronJob run now, and ONLY via `--from=cronjob/…`
+# (see check_kubectl). Nothing else — the chart's objects are helm's business, and a `kubectl
+# create` of one would be an object helm does not know it owns and will not clean up.
+CREATABLE = frozenset({"namespace", "ns", "configmap", "cm", "job", "jobs"})
+
+# Resources `kubectl scale` may resize. Deployments only: the API and worker tiers are what a
+# restore has to quiesce, and StatefulSets, ReplicaSets and the rest are not this chart's shape.
+SCALABLE = frozenset({"deployment", "deployments", "deploy"})
 
 # Resources `kubectl delete` may remove, each with its own narrowing below.
 DELETABLE = frozenset({"configmap", "cm", "pvc", "persistentvolumeclaim", "persistentvolumeclaims"})
@@ -86,6 +120,10 @@ VALUE_FLAGS = frozenset({
     "-n", "--namespace", "-o", "--output", "-l", "--selector", "-f", "--filename",
     "--context", "--kube-context", "--kubeconfig", "--timeout", "--set", "--values",
     "--wait-for-jobs", "--description", "--history-max",
+    # backup/restore: `-s` selects one template out of a `helm template` render, `--replicas`
+    # takes a count, and `-c` a container. Absent from this set they would read as POSITIONALS,
+    # so `scale deployment/x --replicas 0` would look like a scale of a resource called "0".
+    "-s", "--show-only", "--replicas", "-c", "--container", "--tail", "--since",
 })
 
 # helm's own default is 5 minutes, which is short for a migration Job on a large database and is
@@ -216,6 +254,19 @@ def check_kubectl(args: list[str]) -> None:
     if verb.startswith("-"):
         raise ForbiddenCommand(
             f"the kubectl verb must be the first argument; got {verb!r}.")
+    if verb == "logs":
+        # NARROWED TO THE TWO JOBS' OWN OUTPUT. `kubectl logs` in general reads application
+        # containers, whose output carries document names, user identifiers and whatever else the
+        # application logged — a far wider read than anything else on this list. What backup and
+        # restore need is one Job's stdout, and `job/<name>` is the only form that can express
+        # that. A pod name, a deployment, or a `-l` selector would each admit the general case.
+        targets = [a for a in _positionals(args)[1:]]
+        if len(targets) != 1 or not targets[0].startswith("job/"):
+            raise ForbiddenCommand(
+                f"acpctl may only read `kubectl logs job/<name>`; refused "
+                f"{targets or '(no target)'}. Reading arbitrary pod logs is the support bundle's "
+                f"job, where every line goes through the redactor first.")
+        return
     if verb in KUBECTL_READ_VERBS:
         return
     if verb not in KUBECTL_WRITE_VERBS:
@@ -233,12 +284,30 @@ def check_kubectl(args: list[str]) -> None:
                 f"acpctl may only `kubectl create` {', '.join(sorted(CREATABLE))}; refused "
                 f"{resource or '(nothing)'!r}. The release's own objects belong to helm — one "
                 f"created behind its back is one it will not upgrade and will not clean up.")
+        if resource in {"job", "jobs"}:
+            # `--from` IS THE WHOLE PERMISSION. With it, the Job's pod template is copied from a
+            # CronJob the chart rendered — acpctl decides WHEN a backup runs and nothing about
+            # WHAT it runs. Without it, `kubectl create job --image=... -- <command>` would let
+            # this tool run an arbitrary container, with the release's service account, inside
+            # the namespace holding the database. That is not a backup command; it is a shell.
+            source = next((a.split("=", 1)[1] for a in args
+                           if a.startswith("--from=")), None)
+            if not source:
+                raise ForbiddenCommand(
+                    "acpctl may only `kubectl create job --from=cronjob/<name>`; refused a Job "
+                    "created from arguments. What runs must come from an object the chart "
+                    "rendered, not from a command line this tool assembled.")
+            if not source.startswith("cronjob/"):
+                raise ForbiddenCommand(
+                    f"`kubectl create job --from` must name a cronjob; refused {source!r}.")
         return
 
     if verb == "apply":
-        # Apply is permitted ONLY from stdin, and the only thing this module ever pipes into it
-        # is the install-state ConfigMap it builds itself in state_manifest(). Allowing `-f
-        # <path>` would make acpctl a general-purpose applier of whatever a caller pointed it at.
+        # Apply is permitted ONLY from stdin. Two things are ever piped into it: the install-state
+        # ConfigMap this module builds in state_manifest(), and the chart's restore Job as
+        # rendered by `helm template -s` from the RELEASE's own values. Allowing `-f <path>` would
+        # make acpctl a general-purpose applier of whatever a caller pointed it at, which is the
+        # difference between a tool that installs one chart and a tool that applies YAML.
         if "-f" not in args and "--filename" not in args:
             raise ForbiddenCommand("`kubectl apply` needs -f -; refused an apply with no input")
         idx = args.index("-f") if "-f" in args else args.index("--filename")
@@ -246,6 +315,24 @@ def check_kubectl(args: list[str]) -> None:
             raise ForbiddenCommand(
                 "acpctl may only `kubectl apply -f -`, piping a manifest it built itself; "
                 "refused an apply reading from a path.")
+        return
+
+    if verb == "scale":
+        # `kind/name` as well as `kind name`, because scaling one Deployment back to its own
+        # replica count is the ordinary case and `deployment/acp-api` is how it is spelled.
+        kind = resource.split("/", 1)[0]
+        if kind not in SCALABLE:
+            raise ForbiddenCommand(
+                f"acpctl may only `kubectl scale` {', '.join(sorted(SCALABLE))}; refused "
+                f"{resource or '(nothing)'!r}.")
+        if "--all" in args:
+            raise ForbiddenCommand(
+                "refusing `kubectl scale --all`: a restore quiesces the release it names, not "
+                "every workload that happens to share the namespace.")
+        if not any(a == "--replicas" or a.startswith("--replicas=") for a in args):
+            raise ForbiddenCommand(
+                "refusing a `kubectl scale` with no --replicas: the count is the whole of what "
+                "this command does, and defaulting it would be this tool choosing a topology.")
         return
 
     # delete
@@ -437,6 +524,141 @@ class Helm:
             return None, f"unparseable JSON: {exc}"
         return [item["metadata"]["name"] for item in payload.get("items", [])], ""
 
+    def backup_cronjob(self, release: str, namespace: str) -> tuple[dict | None, str]:
+        """The release's backup CronJob, found BY LABEL rather than by a name computed here.
+
+        `(None, "")` means definitely not there; `(None, reason)` means the read did not work.
+
+        WHY NOT `<release>-backup`. The chart names it `<fullname>-backup`, and the fullname is
+        NOT the release name whenever `fullnameOverride` or `nameOverride` is set, or the release
+        name already contains the chart's. A lookup by the computed name would then find nothing
+        and report "this installation takes no backups" about one that does — the wrong answer in
+        the worse direction, since the operator's next move is to stop looking. The instance and
+        component labels are on the object itself, so this asks the cluster which object it is
+        rather than predicting what it was called.
+        """
+        result = self.kubectl(["get", "cronjob", "-n", namespace, "-l",
+                               f"{RELEASE_LABEL}={release},app.kubernetes.io/component=backup",
+                               "-o", "json"])
+        if not result.ok:
+            return None, result.summary()
+        try:
+            items = (result.json() or {}).get("items") or []
+        except (json.JSONDecodeError, ValueError) as exc:
+            return None, f"unparseable CronJob JSON: {exc}"
+        if not items:
+            return None, ""
+        if len(items) > 1:
+            names = ", ".join(sorted((i.get("metadata") or {}).get("name", "?") for i in items))
+            return None, (f"{len(items)} backup CronJobs carry this release's labels ({names}); "
+                          f"refusing to guess which one this installation's backups come from")
+        return items[0], ""
+
+    def job_state(self, name: str, namespace: str) -> tuple[str, str]:
+        """`("succeeded"|"failed"|"running"|"unknown", reason)` for one Job.
+
+        "unknown" is a distinct answer and not folded into "running", because a command that
+        cannot read a Job must not go on waiting for it as though it had — that is how a wait
+        loop becomes a timeout with nothing to report.
+        """
+        result = self.kubectl(["get", "job", name, "-n", namespace, "-o", "json"])
+        if not result.ok:
+            if "notfound" in (result.stderr or "").lower().replace(" ", ""):
+                return "unknown", f"no Job {name} in {namespace}"
+            return "unknown", result.summary()
+        try:
+            status = (result.json() or {}).get("status") or {}
+        except (json.JSONDecodeError, ValueError) as exc:
+            return "unknown", f"unparseable Job JSON: {exc}"
+        for condition in status.get("conditions") or []:
+            if condition.get("status") != "True":
+                continue
+            if condition.get("type") == "Complete":
+                return "succeeded", ""
+            if condition.get("type") == "Failed":
+                return "failed", condition.get("message") or condition.get("reason") or ""
+        if status.get("succeeded"):
+            return "succeeded", ""
+        return "running", ""
+
+    def jobs_with_label(self, selector: str, namespace: str) -> tuple[list[dict] | None, str]:
+        """Jobs carrying a label selector, newest first by creation timestamp."""
+        result = self.kubectl(["get", "job", "-n", namespace, "-l", selector, "-o", "json"])
+        if not result.ok:
+            return None, result.summary()
+        try:
+            items = (result.json() or {}).get("items") or []
+        except (json.JSONDecodeError, ValueError) as exc:
+            return None, f"unparseable JSON: {exc}"
+        return sorted(items,
+                      key=lambda i: (i.get("metadata") or {}).get("creationTimestamp") or "",
+                      reverse=True), ""
+
+    def job_log(self, name: str, namespace: str) -> tuple[str, str]:
+        """One Job's own output — the only logs acpctl reads. See check_kubectl."""
+        result = self.kubectl(["logs", f"job/{name}", "-n", namespace])
+        if not result.ok:
+            return "", result.summary()
+        return result.stdout, ""
+
+    def deployments_owned(self, release: str, namespace: str
+                          ) -> tuple[list[tuple[str, int]] | None, str]:
+        """`(name, spec.replicas)` for the Deployments this release owns.
+
+        THE ONLY SOURCE OF NAMES `scale_deployment` IS EVER GIVEN. helm.check_kubectl bounds the
+        KIND a scale may touch and forbids `--all`; it cannot know which Deployments belong to
+        this release. This query is the other half of that bound — ownership demonstrated by the
+        release's own instance label rather than asserted by a caller — and
+        tests/test_packaging_backup.py asserts nothing else ever reaches the scale call.
+        """
+        result = self.kubectl(["get", "deployment", "-n", namespace, "-l",
+                               f"{RELEASE_LABEL}={release}", "-o", "json"])
+        if not result.ok:
+            return None, result.summary()
+        try:
+            items = (result.json() or {}).get("items") or []
+        except (json.JSONDecodeError, ValueError) as exc:
+            return None, f"unparseable JSON: {exc}"
+        out = []
+        for item in items:
+            name = (item.get("metadata") or {}).get("name")
+            replicas = (item.get("spec") or {}).get("replicas")
+            if name is not None:
+                out.append((name, int(replicas) if replicas is not None else 1))
+        return sorted(out), ""
+
+    def release_values(self, release: str, namespace: str) -> tuple[dict | None, str]:
+        """The values the release was installed with.
+
+        WHY NOT `build_values(document)`: because the running release is what a restore Job has to
+        match. An install may have carried a release manifest's digests, a `--set`, or a second
+        values file, and a Job rendered from the document alone would differ from the workloads it
+        is restoring underneath — a different image, a different security context, a different
+        secret name. helm knows what was actually supplied; this asks it.
+        """
+        result = self.helm(["get", "values", release, "-n", namespace, "-o", "json"])
+        if not result.ok:
+            return None, result.summary()
+        try:
+            payload = result.json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            return None, f"unparseable JSON from helm get values: {exc}"
+        # helm prints `null` for a release installed with no user values at all.
+        return (payload if isinstance(payload, dict) else {}), ""
+
+    def render_template(self, release: str, chart: str, namespace: str, *,
+                        values_path: str, show_only: str, sets: list[str]
+                        ) -> tuple[str, str]:
+        """`helm template -s <one template>` — renders, contacts no API server, changes nothing."""
+        args = ["template", release, chart, "-n", namespace,
+                "--values", values_path, "-s", show_only]
+        for item in sets:
+            args += ["--set", item]
+        result = self.helm(args)
+        if not result.ok:
+            return "", (result.stderr or result.stdout or "").strip()
+        return result.stdout, ""
+
     def manifest_objects(self, release: str, namespace: str) -> tuple[list[str] | None, str]:
         """`kind/name` for everything the release owns, for the uninstall preview.
 
@@ -487,6 +709,22 @@ class Helm:
     def delete_state(self, namespace: str) -> CommandResult:
         return self.kubectl(["delete", "configmap", STATE_CONFIGMAP, "-n", namespace,
                              "--ignore-not-found"], check=True)
+
+    def create_job_from_cronjob(self, name: str, cronjob: str, namespace: str) -> CommandResult:
+        """Run the chart's backup CronJob now. The pod template comes from the CronJob, not from
+        here — see check_kubectl for why `--from` is the whole of the permission."""
+        return self.kubectl(["create", "job", name, f"--from=cronjob/{cronjob}",
+                             "-n", namespace], check=True)
+
+    def apply_manifest(self, manifest: str, namespace: str) -> CommandResult:
+        """Apply a manifest from stdin. The only callers are `write_state` above and the restore,
+        which pipes the chart's own `helm template -s` render."""
+        return self.kubectl(["apply", "-n", namespace, "-f", "-"], stdin=manifest, check=True)
+
+    def scale_deployment(self, name: str, replicas: int, namespace: str) -> CommandResult:
+        """Resize ONE Deployment, named from `deployments_owned` and never from anywhere else."""
+        return self.kubectl(["scale", f"deployment/{name}", f"--replicas={replicas}",
+                             "-n", namespace], check=True)
 
     def delete_owned_pvcs(self, release: str, namespace: str) -> CommandResult:
         return self.kubectl(["delete", "pvc", "-n", namespace, "-l",
