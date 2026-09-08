@@ -15,6 +15,7 @@ to the pipeline.
 from __future__ import annotations
 
 import copy
+import json
 import os
 import re
 import shutil
@@ -497,6 +498,48 @@ def test_private_workers_render_a_policy_that_admits_nothing():
     manifests = render(doc)
     policy = named(manifests, "NetworkPolicy", "-worker-no-ingress")
     assert policy["spec"]["ingress"] == [], "worker ingress policy is not empty"
+
+
+@needs_helm
+def test_asking_for_a_gpu_renders_a_gpu_request():
+    """`ai.ollama.gpu: true` RENDERED NOTHING AT ALL until 2026-09-08.
+
+    The flag gated a pod-level block containing only `nodeSelector` and `tolerations`, both
+    `with`-guarded on values nothing sets — while the comment beside it described an
+    `nvidia.com/gpu` limit that was not written anywhere and could not have been at that level: an
+    extended resource is a CONTAINER resource. The standard-production example asks for a GPU,
+    `grep nvidia` over the render returned nothing, and the pod scheduled onto whatever node had
+    room and ran CPU inference. The document said GPU, the cluster did CPU, and nothing disagreed.
+
+    Only the limit is asserted. Kubernetes fills an extended resource's request in from its limit
+    and rejects the pod if the two are written and differ.
+    """
+    doc = load_example("standard-production")
+    assert doc["ai"]["ollama"]["gpu"] is True, "this test would prove nothing"
+    ollama = named(render(doc), "Deployment", "-ollama")
+    resources = ollama["spec"]["template"]["spec"]["containers"][0]["resources"]
+    assert resources["limits"]["nvidia.com/gpu"] == 1
+    assert "requests" not in resources or "nvidia.com/gpu" not in resources["requests"]
+
+
+@needs_helm
+def test_no_gpu_asked_for_means_no_gpu_requested():
+    """The control. A chart that requested a GPU unconditionally would satisfy the assertion above
+    and make every CPU-only installation unschedulable."""
+    doc = load_example("standard-production")
+    doc["ai"]["ollama"]["gpu"] = False
+    ollama = named(render(doc), "Deployment", "-ollama")
+    resources = ollama["spec"]["template"]["spec"]["containers"][0].get("resources", {})
+    assert "nvidia.com/gpu" not in json.dumps(resources)
+
+
+@needs_helm
+def test_the_gpu_count_is_a_values_knob():
+    manifests = render(load_example("standard-production"),
+                       extra=["--set", "ai.ollama.gpuCount=4"])
+    ollama = named(manifests, "Deployment", "-ollama")
+    limits = ollama["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]
+    assert limits["nvidia.com/gpu"] == 4
 
 
 @needs_helm
