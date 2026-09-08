@@ -3,7 +3,7 @@ from collections import defaultdict
 import re
 
 LANES = ('automatic', 'review', 'manual', 'blocked')
-CAPABILITIES = {'assign': True, 'execute': True, 'save_future': True, 'ai_automatic': False, 'supported_ai_levels': [0, 1],
+CAPABILITIES = {'assign': True, 'execute': True, 'save_future': True, 'ai_budget': True, 'ai_automatic': False, 'supported_ai_levels': [0, 1],
                 'ai_automatic_reason': 'Automatic application of AI proposals is not supported by this execution path.'}
 
 

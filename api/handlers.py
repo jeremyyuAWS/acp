@@ -1135,6 +1135,18 @@ def _rem_event(scan_id: str, kind: str, job: dict | None, file: str | None, **de
 
 @handler("remediate_file")
 def _remediate_file(payload: dict, job: dict) -> None:
+    from ai_run_policy import run_context
+    with run_context(core.store, payload, job) as context:
+        try:
+            return _remediate_file_with_policy(payload, job)
+        finally:
+            if context is not None:
+                for reason in sorted(set(str(item) for item in context.deferred)):
+                    core.store.log_decision("system", "remediate.ai_deferred",
+                        scan_id=context.scan_id, file=payload.get("file"), detail=reason)
+
+
+def _remediate_file_with_policy(payload: dict, job: dict) -> None:
     """Apply server-side remediation to one file and write the fixed copy to Drive.
 
     payload: {scan_id, file, drive_file_id}
