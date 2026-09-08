@@ -151,7 +151,7 @@ def resolve_media_locators(data: bytes, locators) -> dict[str, list[str]]:
 
     WHY THE SLIDES-ONLY WALK THAT USED TO BE HERE WAS REPLACED — two holes, both measured:
 
-      * It scanned `ppt/slides/slide\d+\.xml` alone, so a picture on a slideLayout or
+      * It scanned `ppt/slides/slide\\d+\\.xml` alone, so a picture on a slideLayout or
         slideMaster resolved to NOTHING. That image still raises 1.4.5 (ocr._ooxml_images walks
         the zip namelist), so a reviewer could describe it and the description could never be
         written: the row stayed approved and unapplied forever and the file could never certify.
