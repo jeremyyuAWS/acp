@@ -111,12 +111,13 @@ describe('canonical stage card', () => {
     await act(async () => { root.render(createElement(WorkflowStageStack, {
       lineage, view: 'assess', receivedAt: Date.now(),
     })) })
-    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(2)
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(1)
     const summary = container.querySelector('[data-stage="discover"] .workflow-stage-stack__summary')
     await act(async () => { summary.click() })
-    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(2)
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(1)
     await act(async () => { summary.click() })
-    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(2)
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(1)
+    expect(container.querySelector('.workflow-sse-card')).not.toBeNull()
     expect(container.textContent).not.toContain('Final · refreshed now')
     await act(async () => { vi.advanceTimersByTime(10_000) })
     expect(container.textContent).not.toContain('Final · refreshed now')

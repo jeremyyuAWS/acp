@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import CanonicalStageCard from './CanonicalStageCard.jsx'
-import CompletedStageDetails from './CompletedStageDetails.jsx'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
+import WorkflowStageActivityCard from './WorkflowStageActivityCard.jsx'
 import { canonicalStageCardModel, canonicalWorkflowStages, currentCanonicalStage,
   stageNeedsAttention } from './canonicalStageCard.js'
 
@@ -73,7 +72,7 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
               <span className="workflow-stage-stack__label"><b>{model.stageLabel}</b> · {model.stateLabel}</span>
               <span className="workflow-stage-stack__meta">
                 <span className="muted workflow-stage-stack__count">{primaryOutcome(model)}</span>
-                {!terminal(snapshot.state) && <LiveHeartbeatBars measuredAt={receivedAt} stage={stage}
+                {!open && !terminal(snapshot.state) && <LiveHeartbeatBars measuredAt={receivedAt} stage={stage}
                   historyKey={`${snapshot.workflow_id || lineage?.workflow_id || 'workflow'}:${snapshot.execution_id || stage}`}
                   showText />}
                 {isCurrent && <span className="workflow-stage-stack__ownership">Current</span>}
@@ -81,12 +80,9 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
               <span className="workflow-stage-stack__affordance" aria-hidden="true">{open ? '−' : '+'}</span>
             </button>}
             {!locked && <div id={bodyId} className="workflow-stage-stack__body" hidden={!open}>
-              {detail ? <div className="workflow-stage-stack__live-detail" data-detail-owner="current">{detail}</div> : (
-                ['discover', 'assess'].includes(stage) && terminal(snapshot.state)
-                  ? <CompletedStageDetails snapshot={snapshot} />
-                  : <CanonicalStageCard snapshot={snapshot} receivedAt={receivedAt}
-                      onOpen={onNavigate ? () => onNavigate(destination[stage]) : null} embedded />
-              )}
+              {detail ? <div className="workflow-stage-stack__live-detail" data-detail-owner="current">{detail}</div>
+                : <WorkflowStageActivityCard snapshot={snapshot} receivedAt={receivedAt}
+                    onOpen={onNavigate ? () => onNavigate(destination[stage]) : null} />}
             </div>}
           </div>
         )
