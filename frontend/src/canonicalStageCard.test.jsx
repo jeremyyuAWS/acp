@@ -367,6 +367,50 @@ describe('unified idempotent workflow integration', () => {
     await act(async () => { root.unmount() })
   })
 
+  it('opens a completed stage on its own tab and minimizes it after navigation', async () => {
+    const { container, root } = createTestRoot()
+    const lineage = { workflow_id: 'completed-navigation', workflow_revision: 7, stages: [
+      stage('discover', 'succeeded', 3), stage('assess', 'succeeded', 4),
+      stage('remediate', 'processing', 5),
+    ] }
+
+    await act(async () => { root.render(createElement(WorkflowStageStack, {
+      lineage, activeStage: 'assess',
+    })) })
+    expect(container.querySelector('[data-stage="discover"] .workflow-stage-stack__body').hidden).toBe(true)
+    expect(container.querySelector('[data-stage="assess"] .workflow-stage-stack__body').hidden).toBe(false)
+    expect(container.querySelector('[data-stage="remediate"] .workflow-stage-stack__body').hidden).toBe(false)
+
+    await act(async () => { root.render(createElement(WorkflowStageStack, {
+      lineage, activeStage: 'remediate',
+    })) })
+    expect(container.querySelector('[data-stage="discover"] .workflow-stage-stack__body').hidden).toBe(true)
+    expect(container.querySelector('[data-stage="assess"] .workflow-stage-stack__body').hidden).toBe(true)
+    expect(container.querySelector('[data-stage="remediate"] .workflow-stage-stack__body').hidden).toBe(false)
+    await act(async () => { root.unmount() })
+  })
+
+  it('resets manual disclosure overrides when the active stage tab changes', async () => {
+    const { container, root } = createTestRoot()
+    const lineage = { workflow_id: 'manual-navigation', workflow_revision: 7, stages: [
+      stage('discover', 'succeeded', 3), stage('assess', 'succeeded', 4),
+    ] }
+
+    await act(async () => { root.render(createElement(WorkflowStageStack, {
+      lineage, activeStage: 'assess',
+    })) })
+    const assessSummary = container.querySelector('[data-stage="assess"] .workflow-stage-stack__summary')
+    await act(async () => { assessSummary.click() })
+    expect(container.querySelector('[data-stage="assess"] .workflow-stage-stack__body').hidden).toBe(true)
+
+    await act(async () => { root.render(createElement(WorkflowStageStack, {
+      lineage, activeStage: 'discover',
+    })) })
+    expect(container.querySelector('[data-stage="discover"] .workflow-stage-stack__body').hidden).toBe(false)
+    expect(container.querySelector('[data-stage="assess"] .workflow-stage-stack__body').hidden).toBe(true)
+    await act(async () => { root.unmount() })
+  })
+
   it('rejects stale revisions and never lets an upstream live flag reclaim downstream ownership', () => {
     const lineage = { workflow_revision: 7, stages: [
       stage('discover', 'processing', 99), stage('assess', 'processing', 4),

@@ -2230,6 +2230,8 @@ export default function App() {
         onLiveOps={() => { goToView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
       />
       <WorkflowStageStack lineage={canonicalRun.lineage} receivedAt={canonicalRun.receivedAt}
+        activeStage={view === 'publish' ? 'release'
+          : ['discover', 'assess', 'remediate'].includes(view) ? view : null}
         stageDetails={{
           discover: canonicalStage?.stage === 'discover' && busy && progress
             && (!canonicalScanId || liveScanId === canonicalScanId) ? (
