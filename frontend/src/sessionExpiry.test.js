@@ -55,12 +55,13 @@ describe('a review decision that fails is not shown as saved', () => {
     expect(rem).not.toMatch(/\bp\.catch\(\(\)\s*=>\s*\{\s*\}\)/)
   })
 
-  it('every decision path routes its failure to undoAct', () => {
-    // Both paths still roll back through undoAct, and since 2026-09-01 both also RE-THROW: the
-    // rollback is what repairs local state, the throw is what stops the review pane advancing past
-    // a decision the server refused. Losing either half is a defect, so both are pinned.
-    expect(rem).toMatch(/updateHitlItem\(item\.id, 'skipped'\)\.catch\(\(e\) => \{ undoAct\(item, 'deferred', e\); throw e \}\)/)
-    expect(rem).toMatch(/\(e\) => \{ undoAct\(item, kind, e\); throw e \},/)
+  it('every decision path reconciles an uncertain response before rolling back', () => {
+    // A capacity 503 explicitly reports that the write outcome is unknown. Both paths must
+    // inspect the durable row before undoing local state, while settleActFailure retains the
+    // rollback + rethrow behavior for a decision proven not to have landed.
+    expect(rem).toMatch(/updateHitlItem\(item\.id, 'skipped'\)\.catch\([\s\S]{0,120}settleActFailure\(item, 'deferred', \{ status: 'skipped' \}, e\)/)
+    expect(rem).toMatch(/\(e\) => settleActFailure\(item, kind, \{[\s\S]{0,300}status: apiStatus/)
+    expect(rem).toMatch(/undoAct\(item, kind, err, settled\.outcome\)\s*\n\s*throw err/)
   })
 
   it('undoAct restores the card, undoes the count, and explains', () => {

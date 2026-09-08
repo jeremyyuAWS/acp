@@ -24,6 +24,17 @@ describe('an uncertain HITL decision response', () => {
     )).resolves.toMatchObject({ outcome: 'not_saved', row: { status: 'pending' } })
   })
 
+  it('does not mistake an older approval with different reviewer edits for this write', async () => {
+    const result = await reconcileHitlPutFailure(ITEM.id, {
+      status: 'approved', approvedValue: 'new headline', approvedValues: ['new alt'],
+      resolution: null,
+    }, busy(), async () => [{
+      ...ITEM, status: 'approved', approved_value: 'old headline', resolution: null,
+      proposals: [{ approved_value: 'old alt' }],
+    }])
+    expect(result.outcome).toBe('not_saved')
+  })
+
   it('keeps the outcome unknown when the authoritative read cannot settle it', async () => {
     await expect(reconcileHitlPutFailure(ITEM.id, 'approved', busy(), () => Promise.resolve([])))
       .resolves.toMatchObject({ outcome: 'unknown' })

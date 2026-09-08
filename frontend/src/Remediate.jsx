@@ -92,14 +92,24 @@ const AI_DRAFTABLE_SCS = new Set(['1.1.1', '2.4.4', '2.4.9'])
 // A pool-capacity response can arrive after the decision's transaction began. When the server
 // explicitly says `changes: unknown`, neither success nor failure is safe to infer from the PUT.
 // Re-read the durable queue (all statuses, not only pending) and settle from the row itself.
-export async function reconcileHitlPutFailure(itemId, wantedStatus, err, readQueue = listAllHitl) {
+export async function reconcileHitlPutFailure(itemId, wanted, err, readQueue = listAllHitl) {
   if (err?.code !== 'DB_CAPACITY_BUSY' || err?.changes !== 'unknown') {
     return { outcome: 'not_saved', error: err }
   }
   try {
     const rows = await readQueue()
     const row = (rows || []).find((candidate) => String(candidate.id) === String(itemId))
-    if (row?.status === wantedStatus) return { outcome: 'saved', row }
+    const expected = typeof wanted === 'string' ? { status: wanted } : wanted
+    const sameValues = expected.approvedValues == null || expected.approvedValues.every((value, i) => {
+      const actual = (row?.proposals || row?.evidence || [])[i]?.approved_value
+      return String(actual || '').trim() === String(value || '').trim()
+    })
+    const matches = row?.status === expected.status
+      && String(row?.reviewer_note || '') === String(expected.reviewerNote || '')
+      && String(row?.approved_value || '') === String(expected.approvedValue || '')
+      && String(row?.resolution || '') === String(expected.resolution || '')
+      && sameValues
+    if (matches) return { outcome: 'saved', row }
     if (row) return { outcome: 'not_saved', row, error: err }
   } catch { /* the reconciliation read failed too; preserve uncertainty below */ }
   return { outcome: 'unknown', error: err }
@@ -705,8 +715,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     setActError(hitlFailureCopy(item, kind, err, outcome))
   }
 
-  const settleActFailure = async (item, kind, wantedStatus, err) => {
-    const settled = await reconcileHitlPutFailure(item?.id, wantedStatus, err)
+  const settleActFailure = async (item, kind, wanted, err) => {
+    const settled = await reconcileHitlPutFailure(item?.id, wanted, err)
     if (settled.outcome === 'saved') {
       // The PUT response was lost to capacity pressure, but the durable row proves the decision
       // landed. Keep the optimistic UI and refresh derived compliance state just as on a normal
@@ -736,7 +746,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       setActed((a) => ({ ...a, deferred: a.deferred + 1 }))
       if (!SIM && item?.id) {
         return updateHitlItem(item.id, 'skipped').catch(
-          (e) => settleActFailure(item, 'deferred', 'skipped', e))
+          (e) => settleActFailure(item, 'deferred', { status: 'skipped' }, e))
       }
       return Promise.resolve()
     }
@@ -775,7 +785,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           try { const r = onRefresh?.(); if (r && typeof r.catch === 'function') r.catch(() => {}) }
           catch { /* the refresh is cosmetic — never let it disturb a saved decision */ }
         },
-        (e) => settleActFailure(item, kind, apiStatus, e),
+        (e) => settleActFailure(item, kind, {
+          status: apiStatus,
+          approvedValue: apiStatus === 'approved' ? (editedValue || null) : null,
+          approvedValues: apiStatus === 'approved' ? (approvedValues || null) : null,
+          resolution: apiStatus === 'approved' ? (resolution || null) : null,
+        }, e),
       )
     }
     return Promise.resolve()
