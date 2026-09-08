@@ -141,10 +141,6 @@ def test_the_dead_wiring_is_named_as_dead():
 # is what the absence COSTS, because that is the judgement a reader needs and the thing a grep
 # cannot supply.
 NOT_WIRED_BY_THE_CHART = {
-    "ACP_SHUTDOWN_DRAIN_SECONDS":
-        "the worker stops draining after 20s (api/core.py) inside the chart's 300s grace period, "
-        "so a rolling upgrade abandons a document mid-remediation and the pod then idles for 280s; "
-        "production pins 540 against a 600s grace",
     "ACP_DEPLOY_ENV":
         "IS_PROD stays false, so realtime shadow traffic runs in production and the capacity "
         "gateway can never arm",

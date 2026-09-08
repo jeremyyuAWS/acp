@@ -66,6 +66,19 @@ api:
 workerCommand:
   - acp-worker
 
+# How long Kubernetes waits before SIGKILL on a worker pod, and how long the worker keeps draining
+# inside that window. ONE DECISION WRITTEN AS TWO NUMBERS, so they are derived from each other:
+# leave `workerDrainSeconds` empty and it is the grace period minus the headroom. Setting the grace
+# period alone used to leave the worker draining for api/core.py's default of 20 seconds and idling
+# for the rest, which is the failure this pairing exists to prevent.
+#
+# The headroom is what a worker needs to finish its current write and exit AFTER it stops claiming
+# new work. 60s is production's own figure — deploy/public/redeploy.sh pairs 540 with a 600-second
+# grace — not a round number chosen here.
+workerTerminationGracePeriodSeconds: 300
+workerDrainHeadroomSeconds: 60
+workerDrainSeconds: ""
+
 # One entry per worker role. The keys are the role names the application understands
 # (ACP_WORKER_ROLE), and adding a key here adds a Deployment — there is no per-role template.
 workers: {}
