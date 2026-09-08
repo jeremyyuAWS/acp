@@ -17,9 +17,28 @@
 # an oversight and is not. Nobody in this repository has run this cluster yet; the digest belongs
 # here once a run has recorded which one it pulled, and inventing one now would be a pin to bytes
 # nobody has seen, which is the exact failure the digest rule exists to prevent.
+# NO DEFAULT CNI, BECAUSE THE DEFAULT ONE CANNOT ENFORCE THE THING THIS CHART RENDERS.
+# kind ships kindnet, which accepts NetworkPolicy objects and implements none of them — the exact
+# failure `templates/networkpolicy.yaml` warns about in its own header: "Kubernetes silently
+# ignores NetworkPolicy objects when the CNI does not implement them — no error, no event, no
+# status field saying 'unenforced'." Every run so far installed four policies and proved nothing
+# about any of them, and `acpctl doctor` said so honestly on each one, reporting enforcement as
+# UNKNOWN rather than as a pass.
+#
+# The concrete cost was the EGRESS PORT LIST. `networkPolicy.egressPorts` (53, 443, 5432, 6379,
+# 6380) has never been exercised: with nothing enforcing it, a missing port could not have stopped
+# anything, so the install passed either way. That is the same shape as every defect this job has
+# found — a check that cannot fail.
+#
+# `podSubnet` matches Calico's default IPv4 pool (192.168.0.0/16) rather than kind's usual
+# 10.244.0.0/16, so the manifest needs no CALICO_IPV4POOL_CIDR override and there is one fewer
+# thing to keep in step.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: acp-reference
+networking:
+  disableDefaultCNI: true
+  podSubnet: "192.168.0.0/16"
 nodes:
   - role: control-plane
     image: kindest/node:v1.31.4

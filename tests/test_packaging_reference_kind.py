@@ -332,19 +332,76 @@ def test_the_doctor_step_asserts_its_findings_rather_than_printing_them():
     its own that made the step DECORATIVE. It printed a report nothing read, so doctor could have
     stopped reporting anything at all and the job would have gone green.
 
-    The comment it replaced was wrong in both directions, which is why this is asserted rather
-    than described: it named NetworkPolicy as the expected blocker, and on kind that check is
-    UNKNOWN at WARNING severity (kindnet is in neither CNI list), while the actual blocker —
-    `capacity.floor` — went unmentioned.
+    The comment it replaced was wrong in both directions: it named NetworkPolicy as the expected
+    blocker when that check was UNKNOWN at WARNING severity, while the actual blocker —
+    `capacity.floor` — went unmentioned. Installing Calico has since turned the NetworkPolicy
+    check into a pass, so `capacity.floor` is the only finding left, and the expectation moved
+    because the cluster did. That coupling is the point of asserting rather than describing.
     """
     script = run_steps()
     assert "acpctl doctor" in script and "--json" in script
-    assert "capacity.floor" in script and "networkpolicy.enforcement" in script, (
+    assert "capacity.floor" in script, (
         "the step must name the findings it expects, or it cannot tell a changed report from a "
         "report that stopped being produced")
+    assert "networkpolicy.enforcement" not in script, (
+        "the cluster enforces NetworkPolicy now, so doctor passes that check — expecting it to be "
+        "UNKNOWN would assert the CNI is still kindnet")
 
 
-@needs_helm
+def test_the_cluster_runs_a_cni_that_enforces_what_the_chart_renders():
+    """THE CLAIM `templates/networkpolicy.yaml` SAYS IT CANNOT MAKE, made by the cluster instead.
+
+    Its header: "Kubernetes silently ignores NetworkPolicy objects when the CNI does not implement
+    them — no error, no event, no status field saying 'unenforced'." kindnet is such a CNI, so
+    every run before this one installed four policies and established nothing about any of them.
+
+    The concrete cost was `networkPolicy.egressPorts`. With nothing enforcing it, a missing port
+    could not stop anything and the install passed either way — which is the shape this job exists
+    to refuse. With Calico the install itself tests that list, because a worker that cannot reach
+    Postgres or Redis does not come up.
+    """
+    config = yaml.safe_load(CLUSTER.read_text(encoding="utf-8"))
+    assert config["networking"]["disableDefaultCNI"] is True, (
+        "kindnet accepts NetworkPolicy objects and enforces none of them")
+    assert config["networking"]["podSubnet"] == "192.168.0.0/16", (
+        "Calico's default IPv4 pool; a mismatch here needs a CALICO_IPV4POOL_CIDR override")
+    assert "CALICO_VERSION" in job_env(), "an unpinned CNI moves the cluster under the run"
+
+    steps = [s.get("name", "") for s in workflow()["jobs"]["install"]["steps"]]
+    cni = "A CNI that enforces the policies the chart renders"
+    assert cni in steps, steps
+    assert steps.index("Create the disposable cluster") < steps.index(cni) < steps.index("Install")
+    script = run_steps()
+    assert "kind create cluster --config packaging/reference/kind/cluster.yaml\n" in script, (
+        "`kind create --wait` cannot succeed with no CNI: no node reaches Ready until Calico is "
+        "running, so the wait belongs after the CNI, not on the create")
+
+
+def test_the_enforcement_probe_can_tell_dropped_from_refused():
+    """THE WHOLE DESIGN IS THE TARGET, and getting it wrong gives a check that cannot fail.
+
+    Probing a Service port with no backend times out whether or not a policy exists, so it proves
+    nothing. The step probes the POSTGRES POD IP: 5432 is in `egressPorts` and must connect, and a
+    port that is not in the list, with nothing listening on it, must TIME OUT — because an enforced
+    policy DROPS the packet while an unenforced one lets it reach the pod and come back REFUSED.
+
+    So `refused` is the finding, and this asserts the step still distinguishes the two. Postgres
+    pods carry none of this chart's labels, so no ingress policy applies to them and ACP's own
+    egress policy is the only thing that can drop the packet — which is what makes the result a
+    statement about that policy rather than about the cluster in general.
+    """
+    steps = [s.get("name", "") for s in workflow()["jobs"]["install"]["steps"]]
+    probe = "Are the network policies enforced, or merely accepted?"
+    assert probe in steps, steps
+    assert steps.index("Install") < steps.index(probe)
+    script = run_steps()
+    assert "status.podIP" in script, (
+        "probing a Service port with no backend times out regardless of policy and proves nothing")
+    for token in ("refused", "timeout", "connected"):
+        assert token in script, f"the probe cannot report {token}, so it cannot discriminate"
+    assert "5432" in script and "12345" in script
+
+
 def test_the_dry_run_covers_the_kinds_the_reference_install_never_creates():
     """THE PREMISE OF THAT STEP, ASSERTED, because it is a claim about two documents and either
     can change.
