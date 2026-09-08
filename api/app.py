@@ -17,6 +17,7 @@ Endpoint groups (see routes/):
 from __future__ import annotations
 import base64
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -25,11 +26,28 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 import core
+import store as _store
 from routes import ROUTERS
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="acp — accessibility compliance API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
                    allow_methods=["*"], allow_headers=["*"], expose_headers=["X-Acp-Auth"])
+
+
+@app.middleware("http")
+async def _reserve_database_capacity_for_mutations(request, call_next):
+    """Keep read bursts from consuming every local connection needed by a user decision.
+
+    Background workers and non-HTTP callers retain mutation priority by default. Only methods
+    that cannot write are admitted through the bounded read gate in store.py.
+    """
+    token = _store.DB_READ_REQUEST.set(request.method.upper() in {"GET", "HEAD", "OPTIONS"})
+    try:
+        return await call_next(request)
+    finally:
+        _store.DB_READ_REQUEST.reset(token)
 
 # Not every environment has the Postgres driver installed (store.py's SQLite path doesn't need
 # it, and some dev boxes never install it) — guard the import so this module still loads there.
@@ -442,6 +460,28 @@ def _drain_job_workers():
         print(f"[acp] scheduler shutdown error: {e}", flush=True)
 
 
+def _ollama_keepalive_ping() -> None:
+    """Best-effort Ollama keep-alive request with an operator-friendly timeout log.
+
+    A timeout is expected while the scale-to-zero service wakes.  Report that bounded
+    condition without a traceback; retain the traceback-bearing ``swallowed`` path for
+    unexpected failures so real defects remain diagnosable.
+    """
+    import httpx
+
+    import ai as _ai
+    try:
+        httpx.post(f"{_ai.OLLAMA_BASE_URL}/api/generate",
+                   json={"model": _ai.OLLAMA_MODEL, "prompt": " ",
+                         "keep_alive": "30m", "options": {"num_predict": 1}},
+                   headers=_ai._OLLAMA_HEADERS,
+                   timeout=60)
+    except httpx.TimeoutException:
+        logger.warning("event=ollama.keepalive_timeout timeout_seconds=60 action=ignored")
+    except Exception:
+        swallowed("app._ollama_keepalive_ping: the Ollama keep-alive ping failed")
+
+
 @app.on_event("startup")
 def _ollama_prewarm():
     """Keep the Ollama model loaded so 'Why?' explanations don't eat a cold start
@@ -454,18 +494,8 @@ def _ollama_prewarm():
     import time
 
     def _loop():
-        import httpx
-
-        import ai as _ai
         while True:
-            try:
-                httpx.post(f"{_ai.OLLAMA_BASE_URL}/api/generate",
-                           json={"model": _ai.OLLAMA_MODEL, "prompt": " ",
-                                 "keep_alive": "30m", "options": {"num_predict": 1}},
-                           headers=_ai._OLLAMA_HEADERS,
-                           timeout=60)
-            except Exception:
-                swallowed("app._loop: the Ollama keep-alive ping failed")
+            _ollama_keepalive_ping()
             time.sleep(600)
 
     threading.Thread(target=_loop, daemon=True, name="ollama-prewarm").start()

@@ -9,12 +9,14 @@ serializing writes and survives container restarts across all replicas.
 from __future__ import annotations
 import statistics
 import contextlib
+import contextvars
 import json
 import logging
 import os
 import re
 import time
 import sqlite3
+import threading
 import uuid
 from pathlib import Path
 
@@ -1987,6 +1989,8 @@ def __getattr__(name: str):
 class _SQLiteAdapter:
     def __init__(self, path: str):
         self._path = path
+        self._transaction_conn = contextvars.ContextVar(
+            f"sqlite_transaction_{id(self)}", default=None)
 
     def init_schema(self) -> None:
         conn = sqlite3.connect(self._path)
@@ -2011,6 +2015,14 @@ class _SQLiteAdapter:
 
     @contextlib.contextmanager
     def cursor(self):
+        active = self._transaction_conn.get()
+        if active is not None:
+            cur = active.cursor()
+            try:
+                yield cur
+            finally:
+                cur.close()
+            return
         conn = sqlite3.connect(self._path)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
@@ -2021,6 +2033,25 @@ class _SQLiteAdapter:
             conn.rollback()
             raise
         finally:
+            conn.close()
+
+    @contextlib.contextmanager
+    def transaction(self):
+        """One commit boundary shared by every nested Store method in this context."""
+        if self._transaction_conn.get() is not None:
+            yield
+            return
+        conn = sqlite3.connect(self._path)
+        conn.row_factory = sqlite3.Row
+        token = self._transaction_conn.set(conn)
+        try:
+            yield
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._transaction_conn.reset(token)
             conn.close()
 
     def execute(self, cur, sql: str, params: tuple = ()) -> None:
@@ -2180,6 +2211,13 @@ def db_max_conn(env: dict | None = None) -> int:
 #     formula fix should make unilaterally — use ACP_DB_MAX_CONN for that, once made.
 _API_HEADROOM_CONN = 16
 
+# HTTP middleware marks safe requests as reads. The default is deliberately priority: workers,
+# migrations, and mutating requests must not be classified as disposable dashboard traffic merely
+# because they run outside an HTTP request context.
+DB_READ_REQUEST: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "acp_db_read_request", default=False)
+_MUTATION_RESERVE_CONN = 1
+
 
 class _PgAdapter:
     _MIN_CONN = 1
@@ -2198,6 +2236,8 @@ class _PgAdapter:
         if "sslmode" in params:
             self._ssl_kwargs["sslmode"] = params["sslmode"]
         self._pool = None  # lazy init after schema is applied
+        self._transaction_conn = contextvars.ContextVar(
+            f"pg_transaction_{id(self)}", default=None)
 
     def _connect_kwargs(self) -> dict:
         return {"dsn": self._url, **self._ssl_kwargs}
@@ -2543,25 +2583,73 @@ class _PgAdapter:
         finally:
             conn.autocommit = True
 
-    def _getconn(self, timeout: float = 5.0):
+    def _ensure_read_gate(self):
+        """Lazily build the per-process GET admission gate (also supports test adapters)."""
+        capacity = max(1, int(self._MAX_CONN) - min(_MUTATION_RESERVE_CONN,
+                                                   int(self._MAX_CONN) - 1))
+        if getattr(self, "_read_gate_capacity", None) != capacity:
+            self._read_gate = threading.BoundedSemaphore(capacity)
+            self._read_gate_capacity = capacity
+            self._read_connections = set()
+            self._read_connections_lock = threading.Lock()
+        return self._read_gate
+
+    def _getconn(self, timeout: float = 5.0, read_only: bool | None = None):
         """psycopg2's ThreadedConnectionPool.getconn raises PoolError the moment the pool is
         empty — it never waits. A request arriving during a burst should queue for a moment,
-        not fail. Beyond the timeout the error still surfaces: a pool that stays empty for
-        seconds is a real problem and must not be silently swallowed."""
+        not fail. Safe HTTP reads are admitted through a pool-minus-one gate so a PUT such as a
+        human approval always has a physical slot available. Background workers and callers with
+        no request context retain priority."""
         import psycopg2.pool
         pool = self._get_pool()
         deadline = time.monotonic() + timeout
+        is_read = DB_READ_REQUEST.get() if read_only is None else bool(read_only)
+        gate = self._ensure_read_gate() if is_read else None
+        if gate is not None and not gate.acquire(timeout=max(0.0, timeout)):
+            raise psycopg2.pool.PoolError("database read admission limit reached")
         while True:
             try:
-                return pool.getconn()
+                conn = pool.getconn()
+                if gate is not None:
+                    with self._read_connections_lock:
+                        self._read_connections.add(id(conn))
+                return conn
             except psycopg2.pool.PoolError:
                 if time.monotonic() >= deadline:
+                    if gate is not None:
+                        gate.release()
                     raise
                 time.sleep(0.05)
+
+    def _putconn(self, conn, pool=None) -> None:
+        """Return a connection and its read-admission permit, when it held one."""
+        # Use the exact pool that issued the connection. Lazy pool initialization can race on
+        # first use: two threads may each construct a pool before one becomes self._pool. Looking
+        # self._pool up again here can therefore return a different pool, which rejects the
+        # connection as unkeyed. Callers that already captured the issuing pool pass it through.
+        (pool or self._get_pool()).putconn(conn)
+        gate = getattr(self, "_read_gate", None)
+        lock = getattr(self, "_read_connections_lock", None)
+        if gate is None or lock is None:
+            return
+        with lock:
+            was_read = id(conn) in self._read_connections
+            if was_read:
+                self._read_connections.remove(id(conn))
+        if was_read:
+            gate.release()
 
     @contextlib.contextmanager
     def cursor(self):
         import psycopg2.extras
+        active = self._transaction_conn.get()
+        if active is not None:
+            cur = active.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            try:
+                yield cur
+            finally:
+                cur.close()
+            return
         pool = self._get_pool()
         conn = self._getconn()
         try:
@@ -2572,7 +2660,26 @@ class _PgAdapter:
             conn.rollback()
             raise
         finally:
-            pool.putconn(conn)
+            self._putconn(conn, pool)
+
+    @contextlib.contextmanager
+    def transaction(self):
+        """Acquire once and commit once across nested Store calls."""
+        if self._transaction_conn.get() is not None:
+            yield
+            return
+        pool = self._get_pool()
+        conn = self._getconn()
+        token = self._transaction_conn.set(conn)
+        try:
+            yield
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._transaction_conn.reset(token)
+            self._putconn(conn, pool)
 
     def execute(self, cur, sql: str, params: tuple = ()) -> None:
         cur.execute(sql, params)
@@ -2715,6 +2822,12 @@ class Store:
         self._scope_cache: dict = {}
         self._scope_rules_cache: dict = {}
         self._inventory_cache: dict = {}
+
+    @contextlib.contextmanager
+    def transaction(self):
+        """Make nested Store operations succeed or roll back as one database decision."""
+        with self._db.transaction():
+            yield
 
     def _file_produced_no_result(self, f: dict) -> bool:
         """Did this file's analysis fail to produce a result at all?
@@ -7688,7 +7801,12 @@ class Store:
             self.transition_finding_disposition(
                 scan_id, batch_id, row["finding_id"], disposition,
                 expected_revision=int(row.get("revision") or 0),
-                event_id=f"{event_key}:{row['finding_id']}",
+                # event_key identifies the producer/action, not one immutable ledger event.
+                # A finding may legitimately return to the same disposition after another
+                # transition (retrying Remediate is the production example). Include the source
+                # revision so that return creates a new append-only event instead of colliding
+                # with the producer's earlier event for this finding.
+                event_id=f"{event_key}:r{int(row.get('revision') or 0)}:{row['finding_id']}",
                 review_item_id=review_item_id, fix_evidence_ids=fix_evidence_ids,
                 verified_at=verified_at)
             moved += 1
@@ -10782,6 +10900,13 @@ class Store:
             self._db.execute(cur, "SELECT * FROM hitl_queue WHERE id=%s", (item_id,))
             return self._decode_proposals(self._db.fetchone(cur))
 
+    def _get_hitl_item_for_decision(self, item_id: str) -> dict | None:
+        """Lock one review row until the surrounding decision transaction commits."""
+        suffix = " FOR UPDATE" if self._db.supports_skip_locked else ""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, f"SELECT * FROM hitl_queue WHERE id=%s{suffix}", (item_id,))
+            return self._decode_proposals(self._db.fetchone(cur))
+
     @staticmethod
     def _decode_proposals(row: dict | None) -> dict | None:
         """Parse the hitl_queue `proposals` and `evidence` JSON columns into real lists so
@@ -10819,6 +10944,72 @@ class Store:
                 "approved_value=COALESCE(%s, approved_value), resolution=%s WHERE id=%s",
                 (status, now, reviewer_note, approved_value, resolution, item_id))
         return self.get_hitl_item(item_id)
+
+    def complete_hitl_decision(self, item_id: str, status: str, reviewer_note: str | None,
+                               approved_value: str | None, *, resolution: str | None,
+                               approved_values: list[str | None] | None,
+                               actor: str, detail: str | None) -> tuple[dict | None, bool]:
+        """Persist one reviewer decision atomically and make exact PUT replays a no-op.
+
+        These writes collectively make the decision true.  Keeping them behind the adapter's
+        single commit boundary prevents pool exhaustion (or any SQL failure) from publishing a
+        card state without its values, finding disposition, audit evidence, described-image
+        obligation, or durable apply job.
+        """
+        draft_fallback = resolution != self.DESCRIBED_RESOLUTION
+
+        def _values_match(current: dict) -> bool:
+            if approved_values is None:
+                return True
+            instances = current.get("proposals") or current.get("evidence") or []
+            has_draft = bool(current.get("proposals"))
+            for i, instance in enumerate(instances):
+                if not isinstance(instance, dict):
+                    continue
+                supplied = ((approved_values[i] if i < len(approved_values) else None) or "").strip()
+                expected = supplied
+                if not expected and has_draft and draft_fallback:
+                    expected = str(instance.get("proposed_value") or "").strip()
+                if str(instance.get("approved_value") or "").strip() != expected:
+                    return False
+            return True
+
+        with self.transaction():
+            # Without this lock two API requests can both observe the old state, both decide
+            # they are not replays, and append two audit rows/jobs. PostgreSQL serializes them
+            # here; the second request rechecks only after the first transaction commits.
+            current = self._get_hitl_item_for_decision(item_id)
+            if not current:
+                return None, False
+            replay = (current.get("status") == status
+                      and (current.get("reviewer_note") or None) == (reviewer_note or None)
+                      and (current.get("resolution") or None) == (resolution or None)
+                      and (approved_value is None
+                           or (current.get("approved_value") or None) == approved_value)
+                      and _values_match(current))
+            if replay:
+                return current, True
+
+            updated = self.update_hitl_item(
+                item_id, status, reviewer_note, approved_value, resolution=resolution)
+            self.sync_hitl_finding_dispositions(item_id, status)
+            if status == "approved" and approved_values is not None:
+                self.approve_proposal_values(
+                    item_id, approved_values, draft_fallback=draft_fallback)
+            if (status == "approved" and resolution == self.DESCRIBED_RESOLUTION
+                    and self.queue_described_image_alt(item_id) is None):
+                raise ValueError("described decision produced no alt-text obligation")
+            self.log_decision(actor, f"hitl.{status}", scan_id=current.get("scan_id"),
+                              file=current.get("file"), rule_id=current.get("rule_id"),
+                              detail=detail)
+            if (status == "approved" and current.get("scan_id") and current.get("file")
+                    and self.has_approved_values_to_write(
+                        current["scan_id"], current["file"])):
+                self.enqueue_job(
+                    "apply_approved_values",
+                    {"scan_id": current["scan_id"], "file": current["file"]},
+                    scan_id=current["scan_id"])
+            return self.get_hitl_item(item_id) or updated, False
 
     def assign_hitl_item(self, item_id: str, assignee: str | None) -> dict | None:
         """Set or clear the reviewer assigned to a HITL item. Separate from update_hitl_item

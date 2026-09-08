@@ -105,7 +105,8 @@ describe('the board core is mounted, not merely shipped', () => {
     // inbox. It now returns the write's promise and re-throws on failure, and the review pane
     // awaits that before it moves anyone.
     const s = rem()
-    expect(s).toMatch(/\(e\) => \{ undoAct\(item, kind, e\); throw e \}/)
+    expect(s).toMatch(/undoAct\(item, kind, err, settled\.outcome\)\s*\n\s*throw err/)
+    expect(s).toMatch(/reconcileHitlPutFailure\(item\?\.id, wanted, err\)/)
     expect(s).toMatch(/return p\.then\(/)
     const inbox = code('RemediationInbox.jsx')
     expect(inbox).toMatch(/await onDecide\?\.\(f, decision\)/)

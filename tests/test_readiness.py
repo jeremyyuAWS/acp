@@ -154,6 +154,48 @@ def test_degraded_reasons_are_machine_readable_tokens(monkeypatch):
         assert token.replace("_", "").isalnum() and token.islower()
 
 
+def test_readyz_distinguishes_shallow_langfuse_health_from_real_export_state(monkeypatch):
+    import lf
+
+    monkeypatch.setattr(lf, "exporter_health", lambda: {
+        "configured": True,
+        "state": "degraded",
+        "attempts": 7,
+        "successes": 2,
+        "failures": 5,
+        "consecutive_failures": 5,
+        "last_failure_at": "2026-09-07T12:00:00+00:00",
+        # A public status surface must not accidentally pass through future diagnostic detail.
+        "error": "HTTP 500 from https://user:secret@example.test/api/public/ingestion",
+        "secret_key": "must-not-leak",
+    }, raising=False)
+
+    r = _readyz(monkeypatch, beat=_iso(seconds=5), local_pool=0, pdf_ok=True)
+    status = r["dependencies"]["langfuse"]
+
+    assert status["shallow_health"] == {"checked": False, "state": "not_checked"}
+    assert status["ingestion_exporter"]["state"] == "degraded"
+    assert status["ingestion_exporter"]["consecutive_failures"] == 5
+    assert "error" not in status["ingestion_exporter"]
+    assert "secret_key" not in status["ingestion_exporter"]
+    # Optional telemetry degradation is not a worker/pipeline readiness failure.
+    assert r["ready"] is True and r["degraded"] == []
+
+
+def test_a_broken_langfuse_status_accessor_cannot_break_readyz(monkeypatch):
+    import lf
+
+    monkeypatch.setattr(lf, "exporter_health",
+                        lambda: (_ for _ in ()).throw(RuntimeError("contains secret detail")),
+                        raising=False)
+    r = _readyz(monkeypatch, beat=_iso(seconds=5), local_pool=0, pdf_ok=True)
+
+    ingestion = r["dependencies"]["langfuse"]["ingestion_exporter"]
+    assert ingestion == {"configured": False, "state": "unknown",
+                         "error": "RuntimeError: exporter status unavailable"}
+    assert r["ready"] is True
+
+
 # ── /readyz vision-engine readiness (GPU model) ──────────────────────────────────────────
 def _mock_vision(monkeypatch, *, available, model="llava:13b", reason=None, zone="local"):
     import ai

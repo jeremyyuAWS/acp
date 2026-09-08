@@ -245,64 +245,6 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     if any(not core.store.ai_call_belongs_to_file(
             call_id, item.get("scan_id"), item.get("file")) for call_id in submitted_call_ids):
         raise HTTPException(422, "model_call_id does not belong to this review item")
-    # The resolution is persisted ON THE ROW, not only in the decision log below. The certify
-    # gate and the appliers read rows: with the exception recorded nowhere they could reach,
-    # store._row_approved_values fell back to the card's own UI label, so "Mark as decorative"
-    # became content the file owed the document — countable forever, and (on docx/pptx/xlsx,
-    # which really are appliable) writable as the image's alt text.
-    updated = core.store.update_hitl_item(item_id, body.status, body.reviewer_note,
-                                          body.approved_value, resolution=body.resolution)
-    core.store.sync_hitl_finding_dispositions(item_id, body.status)
-    # Record the reviewer's final text per proposal, so the applier knows which image gets which
-    # description. Only on approval: rejecting or skipping approves no content.
-    if body.status == "approved" and body.approved_values is not None:
-        try:
-            # No draft fallback on a described decision (ADR 0055). Everywhere else a blank means
-            # "the draft I was shown is correct", which is right when the draft is a description.
-            # On a 1.4.5 card it is the OCR TRANSCRIPT — the words inside the picture — so falling
-            # back would file the image's own text as its description, silently, for every image
-            # the reviewer left alone. store.queue_described_image_alt refuses that fallback and
-            # says why; this is the call that had already made it moot.
-            core.store.approve_proposal_values(
-                item_id, body.approved_values,
-                draft_fallback=(body.resolution != Store.DESCRIBED_RESOLUTION))
-        except Exception:
-            swallowed("routes.hitl.hitl_update: approving the proposal values failed")
-    # ADR 0055: describe-instead-of-replace. The reviewer kept the images of text and wrote
-    # descriptions, so this decision resolves 1.4.5/1.4.9 by judgement AND leaves the document
-    # owing 1.1.1 alt text it did not owe before. Record that obligation now, as an approved but
-    # unapplied row, so the gate below enqueues the write and mark_file_compliant_if_reviewed
-    # refuses to certify until the description is in the document and a re-scan agrees.
-    #
-    # AFTER approve_proposal_values, necessarily: the descriptions are read off the source row's
-    # proposals, and until that call lands the row holds only the OCR drafts. And NOT
-    # best-effort in the way the telemetry below is — a swallowed failure here leaves the
-    # reviewer's descriptions reaching nothing while the 1.4.5 finding reads resolved, which is
-    # precisely the silent false certification this feature exists to prevent. It is guarded so
-    # one broken row cannot take down the decision, and it says so in the log.
-    if body.status == "approved" and body.resolution == Store.DESCRIBED_RESOLUTION:
-        # NOT swallowed. Every other best-effort block here degrades telemetry; this one decides
-        # whether the document ends up carrying the reviewer's descriptions. A failure that got
-        # past the 422 above leaves the 1.4.5 row resolved and owing nothing, so the file
-        # certifies as conformant with the images untouched AND undescribed — the exact silent
-        # failure ADR 0055 measured. Better to fail the request: the reviewer sees it, and the
-        # row keeps whatever status it had.
-        if core.store.queue_described_image_alt(item_id) is None:
-            # PUT THE ROW BACK before raising. The 422s above catch the reachable causes, so
-            # arriving here means something unforeseen — and the state this used to leave was the
-            # dangerous one: the row already stamped approved WITH the resolution, no 1.1.1
-            # obligation recorded, and the raise landing before log_decision, so the file could
-            # certify as conformant with no audit line at all. A failed decision must leave the
-            # finding exactly as unresolved as it was.
-            try:
-                core.store.update_hitl_item(item_id, item.get("status") or "pending",
-                                            item.get("reviewer_note"), None,
-                                            resolution=(item.get("resolution") or None))
-                core.store.sync_hitl_finding_dispositions(item_id, item.get("status") or "pending")
-            except Exception:
-                swallowed("routes.hitl.hitl_update: rolling back the described decision failed")
-            raise HTTPException(500, "the descriptions could not be recorded as alt text; "
-                                     "the decision was not completed and the finding is unchanged")
     # Immutable audit trail: WHO decided what, when, on which finding — include the
     # approved value itself so the log is self-sufficient compliance evidence.
     #
@@ -319,10 +261,18 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         _detail = f"{_detail + ' | ' if _detail else ''}resolution: {RESOLUTIONS[body.resolution]}"
     if body.approved_value:
         _detail = f"{_detail + ' | ' if _detail else ''}approved: {body.approved_value[:160]}"
-    core.store.log_decision(
-        actor, f"hitl.{body.status}",
-        scan_id=item.get("scan_id"), file=item.get("file"), rule_id=item.get("rule_id"),
-        detail=_detail)
+    try:
+        updated, replayed = core.store.complete_hitl_decision(
+            item_id, body.status, body.reviewer_note, body.approved_value,
+            resolution=body.resolution, approved_values=body.approved_values,
+            actor=actor, detail=_detail)
+    except ValueError as exc:
+        if str(exc) != "described decision produced no alt-text obligation":
+            raise
+        raise HTTPException(500, "the descriptions could not be recorded as alt text; "
+                                 "the decision was not completed and the finding is unchanged")
+    if replayed:
+        return updated
     # Review telemetry (Intelligent Review Workspace): one event per decision so we can
     # report reviewer time saved + calibrate confidence from the edit/reject signal.
     # Best-effort — never blocks the review.
@@ -395,14 +345,6 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     # A 'decorative' resolution is the fourth kind and the odd one out — it approves no TEXT,
     # only the OOXML marking — and it is folded into the same helper for exactly the reason
     # above: left out, the reviewer's decision would live only in our audit log.
-    if (body.status == "approved" and item.get("scan_id") and item.get("file")
-            and core.store.has_approved_values_to_write(item["scan_id"], item["file"])):
-        try:
-            core.store.enqueue_job("apply_approved_values",
-                                   {"scan_id": item["scan_id"], "file": item["file"]},
-                                   scan_id=item["scan_id"])
-        except Exception:
-            swallowed("routes.hitl.hitl_update: enqueueing the follow-up job for the HITL decision failed")
     # Re-validate → certify: once a remediated file's every review item is approved AND every
     # approved value has been written in, it is fully conformant (auto fixes verified + human
     # findings signed off) and advances to Publish. A file still holding unwritten approved
