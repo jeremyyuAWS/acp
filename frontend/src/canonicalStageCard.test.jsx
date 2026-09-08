@@ -123,6 +123,14 @@ describe('canonical stage card', () => {
     vi.useRealTimers()
   })
 
+  it('gives locked-stage status copy a quieter typographic treatment', () => {
+    const html = renderToStaticMarkup(createElement(WorkflowStageStack, {
+      lineage: { workflow_id: 'workflow-locked', stages: [{ ...SNAPSHOT, stage: 'discover' }] },
+    }))
+    expect(html).toContain('workflow-stage-stack__locked-state')
+    expect(html).toContain('Not started')
+  })
+
   it('never turns unknown totals into zero', () => {
     const html = render({ ...SNAPSHOT, counts: { work_items: { unit: 'work items', total: null } },
       reconciliation: { unit: 'work items', total: null, accounted: null, unaccounted: null } })

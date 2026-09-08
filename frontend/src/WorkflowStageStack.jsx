@@ -58,7 +58,9 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
                key={`${stage}:${snapshot?.execution_id || snapshot?.revision || 'locked'}`}>
             {locked ? <div className="workflow-stage-stack__summary" aria-disabled="true">
               <span className="workflow-stage-stack__check" aria-hidden="true">·</span>
-              <span className="workflow-stage-stack__label"><b>{LABELS[stage]}</b> · Locked</span>
+              <span className="workflow-stage-stack__label"><b>{LABELS[stage]}</b>
+                <span className="workflow-stage-stack__locked-state"> · Locked</span>
+              </span>
               <span className="workflow-stage-stack__meta">
                 <span className="workflow-stage-stack__ownership">Not started</span>
               </span>
