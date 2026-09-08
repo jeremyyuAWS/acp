@@ -116,9 +116,9 @@ describe('no redesign component ships unreachable', () => {
   const BOARD_COMPONENTS = [
     'AssessSetup', 'AssessSummary', 'AssessWorklist', 'AssessFileFindings',
     'DiscoveryResults', 'DiscoverInventoryExport',
-    // DiscoveryCompleteness remains deliberately retired. AssessmentReconciliation was restored
-    // to Assess to compare the checked run with discovered inventory.
-    'AssessmentReconciliation',
+    // 'DiscoveryCompleteness' and 'AssessmentReconciliation' were here until 2026-09-02.
+    // The PRD simplification retired their mounts; they are tracked as deliberate orphans
+    // by unmountedComponents.test.jsx instead.
     'AssertionScope', 'NextStep', 'RunDetails',
     // 'RemediationApprovals' was here until 2026-09-01. The Remediate redesign removed its mount
     // so that finding-level approval happens in exactly one place (the inbox's review panel); it is
