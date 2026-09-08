@@ -33,7 +33,8 @@ import QueuePanel from './QueuePanel.jsx'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import RemediationOpsPanel from './RemediationOpsPanel.jsx'
 import RemediationWorkspaceTabs from './RemediationWorkspaceTabs.jsx'
-import AutomationPolicyControl from './AutomationPolicyControl.jsx'
+import RemediationImpactCard from './RemediationImpactCard.jsx'
+import { remediationImpactScope } from './remediationImpactScope.js'
 import { createReviewEvidenceCache } from './reviewEvidenceCache.js'
 import './remediation-prior-results.css'
 import { deriveRemediateProcessingState } from './remediateProcessingState.js'
@@ -668,8 +669,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     if (SIM) setQueue(buildHumanQueue(files, triage))
   }, [triage]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const runServerRemediation = async (scopeFiles) => {
-    if (!runId || remBusy || remStartRef.current) return
+  const runServerRemediation = async (scopeFiles, remediationPolicy) => {
+    if (!runId || readOnly || remBusy || remStartRef.current) return
     // The page-level controls pass file records; RemediationWork's deterministic batch passes
     // filenames because it partitions findings rather than owning the scan records. Normalize
     // both entry points here so they reach the same durable Remediate queue and progress watcher.
@@ -686,7 +687,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     remStartRef.current = true
     setRemBusy(true); setRemMsg(''); setRemProg(null)
     try {
-      const r = await remediateScan(runId, scope)
+      const r = await remediateScan(runId, scope, remediationPolicy)
       if (!r.enqueued) {
         // We sent a non-empty scope and the server enqueued nothing: the client's view of
         // eligibility is stale (another session remediated them, or the scan moved on). Say
@@ -867,6 +868,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // panel SAYS it will skip and what the button actually skips cannot drift apart.
   const scopeInfo = scopeSummary(files, scopeOpts)
   const remediable = remediableFiles(files, scopeOpts)
+  // Planning includes human-only files and files with residual findings after a prior fix.
+  // The old automatic-action cohort would hide precisely the work this card explains.
+  const impactScope = remediationImpactScope(files, triage)
     .sort((a, b) => (ontRank(a) - ontRank(b)) || (priority(b) - priority(a)))
   const dcount = (st) => remediable.filter((f) => decisions[f.file]?.state === st).length
 
@@ -924,18 +928,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // The deterministic batch, taken from the SAME partition RemediationWork's own button uses.
   const workPartition = remediationWork(files, { cap, assessment })
   const autoBatch = batchScope(workPartition)
-  // The policy preview must see the SAME deterministic findings that feed the primary action,
-  // plus proposal-backed review work. Passing only `reviewNeeds` made the slider claim there was
-  // nothing to preview while the header offered (for example) 13 automatic fixes. Deterministic
-  // rows gain the proposal-shaped fields automationPolicy expects; this changes preview routing
-  // only and does not broaden the server action's deterministic scope.
-  const automationPolicyFindings = [
-    ...(workPartition?.lanes?.automatic?.findings || []).map((finding) => ({
-      ...finding, rule_id: finding.rule_id || finding.sc, hasProposal: true,
-    })),
-    ...reviewNeeds.map((finding) => ({ ...finding, isCurrentReviewCard: true,
-      reviewCardId: finding?._raw?.id || finding?.id })),
-  ]
+  // Impact preview reads the full stored assessment on the server. Review cards enrich
+  // findings there; they are not added to a partial automatic-only browser population.
 
   const fixGroups = groupFixesByRule(fixSource)
   const impact = summarizeImpact(fixSource)
@@ -1707,8 +1701,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         primary={primary}
         readOnly={readOnly}
         onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
-      <AutomationPolicyControl key={runId || 'current'} findings={automationPolicyFindings} runId={runId}
-                               reviewAnalytics={reviewStats} />
+      <RemediationImpactCard key={runId || 'current'} runId={runId}
+        runBusy={remBusy} readOnly={readOnly} myEmail={myEmail}
+        scopeFiles={impactScope.map(file => file.file)}
+        refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`}
+        onRun={readOnly ? undefined : (policy) => runServerRemediation(impactScope, policy)} />
       <RemediationWorkspaceTabs
         runId={runId}
         reviewCount={reviewCount}

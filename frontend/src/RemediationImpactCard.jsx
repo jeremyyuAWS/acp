@@ -1,0 +1,198 @@
+import { useEffect, useId, useRef, useState } from 'react'
+import { getRemediationImpact, saveRemediationImpactPolicy, assignRemediationImpact } from './api.js'
+import './remediation-impact-card.css'
+
+const RULE_STOPS = [
+  ['Review first', 'Ask a person to approve rule-based proposals before application.'],
+  ['Verified fixes', 'Permit eligible rule-based proposals with qualifying validation evidence.'],
+  ['Eligible fixes', 'Also permit supported rule-based proposals with the required evidence. Verify after application.'],
+]
+const AI_STOPS = [
+  ['Off', 'Generate no new AI proposals and apply no AI proposals in this planned run. Existing proposals remain in history.'],
+  ['Draft for review', 'Generate supported AI drafts. A person must approve them before application.'],
+  ['Validated drafts', 'Also permit eligible, validated, non-subjective AI proposals without approval.'],
+  ['Eligible drafts', 'Also permit supported AI proposals that meet the execution service’s eligibility requirements.'],
+]
+const LANES = [['automatic', 'Apply automatically'], ['review', 'Review a proposal'], ['manual', 'Manual work'], ['blocked', 'Blocked / unknown']]
+const OUTLOOKS = [['could_complete', 'Could complete automatically'], ['human_work', 'Human work remains'], ['blocked_incomplete', 'Blocked / assessment incomplete'], ['unavailable', 'Forecast unavailable']]
+const number = value => Number.isFinite(value) ? value.toLocaleString() : 'Not yet available'
+const delta = value => Number.isFinite(value) ? `${value > 0 ? '+' : ''}${value.toLocaleString()}` : 'Not yet available'
+const validPolicy = p => Number.isInteger(p?.rule_based) && p.rule_based >= 0 && p.rule_based <= 2 && Number.isInteger(p?.ai) && p.ai >= 0 && p.ai <= 3
+const policyName = p => validPolicy(p) ? `${RULE_STOPS[p.rule_based][0]} · AI: ${AI_STOPS[p.ai][0]}` : 'Not yet available'
+const reasonText = reason => typeof reason === 'string' ? reason.replaceAll('_', ' ') : 'Reason not available'
+
+function PolicySlider({ title, question, stops, value, onChange, disabled, maxLevel = stops.length - 1 }) {
+  const id = useId()
+  return <div className="remediation-impact__control">
+    <h3>{title}</h3>
+    <label htmlFor={id}>{question}</label>
+    <input id={id} type="range" min="0" max={maxLevel} step="1" value={value}
+      disabled={disabled} onChange={event => onChange(Number(event.target.value))}
+      aria-valuetext={`${stops[value][0]}: ${stops[value][1]}`} aria-describedby={`${id}-description`} />
+    <div className="remediation-impact__stops" style={{ gridTemplateColumns: `repeat(${(maxLevel + 1)}, minmax(0, 1fr))` }}>
+      {stops.slice(0, maxLevel + 1).map(([label], index) => <button key={label} type="button" disabled={disabled || index > maxLevel}
+        aria-pressed={value === index} onClick={() => onChange(index)}>{label}</button>)}
+    </div>
+    {maxLevel < stops.length - 1 && <p className="remediation-impact__unavailable">Unavailable: {stops.slice(maxLevel + 1).map(([label]) => label).join(' · ')}</p>}
+    <p id={`${id}-description`} className="remediation-impact__description">{stops[value][1]}</p>
+  </div>
+}
+
+export default function RemediationImpactCard({ runId, onRun, runBusy = false, myEmail = '', readOnly = false, refreshKey = 0, scopeFiles }) {
+  const titleId = useId()
+  const assigneeId = useId()
+  const [assignmentOpen, setAssignmentOpen] = useState(false)
+  const [assignmentFiles, setAssignmentFiles] = useState([])
+  const [assignee, setAssignee] = useState(myEmail)
+  const [assigning, setAssigning] = useState(false)
+  const [assignmentResult, setAssignmentResult] = useState(null)
+  const [assignmentError, setAssignmentError] = useState('')
+  const scopeKey = Array.isArray(scopeFiles) ? JSON.stringify([...scopeFiles].sort()) : null
+  const [selectedFile, setSelectedFile] = useState(null)
+  const [draft, setDraft] = useState(null)
+  const policy = draft?.runId === runId ? draft.policy : null
+  const setPolicy = value => setDraft(current => ({ runId, policy: typeof value === 'function' ? value(current?.runId === runId ? current.policy : null) : value }))
+  const [reload, setReload] = useState(0)
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [filter, setFilter] = useState(null)
+  useEffect(() => { setSelectedFile(null); setAssignmentOpen(false); setAssignmentResult(null); setAssignmentError('') }, [filter, scopeKey, runId])
+  const sequence = useRef(0)
+  const runRef = useRef(runId)
+  // A run switch must not submit the previous run's edited policy.
+  useEffect(() => { runRef.current = runId; setData(null); setFilter(null); setNotice('') }, [runId])
+  useEffect(() => {
+    const request = ++sequence.current
+    let cancelled = false
+    if (!runId) { setLoading(false); return }
+    setLoading(true); setError('')
+    const requestedPolicy = runRef.current === runId ? policy : null
+    Promise.resolve().then(() => getRemediationImpact(runId, requestedPolicy, scopeKey === null ? undefined : JSON.parse(scopeKey))).then(result => {
+      if (cancelled || request !== sequence.current) return
+      setData(result)
+    }).catch(err => { if (!cancelled && request === sequence.current) { setData(null); setError(err?.message || 'The preview could not be loaded.') } })
+      .finally(() => { if (!cancelled && request === sequence.current) setLoading(false) })
+    return () => { cancelled = true }
+  }, [runId, policy, refreshKey, reload, scopeKey])
+
+  const selected = policy || (validPolicy(data?.policy) ? data.policy : { rule_based: 0, ai: 0 })
+  const ready = !!data && !loading && !error && data.integrity?.complete === true
+  const change = (key, value) => { setNotice(''); setFilter(null); setPolicy(current => ({ ...(current || selected), [key]: value })) }
+  const filteredFiles = (data?.files || []).filter(file => !filter || filter.type === 'all' || (filter.type === 'outlook' ? file.outlook === filter.key : file[filter.key] > 0))
+  const reasons = Object.values((data?.findings || []).filter(row => row.lane !== 'automatic').reduce((groups, row) => {
+    const key = row.primary_reason || 'reason_unavailable'
+    const group = groups[key] ||= { reason: key, findings: 0, files: new Set() }
+    group.findings += Number.isFinite(row.finding_count) ? row.finding_count : 1
+    if (row.file) group.files.add(row.file)
+    return groups
+  }, {}))
+  const humanFiles = filteredFiles.filter(file => file.review > 0 || file.manual > 0 || file.blocked > 0)
+  async function assign(event) {
+    event.preventDefault()
+    if (readOnly || assigning || !assignmentFiles.length || data?.capabilities?.assign !== true) return
+    const assignmentRun = runId
+    setAssigning(true); setAssignmentError(''); setAssignmentResult(null)
+    try {
+      const result = await assignRemediationImpact(runId, assignmentFiles, assignee.trim(), selected)
+      if (runRef.current !== assignmentRun) return
+      setAssignmentResult(result)
+    } catch (err) {
+      if (runRef.current === assignmentRun) setAssignmentError(err?.message || 'Assignment failed. Please try again.')
+    } finally { setAssigning(false) }
+  }
+  async function save() {
+    setSaving(true); setNotice('')
+    const savingRun = runId
+    try {
+      const saved = await saveRemediationImpactPolicy(runId, selected, data?.active_policy?.revision)
+      if (runRef.current !== savingRun) return
+      if (saved?.policy) setData(current => ({ ...current, active_policy: saved.policy }))
+      setReload(current => current + 1)
+      setNotice('Saved as the default for future runs. This run has not changed.')
+    }
+    catch (err) { setNotice(`Could not save defaults: ${err?.message || 'Please try again.'}`) }
+    finally { setSaving(false) }
+  }
+
+  return <section className="remediation-impact" aria-labelledby={titleId} aria-busy={loading}>
+    <header className="remediation-impact__header"><div><span className="remediation-impact__eyebrow">{scopeKey === null ? 'Remediation planner' : 'Selected remediation scope'} · Preview only</span>
+      <h2 id={titleId}>See what ACP can handle</h2>
+      <p>{ready ? <><strong>{number(data.open?.findings)} unresolved findings</strong> across <strong>{number(data.open?.files)} files</strong>.</> : 'Preview the current assessment before applying changes.'}</p>
+    </div><div className="remediation-impact__active"><span>Active settings</span><strong>{policyName(data?.active_policy)}</strong></div></header>
+    <div className="remediation-impact__controls">
+      <PolicySlider title="Rule-based fixes" question="What rule-based fixes may ACP apply without approval?" stops={RULE_STOPS}
+        value={selected.rule_based} onChange={value => change('rule_based', value)} disabled={!validPolicy(data?.policy) || runBusy} />
+      <PolicySlider title="AI-assisted fixes" question="What may ACP do with AI proposals?" stops={AI_STOPS}
+        value={selected.ai} onChange={value => change('ai', value)} disabled={!validPolicy(data?.policy) || runBusy} maxLevel={data?.capabilities?.ai_automatic === true ? 3 : 1} />
+    </div>
+    {data?.capabilities?.ai_automatic !== true && <p className="remediation-impact__note">{data?.capabilities?.ai_automatic_reason || 'Automatic application of AI proposals is not available on this execution path. Drafting depends on AI settings and a usable connection.'}</p>}
+    <p className="remediation-impact__guard">These controls change remediation permissions, not assessment results or provider credentials. Human-only and subjective decisions stay protected.</p>
+    <details className="remediation-impact__providers"><summary>AI connections and model details</summary>
+      {data?.providers && <ul>{[['text', 'Text drafting'], ['vision', 'Image drafting']].map(([key, label]) =>
+        <li key={key}>{label}: {data.providers[key]?.provider || 'Not yet available'}
+          {' · '}{data.providers[key]?.model || 'Model not reported'}{' · Connection not tested'}</li>)}</ul>}
+      <p>Connections are not tested by this preview. Configured credentials alone do not establish a working connection.</p>
+      <p>Text and image drafting use their separately configured providers. A drafting opportunity is not a guaranteed resolution.</p>
+      {data?.capabilities?.reason && <p>{data.capabilities.reason}</p>}
+    </details>
+    <div role="status" aria-live="polite" aria-atomic="true" className="remediation-impact__status">
+      {loading ? 'Calculating the impact of these settings…' : error ? `Preview unavailable. ${error}` : !runId ? 'Select an assessment to preview remediation.' : !ready ? 'The preview could not be reconciled. Counts are unavailable.' : `${number(data.lanes?.automatic?.findings)} findings eligible for automatic application. ${number(data.lanes?.review?.findings)} findings require proposal review.`}
+      {notice && <span> {notice}</span>}
+    </div>
+    {ready && <>
+      <h3>Impact vs active settings</h3>
+      <div className="remediation-impact__table-wrap"><table><caption className="sr-only">Finding routes for active and preview settings</caption>
+        <thead><tr><th scope="col">Finding route</th><th scope="col">Active findings</th><th scope="col">Preview findings</th><th scope="col">Change</th><th scope="col">Affected files</th></tr></thead>
+        <tbody>{LANES.map(([key, label]) => <tr key={key} className={`remediation-impact__lane--${key}`}>
+          <th scope="row"><button type="button" onClick={() => setFilter({ type: 'lane', key, label })}>{label}</button></th>
+          <td>{number(data.active_lanes?.[key]?.findings)}</td><td><strong>{number(data.lanes?.[key]?.findings)}</strong></td>
+          <td>{delta(data.lanes?.[key]?.delta)}</td><td>{number(data.lanes?.[key]?.files)}</td>
+        </tr>)}</tbody></table></div>
+      <p className="remediation-impact__note">Affected-file counts overlap: one file may contain automatic fixes and human work. Finding routes do not overlap.</p>
+      <h3>File outlook</h3><div className="remediation-impact__outlooks">{OUTLOOKS.map(([key, label]) => <button type="button" key={key}
+        onClick={() => setFilter({ type: 'outlook', key, label })}><strong>{number(data.file_outlook?.[key]?.files)}</strong><span>{label}</span></button>)}</div>
+      <p className="remediation-impact__note">Each file appears in one outlook. Completion is conditional on fixes passing verification and required assessment checks being complete.</p>
+      <details className="remediation-impact__remaining"><summary>Why work remains</summary>
+        <ul>{reasons.length ? reasons.map(group => <li key={group.reason}>{reasonText(group.reason)} — {number(group.findings)} findings across {number(group.files.size)} files</li>) : <li>No remaining-work reasons were returned.</li>}</ul>
+        <p>Review proposals, edit source content, resolve accessibility judgments, or investigate blockers. Assignment does not resolve findings.</p>
+      </details>
+      <button type="button" onClick={() => setFilter({ type: 'all', label: 'All affected files' })}>Inspect affected files</button>
+      {filter && <div className="remediation-impact__drilldown"><div className="remediation-impact__header"><h3>{filter.label}</h3><button type="button" onClick={() => setFilter(null)}>Close details</button></div>
+        {filteredFiles.length ? <div className="remediation-impact__table-wrap"><table><caption>Files in this preview category</caption>
+          <thead><tr><th>File</th><th>Open findings</th><th>Automatic</th><th>Review</th><th>Manual</th><th>Blocked</th></tr></thead>
+          <tbody>{filteredFiles.map((file, index) => <tr key={`${file.file}-${index}`}><th scope="row"><button type="button" onClick={() => setSelectedFile(file.file)}>{file.file || 'Unnamed file'}</button></th>
+            <td>{number(file.findings)}</td><td>{number(file.automatic)}</td><td>{number(file.review)}</td><td>{number(file.manual)}</td><td>{number(file.blocked)}</td></tr>)}</tbody>
+        </table></div> : <p>No file details were returned for this category.</p>}
+        {selectedFile && <div className="remediation-impact__file-findings"><h4>Finding paths: {selectedFile}</h4><ul>{(data.findings || []).filter(row => row.file === selectedFile).map((row, index) => <li key={row.id || index}><strong>{row.rule_id || row.criterion || 'Finding'}</strong> · {number(row.finding_count)} findings → {LANES.find(([key]) => key === row.lane)?.[1] || 'Route unavailable'}<br />{reasonText(row.primary_reason)}. Next action: {row.lane === 'automatic' ? 'Apply the eligible fix, then verify.' : row.lane === 'review' ? 'Review the proposal before application.' : row.lane === 'manual' ? 'Edit the source or request an accessibility judgment.' : 'Investigate the blocker before remediation.'}</li>)}</ul></div>}
+        <button type="button" disabled={readOnly || assigning || !humanFiles.length || data?.capabilities?.assign !== true}
+          onClick={() => { setAssignmentFiles(humanFiles.map(file => file.file)); setAssignee(myEmail); setAssignmentOpen(true); setAssignmentResult(null); setAssignmentError('') }}>Assign human work</button>
+        {data?.capabilities?.assign !== true && <p>Assignment is not available for this preview.</p>}
+        {assignmentOpen && <form className="remediation-impact__assignment" onSubmit={assign}>
+          <h4>Assign remaining human work</h4>
+          <fieldset disabled={assigning || readOnly}><legend>Select files</legend>
+            {humanFiles.map(file => <label key={file.file}><input type="checkbox" checked={assignmentFiles.includes(file.file)}
+              onChange={event => setAssignmentFiles(current => event.target.checked ? [...current, file.file] : current.filter(name => name !== file.file))} /> {file.file}</label>)}
+          </fieldset>
+          <label htmlFor={assigneeId}>Assignee email</label>
+          <input id={assigneeId} type="email" required value={assignee} disabled={assigning || readOnly} onChange={event => setAssignee(event.target.value)} />
+          <p>This assigns pending review work. Approved work and work already in review may be skipped. No findings are marked resolved.</p>
+          <button type="submit" disabled={assigning || readOnly || !assignmentFiles.length || !assignee.trim()}>{assigning ? 'Assigning…' : 'Confirm assignment'}</button>
+          <button type="button" disabled={assigning} onClick={() => setAssignmentOpen(false)}>Cancel assignment</button>
+          {assignmentError && <p role="alert">Could not assign work: {assignmentError}</p>}
+          {assignmentResult && <div role="status"><p>{number(assignmentResult.tasks_assigned)} tasks covering {number(assignmentResult.findings_assigned)} findings across {number(assignmentResult.files_assigned)} files assigned to {assignmentResult.assignee || assignee}.</p>
+            <ul>{(assignmentResult.results || []).map((result, index) => <li key={`${result.file}-${index}`}>{result.file}: {result.status}{result.message ? ` — ${result.message}` : ''}</li>)}</ul>
+          </div>}
+        </form>}
+      </div>}
+    </>}
+    {ready && data?.capabilities?.execute !== true && <p>Execution unavailable: {data?.capabilities?.execute_reason || data?.capabilities?.reason || 'This preview cannot currently be executed.'}</p>}
+    <footer className="remediation-impact__actions"><button type="button" className="remediation-impact__run" disabled={readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
+      onClick={() => onRun(selected, data)}>{runBusy ? 'Remediation is running…' : 'Run remediation with these settings'}</button>
+      <button type="button" disabled={!validPolicy(data?.active_policy) || runBusy} onClick={() => { setPolicy({ ...data.active_policy }); setFilter(null) }}>Reset to active</button>
+      <button type="button" disabled={readOnly || !ready || data?.capabilities?.save_future !== true || saving || runBusy} onClick={save}>{saving ? 'Saving…' : 'Save as default for future runs'}</button>
+    </footer>
+  </section>
+}

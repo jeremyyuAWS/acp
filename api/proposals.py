@@ -874,7 +874,7 @@ def _pdf_struct_image_map(pdf) -> dict:
     return out
 
 
-def _propose_pdf_images_of_text(path) -> list[dict]:
+def _propose_pdf_images_of_text(path, *, ai_enabled: bool = True) -> list[dict]:
     """1.4.5/1.4.9 proposals for PDF: OCR each raster XObject that maps to a tagged /Figure.
 
     Uses pdf:fig:P:S locators (not "image N") so apply_pdf_figure_alt can resolve and write
@@ -919,7 +919,7 @@ def _propose_pdf_images_of_text(path) -> list[dict]:
                                      "Otherwise paste the text back as real, selectable text.")
                         try:
                             import ai as _ai
-                            if _ai.looks_like_logotype(img_bytes):
+                            if ai_enabled and _ai.looks_like_logotype(img_bytes):
                                 rationale = ("The vision model reads this image as a logotype/brand "
                                              "mark. " + rationale)
                         except Exception:
@@ -939,7 +939,7 @@ def _propose_pdf_images_of_text(path) -> list[dict]:
         return []
 
 
-def propose_images_of_text(path, ext: str) -> list[dict]:
+def propose_images_of_text(path, ext: str, *, ai_enabled: bool = True) -> list[dict]:
     """One WCAG 1.4.5 proposal per embedded image that bakes in substantial text: the text is
     OCR'd out and surfaced so the reviewer can paste it back as real, selectable text (or
     confirm the picture is decorative). NEVER auto-applied — swapping an image for live text is
@@ -990,7 +990,7 @@ def propose_images_of_text(path, ext: str) -> list[dict]:
                 # not evidence of anything, so silence beats noise (ADR 0016).
                 try:
                     import ai as _ai
-                    if _ai.looks_like_logotype(img):
+                    if ai_enabled and _ai.looks_like_logotype(img):
                         rationale = ("The vision model reads this image as a logotype/brand "
                                      "mark. " + rationale)
                 except Exception:

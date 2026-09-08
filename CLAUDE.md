@@ -669,7 +669,7 @@ The other direction has its own guard: `lastTwoWiring.test.jsx` sweeps every com
 the approved design boards and fails if any is not rendered by some screen. Retired features are
 not on that list; components that are supposed to be live are.
 
-**Currently retired or unmounted, and mounted nowhere** (frontend/src): `AssessScope`,
+**Currently retired or unmounted, and mounted nowhere** (frontend/src): `AssessScope`, `AutomationPolicyControl`,
 `AssessmentReconciliation`, `CanonicalStageCard`, `ConfidenceDashboard`, `ControlPlane`, `Dashboard`,
 `DiscoverCompleteSummary`, `DiscoveryCompleteness`, `Disposition`, `DispositionReviewWorkspace`,
 `EstateCoverage`, `EstateTreemap`, `FileTypeConfig`, `Insight`, `LifecycleOverrideControl`, `LiveAssessment`, `PiiPanel`,
