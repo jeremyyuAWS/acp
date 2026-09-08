@@ -149,6 +149,38 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).not.toContain('Processing now:')
   })
 
+  it('adds measured result detail to the completed assessment card', () => {
+    const last = {
+      ...SNAP,
+      kpis: { ...SNAP.kpis, completed: 22, findings_so_far: 47, unable_to_assess: 2 },
+      outcomes: { passed: 15, review: 5, failed: 2, skipped: 0, processing: 0 },
+    }
+    const html = render(last)
+    expect(html).toContain('Completed assessment results')
+    expect(html).toContain('Assessment results')
+    expect(html).toContain('22 of 22 eligible documents finalized')
+    expect(html).toContain('Findings recorded')
+    expect(html).toContain('47 accessibility findings recorded across the completed assessment')
+    expect(html).toContain('Documents passed')
+    expect(html).toContain('Need review')
+    expect(html).toContain('Could not complete')
+    expect(html).toContain('2 documents could not be assessed and require follow-up')
+    expect(html).toContain('Remediation recommendations are ready for supported findings')
+  })
+
+  it('omits pending result counts instead of presenting them as zero', () => {
+    const last = {
+      ...SNAP,
+      kpis: { ...SNAP.kpis, completed: 22 },
+      kpis_pending: ['findings_so_far', 'unable_to_assess'],
+    }
+    const html = render(last)
+    expect(html).toContain('Assessment results')
+    expect(html).not.toContain('Findings recorded')
+    expect(html).not.toContain('accessibility findings recorded')
+    expect(html).not.toContain('could not be assessed and require')
+  })
+
   it('falls back to the lane label when no document is currently reported', () => {
     const idle = { ...SNAP, queue: { ...SNAP.queue, current: null, in_flight: 0 } }
     const html = render(idle)
