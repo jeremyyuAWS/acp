@@ -13792,6 +13792,56 @@ class Store:
             return None
         return self.get_stage_output_manifest(execution["output_manifest_id"])
 
+    def _assess_coordinator_documents(self, scan_id: str) -> dict:
+        """Read document results, not the coordinator's terminal queue state.
+
+        scan_runs.files is reset to the admitted population by _scan_assess before
+        fan-out. Discovery's wider inventory is not an assessment denominator.
+        Completed queue jobs may be purged, so results and this counter survive them.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT files,scope,assessed_at FROM scan_runs WHERE id=%s", (scan_id,))
+            run = self._db.fetchone(cur) or {}
+            self._db.execute(cur,
+                "SELECT file,status FROM file_records WHERE scan_id=%s", (scan_id,))
+            results = {row["file"]: row["status"] for row in self._db.fetchall(cur)}
+            self._db.execute(cur,
+                "SELECT type,payload,status FROM jobs WHERE scan_id=%s "
+                "AND type IN ('scan_file','scan_batch') ORDER BY created_at,id", (scan_id,))
+            jobs = self._db.fetchall(cur)
+        scope = run.get("scope") or {}
+        if isinstance(scope, str):
+            scope = json.loads(scope)
+        admitted = bool(results or jobs or run.get("assessed_at")
+                        or "lifecycle_eligible_excluded" in scope)
+        total = run.get("files") if admitted else None
+        buckets = dict.fromkeys(("waiting", "processing", "assessed", "failed", "cancelled", "skipped"), 0)
+        for status in results.values():
+            buckets[{"error": "failed", "skipped": "skipped", None: "waiting"}.get(
+                status, "assessed")] += 1
+        pending = {}
+        for job in jobs:
+            for document in self._dead_job_files(job):
+                if document["file"] not in results:
+                    pending[document["file"]] = job["status"]
+        for status in pending.values():
+            # A done job without a persisted result is still missing evidence.
+            bucket = {"running": "processing", "dead": "failed",
+                      "cancelled": "cancelled"}.get(status, "waiting")
+            buckets[bucket] += 1
+        accounted = sum(buckets.values())
+        if total is not None and total > accounted:
+            buckets["waiting"] += total - accounted
+            accounted = total
+        return {
+            "unit": "eligible documents", "scope": "current Assess scan population",
+            "equation": "eligible = waiting + processing + assessed + failed + cancelled + skipped",
+            "total": total, "accounted": accounted,
+            "unaccounted": None if total is None else total - accounted,
+            "buckets": buckets, "exact": total is not None and total == accounted,
+        }
+
     def _stage_domain_reconciliation(self, execution: dict, partitions: dict[str, int]) -> dict:
         """Reconcile one stage in the domain unit its operator actually recognizes.
 
@@ -13824,6 +13874,19 @@ class Store:
             }
 
         if stage == "assess":
+            # A scan-wide coordinator/trace is one queue item, never one document.
+            # Keep per-document executions on their immutable item ledger; use the
+            # admitted scan population for the legacy coordinator fan-out instead.
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT w.input_id,w.job_id,COALESCE(o.topic,j.type) AS kind "
+                    "FROM stage_work_items w LEFT JOIN stage_outbox o "
+                    "ON o.work_item_id=w.work_item_id LEFT JOIN jobs j ON j.id=w.job_id "
+                    "WHERE w.execution_id=%s", (execution_id,))
+                inputs = self._db.fetchall(cur)
+            if (len(inputs) == 1 and inputs[0]["kind"] in ("scan_assess", "assess_trace")
+                    and inputs[0]["input_id"] in ("item-0", inputs[0]["job_id"])):
+                return self._assess_coordinator_documents(scan_id)
             eligible = execution.get("expected_items")
             accounted = queued + processing + completed + failed + cancelled + skipped
             return {
