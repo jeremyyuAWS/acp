@@ -13,6 +13,8 @@ const full = {
                action: 'assessing', text: 'Assessing discharge.pdf for 1.4.3  (+5 more in progress)' },
     processing: true, stale: false,
   },
+  documents: { completed: 51, displayed: 1, truncated: true,
+    items: [{ file: 'Clinical/report.pdf', score: 81, criteria: ['1.4.3'] }] },
   sequence: 12, generated_at: '2026-08-20T00:00:00Z', kpis_pending: [],
 }
 
@@ -39,6 +41,8 @@ describe('normalizeLive', () => {
     expect(m.queue.workers).toEqual({ busy: 6, max: 8, idle: 2, capacityScope: null })
     expect(m.queue.current.criterionName).toBe('Contrast (Minimum)')
     expect(m.queue.processing).toBe(true)
+    expect(m.documents).toEqual({ completed: 51, displayed: 1, truncated: true,
+      items: [{ file: 'Clinical/report.pdf', score: 81, criteria: ['1.4.3'] }] })
     expect(m.warnings).toEqual([])
   })
 

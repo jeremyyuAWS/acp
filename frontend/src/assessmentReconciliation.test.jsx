@@ -134,13 +134,10 @@ describe('the reconciliation renders every bucket and its arithmetic', () => {
   })
 })
 
-// AssessmentReconciliation was UNMOUNTED from Overview on 2026-09-02 (PRD "ACP Discover and
-// Overview Simplification") — EstateProgressPanel's funnel and the compliance funnel carry the
-// estate story now, and the five-bucket partition was a third telling of it. The component file and
-// every test above it stay: the panel is a retired feature, not a deleted one (CLAUDE.md), and it is
-// listed in `unmountedComponents.test.jsx`, which fails if anything mounts it again without the
-// record being updated. The tests above still exercise the panel directly and still pass.
-describe('Overview no longer mounts the reconciliation', () => {
+// Overview still avoids a third telling of the estate funnel. The panel is restored on Assess,
+// where it qualifies the result by comparing what Assessment checked with the inventory Discovery
+// handed it.
+describe('the reconciliation belongs to Assess, not Overview', () => {
   const screen = (run, files) =>
     renderToStaticMarkup(createElement(Overview, {
       run, files, trend: [], trendDates: [], onGo: () => {}, scanList: [], onPickScan: () => {},
@@ -159,6 +156,12 @@ describe('Overview no longer mounts the reconciliation', () => {
     const html = screen({ id: 's3', files: 3, certifiable: 1, scope: { kind: 'local' } }, rows(3, 0))
     expect(html).not.toContain('What was assessed, and what was not')
   })
+
+  it('is mounted beside the completed Assess result', () => {
+    const app = readFileSync(join(here, 'App.jsx'), 'utf8')
+    expect(app).toMatch(/import AssessmentReconciliation from '\.\/AssessmentReconciliation\.jsx'/)
+    expect(app).toMatch(/<AssessSummary[\s\S]{0,1200}<AssessmentReconciliation run=\{run\} files=\{files\}/)
+  })
 })
 
 // ── Source-level pins for what the DOM cannot show ────────────────────────────────────────────
@@ -166,7 +169,7 @@ describe('the wiring is where it says it is', () => {
   const overview = readFileSync(join(here, 'Overview.jsx'), 'utf8')
   const panel = readFileSync(join(here, 'AssessmentReconciliation.jsx'), 'utf8')
 
-  it('Overview neither imports nor renders the panel any more', () => {
+  it('Overview neither imports nor renders the panel', () => {
     // Not just unrendered — unimported. A dead import is what makes an orphan actively misleading:
     // a reader greps, finds it, and concludes the component is wired (CLAUDE.md, 2026-08-30).
     expect(overview).not.toMatch(/import AssessmentReconciliation from/)

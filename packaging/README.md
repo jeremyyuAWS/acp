@@ -122,15 +122,21 @@ python -m acpctl values    packaging/examples/regulated.acp-deployment.yaml
 python -m acpctl doctor    packaging/examples/standard-production.acp-deployment.yaml
 python -m acpctl status    packaging/examples/standard-production.acp-deployment.yaml
 
-# these three reach a cluster; install and uninstall can change one — see docs/lifecycle.md
+# these five reach a cluster; four of them can change one — see docs/lifecycle.md
 python -m acpctl install   <spec> -n acp-prod --release-manifest release.json
 python -m acpctl uninstall <spec> -n acp-prod            # previews; --yes to act
 python -m acpctl support-bundle <spec> -n acp-prod -o ./bundle
+python -m acpctl backup    <spec> -n acp-prod            # runs the chart's backup CronJob now
+python -m acpctl restore   <spec> -n acp-prod --from acp-….dump --quiesce --yes
 ```
 
-`validate` exits 0 on success and 1 on any error; warnings are printed and never fail. Four
-commands remain unimplemented — upgrade, rollback, backup, restore — and they exit 2 naming the
-phase they belong to, rather than accepting arguments and doing nothing.
+`validate` exits 0 on success and 1 on any error; warnings are printed and never fail. Two
+commands remain unimplemented — upgrade and rollback — and they exit 2 naming the phase they
+belong to, rather than accepting arguments and doing nothing.
+
+`backup` acts immediately; `restore` previews and changes nothing without `--yes`, because it
+drops and recreates every object in the database. Run `restore` with no `--from` to see which dumps
+the backup Jobs on the cluster reported writing — there is deliberately no `latest`.
 
 ## `init` — start from something valid
 

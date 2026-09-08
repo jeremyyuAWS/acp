@@ -850,6 +850,22 @@ jobs:
         # THE REFUSAL IS RUN FIRST, DELIBERATELY. A restore that succeeds tells you nothing about
         # whether the guard works, and the guard is what stands between an operator and a
         # `--clean` under three live worker tiers.
+        #
+        # AND IT IS DRIVEN THROUGH `acpctl`, WHICH IS NEW. Until this step, NO acpctl command that
+        # changes a cluster had ever run against a real API server: install, uninstall and
+        # support-bundle are tested against an injected runner that answers the way helm and
+        # kubectl are DOCUMENTED to answer, which establishes their logic and nothing about
+        # kubectl. Four things here can only be settled by a cluster — that the backup CronJob is
+        # findable by its labels rather than by a computed name, that `create job --from=cronjob/…`
+        # produces a pod the restricted standard admits, that the log acpctl parses is the log
+        # kubectl returns, and that the Job name it polls for is the one the chart rendered.
+        #
+        # `--quiesce` IS EXERCISED BY ITS REFUSAL, not by its success, and that is the honest
+        # shape here: this release is installed by `helm install`, so there is no acp-installation
+        # ConfigMap to record replica counts in, and scaling tiers to zero with no record of what
+        # they were is exactly what that refusal exists to prevent. The scale-down below is done
+        # by kubectl for the same reason. The success path stays covered by unit tests alone, and
+        # packaging/docs/lifecycle.md says so.
         run: |
           set -euo pipefail
           # Turn the backup on. Everything the upgrade step passes, plus the two decisions the
@@ -877,28 +893,76 @@ jobs:
           kubectl -n "$NAMESPACE" exec deployment/acp-postgres -- psql -U acp -d acpdb -c \
             "create table acp_restore_drill(note text); insert into acp_restore_drill values ('$GITHUB_RUN_ID');"
 
-          kubectl -n "$NAMESPACE" create job acp-backup-drill --from=cronjob/acp-backup
-          kubectl -n "$NAMESPACE" wait --for=condition=complete job/acp-backup-drill --timeout=300s
-          kubectl -n "$NAMESPACE" logs job/acp-backup-drill | tee /tmp/backup.log
-          grep -q "retention 7d" /tmp/backup.log
-          DUMP="$(sed -n 's#^wrote /backups/\(acp-[^ ]*\.dump\) .*#\1#p' /tmp/backup.log)"
-          test -n "$DUMP" || { echo "the backup job named no dump file"; exit 1; }
-          echo "the dump to restore is $DUMP"
+          # THROUGH `acpctl backup`, NOT `kubectl create job`. This is the first time any acpctl
+          # command that CHANGES a cluster has run against a real API server — install, uninstall
+          # and support-bundle are all tested against an injected runner answering the way helm
+          # and kubectl are documented to answer, which establishes their logic and nothing about
+          # kubectl. Everything here is a claim that only a cluster can settle: that the CronJob
+          # is findable by its labels, that `--from=cronjob/…` copies a pod template the
+          # restricted standard admits, and that the log this parses is the log kubectl returns.
+          python -m acpctl backup "$SPEC" -n "$NAMESPACE" --release-name acp --json \
+            > /tmp/backup.json
+          cat /tmp/backup.json
+          DUMP="$(python -c 'import json;print(json.load(open("/tmp/backup.json"))["file"])')"
+          test -n "$DUMP" || { echo "acpctl backup named no dump file"; exit 1; }
+          python - <<'PY'
+          import json, sys
+          record = json.load(open("/tmp/backup.json"))
+          # The fields acpctl PARSED out of the Job's own log. A record with a job name and
+          # nothing else would mean the command reported that Kubernetes accepted a request.
+          for key in ("file", "bytes", "objects", "retentionDays", "kept"):
+              if key not in record:
+                  print(f"acpctl backup --json omitted {key}: {record}", file=sys.stderr)
+                  sys.exit(1)
+          assert record["retentionDays"] == 7, record
+          assert record["objects"] > 0 and record["bytes"] > 0, record
+          print(f"backed up {record['file']}: {record['bytes']} bytes, "
+                f"{record['objects']} objects, {record['kept']} kept")
+          PY
 
-          # THE GUARD, EXERCISED. The application is still running, so this restore must fail —
-          # and must fail for the stated reason rather than for any other.
-          helm template acp packaging/chart/acp \
-            -f /tmp/values.yaml \
-            -f packaging/reference/kind/runner-resources.yaml \
-            --set secrets.existingSecret=acp-secrets \
-            --set restore.enabled=true \
-            --set restore.file="$DUMP" \
-            --set restore.runId=refusal \
-            --set restore.confirm=acp \
-            -s templates/restore-job.yaml | kubectl -n "$NAMESPACE" apply -f -
-          kubectl -n "$NAMESPACE" wait --for=condition=failed job/acp-restore-refusal --timeout=300s
-          kubectl -n "$NAMESPACE" logs job/acp-restore-refusal | tee /tmp/refusal.log
+          # THE LISTING, against a real cluster. No --from, so this must exit 2 and name the dump
+          # it found by reading the backup Jobs' logs.
+          set +e
+          python -m acpctl restore "$SPEC" -n "$NAMESPACE" --release-name acp > /tmp/list.txt 2>&1
+          LIST_CODE=$?
+          set -e
+          cat /tmp/list.txt
+          test "$LIST_CODE" -eq 2 || { echo "restore with no --from exited $LIST_CODE"; exit 1; }
+          grep -q "$DUMP" /tmp/list.txt
+
+          # THE PREVIEW CHANGES NOTHING, and the proof is that the drill row is still there after
+          # it — asserted below, once, after the row has been destroyed and brought back.
+          python -m acpctl restore "$SPEC" -n "$NAMESPACE" --release-name acp \
+            --from "$DUMP" | tee /tmp/preview.txt
+          grep -q "PREVIEW ONLY" /tmp/preview.txt
+
+          # --quiesce MUST REFUSE HERE, and that is the point of running it. This release was
+          # installed by `helm install` rather than `acpctl install`, so there is no
+          # acp-installation ConfigMap to record the replica counts in — and scaling the tiers to
+          # zero with no record of what they were is exactly what the refusal exists to prevent.
+          set +e
+          python -m acpctl restore "$SPEC" -n "$NAMESPACE" --release-name acp \
+            --from "$DUMP" --quiesce --yes > /tmp/noquiesce.txt 2>&1
+          Q_CODE=$?
+          set -e
+          cat /tmp/noquiesce.txt
+          test "$Q_CODE" -eq 1 || { echo "--quiesce exited $Q_CODE, expected a refusal"; exit 1; }
+          grep -q "refusing --quiesce" /tmp/noquiesce.txt
+          # And it refused BEFORE scaling anything: every tier is still up.
+          kubectl -n "$NAMESPACE" rollout status deployment/acp-api --timeout=60s
+
+          # THE JOB'S OWN GUARD, EXERCISED THROUGH THE CLI. The application is running, so this
+          # must fail — and must be reported as a REFUSAL that changed nothing rather than as a
+          # restore that broke something.
+          set +e
+          python -m acpctl restore "$SPEC" -n "$NAMESPACE" --release-name acp \
+            --from "$DUMP" --run-id refusal --yes > /tmp/refusal.log 2>&1
+          R_CODE=$?
+          set -e
+          cat /tmp/refusal.log
+          test "$R_CODE" -eq 1 || { echo "the live-application restore exited $R_CODE"; exit 1; }
           grep -q "REFUSING:" /tmp/refusal.log
+          grep -q "refused rather than failed" /tmp/refusal.log
           # And it refused BEFORE dropping anything: the row is still there.
           kubectl -n "$NAMESPACE" exec deployment/acp-postgres -- psql -U acp -d acpdb -tAc \
             "select note from acp_restore_drill" | grep -q "$GITHUB_RUN_ID"
@@ -920,20 +984,24 @@ jobs:
           done
           test "$OPEN" = "0" || { echo "still $OPEN session(s) on the database"; exit 1; }
 
-          # Destroy what the backup holds, then get it back.
+          # Destroy what the backup holds, then get it back — through the CLI this time, with the
+          # tiers already down, which is the path `--quiesce` would have taken had there been an
+          # install record to write the replica counts into.
           kubectl -n "$NAMESPACE" exec deployment/acp-postgres -- psql -U acp -d acpdb -c \
             "drop table acp_restore_drill;"
-          helm template acp packaging/chart/acp \
-            -f /tmp/values.yaml \
-            -f packaging/reference/kind/runner-resources.yaml \
-            --set secrets.existingSecret=acp-secrets \
-            --set restore.enabled=true \
-            --set restore.file="$DUMP" \
-            --set restore.runId=drill \
-            --set restore.confirm=acp \
-            -s templates/restore-job.yaml | kubectl -n "$NAMESPACE" apply -f -
-          kubectl -n "$NAMESPACE" wait --for=condition=complete job/acp-restore-drill --timeout=600s
-          kubectl -n "$NAMESPACE" logs job/acp-restore-drill
+          python -m acpctl restore "$SPEC" -n "$NAMESPACE" --release-name acp \
+            --from "$DUMP" --run-id drill --yes --json > /tmp/restore.json 2>/tmp/restore.log
+          cat /tmp/restore.log
+          cat /tmp/restore.json
+          python - <<'PY'
+          import json, sys
+          record = json.load(open("/tmp/restore.json"))
+          if "tables" not in record:
+              print(f"acpctl restore --json omitted the table count: {record}", file=sys.stderr)
+              sys.exit(1)
+          assert record["tables"] > 0, record
+          print(f"restored {record['from']} as {record['job']}: {record['tables']} tables")
+          PY
           BACK="$(kubectl -n "$NAMESPACE" exec deployment/acp-postgres -- psql -U acp -d acpdb -tAc \
             "select note from acp_restore_drill" | tr -d '[:space:]')"
           test "$BACK" = "$GITHUB_RUN_ID" \

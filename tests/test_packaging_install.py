@@ -1182,14 +1182,27 @@ def test_upgrade_and_rollback_are_still_refused():
     ran.
 
     support-bundle WAS in this set and has been removed from it, because it is implemented now
-    (PRD S5.D.6) — not because the assertion was in the way. The distinction matters: the four
-    named below are the ones that would silently mislead if stubbed out badly, and a `backup`
-    that exits 0 having done nothing is the specific failure this guards. support-bundle now has
-    its own tests; leaving it here would assert that a working command is broken.
+    (PRD S5.D.6) — not because the assertion was in the way. The distinction matters: the ones
+    named below are those that would silently mislead if stubbed out badly, and a `backup` that
+    exits 0 having done nothing is the specific failure this guards. support-bundle now has its
+    own tests; leaving it here would assert that a working command is broken.
+
+    `backup` AND `restore` LEFT THE SET FOR THE SAME REASON, AND THAT IS THE ONE TO SCRUTINISE,
+    because this test named `backup` specifically as the thing it was protecting. What protects it
+    now is not this assertion but tests/test_packaging_backup.py, and in particular
+    `test_a_completed_job_that_names_no_dump_is_not_a_success` — the exact failure the sentence
+    above describes, asserted against the implementation rather than against its absence. A stub
+    was the right guard while there was nothing to test; it is the wrong one once there is,
+    because it would then be asserting that a working command must not exist.
+
+    THE ASSERTION BELOW IS EQUALITY, NOT A SUBSET, and it was a subset before. That is what makes
+    removing an entry a deliberate edit rather than something a passing suite tolerates: a
+    command quietly dropped from the stub list without an implementation now fails HERE.
     """
     from acpctl.cli import NOT_YET_IMPLEMENTED
-    assert {"upgrade", "rollback", "backup", "restore"} <= set(NOT_YET_IMPLEMENTED)
-    assert "support-bundle" not in NOT_YET_IMPLEMENTED
+    assert set(NOT_YET_IMPLEMENTED) == {"upgrade", "rollback"}
+    for retired in ("support-bundle", "install", "uninstall", "backup", "restore"):
+        assert retired not in NOT_YET_IMPLEMENTED
 
 
 # ── fixtures ─────────────────────────────────────────────────────────────────

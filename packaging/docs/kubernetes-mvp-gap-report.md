@@ -688,13 +688,25 @@ values file regenerated from a document loses the block — which `values.yaml` 
 somebody would hit it. The remaining workstream B item is unchanged: a supported-distribution
 claim, PRD §4.
 
-**Two seams this leaves open, named so neither is read as an absence.** `acpctl backup` and
-`acpctl restore` still exit 2 as phase 5 — the CHART has the Jobs and the CLI has no command that
-runs them, so "acpctl backup refuses" must not be read as "this installation cannot be backed up".
-And the support bundle does not collect `latest.json`, which is the file the backup CronJob writes
-precisely so PRD §14's "backup age and restore-test status" can be read without database access;
-collecting it is a few lines in `support_bundle.py` and the obvious next step for whoever owns
-workstream D.
+**The first of the two seams recorded here is closed.** `acpctl backup` and `acpctl restore` ran
+the chart's Jobs and exited 2 as phase 5; they now run them, wait, and read back what the Job's own
+log says it did. `acpctl backup --json` emits the dump's name, size and restorable-object count —
+the machine-readable half of PRD §14's "backup age", parsed from the Job's report rather than from
+this tool's belief. The remaining seam is unchanged: **the support bundle does not collect
+`latest.json`**, which the backup CronJob writes precisely so backup age can be read without
+database access. Collecting it is a few lines in `support_bundle.py`.
+
+**And this is where acpctl's mutating commands first met an API server.** `install`, `uninstall`
+and `support-bundle` are tested against an injected runner answering the way helm and kubectl are
+*documented* to answer — enough to establish their logic, nothing about kubectl. The reference
+cluster now drives `backup` and `restore` end to end, which settles four things only a cluster can:
+that the CronJob is findable by its labels rather than by a computed name (it is `<fullname>-backup`,
+and the fullname is not the release name whenever `fullnameOverride` is set), that
+`create job --from=cronjob/…` produces a pod the restricted standard admits, that the log acpctl
+parses is the log kubectl returns, and that the Job name it polls for is the one the chart rendered
+after its 63-character truncation. `restore --quiesce` is exercised there by its **refusal** — the
+reference release is installed by `helm install`, so there is no install-state ConfigMap to record
+replica counts in — and its success path stays covered by unit tests alone.
 
 ---
 
