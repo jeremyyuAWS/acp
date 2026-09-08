@@ -92,6 +92,12 @@ ingress:
   annotations: {}
 
 networkPolicy:
+  # WHO MAY REACH THE API. Empty means the chart decides: with a public ingress the controller is
+  # in a namespace this chart cannot name, so the rule stays open; without one it is restricted to
+  # the release's own pods. Set this to name peers explicitly — a list of NetworkPolicy `from`
+  # entries — when a controller, a scraper or another workload must reach the API and is not part
+  # of this release.
+  apiIngressFrom: []
   enabled: false
   defaultDeny: false
   workerIngress: true

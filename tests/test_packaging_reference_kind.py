@@ -472,6 +472,30 @@ def test_the_dry_run_covers_the_kinds_the_reference_install_never_creates():
         "the dry run must submit the whole render now that nothing needs skipping")
 
 
+def test_the_ingress_probe_proves_its_own_mechanism_before_trusting_it():
+    """"DID NOT CONNECT" IS ALSO WHAT A BROKEN PROBE LOOKS LIKE.
+
+    The step checks that a pod carrying none of the release's labels cannot reach the API. No bash
+    `/dev/tcp`, no DNS, no `timeout` — each would produce the same silence and read as a policy
+    that works, which is the `cmd | grep X || echo clean` shape this repository already has a scar
+    from.
+
+    So it opens a socket to Postgres from the Postgres pod FIRST. That must succeed; when it does
+    not, the step reports a broken mechanism rather than a passing check.
+    """
+    script = run_steps()
+    assert "deploy/acp-postgres -- bash" in script, (
+        "the probe must come from a pod carrying none of the chart's labels, or the API's ingress "
+        "rule does not apply to it and the result says nothing")
+    assert "/dev/tcp/acp-postgres/5432" in script, "the positive control is missing"
+    assert "/dev/tcp/acp-api/80" in script
+    control = script.index("/dev/tcp/acp-postgres/5432")
+    probe = script.index("/dev/tcp/acp-api/80")
+    assert control < probe, "the control has to run before the verdict it makes trustworthy"
+    assert "meaningless" in script, (
+        "a failed control must say the mechanism is broken, not that the policy holds")
+
+
 def test_the_reference_cluster_upgrades_as_well_as_installs():
     """AN INSTALL THAT CANNOT BE UPGRADED IS A DEMO, and every way this chart could fail to
     upgrade is invisible to `helm template` and to a first install:
