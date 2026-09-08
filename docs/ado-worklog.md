@@ -3413,18 +3413,34 @@ in either direction.
   the remediate POST was likewise unscoped. Same class as #1202 and #872, found by looking rather than waiting.
 ## Feature: ACP — Iteration 12 delivery · #5675
 
-Created 2026-09-08 under Epic #3664, mirroring #5478. It carries the **delivery-log and repository
-work** for 2026-09-07 as four Closed Tasks totalling 8 hours — the daily cap, not the day's full
-output:
+Created 2026-09-08 under Epic #3664, mirroring #5478. It carries **2026-09-07's whole day as nine
+Closed Tasks totalling exactly 8 hours** — the daily cap, not the day's full output.
 
-- **#5676 (4h)** — Document 431 commits across two standup passes, PRs #1276–#1724.
-- **#5677 (2h)** — Land the log on `main` via PR #1729, carrying the 2026-09-04 section that had been
-  committed to a parked branch and never merged.
-- **#5678 (1h)** — Unpark the `acp` checkout from a branch 803 commits behind `main`.
-- **#5679 (1h)** — Diagnose the `AssessSummary` case collision and correct the Open item it produced.
+Delivery-log and repository work — **3h**:
 
-The product work in this same window is filed under its functional Features above, not here. **No
-hours are booked against it** — see the Sync log entry for 2026-09-08.
+- **#5676 (1.5h)** — Document 431 commits across two standup passes, PRs #1276–#1724.
+- **#5677 (0.5h)** — Land the log on `main` via PR #1729, carrying the 2026-09-04 section that had
+  been committed to a parked branch and never merged.
+- **#5678 (0.5h)** — Unpark the `acp` checkout from a branch 803 commits behind `main`.
+- **#5679 (0.5h)** — Diagnose the `AssessSummary` case collision and correct the Open item it produced.
+
+Product work, the 81 commits dated that day — **5h**:
+
+- **#5686 (1.5h)** — Kubernetes/Helm packaging (#1798–#1808).
+- **#5687 (1.5h)** — Canonical stage model and the Live Operations drawer (#1720–#1793).
+- **#5688 (1h)** — ADR 0055 describe-instead-of-replace, and the false certification it exposed
+  (#1733–#1776).
+- **#5689 (0.5h)** — Eval replication and model rollout gates (#1727–#1775).
+- **#5690 (0.5h)** — Capacity scheduling, DB mutation isolation, governed remediation policy
+  (#1735–#1795).
+
+**This is a re-cut, recorded rather than silently rewritten.** #5676–#5679 originally held all 8
+hours, because the first pass booked only the delivery-log work and left the day's 81 product commits
+with no estimate at all. Rather than add hours to a day already at its cap, the existing four Tasks
+were rescaled from 8h to 3h and the product Tasks created for the remaining 5h. The narrative for
+that product work stays under its functional Features above; only the estimate lives here, the same
+split #5478 used. The day's ledger total is unchanged at 8h — the cap was never breached in either
+direction.
 
 
 
@@ -4263,3 +4279,13 @@ that **installing it found the defects reading it did not**.
   Two things this entry does **not** do: it does not re-verify PR claims against the source (the
   bullets follow commit subjects and bodies), and it does not open an Iteration 13 Feature. Sync marker
   advanced from `8c854d71` to `origin/main` head.
+
+- **2026-09-08 (hours re-cut, no commits documented)** — 2026-09-07's 8 hours were re-divided across
+  nine Tasks under #5675 rather than four. The first pass had booked the whole day to the delivery-log
+  work (#5676–#5679) while the 81 product commits dated that day carried no estimate; the fix under the
+  cap is to re-cut the day, never to extend it. #5676–#5679 were rescaled 8h → 3h and #5686–#5690
+  created for the remaining 5h, totalling exactly 8.0h. **The `ado-hours.sh` ledger is untouched** — it
+  records the day's total, which was and remains 8h to `acp`, and ADO holds the breakdown. Its note
+  line still names only #5676–#5679, which is now a subset; the ledger is append-only by design and
+  was deliberately not hand-edited to match. No Feature bullets changed and the sync marker was not
+  advanced.
