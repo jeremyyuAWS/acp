@@ -118,6 +118,22 @@ describe('canonical stage card', () => {
     expect(html).not.toContain('live-heartbeat-bars')
   })
 
+  it('rehydrates the bullet-based live Discovery card from canonical SSE data', () => {
+    const html = renderToStaticMarkup(createElement(WorkflowStageStack, { receivedAt: Date.now(),
+      lineage: { workflow_id: 'drive-live', workflow_revision: 3, stages: [{
+        ...SNAPSHOT, workflow_id: 'drive-live', stage: 'discover', source: 'drive', state: 'processing',
+        domain_reconciliation: { unit: 'inventory documents', total: 986, accounted: 147,
+          exact: true, buckets: { active: 147, folders_visited: 12 } },
+      }] },
+    }))
+    expect(html).toContain('Discovering documents')
+    expect(html).toContain('Discovery steps')
+    expect(html).toContain('Documents found')
+    expect(html).toContain('live-heartbeat-bars')
+    expect(html).toContain('livecounter')
+    expect(html).not.toContain('workflow-sse-card')
+  })
+
   it('keeps retained history mounted while an earlier-stage card collapses and expands', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-07T01:02:03Z'))

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import CompletedStageDetails from './CompletedStageDetails.jsx'
+import CompletedStageDetails, { liveDiscoverProgress } from './CompletedStageDetails.jsx'
+import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import WorkflowStageActivityCard from './WorkflowStageActivityCard.jsx'
 import { canonicalStageCardModel, canonicalWorkflowStages, currentCanonicalStage,
@@ -85,6 +86,11 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
               {detail ? <div className="workflow-stage-stack__live-detail" data-detail-owner="current">{detail}</div>
                 : completed(snapshot.state) && ['discover', 'assess'].includes(stage)
                   ? <CompletedStageDetails snapshot={snapshot} />
+                  : stage === 'discover' && !terminal(snapshot.state)
+                    ? <DiscoverRunProgress progress={liveDiscoverProgress(snapshot)} busy
+                        source={snapshot?.source || null} scope={snapshot?.scope || null}
+                        freshness="live"
+                        onReview={onNavigate ? () => onNavigate(destination[stage]) : null} />
                   : <WorkflowStageActivityCard snapshot={snapshot} receivedAt={receivedAt}
                       onOpen={onNavigate ? () => onNavigate(destination[stage]) : null} />}
             </div>}
