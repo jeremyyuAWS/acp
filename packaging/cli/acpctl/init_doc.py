@@ -250,9 +250,20 @@ def _required_refs(doc: dict) -> list[str]:
     implementation that goes stale silently; if the function is ever renamed, an ImportError names
     the problem immediately, which is the failure worth having.
     """
-    from .spec import required_secret_names
+    from .spec import authentication_refs, required_secret_names
 
-    return list(required_secret_names(doc))
+    names = list(required_secret_names(doc))
+    # PUBLIC INGRESS NEEDS ONE OF TWO REFS, WHICH `required_secret_names` CANNOT SAY. That function
+    # returns names that must ALL be present; authentication is satisfied by either the GIS client
+    # id or the passcode, so the rule that enforces it lives on its own and exposes the acceptable
+    # names here. Init emits the FIRST — per-user Google sign-in, which is what production runs
+    # when a client id exists and the better default of the two — and a document that wants the
+    # passcode gate swaps the key. Without this, every document init generated for a
+    # public-ingress deployment would fail the validator init exists to satisfy.
+    acceptable = authentication_refs(doc)
+    if acceptable and not any(name in names for name in acceptable):
+        names.append(acceptable[0])
+    return names
 
 
 # ── rendering ─────────────────────────────────────────────────────────────────

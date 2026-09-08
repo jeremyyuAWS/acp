@@ -78,6 +78,9 @@ network:
 secrets:
   provider: azure-key-vault
   refs:
+    acp-access-code:
+      name: access-code
+      key: value
     database-url:
       name: database-url
       key: value

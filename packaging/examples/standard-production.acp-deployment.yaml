@@ -106,6 +106,13 @@ secrets:
   provider: azure-key-vault
   refs:
     database-url: { name: acp-kv, key: database-url }
+    # WHAT OPENS THE GATE. `api/app.py`'s access middleware is a no-op when neither
+    # ACP_ACCESS_CODE nor ACP_GOOGLE_CLIENT_ID is set, so a public-ingress installation without one
+    # of these serves every non-public route to anything that reaches the ingress. The chart
+    # projects each `secrets.refs` key as an uppercase env var, so declaring the reference IS the
+    # wiring. Swap this key for `acp-access-code` to use the Basic-auth passcode gate instead —
+    # deploy/public/deploy.sh chooses between exactly these two modes and always sets one.
+    acp-google-client-id: { name: acp-kv, key: google-client-id }
     redis-url: { name: acp-kv, key: redis-url }
     object-storage: { name: acp-kv, key: blob-account }
     langfuse-secret-key: { name: acp-kv, key: langfuse-secret-key }
