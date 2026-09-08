@@ -8,13 +8,20 @@
     python -m acpctl status    <spec> -n <namespace>
     python -m acpctl install   <spec> -n <namespace> --release-manifest <path> --yes
     python -m acpctl uninstall <spec> -n <namespace>
+    python -m acpctl backup    <spec> -n <namespace>
+    python -m acpctl restore   <spec> -n <namespace> --from <dump> --quiesce --yes
 
-TWO OF THESE CAN CHANGE A CLUSTER, AND ONLY TWO. Everything above `install` reads or renders and
+FOUR OF THESE CAN CHANGE A CLUSTER, AND ONLY FOUR. Everything above `install` reads or renders and
 nothing else — `cluster.py` enforces that with a kubectl allow-list containing no mutating verb,
-and the doctor and status tests assert the refusal. `install` and `uninstall` mutate through
-`helm.py`, which has its OWN, narrower allow-list: helm plus four kubectl writes, nothing more.
-The split is deliberate, so that adding an installer did not quietly retire the read-only
-guarantee the other commands are built on. See packaging/docs/lifecycle.md.
+and the doctor and status tests assert the refusal. `install`, `uninstall`, `backup` and `restore`
+mutate through `helm.py`, which has its OWN, narrower allow-list: helm plus a short list of
+kubectl writes, each narrowed by resource, by flag or by both. The split is deliberate, so that
+adding an installer did not quietly retire the read-only guarantee the other commands are built
+on — and so that adding a backup did not widen it a second time by habit. See
+packaging/docs/lifecycle.md.
+
+`backup` AND `restore` RUN THE CHART'S OWN JOBS; neither opens a database. `restore` previews and
+changes nothing without `--yes`, because it drops and recreates every object it restores.
 
 Exit codes: 0 success, 1 refused/invalid/failed, 2 usage error or an unreachable cluster (which
 is retryable and 1 is not). `validate` exits 1 on errors only — warnings are printed and do not
@@ -38,8 +45,6 @@ from .values import build_values, render_values_yaml
 NOT_YET_IMPLEMENTED = {
     "upgrade": "phase 5",
     "rollback": "phase 5",
-    "backup": "phase 5",
-    "restore": "phase 5",
 }
 
 
@@ -657,6 +662,11 @@ def build_parser() -> argparse.ArgumentParser:
     # `acpctl validate` free of it, matching how every other command's module is imported.
     from . import support_bundle as support_bundle_mod
     support_bundle_mod.add_parser(sub)
+
+    # Same reasoning, and the same import discipline: backup.py declares both of its commands'
+    # flags beside the code that reads them.
+    from . import backup as backup_mod
+    backup_mod.add_parser(sub)
 
     for name, why in sorted(NOT_YET_IMPLEMENTED.items()):
         p = sub.add_parser(name, help=f"not yet implemented — {why}")
