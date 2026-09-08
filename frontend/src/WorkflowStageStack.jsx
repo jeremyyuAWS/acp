@@ -62,7 +62,9 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
               <span className="workflow-stage-stack__check" aria-hidden="true">
                 {attention ? '!' : snapshot.state === 'succeeded' ? '✓' : '•'}
               </span>
-              <span className="workflow-stage-stack__label"><b>{model.stageLabel}</b> · {model.stateLabel}</span>
+              <span className="workflow-stage-stack__label"><b>{model.stageLabel}</b>
+                <span className="workflow-stage-stack__state"> · {model.stateLabel}</span>
+              </span>
               <span className="workflow-stage-stack__meta">
                 <span className="muted workflow-stage-stack__count">{primaryOutcome(model)}</span>
                 {!open && !terminal(snapshot.state) && <LiveHeartbeatBars measuredAt={receivedAt} stage={stage}
