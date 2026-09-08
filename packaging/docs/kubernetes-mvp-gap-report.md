@@ -155,6 +155,27 @@ rendered-manifest test compares the chart against itself, so a chart that render
 consistently passes. None was reachable without reading the application the chart deploys, or the
 CNI semantics it depends on — and the fourth was not reachable by reading at all.
 
+**A Helm install served the API to anyone who could reach it.** `api/app.py`'s `_access_gate`
+middleware is explicitly a no-op when neither `ACP_ACCESS_CODE` nor `ACP_GOOGLE_CLIENT_ID` is set —
+its own docstring says "No-op when neither is set (local dev)" — and the chart rendered neither.
+Every example document sets `network.publicIngress: true`, so every installation this repository
+could describe served every non-public route to anything that reached the Ingress. Not a weak gate;
+no gate.
+
+What kept it invisible is a naming near-miss. The contract already *required*
+`google-oauth-client-secret` for the Google Drive source, which projects as
+`GOOGLE_OAUTH_CLIENT_SECRET` — a variable nothing in `api/` reads. The one that arms the gate is
+`ACP_GOOGLE_CLIENT_ID`: a different value with a similar name, required by nothing and mentioned
+nowhere. A reviewer scanning the refs for something Google-shaped and authentication-shaped found
+one.
+
+Now an ERROR rather than a warning, unlike the object-storage rule above, and the difference is
+whether the document can do anything about it: this one is satisfied by a single reference the
+chart already knows how to project, so a document that omits it has chosen an open deployment
+rather than been unable to describe a closed one. `deploy/public/deploy.sh` has always set one of
+the two — "per-user GIS (client id set, passcode off) vs demo (passcode gate on)" — so production
+was never in this state and the derived Azure document now records which secret proves it.
+
 **The seam that loses the product's output, found and half-fixed.** `api/blob.py` is the PRIMARY
 store for a remediated file's fixed copy (ADR 0010) and decides whether it exists from one
 variable, `ACP_BLOB_ACCOUNT`. Unset, `_ENABLED` is false and every function returns `None`.

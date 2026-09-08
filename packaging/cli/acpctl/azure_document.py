@@ -187,7 +187,17 @@ def derive(*, version: str, name: str = "acp-production") -> dict[str, Any]:
 # The contract's required-reference names, and the ACA secret whose presence proves the deployment
 # holds a credential for it. Only names the scripts actually wire are mapped: `object-storage` is
 # deliberately absent, because there is no storage secret to map — see `_secrets`.
-_REF_FROM_ACA_SECRET = {"database-url": "database-url", "redis-url": "redis-url"}
+_REF_FROM_ACA_SECRET = {
+    "database-url": "database-url",
+    "redis-url": "redis-url",
+    # WHAT KEEPS PRODUCTION'S PUBLIC INGRESS FROM BEING OPEN, and the reason the contract's
+    # `network.unauthenticated-ingress` rule does not fire on this document. deploy.sh picks one of
+    # two modes at deploy time — "per-user GIS (client id set, passcode off) vs demo (passcode gate
+    # on)" — and ALWAYS sets one, wiring `secretref:access-code` in the second. Which mode is live
+    # depends on $ACP_GOOGLE_CLIENT_ID at deploy time and is not derivable from the script; that
+    # the script authenticates either way is.
+    "acp-access-code": "access-code",
+}
 
 
 def _secrets() -> dict[str, Any]:

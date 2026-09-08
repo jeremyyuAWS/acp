@@ -408,6 +408,61 @@ def _rule_secret_provider_platform(doc: dict, out: Result) -> None:
             f"{', '.join(allowed)}", "secrets.platform"))
 
 
+# The two ways ACP authenticates a public deployment, and the only two `api/app.py` implements.
+# `deploy/public/deploy.sh` chooses between them at deploy time — "per-user GIS (client id set,
+# passcode off) vs demo (passcode gate on)" — and always sets one, which is why production is not
+# in the state this rule exists to prevent and a Helm install was.
+#
+# BOTH ARRIVE AS `secrets.refs` ENTRIES because the projection loop in the chart's `acp.commonEnv`
+# is the one wiring mechanism there is: declaring the reference IS the wiring, and the key becomes
+# the env var. A Google OAuth CLIENT ID is not secret and sits there only for that reason; giving
+# it a field of its own is a v1alpha2 question, and storing a public identifier in a Secret costs
+# nothing meanwhile.
+AUTH_SECRET_NAMES = ("acp-google-client-id", "acp-access-code")
+
+
+def authentication_refs(doc: dict) -> tuple[str, ...]:
+    """The refs that would authenticate this document, in preference order. Empty when the
+    installation admits no public traffic and therefore needs none."""
+    return AUTH_SECRET_NAMES if doc["network"]["publicIngress"] else ()
+
+
+def _rule_public_ingress_is_authenticated(doc: dict, out: Result) -> None:
+    """PRD S13: an installation with public ingress must authenticate it.
+
+    `api/app.py`'s `_access_gate` middleware is EXPLICITLY A NO-OP when neither ACP_ACCESS_CODE nor
+    ACP_GOOGLE_CLIENT_ID is set — its own docstring says "No-op when neither is set (local dev)".
+    The chart renders neither, so every Helm install of a document with `publicIngress: true` has
+    served the whole non-public API to anything that can reach the Ingress. Not a weak password: no
+    gate at all.
+
+    AN ERROR, WHERE THE OBJECT-STORAGE RULE IS A WARNING, and the difference is whether the
+    document can do anything about it. Object storage has no implementation off Azure, so failing
+    those documents would block work on a gap packaging cannot close. This one is satisfied by one
+    line — a ref the chart already knows how to project — so a document that omits it has chosen an
+    open deployment rather than been unable to describe a closed one.
+
+    WHY THE `google-oauth-client-secret` REF DOES NOT SATISFY IT, since a reader will ask: that ref
+    is required for the Google Drive SOURCE and projects as GOOGLE_OAUTH_CLIENT_SECRET, which
+    nothing in `api/` reads. The variable that opens the gate is ACP_GOOGLE_CLIENT_ID — a different
+    value with a different name, and the contract requiring the first while never mentioning the
+    second is how this stayed invisible.
+    """
+    acceptable = authentication_refs(doc)
+    if not acceptable:
+        return
+    declared = doc["secrets"].get("refs", {})
+    if any(name in declared for name in acceptable):
+        return
+    out.errors.append(Finding(
+        "secrets.refs",
+        f"network.publicIngress is true but neither {' nor '.join(acceptable)} is declared, so "
+        f"ACP_ACCESS_CODE and ACP_GOOGLE_CLIENT_ID are both unset and api/app.py's access gate is "
+        f"a no-op: every non-public request would be served to anything that reaches the ingress "
+        f"(PRD S13)",
+        "network.unauthenticated-ingress"))
+
+
 def required_secret_names(doc: dict) -> list[str]:
     """Secret references this configuration cannot run without. Also used by the plan."""
     names = list(_ALWAYS_REQUIRED_SECRETS)
@@ -724,6 +779,7 @@ _SEMANTIC_RULES = (
     _rule_production_backup_retention,
     _rule_ha_posture,
     _rule_private_workers,
+    _rule_public_ingress_is_authenticated,
     _rule_public_url,
     _rule_egress_allowlist,
     _rule_autoscale_signals,
