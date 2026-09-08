@@ -32,24 +32,46 @@ document, the same release manifest and the same rendered values does NOTHING, e
 not append a duplicate entry to the state history. An installer that appends an event per
 invocation produces a history of things that did not happen.
 
-THE RELEASE-MANIFEST READER BELOW IS A CONSUMER, NOT THE OWNER OF THAT FORMAT. The manifest is
-produced by the release pipeline (PRD workstream A); this file reads the narrowest thing it can
-work with and refuses anything it does not understand rather than guessing. It deliberately does
-not define a schema, validate fields it does not use, or write manifests. If the pipeline's format
-grows a field, nothing here needs to change; if it CONTRADICTS itself — components built from
-different revisions — this refuses, because "CI fails on a mixed-revision release" is the property
-the format exists to have and a consumer that installs one anyway makes that guarantee decorative.
+THERE IS ONE RELEASE-MANIFEST READER AND IT IS NOT IN THIS FILE. `--release-manifest` is parsed
+and validated by release.py against packaging/schema/acp-release.schema.json (kind `ACPRelease`) —
+the same call `acpctl release verify`, `acpctl plan --release` and `acpctl values --release` make.
+This module asks the loaded release three questions (its chart digests, its chart repositories,
+its version) and holds no opinion at all about the format.
+
+WHY THAT REPLACED A READER THAT WORKED. This file was written while no release-manifest format
+existed, so it carried its own: a tolerant mapping of component name to `{digest, repository,
+revision, version}`, checked for digest shape and for revision/version agreement. That reader was
+not wrong; it was a SECOND definition of somebody else's contract. PRD S6 forbids exactly that —
+"do not allow parallel work to create multiple release-manifest formats" — for the reason two
+definitions always give: they drift, and the copy nothing else runs drifts SILENTLY. A manifest
+the pipeline emits and `acpctl release verify` passes would have been read here by different
+rules, and the first time the two disagreed, the install is where it would have surfaced.
+
+THE GUARANTEE WENT UP, NOT SIDEWAYS, which is worth stating because delegating usually weakens
+something. The old reader checked two things: digest shape, and that the components agreed on a
+revision and a version. release.validate() checks those and, in addition: one source revision
+across the whole release, a signature declared per artifact, an SBOM declared per artifact, amd64
+on every artifact, arm64 recorded per image rather than claimed release-wide, component-name
+uniqueness, every logical image `acpctl plan` names served by exactly one artifact, and every
+image the CHART pulls backed by exactly one artifact. A manifest failing ANY of those is refused
+here, before the cluster is contacted — so an unsigned release is now never installed and then
+reported, which is the case the old reader had no way to see.
+
+WHAT IT STILL CANNOT DO, so it is not assumed: nothing here contacts a registry, so a declared
+signature is not a verified one and a digest is not proven to exist. release.py says the same
+about itself in its own docstring; verifying against the registry is future work (PRD S13) and
+the gap is deliberately left visible rather than papered over by the word "verified".
 """
 from __future__ import annotations
 
 import json
-import re
 import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from . import release as release_mod
 from . import spec as spec_mod
 from . import state as state_mod
 from .helm import STATE_CONFIGMAP, CommandFailed, Helm, ToolUnavailable
@@ -63,33 +85,10 @@ EXIT_USAGE = 2
 # packaging/cli/acpctl/install.py -> packaging/chart/acp
 DEFAULT_CHART = Path(__file__).resolve().parents[2] / "chart" / "acp"
 
-# PRD S5.1 again: an immutable digest, and nothing that merely looks like one. Uppercase hex is
-# not accepted because registries do not produce it, and a digest this tool "normalised" would be
-# one the operator cannot grep for in their registry's UI.
-DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-
-# The image components the CHART knows how to pin — `templates/_helpers.tpl` looks each up in
-# `image.digests`. Not the same list as inventory.IMAGES: the API and the three worker tiers share
-# two images in the chart (`api`, `worker`), because they differ by command and ACP_WORKER_ROLE
-# rather than by artifact. Pinning a component the chart never reads would be a digest that
-# resolves nothing.
-CHART_COMPONENTS = ("api", "worker", "ollama", "grafana")
-
-# What a release manifest may call each chart component. The pipeline names artifacts (PRD S5.1
-# lists `acp-web-api`, `acp-discovery-worker`, …); the chart names ROLES. This is the only place
-# the two vocabularies meet, and it is a tolerant read rather than a claim about the format: an
-# unrecognised key in the manifest is ignored, a recognised one is used.
-COMPONENT_ALIASES: dict[str, tuple[str, ...]] = {
-    "api": ("api", "acp-web-api", "web-api", "acp-api"),
-    # THREE WORKER ARTIFACTS, ONE CHART IMAGE. If a manifest carries all three they must agree,
-    # because the chart has exactly one `worker` digest to install and picking one arbitrarily
-    # would deploy an assess worker built from a different revision than the discovery worker,
-    # under a state file claiming they matched.
-    "worker": ("worker", "acp-worker", "acp-discovery-worker", "acp-assess-worker",
-               "acp-remediate-worker", "discover", "assess", "remediate"),
-    "ollama": ("ollama", "acp-ollama-gateway"),
-    "grafana": ("grafana", "acp-grafana"),
-}
+# THE CHART'S IMAGE COMPONENTS ARE release.CHART_IMAGE_COMPONENTS, not a tuple of this module's
+# own. That copy is pinned to the chart's templates by a test that reads them, and a second copy
+# here would be the same drift this file's docstring is about, one scope smaller: the day the
+# chart grows a fifth image, a private list would go on refusing to pin it with nothing failing.
 
 # Fallback repositories, used only when the chart's values.yaml cannot be parsed (no PyYAML in an
 # air-gapped bundle). They mirror packaging/chart/acp/values.yaml; the chart is the source of
@@ -98,122 +97,6 @@ _FALLBACK_REPOSITORIES = {
     "api": "acp", "worker": "acp-worker",
     "ollama": "acp-ollama-gateway", "grafana": "acp-grafana",
 }
-
-
-class ManifestError(ValueError):
-    """The release manifest is unusable. Always a refusal, never a warning: every one of these
-    means acpctl cannot say which code it would be installing."""
-
-
-@dataclass
-class ReleaseManifest:
-    path: str
-    sha256: str
-    revision: str
-    version: str
-    components: dict[str, dict[str, str]]
-
-
-def load_release_manifest(path: str | Path) -> ReleaseManifest:
-    """Read a release manifest. A NARROW CONSUMER — see this module's docstring.
-
-    Accepts YAML or JSON, and either a top-level `components:` mapping or a bare top-level
-    mapping of component name to entry. Both shapes are accepted because the format is owned
-    elsewhere and this is the smallest set of assumptions that can still be checked; what is NOT
-    accepted is anything ambiguous.
-
-    Every entry must carry `digest`, `repository`, `revision` and `version`. The last two are not
-    used to install anything — they are read solely so that a manifest whose components disagree
-    can be refused, which is PRD workstream A's "CI fails on a mixed-revision release" enforced at
-    the point where it would otherwise stop mattering.
-    """
-    target = Path(path)
-    text = target.read_text(encoding="utf-8")
-    payload = _parse_manifest_text(text, target)
-
-    if not isinstance(payload, dict):
-        raise ManifestError(
-            f"{target}: expected a mapping of component name to entry (optionally under a "
-            f"top-level `components:` key); got {type(payload).__name__}")
-    raw = payload.get("components", payload)
-    if not isinstance(raw, dict) or not raw:
-        raise ManifestError(f"{target}: no components found")
-
-    components: dict[str, dict[str, str]] = {}
-    revisions: dict[str, str] = {}
-    versions: dict[str, str] = {}
-    for name, entry in raw.items():
-        if not isinstance(entry, dict):
-            # A bare top-level mapping is one of the accepted shapes, so a scalar here is most
-            # likely a top-level key of some LARGER manifest format (`apiVersion: …`) rather than
-            # a broken component. Skipping it silently would mean reading half a document as if
-            # it were the whole one.
-            if name in ("components",):
-                continue
-            if isinstance(entry, (str, int, float, bool)) or entry is None:
-                continue
-            raise ManifestError(f"{target}: component {name!r} is not a mapping")
-        missing = [f for f in ("digest", "repository", "revision", "version") if not entry.get(f)]
-        if missing:
-            raise ManifestError(
-                f"{target}: component {name!r} is missing {', '.join(missing)}. A component "
-                f"acpctl cannot fully identify is one it cannot record as installed.")
-        digest = str(entry["digest"])
-        if not DIGEST_RE.match(digest):
-            raise ManifestError(
-                f"{target}: component {name!r} has digest {digest!r}, which is not a sha256 "
-                f"digest. PRD S5.1 requires immutable digests; a tag here would install "
-                f"whatever that tag points at today.")
-        components[str(name)] = {
-            "repository": str(entry["repository"]),
-            "digest": digest,
-            "revision": str(entry["revision"]),
-            "version": str(entry["version"]),
-        }
-        revisions[str(name)] = str(entry["revision"])
-        versions[str(name)] = str(entry["version"])
-
-    if not components:
-        raise ManifestError(f"{target}: no components found")
-    if len(set(revisions.values())) > 1:
-        raise ManifestError(
-            f"{target}: MIXED-REVISION RELEASE — components were built from different source "
-            f"revisions ({_disagreement(revisions)}). PRD S5.1 requires every image in a release "
-            f"to come from the same revision; installing this would deploy an API and a worker "
-            f"from different commits, which is a class of bug nobody can reproduce afterwards.")
-    if len(set(versions.values())) > 1:
-        raise ManifestError(
-            f"{target}: components declare different versions ({_disagreement(versions)}). The "
-            f"installation records ONE version; recording either of these would make the state "
-            f"file a false statement about half the release.")
-
-    return ReleaseManifest(
-        path=str(target), sha256=state_mod.sha256_file(target),
-        revision=next(iter(revisions.values())), version=next(iter(versions.values())),
-        components=components)
-
-
-def _parse_manifest_text(text: str, target: Path) -> Any:
-    """JSON first, then YAML. JSON is a subset, so trying it first means the reader works in an
-    air-gapped bundle with no PyYAML for the format CI most naturally emits."""
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    try:
-        import yaml
-    except ImportError as exc:  # pragma: no cover - environment-dependent
-        raise ManifestError(
-            f"{target} is not JSON and PyYAML is not installed, so it cannot be read as YAML"
-        ) from exc
-    try:
-        return yaml.safe_load(text)
-    except Exception as exc:  # yaml raises several types
-        raise ManifestError(f"{target}: not valid YAML or JSON: {exc}") from exc
-
-
-def _disagreement(values: dict[str, str]) -> str:
-    return "; ".join(f"{name}={value}" for name, value in sorted(values.items()))
 
 
 def required_components(values: dict) -> list[str]:
@@ -234,7 +117,14 @@ def required_components(values: dict) -> list[str]:
 
 
 def chart_repositories(values: dict, chart_dir: str | Path) -> dict[str, str]:
-    """Which repository each chart component pulls from, as the chart itself would resolve it."""
+    """Which repository each chart component pulls from, as the chart itself would resolve it.
+
+    THE FALLBACK, NOT THE ANSWER. When a release manifest was given it names the artifacts the
+    build actually produced and those win (see resolve_components); this reads the chart's own
+    defaults, which are what an unpinned install has and nothing better. It is kept for exactly
+    that path: `--allow-unpinned` with no manifest still has to write SOME repository into the
+    installation record, and "the name the chart would have used" is the only honest one.
+    """
     image = dict(values.get("image") or {})
     defaults = dict(_FALLBACK_REPOSITORIES)
     try:
@@ -254,43 +144,56 @@ def chart_repositories(values: dict, chart_dir: str | Path) -> dict[str, str]:
             for component, key in keys.items()}
 
 
-def resolve_components(manifest: ReleaseManifest | None, wanted: list[str],
-                       repositories: dict[str, str]) -> tuple[dict[str, dict[str, str]], list[str]]:
+def resolve_components(release: Any | None, wanted: list[str],
+                       chart_defaults: dict[str, str]) -> tuple[dict[str, dict[str, str]], list[str]]:
     """The `release.components` map for the state, and the components with no digest.
 
     The second half of the return is the point: a caller that only took the map would install an
     unpinned release without noticing, which is exactly what `--allow-unpinned` exists to make
     into a deliberate act.
+
+    THE MANIFEST'S REPOSITORY BEATS THE CHART'S DEFAULT, and that is a correctness rule rather
+    than a preference. The chart's `image.repository` and `image.workerRepository` default to
+    `acp` and `acp-worker`, which are names this repository's build does not produce (#1797); the
+    release manifest names the artifact that WAS built. So where the manifest speaks it wins, and
+    the chart-derived value below is the fallback for the no-manifest path — where the
+    alternative is not a better name but no name at all.
+
+    WITH A VALID RELEASE THE UNPINNED LIST IS ALWAYS EMPTY, because release.validate() refuses a
+    manifest that does not back every one of the chart's four image components. That is stricter
+    than this function's own rule — a digest per ENABLED component — and the weaker rule is kept
+    rather than deleted because it still governs the path where NO manifest was given, which is
+    the path `--allow-unpinned` exists for and the one whose message names components.
     """
+    digests = release.chart_digests() if release is not None else {}
+    repositories = release.chart_repositories() if release is not None else {}
     resolved: dict[str, dict[str, str]] = {}
     unpinned: list[str] = []
     for component in wanted:
-        entries = _manifest_entries_for(manifest, component)
-        digests = {entry["digest"] for entry in entries}
-        if len(digests) > 1:
-            raise ManifestError(
-                f"the release manifest gives component {component!r} more than one digest "
-                f"({', '.join(sorted(digests))}). The chart installs ONE image for it, so there "
-                f"is no correct choice to make here.")
-        if entries:
-            entry = entries[0]
-            resolved[component] = {"repository": entry.get("repository") or repositories[component],
-                                   "digest": entry["digest"]}
-        else:
-            resolved[component] = {"repository": repositories[component], "digest": None}
+        digest = digests.get(component)
+        resolved[component] = {
+            "repository": chart_defaults[component],
+            "digest": digest,
+        }
+        if not digest:
             unpinned.append(component)
     return resolved, unpinned
 
 
-def _manifest_entries_for(manifest: ReleaseManifest | None, component: str) -> list[dict]:
-    if manifest is None:
-        return []
-    names = COMPONENT_ALIASES.get(component, (component,))
-    return [entry for name, entry in sorted(manifest.components.items()) if name in names]
+def render_values(document: dict, release: Any | None) -> str:
+    """The chart values for this install, pinned to `release` when there is one.
 
+    BUILT BY values.build_values, WHICH ALREADY TAKES A RELEASE. The digests and the repository
+    overrides come from the same function `acpctl values --release` runs, so the file helm is
+    handed here is the file an operator can reproduce with that command and diff. An installer
+    that assembled its own pinned values would be a third opinion about what a pinned values file
+    looks like, and the one nobody can print.
 
-def render_values_with_digests(document: dict, digests: dict[str, str]) -> str:
-    """The chart values for this install, with the resolved digests in them.
+    A RELEASE PINS ALL FOUR CHART COMPONENTS, INCLUDING ONES THIS RENDER DISABLES. That is not an
+    oversight: `image.digests` is a lookup table the chart consults only for the images it
+    actually renders, so an entry for a Deployment that does not exist installs nothing — and
+    hashing the whole release into `chart.valuesSha256` means switching Ollama on later is
+    correctly seen as a change rather than as the same installation.
 
     THE DIGESTS GO IN THE VALUES FILE, NOT ON `--set`. Two reasons, and the second is the one that
     bites: the values file is what gets hashed into the state as `chart.valuesSha256`, so a
@@ -298,8 +201,7 @@ def render_values_with_digests(document: dict, digests: dict[str, str]) -> str:
     release "identical"; and `--set` values are invisible in `helm get values` output read later
     by somebody trying to work out what is running.
     """
-    values = build_values(document)
-    values["image"]["digests"] = {k: v for k, v in digests.items() if v}
+    values = build_values(document, release)
     header = (
         "# GENERATED by `acpctl install` from an acp-deployment document. Do not hand-edit:\n"
         "# edit the deployment document and reinstall, or the two disagree and the document\n"
@@ -362,6 +264,78 @@ class Outcome:
     messages: list[str] = field(default_factory=list)
 
 
+def load_release(path: str | Path, document: dict, *, echo: Callable[[str], None]
+                 ) -> tuple[Any | None, str | None, Outcome | None]:
+    """The validated release for `--release-manifest`: (release, its sha256, a refusal or None).
+
+    A NON-NONE THIRD ELEMENT MEANS STOP, and stopping is the whole point of this function. An
+    unusable release manifest must never degrade into the unpinned path: the operator asked to
+    pin, and an install that quietly fell back to tags would either refuse for a reason that
+    reads as "you forgot --release-manifest" or install and record `pinned: false` under a
+    command line that says otherwise.
+
+    VALIDATION IS RUN HERE RATHER THAN TRUSTED FROM `acpctl release verify`. It is the same call,
+    and running it again costs one schema parse — against the assumption that somebody ran the
+    other command against THIS file, on this machine, since it was last edited. Assumptions like
+    that are how an unsigned release gets installed by a tool that "already checked".
+
+    WARNINGS ARE PRINTED AND DO NOT REFUSE. release.py's warnings are facts about the release
+    that are legitimate (`arm64 on some images only`) or that the operator has to see rather than
+    be stopped by (`this registry is a reserved TLD, so it is an illustration`). Turning them
+    into refusals would make the shipped example uninstallable and teach people to pass a flag
+    that switches off the errors too.
+    """
+    try:
+        payload = release_mod.load_manifest(path)
+    except FileNotFoundError:
+        return None, None, Outcome(EXIT_USAGE, reason=f"no such release manifest: {path}")
+    except OSError as exc:
+        return None, None, Outcome(EXIT_USAGE, reason=f"could not read {path}: {exc}")
+    except Exception as exc:  # noqa: BLE001 - json, yaml and load_document raise several types
+        # NOT A USAGE ERROR. The path resolved and the bytes were readable; what failed is the
+        # file's claim to be a manifest, and a pipeline should stop rather than retry.
+        return None, None, Outcome(EXIT_REFUSED, reason=(
+            f"refusing to install: {path} could not be parsed as a release manifest ({exc!r}). "
+            f"It must be the YAML or JSON of an ACPRelease document — see "
+            f"packaging/examples/example.acp-release.yaml."))
+
+    result = release_mod.validate(payload)
+    for finding in result.warnings:
+        echo(f"  release manifest: {finding.render()}")
+    if not result.ok:
+        for finding in result.errors:
+            echo(f"  {finding.render()}")
+        return None, None, Outcome(EXIT_REFUSED, reason=(
+            f"refusing to install: {path} is not a valid release manifest "
+            f"({len(result.errors)} error(s)):\n"
+            + "\n".join(f"  {finding.render()}" for finding in result.errors)
+            + f"\nA release that fails its own contract is how an unsigned image, or an API and "
+              f"a worker built from different commits, reaches a cluster under an installation "
+              f"record saying the release was checked. Run `acpctl release verify {path}` to see "
+              f"these findings again without contacting anything."))
+
+    # THE RELEASE AND THE DOCUMENT MUST AGREE ON THE VERSION. The installation record writes ONE
+    # version — the document's — so installing a release that calls itself something else makes
+    # the record a false statement about the images that are running. This replaces the old
+    # reader's "components declare different versions" refusal: under the ACPRelease contract a
+    # manifest has a single metadata.version and cannot disagree with itself, so the only
+    # disagreement left to catch is this one, between the release and the document installing it.
+    mismatches = release_mod.check_against_document(result.release, document)
+    if mismatches:
+        for finding in mismatches:
+            echo(f"  {finding.render()}")
+        return None, None, Outcome(EXIT_REFUSED, reason=(
+            f"refusing to install: {path} cannot be used with this document:\n"
+            + "\n".join(f"  {finding.render()}" for finding in mismatches)))
+
+    # HASHED FROM A SECOND READ, which is a real if narrow gap: a manifest rewritten between the
+    # parse above and this call would be recorded under a hash of bytes that were not installed.
+    # Closing it means a loader that returns the text as well as the document — a second reader,
+    # which is the thing this module was rewritten to stop having. The window is microseconds; a
+    # wrong hash here is detectable later, a duplicated contract is not.
+    return result.release, state_mod.sha256_file(path), None
+
+
 def install(document_path: str, *, namespace: str, release_name: str | None = None,
             release_manifest: str | None = None, allow_unpinned: bool = False,
             adopt: bool = False, skip_preflight: bool = False, assume_yes: bool = False,
@@ -393,26 +367,23 @@ def install(document_path: str, *, namespace: str, release_name: str | None = No
                               f"({len(result.errors)} error(s))")
 
     release = release_name or (document.get("metadata") or {}).get("name") or "acp"
-    values = build_values(document)
 
-    # ── digests, before anything is contacted ─────────────────────────────────
-    manifest: ReleaseManifest | None = None
+    # ── the release, before anything is contacted ─────────────────────────────
+    # READ AND VALIDATED BY release.py, never by this file (see the module docstring). A manifest
+    # that fails release.validate() is REFUSED here — unsigned, no SBOM, mixed revisions, an
+    # image the chart pulls that nothing backs — rather than installed and described afterwards.
+    pinned_release: Any | None = None
+    manifest_sha256: str | None = None
     if release_manifest:
-        try:
-            manifest = load_release_manifest(release_manifest)
-        except FileNotFoundError:
-            return Outcome(EXIT_USAGE, reason=f"no such release manifest: {release_manifest}")
-        except OSError as exc:
-            return Outcome(EXIT_USAGE, reason=f"could not read {release_manifest}: {exc}")
-        except ManifestError as exc:
-            return Outcome(EXIT_REFUSED, reason=str(exc))
+        pinned_release, manifest_sha256, refusal = load_release(
+            release_manifest, document, echo=echo)
+        if refusal is not None:
+            return refusal
 
+    values = build_values(document, pinned_release)
     wanted = required_components(values)
-    try:
-        components, unpinned = resolve_components(
-            manifest, wanted, chart_repositories(values, chart_dir))
-    except ManifestError as exc:
-        return Outcome(EXIT_REFUSED, reason=str(exc))
+    components, unpinned = resolve_components(
+        pinned_release, wanted, chart_repositories(values, chart_dir))
 
     if unpinned and not allow_unpinned:
         return Outcome(EXIT_REFUSED, reason=(
@@ -433,15 +404,14 @@ def install(document_path: str, *, namespace: str, release_name: str | None = No
         echo("  Recorded in the installation state as pinned: false.")
         echo("")
 
-    values_yaml = render_values_with_digests(
-        document, {c: components[c]["digest"] for c in components})
+    values_yaml = render_values(document, pinned_release)
 
     candidate = state_mod.build(
         document, namespace=namespace, release_name=release,
         document_path=str(document_path), document_sha256=state_mod.sha256_file(document_path),
         values_sha256=state_mod.sha256_text(values_yaml),
         chart=state_mod.chart_metadata(chart_dir), components=components,
-        pinned=not unpinned, manifest_sha256=manifest.sha256 if manifest else None,
+        pinned=not unpinned, manifest_sha256=manifest_sha256,
         helm_revision=None,
         flags={"skipPreflight": skip_preflight, "adopted": adopt, "allowUnpinned": allow_unpinned})
 
@@ -525,7 +495,10 @@ def install(document_path: str, *, namespace: str, release_name: str | None = No
                        reason="already installed and identical")
 
     # ── the plan, and consent ─────────────────────────────────────────────────
-    echo(render_plan(document, result.warnings))
+    # THE PLAN IS RENDERED AGAINST THE RELEASE, so the digests in the record are the digests the
+    # operator was shown before consenting. A consent screen that named images without saying
+    # which bytes they resolve to would ask for agreement to something it did not display.
+    echo(render_plan(document, result.warnings, pinned_release))
     echo("")
     echo(f"  release   {release}")
     echo(f"  namespace {namespace}")

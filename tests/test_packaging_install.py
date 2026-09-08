@@ -27,6 +27,7 @@ packaging/docs/lifecycle.md, which says so rather than implying otherwise.
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 
@@ -35,6 +36,7 @@ import pytest
 from packaging_helpers import PACKAGING, load_example
 
 EXAMPLE = PACKAGING / "examples" / "standard-production.acp-deployment.yaml"
+RELEASE_EXAMPLE = PACKAGING / "examples" / "example.acp-release.yaml"
 CHART = PACKAGING / "chart" / "acp"
 
 DIGEST_A = "sha256:" + "a" * 64
@@ -179,25 +181,46 @@ def mutations(runner: FakeRunner) -> list[list[str]]:
     return probe.mutations()
 
 
-def manifest_file(tmp_path, *, components=None, name="release.json", as_yaml=False,
-                  revision="abc123", version="2026.9"):
-    """A release manifest with the four chart components, unless told otherwise."""
-    if components is None:
-        components = {
-            "acp-web-api": {"digest": DIGEST_A, "repository": "acp-web-api"},
-            "acp-discovery-worker": {"digest": DIGEST_B, "repository": "acp-worker"},
-            "acp-ollama-gateway": {"digest": DIGEST_C, "repository": "acp-ollama-gateway"},
-            "acp-grafana": {"digest": DIGEST_D, "repository": "acp-grafana"},
-        }
-    filled = {name_: {**entry, "revision": entry.get("revision", revision),
-                      "version": entry.get("version", version)}
-              for name_, entry in components.items()}
+def component(document: dict, name: str) -> dict:
+    return next(c for c in document["components"] if c["name"] == name)
+
+
+def release_document() -> dict:
+    """A valid `ACPRelease` document, with this file's digests substituted in.
+
+    BUILT FROM THE SHIPPED EXAMPLE RATHER THAN HAND-ROLLED, for the reason
+    tests/test_packaging_release.py does the same. A fixture typed out to satisfy the schema from
+    memory describes the contract on the day it was written and goes on passing after the
+    contract moves; starting from packaging/examples/example.acp-release.yaml means a rule added
+    to release.py is felt HERE too — which is now the point, because `install` refuses on exactly
+    release.validate()'s rules and no longer has any of its own.
+
+    ONE ARTIFACT BACKS TWO CHART IMAGES, and that is why `api` and `worker` share DIGEST_A rather
+    than getting one each. `deploy/public/deploy.sh` builds a single application image that runs
+    the API and every worker role; the old fixture here named `acp-web-api` and
+    `acp-discovery-worker` as separate artifacts with separate digests, which is a release nobody
+    has ever built. The manifest format exists to stop that fiction being representable.
+    """
+    from acpctl.release import load_manifest
+
+    document = copy.deepcopy(load_manifest(RELEASE_EXAMPLE))
+    for name, digest in (("app", DIGEST_A), ("ollama-gateway", DIGEST_C), ("grafana", DIGEST_D)):
+        component(document, name)["digest"] = digest
+    return document
+
+
+def manifest_file(tmp_path, *, document=None, name="release.json", as_yaml=False):
+    """Write a release manifest for `install` to read. A valid one, unless told otherwise."""
+    payload = release_document() if document is None else document
     target = tmp_path / name
     if as_yaml:
         import yaml
-        target.write_text(yaml.safe_dump({"components": filled}), encoding="utf-8")
+        assert target.suffix in (".yaml", ".yml"), (
+            "release.load_manifest picks its parser from the suffix, so YAML in a .json file "
+            "would be read as JSON and fail for the wrong reason")
+        target.write_text(yaml.safe_dump(payload), encoding="utf-8")
     else:
-        target.write_text(json.dumps({"components": filled}), encoding="utf-8")
+        target.write_text(json.dumps(payload), encoding="utf-8")
     return target
 
 
@@ -351,76 +374,149 @@ def test_the_guard_runs_on_the_real_path_not_only_in_these_unit_tests(tmp_path):
     assert runner.log == [], "the refused command still reached the runner"
 
 
-# ── the release manifest: a narrow consumer ──────────────────────────────────
+# ── the release manifest: one reader, and it lives in release.py ─────────────
 
-def test_a_manifest_is_read_as_json_or_yaml_and_in_either_shape(tmp_path):
-    from acpctl.install import load_release_manifest
-    as_json = load_release_manifest(manifest_file(tmp_path, name="a.json"))
-    as_yaml = load_release_manifest(manifest_file(tmp_path, name="a.yaml", as_yaml=True))
-    assert as_json.components == as_yaml.components
+def test_install_carries_no_release_manifest_reader_of_its_own():
+    """PRD S6: no parallel release-manifest formats, install-state formats or report schemas.
 
-    bare = tmp_path / "bare.json"
-    bare.write_text(json.dumps({
-        "api": {"digest": DIGEST_A, "repository": "acp", "revision": "r1", "version": "2026.9"}}))
-    assert load_release_manifest(bare).components["api"]["digest"] == DIGEST_A
+    `install.py` used to carry a narrow reader of its own — `ReleaseManifest`,
+    `load_release_manifest`, `_parse_manifest_text`, `resolve_components`'s alias table — written
+    while no format existed, against a shape agreed by message. release.py plus
+    packaging/schema/acp-release.schema.json is now the format, so the second reader is deleted
+    rather than kept "in case": a duplicate contract nothing else runs is one that drifts without
+    failing, and the install is where the drift would have surfaced as a wrong digest.
+
+    ASSERTED BY ABSENCE, which is the only way this stays true. Nothing imports these names any
+    more, so a reintroduced copy would break no test — it would simply exist, and be believed.
+    """
+    from acpctl import install as install_mod
+
+    for gone in ("ReleaseManifest", "load_release_manifest", "_parse_manifest_text",
+                 "_disagreement", "_manifest_entries_for", "ManifestError", "COMPONENT_ALIASES",
+                 "DIGEST_RE"):
+        assert not hasattr(install_mod, gone), (
+            f"install.{gone} is back: the release-manifest contract is release.py's, and a "
+            f"second reader of it in this module is what PRD S6 forbids")
+
+
+def test_the_manifest_is_read_as_json_or_yaml_and_installs_the_same_release(tmp_path):
+    """Both forms, through the real install. The JSON path is the one that has to keep working
+    with no PyYAML at all (PRD S17's air-gapped bundle), and it is release.load_manifest that
+    owns that guarantee now — this asserts install actually goes through it."""
+    as_json = run_install(tmp_path, FakeRunner(),
+                          release_manifest=str(manifest_file(tmp_path, name="a.json")))
+    as_yaml = run_install(tmp_path, FakeRunner(),
+                          release_manifest=str(manifest_file(tmp_path, name="a.yaml",
+                                                             as_yaml=True)))
+    assert as_json.code == 0, as_json.reason
+    assert as_yaml.code == 0, as_yaml.reason
+    assert as_json.state["release"]["components"] == as_yaml.state["release"]["components"]
 
 
 def test_a_mixed_revision_release_is_refused(tmp_path):
     """PRD workstream A's guarantee is that CI fails on a mixed-revision release. A consumer that
     installs one anyway makes that guarantee decorative — and the result is an API and a worker
-    from different commits, which is a class of bug nobody can reproduce afterwards."""
-    from acpctl.install import ManifestError, load_release_manifest
-    path = manifest_file(tmp_path, components={
-        "acp-web-api": {"digest": DIGEST_A, "repository": "acp", "revision": "r1"},
-        "acp-worker": {"digest": DIGEST_B, "repository": "acp-worker", "revision": "r2"},
-    })
-    with pytest.raises(ManifestError, match="MIXED-REVISION"):
-        load_release_manifest(path)
+    from different commits, which is a class of bug nobody can reproduce afterwards.
+
+    The rule is release.py's (`release.mixed-revision`) rather than this module's, and that is the
+    change: the refusal is now the same one `acpctl release verify` gives for the same file."""
+    document = release_document()
+    component(document, "ollama-gateway")["sourceRevision"] = "a" * 40
+    runner = FakeRunner()
+    outcome = run_install(tmp_path, runner, release_manifest=str(
+        manifest_file(tmp_path, document=document, name="mixed.json")))
+    assert outcome.code == 1
+    assert "release.mixed-revision" in text(outcome)
+    assert mutations(runner) == []
 
 
-def test_components_declaring_different_versions_are_refused(tmp_path):
-    from acpctl.install import ManifestError, load_release_manifest
-    path = manifest_file(tmp_path, components={
-        "acp-web-api": {"digest": DIGEST_A, "repository": "acp", "version": "2026.9"},
-        "acp-worker": {"digest": DIGEST_B, "repository": "acp-worker", "version": "2026.8"},
-    })
-    with pytest.raises(ManifestError, match="different versions"):
-        load_release_manifest(path)
+def test_a_release_that_is_not_the_documents_version_is_refused(tmp_path):
+    """WHAT REPLACED "components declare different versions".
+
+    The old reader read a `version` on every component and refused a manifest whose components
+    disagreed, because the installation record states ONE version. An `ACPRelease` has a single
+    `metadata.version` and cannot disagree with itself, so that refusal has no reachable case any
+    more — but the fact it protected does: the record writes the DOCUMENT's version, so a release
+    calling itself something else would make it a false statement about the running images. That
+    check is `release.check_against_document`, and this asserts install runs it."""
+    document = release_document()
+    document["metadata"]["version"] = "2026.8"
+    runner = FakeRunner()
+    outcome = run_install(tmp_path, runner, release_manifest=str(
+        manifest_file(tmp_path, document=document, name="other-version.json")))
+    assert outcome.code == 1
+    assert "release.version-mismatch" in text(outcome)
+    assert mutations(runner) == []
 
 
 @pytest.mark.parametrize("digest", ["2026.9", "sha256:abc", "sha256:" + "A" * 64,
                                     "sha1:" + "a" * 40, "@sha256:" + "a" * 64])
 def test_anything_that_is_not_a_sha256_digest_is_refused(digest, tmp_path):
-    from acpctl.install import ManifestError, load_release_manifest
-    path = manifest_file(tmp_path, components={
-        "acp-web-api": {"digest": digest, "repository": "acp"}})
-    with pytest.raises(ManifestError, match="not a sha256 digest"):
-        load_release_manifest(path)
+    """PRD S5.1: an immutable digest, and nothing that merely looks like one. Uppercase hex is
+    refused too, because registries do not produce it and a digest acpctl "normalised" would be
+    one the operator cannot grep for in their registry's UI."""
+    document = release_document()
+    component(document, "app")["digest"] = digest
+    runner = FakeRunner()
+    outcome = run_install(tmp_path, runner, release_manifest=str(
+        manifest_file(tmp_path, document=document, name="bad-digest.json")))
+    assert outcome.code == 1
+    assert "digest" in text(outcome)
+    assert mutations(runner) == []
 
 
-@pytest.mark.parametrize("missing", ["digest", "repository", "revision", "version"])
+@pytest.mark.parametrize("missing", ["name", "repository", "digest", "sourceRevision",
+                                     "architectures", "serves"])
 def test_a_component_missing_a_required_field_is_refused(missing, tmp_path):
-    from acpctl.install import ManifestError, load_release_manifest
-    entry = {"digest": DIGEST_A, "repository": "acp", "revision": "r1", "version": "2026.9"}
-    entry.pop(missing)
-    path = tmp_path / "m.json"
-    path.write_text(json.dumps({"components": {"acp-web-api": entry}}))
-    with pytest.raises(ManifestError, match=missing):
-        load_release_manifest(path)
+    """A component acpctl cannot fully identify is one it cannot record as installed."""
+    document = release_document()
+    component(document, "app").pop(missing)
+    runner = FakeRunner()
+    outcome = run_install(tmp_path, runner, release_manifest=str(
+        manifest_file(tmp_path, document=document, name=f"no-{missing}.json")))
+    assert outcome.code == 1
+    assert missing in text(outcome)
+    assert mutations(runner) == []
 
 
-def test_the_three_worker_artifacts_must_agree_on_one_digest(tmp_path):
-    """The chart installs ONE worker image for all three roles. A manifest naming three different
-    digests has no correct answer, and picking one would deploy an assess worker built from a
-    different image than the discovery worker under a record claiming they matched."""
-    from acpctl.install import ManifestError, load_release_manifest, resolve_components
-    path = manifest_file(tmp_path, components={
-        "acp-discovery-worker": {"digest": DIGEST_B, "repository": "acp-worker"},
-        "acp-assess-worker": {"digest": DIGEST_C, "repository": "acp-worker"},
-    })
-    manifest = load_release_manifest(path)
-    with pytest.raises(ManifestError, match="more than one digest"):
-        resolve_components(manifest, ["worker"], {"worker": "acp-worker"})
+@pytest.mark.parametrize("attestation,rule",
+                         [("signature", "release.unsigned"), ("sbom", "release.no-sbom")])
+def test_a_release_that_fails_validation_is_refused_rather_than_installed(attestation, rule,
+                                                                         tmp_path):
+    """THE GUARANTEE THE OLD READER COULD NOT HAVE GIVEN, and the reason this delegation is a
+    strengthening rather than a shuffle.
+
+    The narrow reader checked digest shape and revision/version agreement; signatures and SBOMs
+    were not fields it read, so a release declaring neither passed it and installed. PRD S5.1
+    requires both per image and PRD S13 requires the signature verified before deployment — and
+    an unsigned image that reaches a cluster and is only noticed afterwards is precisely the
+    failure a pre-install check exists to prevent. Refused before anything is contacted."""
+    document = release_document()
+    component(document, "app").pop(attestation)
+    runner = FakeRunner()
+    outcome = run_install(tmp_path, runner, release_manifest=str(
+        manifest_file(tmp_path, document=document, name=f"no-{attestation}.json")))
+    assert outcome.code == 1
+    assert rule in text(outcome)
+    assert mutations(runner) == []
+
+
+def test_two_artifacts_claiming_the_same_chart_image_are_refused(tmp_path):
+    """WHAT REPLACED "the three worker artifacts must agree on one digest".
+
+    The chart installs ONE image per component, so two artifacts both claiming to back `worker`
+    leaves no correct choice — picking one would deploy an assess worker built from a different
+    image than the discovery worker, under a record claiming they matched. The old reader caught
+    this by aliasing artifact names to chart roles and comparing digests; the manifest now states
+    the mapping outright in `chartImages`, and release.py refuses the ambiguity."""
+    document = release_document()
+    component(document, "ollama-gateway")["chartImages"] = ["ollama", "worker"]
+    runner = FakeRunner()
+    outcome = run_install(tmp_path, runner, release_manifest=str(
+        manifest_file(tmp_path, document=document, name="ambiguous.json")))
+    assert outcome.code == 1
+    assert "release.chart-image-ambiguous" in text(outcome)
+    assert mutations(runner) == []
 
 
 def test_only_the_components_this_render_enables_are_required():
@@ -460,17 +556,20 @@ def test_a_manifest_missing_one_required_component_is_refused(omitted, tmp_path)
 
     The refusal names the component, so the operator's next move is to fix the manifest rather
     than to reach for --allow-unpinned, which would switch pinning off for everything.
+
+    UNDER THE ACPRelease CONTRACT THE MISSING THING IS A `chartImages` ENTRY, not an absent
+    stanza: one artifact can back several of the chart's images, so what makes an image unpinned
+    is no artifact CLAIMING it. release.py refuses that outright (`release.chart-image-unpinned`)
+    for every chart component, not only the enabled ones — which is stricter than this module's
+    own rule and is left alone rather than relaxed. The enabled-only rule still governs the
+    no-manifest path, which is the test above and `test_only_the_components_this_render_enables`.
     """
-    entries = {
-        "acp-web-api": {"digest": DIGEST_A, "repository": "acp"},
-        "acp-discovery-worker": {"digest": DIGEST_B, "repository": "acp-worker"},
-        "acp-ollama-gateway": {"digest": DIGEST_C, "repository": "acp-ollama-gateway"},
-        "acp-grafana": {"digest": DIGEST_D, "repository": "acp-grafana"},
-    }
-    drop = {"ollama": "acp-ollama-gateway", "worker": "acp-discovery-worker"}[omitted]
-    entries.pop(drop)
+    document = release_document()
+    holder = {"ollama": "ollama-gateway", "worker": "app"}[omitted]
+    component(document, holder)["chartImages"] = [
+        name for name in component(document, holder)["chartImages"] if name != omitted]
     runner = FakeRunner()
-    path = manifest_file(tmp_path, name=f"without-{omitted}.json", components=entries)
+    path = manifest_file(tmp_path, document=document, name=f"without-{omitted}.json")
     outcome = run_install(tmp_path, runner, release_manifest=str(path))
     assert outcome.code == 1
     assert omitted in outcome.reason
@@ -511,20 +610,60 @@ def test_the_digests_reach_the_values_file_helm_is_given(tmp_path):
     """The pin has to reach the CHART, not just the record. A state file saying `pinned: true`
     over a values file with an empty `image.digests` would be a false statement in the one
     document written to be the record of what ran."""
-    from acpctl.install import load_release_manifest, render_values_with_digests, resolve_components
+    from acpctl.install import chart_repositories, render_values, resolve_components
+    from acpctl.release import load_manifest, validate
     from acpctl.values import build_values
 
     doc = load_example("standard-production")
-    manifest = load_release_manifest(manifest_file(tmp_path))
+    release = validate(load_manifest(manifest_file(tmp_path))).release
     components, unpinned = resolve_components(
-        manifest, ["api", "worker", "ollama", "grafana"],
-        {"api": "acp", "worker": "acp-worker", "ollama": "acp-ollama-gateway",
-         "grafana": "acp-grafana"})
+        release, ["api", "worker", "ollama", "grafana"],
+        chart_repositories(build_values(doc), CHART))
     assert unpinned == []
-    rendered = render_values_with_digests(doc, {k: v["digest"] for k, v in components.items()})
-    for digest in (DIGEST_A, DIGEST_B, DIGEST_C, DIGEST_D):
+    rendered = render_values(doc, release)
+    for digest in (DIGEST_A, DIGEST_C, DIGEST_D):
         assert digest in rendered
+    for component_ in ("api", "worker", "ollama", "grafana"):
+        assert components[component_]["digest"] in rendered
     assert build_values(doc)["image"]["digests"] == {}, "build_values must stay digest-free"
+
+
+def test_the_release_names_the_repositories_and_beats_the_charts_defaults(tmp_path):
+    """#1797's finding, carried into the install. The chart's `image.repository` and
+    `image.workerRepository` default to `acp` and `acp-worker` — names this repository's build
+    does not produce — so an install that took them would record, and pull, an artifact nobody
+    published. The release manifest names what was actually built (`acp-app`), and it wins.
+
+    ASSERTED AGAINST THE CHART'S OWN DEFAULT rather than against a literal, so this cannot pass
+    vacuously the day the chart is changed to agree."""
+    from acpctl.install import chart_repositories
+    from acpctl.values import build_values
+
+    doc = load_example("standard-production")
+    defaults = chart_repositories(build_values(doc), CHART)
+    assert defaults["api"] != "acp-app", "the chart default and the release now agree — retire this"
+
+    outcome = run_install(tmp_path, FakeRunner())
+    assert outcome.code == 0, outcome.reason
+    components = outcome.state["release"]["components"]
+    assert components["api"]["repository"] == "acp-app"
+    assert components["worker"]["repository"] == "acp-app"
+    assert components["ollama"]["repository"] == "acp-ollama-gateway"
+
+
+def test_an_unpinned_install_falls_back_to_the_chart_repositories(tmp_path):
+    """The other side of the rule above: with no manifest there is nothing better than the name
+    the chart would have used, and the record still has to say something. This is why
+    `chart_repositories` survives the deletion of the manifest reader."""
+    from acpctl.install import chart_repositories
+    from acpctl.values import build_values
+
+    outcome = run_install(tmp_path, FakeRunner(), release_manifest=None, allow_unpinned=True)
+    assert outcome.code == 0, outcome.reason
+    defaults = chart_repositories(build_values(load_example("standard-production")), CHART)
+    for name, entry in outcome.state["release"]["components"].items():
+        assert entry["digest"] is None
+        assert entry["repository"] == defaults[name]
 
 
 # ── preflight ────────────────────────────────────────────────────────────────
@@ -842,12 +981,9 @@ def test_a_changed_release_manifest_is_not_a_no_op(tmp_path):
     call a re-pinned release unchanged and skip the install that was the point of running it."""
     runner = FakeRunner()
     assert run_install(tmp_path, runner).code == 0
-    moved = manifest_file(tmp_path, name="moved.json", components={
-        "acp-web-api": {"digest": DIGEST_B, "repository": "acp-web-api"},
-        "acp-worker": {"digest": DIGEST_B, "repository": "acp-worker"},
-        "acp-ollama-gateway": {"digest": DIGEST_C, "repository": "acp-ollama-gateway"},
-        "acp-grafana": {"digest": DIGEST_D, "repository": "acp-grafana"},
-    })
+    rebuilt = release_document()
+    component(rebuilt, "app")["digest"] = DIGEST_B
+    moved = manifest_file(tmp_path, document=rebuilt, name="moved.json")
     outcome = run_install(tmp_path, runner, release_manifest=str(moved))
     assert outcome.code == 0, outcome.reason
     assert outcome.changed is True
