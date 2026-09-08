@@ -1184,7 +1184,7 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
       <b>Queue concentration:</b> one user holds {concentration.pct}% of waiting jobs. Tenant-fair scheduling gives other waiting users the next equally prioritized capacity.
     </div>}
     <div role="tablist" aria-label="Live Operations flow views" style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-      {[['infrastructure', 'Infrastructure map'], ['jobs', `Running jobs (${summary.active_workflows ?? summary.active_runs ?? 0})`]].map(([id, label]) =>
+      {[['infrastructure', 'Infrastructure map'], ['jobs', `Running jobs (${summary.running_workflows ?? summary.active_runs ?? 0})`]].map(([id, label]) =>
         <button key={id} type="button" role="tab" aria-selected={flowTab === id}
           className={flowTab === id ? '' : 'ghost'}
           onClick={() => { setFlowTab(id); setFlowFilter(null); setSelectedKey(null) }}
