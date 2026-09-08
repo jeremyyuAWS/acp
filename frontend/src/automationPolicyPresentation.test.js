@@ -30,4 +30,9 @@ describe('automation policy presentation contract', () => {
     expect(css).toMatch(/automation-policy__slider input[^}]*touch-action: pan-y/)
     expect(css).toMatch(/automation-policy__ticks button[^}]*min-width: 44px[^}]*min-height: 34px/)
   })
+
+  it('aligns every routing outcome to the same text column', () => {
+    expect(css).toMatch(/automation-policy__routes > div[^}]*grid-template-columns: minmax\(150px, \.7fr\) minmax\(0, 1fr\) auto/)
+    expect(css).toMatch(/automation-policy__routes b[^}]*justify-self: stretch[^}]*text-align: left/)
+  })
 })
