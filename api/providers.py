@@ -75,6 +75,9 @@ def claude_text_generate(prompt: str, *, temperature: float = 0.4,
 
     Returns {text, prompt_tokens, completion_tokens, cost_usd, model, provider, zone, host}
     or None when the key is absent or the call fails. Never raises."""
+    from llm_waterfall_provider import managed_context, defer_managed
+    if managed_context() is not None:
+        return defer_managed('direct_legacy_transport_blocked')
     if not _ANTHROPIC_KEY:
         return None
     import httpx
@@ -153,6 +156,9 @@ def openai_text_generate(prompt: str, *, temperature: float = 0.4,
 
     Returns {text, prompt_tokens, completion_tokens, cost_usd, model, provider, zone, host}
     or None when the key reference does not resolve or the call fails. Never raises."""
+    from llm_waterfall_provider import managed_context, defer_managed
+    if managed_context() is not None:
+        return defer_managed('direct_legacy_transport_blocked')
     key = _openai_text_key()
     if not key:
         return None
@@ -258,6 +264,9 @@ def text_generate(prompt: str, *, temperature: float = 0.4, max_tokens: int = 80
     not resolve returns None, so the caller still degrades to the local path.
 
     Returns the vendor-neutral result dict, or None. Never raises."""
+    from llm_waterfall_provider import managed_context, managed_text_generate
+    if managed_context() is not None:
+        return managed_text_generate(prompt)
     name = (provider or active_text_provider() or "").strip().lower()
     if name == "openai":
         return openai_text_generate(prompt, temperature=temperature, max_tokens=max_tokens,
@@ -439,6 +448,9 @@ class OllamaVisionProvider:
 
     def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
                  timeout: float = 120.0) -> dict:
+        deferred = _managed_vision_deferral()
+        if deferred is not None:
+            return deferred
         import base64
         mdl = model or self.model
         t0 = time.monotonic()
@@ -642,6 +654,9 @@ class AzureOpenAIVisionProvider:
 
     def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
                  timeout: float = 120.0) -> dict:
+        deferred = _managed_vision_deferral()
+        if deferred is not None:
+            return deferred
         import base64
         t0 = time.monotonic()
         url = (f"{self.endpoint}/openai/deployments/{self.deployment}"
@@ -712,6 +727,9 @@ class OpenAIVisionProvider:
 
     def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
                  timeout: float = 120.0) -> dict:
+        deferred = _managed_vision_deferral()
+        if deferred is not None:
+            return deferred
         import base64
         mdl = model or self.model
         t0 = time.monotonic()
@@ -781,6 +799,9 @@ class GeminiVisionProvider:
 
     def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
                  timeout: float = 120.0) -> dict:
+        deferred = _managed_vision_deferral()
+        if deferred is not None:
+            return deferred
         import base64
         mdl = model or self.model
         t0 = time.monotonic()
@@ -850,6 +871,9 @@ class BedrockVisionProvider:
 
     def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
                  timeout: float = 120.0) -> dict:
+        deferred = _managed_vision_deferral()
+        if deferred is not None:
+            return deferred
         import base64, json
         mdl = model or self.model
         t0 = time.monotonic()
@@ -932,6 +956,9 @@ class AnthropicVisionProvider:
 
     def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
                  timeout: float = 120.0) -> dict:
+        deferred = _managed_vision_deferral()
+        if deferred is not None:
+            return deferred
         import base64
         mdl = model or self.model
         t0 = time.monotonic()
@@ -1010,6 +1037,9 @@ class RunPodServerlessVisionProvider:
 
     def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
                  timeout: float = 120.0) -> dict:
+        deferred = _managed_vision_deferral()
+        if deferred is not None:
+            return deferred
         import base64
         t0 = time.monotonic()
         mdl = model or self.model
@@ -1083,6 +1113,9 @@ class HuggingFaceVisionProvider:
 
     def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
                  timeout: float = 120.0) -> dict:
+        deferred = _managed_vision_deferral()
+        if deferred is not None:
+            return deferred
         import base64
         mdl = model or self.model
         t0 = time.monotonic()
@@ -1456,3 +1489,13 @@ def active_vision_provider() -> VisionProvider:
     # honours the row's own model. The dead branch pinned `CLAUDE_TEXT_MODEL` — a TEXT model id —
     # onto a vision adapter, so it would have been wrong about the model as well as the consent.
     return OllamaVisionProvider(base_url, model)
+
+
+# Run governance is opt-in; legacy unbudgeted calls keep their existing behavior.
+def _managed_vision_deferral():
+    from llm_waterfall_provider import managed_context, defer_managed
+    if managed_context() is None:
+        return None
+    defer_managed('vision_pricing_not_verified', kind='vision')
+    return _result(text=None, model='not-dispatched', provider='governed',
+        zone='none', latency_ms=0, ok=False, reason='vision_pricing_not_verified')

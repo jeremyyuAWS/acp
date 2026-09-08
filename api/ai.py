@@ -132,6 +132,10 @@ def _leave_vision_capacity() -> None:
 
 def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs) -> dict:
     """Run one provider request inside the shared GPU admission limit."""
+    from llm_waterfall_provider import managed_context, defer_managed
+    if managed_context() is not None:
+        defer_managed('legacy_ai_path_not_budgeted', kind='_bounded_vision_generate')
+        return {'ok': False, 'text': None, 'reason': 'vision_pricing_not_verified', 'model': 'not-dispatched'}
     if not _enter_vision_capacity():
         return {
             "ok": False, "reason": "capacity_busy",
@@ -354,6 +358,10 @@ def explain_finding(
 ) -> dict | None:
     """Explain a WCAG finding via the local Ollama model. Returns None when Ollama
     is unavailable / on error (the UI then shows 'AI explanation unavailable')."""
+    from llm_waterfall_provider import managed_context, defer_managed
+    if managed_context() is not None:
+        defer_managed('legacy_ai_path_not_budgeted', kind='explain_finding')
+        return None
     prompt = _prompt(rule_id, rule_name, level, filename, finding_count, severity, engine_rule_ids)
     import time as _t
     _t0 = _t.monotonic()
@@ -505,6 +513,9 @@ def model_is_available() -> bool:
     503, which is indistinguishable from a document that needed no fix — the operator needs one
     line naming the real cause, and `ollama pull` is the whole remedy.
     """
+    from llm_waterfall_provider import managed_context, managed_text_ready
+    if managed_context() is not None:
+        return managed_text_ready()
     _maybe_refresh_endpoint()
     tags = _tags_cached()
     ok = _tags_have(tags, OLLAMA_MODEL)
@@ -522,6 +533,10 @@ def vision_is_available() -> bool:
     """True only when Ollama is reachable AND the configured vision model is pulled.
     Distinct from is_available(): a text-only Ollama is 'available' but cannot describe
     images, so the alt-text remediator must gate genuine captioning on this, not is_available."""
+    from llm_waterfall_provider import managed_context, defer_managed
+    if managed_context() is not None:
+        defer_managed('vision_pricing_not_verified', kind='vision')
+        return False
     _maybe_refresh_endpoint()
     return _tags_have(_tags_cached(), OLLAMA_VISION_MODEL)
 
@@ -543,6 +558,10 @@ def vision_unavailable_reason() -> str | None:
     deliberately set to the same string as the deploy default is still an override, and only the
     store knows that.
     """
+    from llm_waterfall_provider import managed_context, defer_managed
+    if managed_context() is not None:
+        defer_managed('vision_pricing_not_verified', kind='vision')
+        return 'Vision is deferred: no verified spending bound for this run'
     _maybe_refresh_endpoint()
     tags = _tags_cached()
     if tags is None:
@@ -718,6 +737,10 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     `model` overrides the vision model for this one call (the validator uses a SECOND model for a
     genuine cross-check). `clean=False` returns the raw reply (the validator parses its own format
     rather than an alt string)."""
+    from llm_waterfall_provider import managed_context, defer_managed
+    if managed_context() is not None:
+        defer_managed('legacy_ai_path_not_budgeted', kind='_vision_generate')
+        return None
     import time as _t
     _t0 = _t.monotonic()
     # The transport goes through the provider seam (ADR 0019 §1): today that is always the local
@@ -1213,6 +1236,10 @@ def copilot_guidance(image_bytes: bytes, *, rule_id: str = "", filename: str = "
     """Interpretive guidance for an image (not alt text) from the configured cloud provider.
     Returns {guidance, provider, zone, model, cost_usd} or None when no cloud is configured
     or the call fails. Cloud-only: gated on cloud_vision_provider() is not None."""
+    from llm_waterfall_provider import managed_context, defer_managed
+    if managed_context() is not None:
+        defer_managed('legacy_ai_path_not_budgeted', kind='copilot_guidance')
+        return None
     import providers as _providers
     cloud = _providers.cloud_vision_provider()
     if cloud is None:
@@ -1271,6 +1298,10 @@ def describe_reading_order(page_bytes: bytes, *, filename: str = "",
     Returns {"order", "model"} — a short human-readable reading sequence — or None. Bounded
     and traced like describe_image. This is only ever a PROPOSAL a human confirms (a machine
     cannot be trusted to fix reading order on an untagged scan), never an auto-fix."""
+    from llm_waterfall_provider import managed_context, defer_managed
+    if managed_context() is not None:
+        defer_managed('legacy_ai_path_not_budgeted', kind='describe_reading_order')
+        return None
     if not page_bytes:
         return None
     import base64
@@ -1362,6 +1393,11 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     `style` re-drafts an image description shorter/longer at the reviewer's request (#131).
     `guidance` (ADR 0021) is the org house-style block, injected into the prompt when review
     memory is active — "" (the default) leaves the prompt byte-identical to pre-memory."""
+    from llm_waterfall_provider import managed_context, defer_managed
+    _managed_run = managed_context()
+    if _managed_run is not None and rule_id == "1.1.1":
+        defer_managed('vision_pricing_not_verified', kind='alt_text')
+        return None
     if rule_id == "1.1.1" and image_bytes:
         res = describe_image(image_bytes, filename=filename, context=detail, style=style,
                              guidance=guidance, scan_id=scan_id, file=file)
@@ -1387,7 +1423,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     # takes effect immediately and cannot be bypassed by a stale browser.
     import providers as _prov
     _pilot_model = _pilot_provider = None
-    if rule_id == "2.4.4" and file_format:
+    if rule_id == "2.4.4" and file_format and _managed_run is None:
         try:
             import core as _core
             import remediation_pilot as _pilot
@@ -1401,6 +1437,8 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
             _pilot_model = _pilot_provider = None
     _cr = _prov.text_generate(prompt, temperature=0.4, max_tokens=800,
                               model=_pilot_model, provider=_pilot_provider)
+    if _cr is not None and _cr.get("deferred"):
+        return None
     if _cr is not None:
         text = _cr["text"].strip().strip('"').strip()
         if text:
@@ -1415,6 +1453,8 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                    "is_template": rule_id == "1.1.1", "model": _cr["model"],
                    "provider": _cr["provider"], "processing_zone": _cr["zone"],
                    "cost_usd": _cr["cost_usd"]}
+            if _managed_run is not None:
+                out.update(approval_required=True, attempts=_cr.get("attempts", []))
             if call_id:
                 out["ai_call_id"] = call_id
             if out["is_template"]:
@@ -1426,6 +1466,9 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                     "filename. Pick the image above and draft again, or write the value yourself."
                 )
             return out
+    if _managed_run is not None:
+        defer_managed('bounded_text_draft_unavailable')
+        return None
     # Cloud provider unavailable or not configured — fall back to Ollama.
     try:
         import httpx
@@ -1485,6 +1528,10 @@ def simplify_text(text: str, *, scan_id: str | None = None, file: str | None = N
     long sentences, it does NOT summarise or drop content (that would change meaning, not readability,
     and could invent/omit facts — ADR 0016). Returns the simpler text or None. HITL by design: the
     reviewer approves the rewrite; nothing is auto-applied to the document."""
+    from llm_waterfall_provider import managed_context, defer_managed
+    if managed_context() is not None:
+        defer_managed('legacy_ai_path_not_budgeted', kind='simplify_text')
+        return None
     src = (text or "").strip()
     # model_is_available(), not is_available(): the POST below names OLLAMA_MODEL, so a reachable
     # Ollama that never pulled it 404s on every call and this returns None either way — one probe
@@ -1582,6 +1629,10 @@ def _digest_fallback_narrative(facts: dict) -> str:
 
 def _ollama_narrative(facts: dict) -> tuple[str, str] | None:
     """Local fallback narrative via the deployed Ollama backend. Returns (text, model)."""
+    from llm_waterfall_provider import managed_context, defer_managed
+    if managed_context() is not None:
+        defer_managed('legacy_ai_path_not_budgeted', kind='_ollama_narrative')
+        return None
     import time as _t
     _t0 = _t.monotonic()
     _p = _digest_prompt(facts)
@@ -1645,3 +1696,41 @@ def looks_like_logotype(image_bytes: bytes, *, scan_id: str | None = None,
     if w.startswith("no"):
         return False
     return None
+
+
+def run_verified_remediation(request, *, persist, previous=None, model_specs=None,
+                             ledger=None, owner_id=None, run_id=None, generator=None):
+    """Governed two-model remediation entry point for a persisted worker run.
+
+    Caller binds policy/source/authority server-side, locks the operation, and
+    disables legacy AI drafting for this run. Only an independently verified
+    HTML root-language candidate is supported; this does not promote a file.
+    """
+    from llm_remediation_waterfall import (
+        BudgetAdapter, apply_html_language, run_waterfall, verify_html_language,
+    )
+    from llm_waterfall_provider import StrictTextGenerator, configured_generator, managed_context
+    ctx = managed_context()
+    if ctx is None or not ctx.enabled:
+        raise ValueError('an enabled durable managed run is required')
+    if ((ledger is not None and ledger is not ctx.ledger)
+            or (owner_id is not None and owner_id != ctx.owner_id)
+            or (run_id is not None and run_id != ctx.run_id)):
+        raise ValueError('caller identity does not match the durable run')
+    ledger, owner_id, run_id = ctx.ledger, ctx.owner_id, ctx.run_id
+    if request.family != 'html-root-language':
+        raise ValueError('no independent verifier for this fix family')
+    # Fail before reserving or dispatching if source/authority is unsupported.
+    baseline = verify_html_language(request, apply_html_language(
+        request.source, {'language': request.expected_language}))
+    if not baseline.accepted():
+        raise ValueError('authoritative language or supported HTML evidence unavailable')
+    if generator is None:
+        generator = (StrictTextGenerator(tuple(model_specs)) if model_specs is not None
+                     else configured_generator())
+    budget = BudgetAdapter(ledger, owner_id, run_id, generator.pricing_refs)
+    return run_waterfall(request, generator.models, generate=generator,
+        reserve=budget.reserve, claim_dispatch=budget.claim_dispatch,
+        settle=budget.settle, mark_uncertain=budget.mark_uncertain,
+        apply_to_copy=apply_html_language, verify=verify_html_language,
+        persist=persist, previous=previous)

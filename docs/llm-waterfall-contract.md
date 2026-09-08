@@ -174,3 +174,70 @@ They automatically skip when the spending module is absent from an isolated
 checkout, and run normally once both modules are integrated. No provider was
 called. PostgreSQL coverage belongs to the separately owned spending ledger;
 this waterfall integration run used SQLite only.
+
+## Run-scoped provider integration
+
+`llm_waterfall_provider.py` adds a strict real HTTP text adapter and hooks into
+`providers.text_generate`. In an explicit capped run, existing text drafting
+uses `ai_run_policy.current_run_context(required=False)` and its durable ledger,
+owner, run, and enabled policy. Outside a managed run, legacy behavior remains
+unchanged and no spending-cap claim is made.
+
+Every managed text request reserves its verified maximum, exclusively claims
+one dispatch, and settles measured token usage. An empty but accounted response
+can try the second model once. Provider failures, unknown/model-mismatched usage,
+unsupported cache/audio accounting, or cost failures stop without a fallback;
+uncertain usage retains a blocked reservation. Semantic drafts always return
+`approval_required=True`; producing nonempty text is not evidence of objective
+correctness. `ctx.deferred` contains detailed reasons/attempts for the worker to
+persist and display. Ledger rows durably preserve spend/attempt identity even if
+the worker crashes before handling the returned draft. A worker retry uses fresh
+attempt IDs and consumes the same immutable run cap.
+
+Managed `ai.suggest_fix` cannot fall back to Ollama, and its availability gate
+checks bounded text configuration rather than requiring a local Ollama model.
+All vision adapters and direct legacy AI entry points defer in managed contexts
+until their pricing can be bounded. Guards run before AI dispatch; no credential
+is logged or included in a result. Existing vision/draft paths outside a capped
+run preserve their behavior. Parent worker integration must establish the context
+around the whole job and persist `ctx.deferred` when the job ends.
+
+### Server-owned model configuration
+
+`ACP_BOUNDED_TEXT_MODELS_JSON` is a JSON array of exactly two `TextModelSpec`
+objects. This task does not populate it or invent current prices. Both models
+must use the already owner-selected text provider (`openai` or `anthropic`) and
+exact response model IDs, with no aliases. Required fields:
+
+* `provider`, `model`, `pricing_ref` (auditable approved pricing snapshot).
+* `input_usd_per_million`, `output_usd_per_million`: positive decimal strings.
+* `context_token_limit`: verified hard provider/model context ceiling, not an
+  estimate from the prompt. The full ceiling is reserved for input tokens.
+* `output_token_limit`: positive integer, bounded by the context ceiling.
+* `verified_until`: integer Unix expiry for the price/model-limit snapshot.
+* `timeout_seconds`: optional integer, default 30, maximum 120.
+
+The host must validate these values against the provider's actual model contract
+before provisioning this server config; a caller-provided price or a nonempty
+reference alone is not proof. The transport sends a single text-only request,
+uses a provider-enforced output limit, disables redirects, and has no SDK retries.
+It does not support tools, images, cache pricing, audio, custom pricing tiers, or
+opaque gateways that alter model/usage. Such responses retain the reservation for
+reconciliation. Missing, expired, unsupported, or mismatched config defers with
+no model call. No free/default rate or default price-table entry is accepted.
+
+### Verified fix facade
+
+`ai.run_verified_remediation(request, persist=..., previous=...)` derives ledger,
+owner, and run from the enabled durable context; conflicting optional identity
+arguments are rejected. It uses server model config by default. It preflights
+supported HTML/authority evidence, then calls the independently verified waterfall.
+The parent must still construct the request's mode/eligibility from the accepted
+run policy, persist snapshots under an operation lock, and compare the source
+revision before candidate promotion. Unsupported Office/PDF/semantic fixes are
+not licensed for automatic approval by the draft provider integration.
+
+This change wires the provider boundary and facade; worker context establishment,
+exception persistence/UI, immutable enqueue policy, and candidate promotion are
+separate parent/sibling integration responsibilities. No deployment or paid API
+validation was performed.
