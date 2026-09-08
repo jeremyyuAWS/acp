@@ -28,7 +28,9 @@ def ledger(tmp_path, request):
     result.init_schema()
     if request.param == "postgres":
         with adapter.cursor() as cur:
-            adapter.execute(cur, "TRUNCATE ai_spending_attempts, ai_spending_budgets")
+            # The full migration may also have installed run policy references.
+            # This fixture is restricted above to a disposable localhost test DB.
+            adapter.execute(cur, "TRUNCATE ai_spending_attempts, ai_spending_budgets CASCADE")
     result.create_budget("owner", "run", 100)
     yield result
     if request.param == "postgres" and adapter._pool:

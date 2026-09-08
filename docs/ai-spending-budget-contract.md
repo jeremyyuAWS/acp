@@ -1,6 +1,7 @@
 # Metered provider spending reservation contract
 
-This is an opt-in ledger, not yet wired to provider dispatch, run creation, or the UI.
+This is an opt-in ledger wired to canonical remediation job creation and worker
+context. Provider dispatch and UI integration are owned by the parallel integration tasks.
 It bounds admitted **metered provider exposure** only when the caller supplies and
 enforces a valid upper bound for every potentially billable attempt. It does not cap
 shared infrastructure, provisioned GPU time, hosting, storage, or other Azure costs.
@@ -8,8 +9,9 @@ No real provider prices are included. Test amounts are synthetic.
 
 ## Ownership and integration
 
-This task owns `api/ai_spending_budget.py`, `tests/test_ai_spending_budget.py`, and
-this document. Provider dispatch/waterfall and frontend integration belong to other tasks.
+This task owns `api/ai_spending_budget.py`, `api/ai_run_policy.py`, their tests,
+the spending schema/enqueue/reset seams in `api/store.py`, and this document.
+Provider dispatch/waterfall and frontend integration belong to other tasks.
 The deadline is September 9, 2026 at 10 a.m. Pacific.
 
 Construct `BudgetLedger(store._db)` using the existing SQLite or Postgres adapter.
@@ -21,10 +23,46 @@ commit before a network call. Database failures propagate and grant no permissio
 `SCHEMA` defines two additive tables: `ai_spending_budgets` (owner/run composite
 primary key, immutable cap/currency) and `ai_spending_attempts` (owner/run/attempt
 composite key, maximum charge, pricing reference, state, final charge).
-`init_schema()` is an explicit local/bootstrap seam. Production integration must
-incorporate these statements into the versioned migration machinery in `store.py`
-and update its schema version/checksum with that file's owner. Do not run DDL per
-request or claim production readiness before that migration is reviewed.
+`init_schema()` is an explicit local/bootstrap seam. The production Store's version
+44 migration includes these statements plus `ai_spending_run_policies`, with its
+schema checksum updated. No DDL runs during request dispatch.
+
+## Canonical run integration
+
+`Store.enqueue_stage_batch` reads each remediation payload's
+`remediation_impact_policy.ai_budget_usd`: a canonical nonnegative two-place USD
+string, e.g. `"0.10"`. Every file must have the same normalized spending policy.
+The owner is derived from the database workflow/scan and the run ID is the canonical
+stage execution batch ID, never the reusable settings snapshot ID. Policy and budget
+are inserted in the same transaction as the jobs, before workers can claim them.
+Changing or removing a cap for the same execution is refused. Failed-job retries
+preserve existing holds/spend. The route's existing policy snapshot fingerprint must
+include the cap, as it does for other policy fields.
+
+The parent handler integration uses `with ai_run_policy.run_context(store, payload,
+job) as ctx:` around the **entire** remediation handler, including draft proposers.
+It reads the durable job, joins the owning scan and stage execution, validates the
+owner/scan/file and policy against the supplied payload, and installs a ContextVar.
+`current_run_context(required=False)` and `optional_current_run_context()` return
+None outside a managed job. The default `current_run_context()` refuses absence.
+`ctx` exposes the ledger, owner_id, run_id, scan_id, an immutable policy mapping,
+enabled, and a task-local `deferred` list for provider explanations. Context resets
+even on handler failure and does not leak between concurrent workers. An outer
+Store transaction is refused. New child threads need explicit context propagation.
+
+No cap field means a **legacy unmanaged run**, not free AI and not a cap. Explicit
+`"0.00"` is managed and disables paid AI, as does AI level zero. Invalid explicit
+values fail closed. Provider integration must block all legacy fallback/vision calls
+inside managed context and gate strict dispatch on `ctx.enabled`; only the bounded
+adapter may spend. For fixture compatibility, legacy calls with no durable job ID
+yield None without constructing a Store; managed calls require the authenticated join.
+
+Already-queued managed jobs can bind a missing policy row from their durable payload
+before any provider call. Current user defaults or caller-supplied caps cannot replace
+that snapshot. `read_run_budget(store, owner_id, scan_id, run_id)` returns the scoped
+ledger snapshot plus policy, or None if no matching managed run exists. Owner reset
+and analytics reset clear the three ledger tables in foreign-key order; a retry must
+not reconstruct a deleted managed execution from an untrusted payload.
 
 ## API
 
@@ -102,7 +140,7 @@ independent adapters, duplicate claims, invalid transitions, uncertain charges,
 overruns, and a simulated transaction failure. Providers are never called.
 SQLite tests run by default. To also run against a disposable local Postgres database,
 set `ACP_BUDGET_TEST_PG_URL` to a localhost URL with database name `acp_budget_test`.
-That opt-in fixture truncates only the two ledger tables in that dedicated database.
+That opt-in fixture clears ledger tables and dependent run policy rows in that database.
 It must never point to production. Concurrent callers use separate connections.
 
 Verified September 8, 2026: **30 passed** (15 cases each on SQLite and PostgreSQL
@@ -111,8 +149,16 @@ charge exceeding the entire run cap. PostgreSQL concurrency was exercised agains
 the real `_PgAdapter`, not a SQL mock. Transaction failure is deliberately simulated;
 no live provider billing, crash-injected database process, or production database was used.
 
-Remaining integration: versioned schema migration, authenticated run budget creation,
-verified provider price/bound calculation, token/charge limits and disabled hidden
-retries, dispatch callbacks, reconciliation workflow, and UI reporting that separates
+Integration verification: **105 passed, 3 skipped** across ledger/run policy,
+schema-lock, owner-reset, stage-retry and remediation-enqueue tests, with the local
+Postgres opt-in enabled. Six run-policy scenarios exercised the complete production
+Store migration and queue/context/reset paths on PostgreSQL. The three skipped
+schema tests require their separate external test service; they are not counted as
+verified. Two additional focused tests cover no-ID legacy fixtures and removing a
+managed cap from either supplied or persisted payload; both passed.
+
+Remaining parallel integration: verified provider price/bound calculation,
+token/charge limits and disabled hidden retries, handler context wrapper, dispatch
+callbacks, reconciliation workflow, and UI reporting that separates
 metered model charges from infrastructure costs. Current tests are not end-to-end
 evidence of a production cap.
