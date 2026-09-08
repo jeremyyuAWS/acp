@@ -212,6 +212,10 @@ def build_run_impact(store, scan_id, owner, policy=None, scope=None):
         result['capabilities'].update(execute=False, reason=CAPABILITIES['ai_automatic_reason'])
     result['scope'] = {'type': 'selected_files' if scope is not None else 'assessment', 'files': len(files)}
     result['assessment_gaps'] = {'files': sum(bool(f.get('complete') is not True or f.get('blocked')) for f in files)}
+    if hasattr(store, 'remediation_status'):
+        from ai_run_policy import read_run_budget
+        batch_id = store.remediation_status(scan_id).get('batch_id')
+        result['ai_spending'] = read_run_budget(store, owner, scan_id, batch_id) if batch_id else None
     return result
 
 

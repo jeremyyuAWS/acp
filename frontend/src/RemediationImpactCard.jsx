@@ -184,6 +184,12 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       {loading ? 'Calculating the impact of these settings…' : error ? `Preview unavailable. ${error}` : !runId ? 'Select an assessment to preview remediation.' : !ready ? 'The preview could not be reconciled. Counts are unavailable.' : `${number(data.lanes?.automatic?.findings)} findings eligible for automatic application. ${number(data.lanes?.review?.findings)} findings require proposal review.`}
       {notice && <span> {notice}</span>}
     </div>
+    {data?.ai_spending && <section aria-label="AI spending for the latest remediation run">
+      <h3>AI spending · Latest remediation run</h3>
+      <p>{[['Spent', 'spent_units'], ['Reserved for requests', 'held_units'], ['Remaining', 'available_units'], ['Limit', 'cap_units']].map(([label, key]) =>
+        <span key={key}>{label}: {Number.isSafeInteger(data.ai_spending[key]) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(data.ai_spending[key] / 1000000) : 'Unavailable'}{' · '}</span>)}</p>
+      <p>{data.ai_spending.blocked ? 'AI is paused while an uncertain charge or spending overrun is reconciled.' : 'Reservations cover requests that may still be charged. Infrastructure costs are separate.'}</p>
+    </section>}
     {ready && <>
       <h3>How the findings will be handled</h3>
       <div className="remediation-impact__routes">{LANES.map(([key, label]) => <button type="button" key={key}
