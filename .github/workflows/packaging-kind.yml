@@ -48,6 +48,13 @@ jobs:
       SPEC: packaging/reference/kind/acp-deployment.yaml
       NAMESPACE: acp-kind
       IMAGE: acp-app:ci
+      # Pinned for the same reason every other version here is: a CNI that moves under the run
+      # makes a green job unattributable. Bump deliberately, with a run behind it.
+      CALICO_VERSION: v3.28.2
+      # CRDs ONLY, not the operators. See the dry-run step for why that is the right
+      # amount of KEDA and External Secrets to install here.
+      KEDA_CRDS_VERSION: v2.16.0
+      ESO_CRDS_VERSION: v0.10.5
       KIND_CLUSTER: acp-reference
       PYTHONPATH: packaging/cli
 
@@ -96,10 +103,46 @@ jobs:
           bash scripts/install_kind.sh
 
       - name: Create the disposable cluster
+        # NO `--wait` ON `kind create`. The cluster config disables kind's default CNI, so no node
+        # can reach Ready until Calico is running — waiting here would time out on a cluster that
+        # is behaving exactly as intended. The wait moves below, after the CNI.
         run: |
-          kind create cluster --config packaging/reference/kind/cluster.yaml --wait 120s
+          set -euo pipefail
+          kind create cluster --config packaging/reference/kind/cluster.yaml
           kubectl cluster-info
+          # WHICH BYTES THIS CLUSTER ACTUALLY RAN. cluster.yaml pins the node image by TAG and says
+          # why: everything else in this packaging work is pinned by digest, and inventing one
+          # before any run had recorded which one it pulled would have been a pin to bytes nobody
+          # had seen. Runs have recorded it now, so this prints it — the digest that appears here
+          # is what a later commit can pin, sourced from a run rather than from a registry lookup.
+          docker image inspect "$(python -c "
+          import yaml
+          print(yaml.safe_load(open('packaging/reference/kind/cluster.yaml'))['nodes'][0]['image'])
+          ")" --format 'node image digest: {{index .RepoDigests 0}}' || true
+
+      - name: A CNI that enforces the policies the chart renders
+        # THE POINT OF REPLACING kindnet, and it is not tidiness. `templates/networkpolicy.yaml`
+        # says it in its own header: "Kubernetes silently ignores NetworkPolicy objects when the
+        # CNI does not implement them — no error, no event, no status field saying 'unenforced'."
+        # kindnet is such a CNI. Every run before this one installed four policies and established
+        # nothing about any of them.
+        #
+        # The concrete cost was `networkPolicy.egressPorts` (53, 443, 5432, 6379, 6380). With
+        # nothing enforcing it, a missing port could not stop anything and the install passed
+        # either way — a check that cannot fail, which is the shape this job exists to refuse.
+        # With Calico running, the install ITSELF tests that list: a worker that cannot reach
+        # Postgres or Redis does not come up.
+        #
+        # Calico rather than Cilium because `acpctl doctor` already recognises `calico-node` as an
+        # enforcing CNI, so this also exercises that detection against a real one instead of a
+        # table entry. Pinned, for the same reason the node image is.
+        run: |
+          set -euo pipefail
+          kubectl apply -f "https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/calico.yaml"
+          kubectl -n kube-system rollout status daemonset/calico-node --timeout=300s
+          kubectl wait --for=condition=Ready node --all --timeout=300s
           kubectl get nodes -o wide
+          kubectl -n kube-system get daemonset
 
       - name: Load the image into the cluster
         # NO REGISTRY. This is what makes the whole job self-contained: kind copies the local image
@@ -155,21 +198,24 @@ jobs:
         # the one drift it expects.
         #
         # THE COMMENT THIS REPLACES WAS WRONG IN BOTH DIRECTIONS, which is the reason for asserting
-        # rather than describing. It said NetworkPolicy was expected "as a blocker". Measured on
-        # the green run of 2026-09-08:
+        # rather than describing. It said NetworkPolicy was expected "as a blocker". Measured:
         #
-        #   [????] networkpolicy.enforcement  UNKNOWN, severity WARNING  — kind runs kindnet, which
-        #          is in neither the enforcing nor the known-non-enforcing list, so doctor says it
-        #          could not tell. That is not a blocker and does not make `ok` false.
-        #   [FAIL] capacity.floor             FAIL, severity BLOCKER     — the real blocker, and it
-        #          went unmentioned. doctor computes the floor from the DOCUMENT (5 CPU for five
-        #          `small` pods) while this job installs with runner-resources.yaml lowering the
-        #          requests, so doctor is right about the document and describes something other
-        #          than what gets installed. `acpctl doctor` takes no values overlay; see the gap
-        #          report.
+        #   [FAIL] capacity.floor  FAIL, severity BLOCKER — the only finding now, and the one no
+        #          comment ever mentioned. doctor computes the floor from the DOCUMENT (5 CPU for
+        #          five `small` pods) while this job installs with runner-resources.yaml lowering
+        #          the requests, so doctor is right about the document and is describing something
+        #          other than what gets installed. `acpctl doctor` takes no values overlay; see
+        #          the gap report.
         #
-        # Both must be present and nothing else may be non-pass. A check that stops firing fails
-        # this step, which is the point: an expected finding that vanishes is a finding.
+        # `networkpolicy.enforcement` WAS the second finding — UNKNOWN at WARNING severity, since
+        # kindnet is in neither the enforcing nor the known-non-enforcing CNI list, so not a
+        # blocker and not a pass. Installing Calico turned it into a pass, so this expectation now
+        # covers doctor's CNI detection against a REAL enforcing CNI rather than against a table
+        # entry. It changed here only because the cluster changed, which is exactly the coupling
+        # this assertion exists for.
+        #
+        # The expected findings must all be present and nothing else may be non-pass. A check that
+        # stops firing fails this step: an expected finding that vanishes is a finding.
         run: |
           set -euo pipefail
           python -m acpctl doctor "$SPEC" -n "$NAMESPACE" || true
@@ -177,7 +223,7 @@ jobs:
           python - <<'PY'
           import json, sys
 
-          EXPECTED = {"capacity.floor": "fail", "networkpolicy.enforcement": "unknown"}
+          EXPECTED = {"capacity.floor": "fail"}
           report = json.load(open("/tmp/doctor.json"))
           assert report["reachable"], report
           found = {c["id"]: c["status"] for c in report["checks"] if c["status"] != "pass"}
@@ -250,6 +296,76 @@ jobs:
           sys.exit(1)
           PY
 
+      - name: Are the network policies enforced, or merely accepted?
+        # THE CLAIM `templates/networkpolicy.yaml` SAYS IT CANNOT MAKE, now made by the cluster.
+        # Its header: "Kubernetes silently ignores NetworkPolicy objects when the CNI does not
+        # implement them — no error, no event, no status field saying 'unenforced'." Every run
+        # before Calico installed four policies and established nothing about any of them.
+        #
+        # THE DISCRIMINATOR IS TIMEOUT VERSUS REFUSED, and choosing the target carefully is the
+        # whole design. Probing a Service port with no backend times out whether or not a policy
+        # exists, so it proves nothing. This probes the POSTGRES POD IP directly:
+        #
+        #   port 5432   in `networkPolicy.egressPorts`   -> must CONNECT
+        #   port 12345  not in the list, nothing listening on the pod
+        #                 enforced     -> the packet is DROPPED       -> timeout
+        #                 unenforced   -> the packet reaches the pod  -> RST -> refused
+        #
+        # So `refused` is the finding: it means the policies are decoration. Postgres pods carry
+        # none of this chart's labels, so no ingress policy applies to them and the only thing
+        # that can drop the packet is ACP's own egress policy — which is what makes this a
+        # statement about that policy rather than about the cluster in general.
+        #
+        # Resolving the name at all exercises 53/UDP, the port whose absence made every earlier
+        # version of the default-deny policy unusable.
+        run: |
+          set -euo pipefail
+          PGIP="$(kubectl -n "$NAMESPACE" get pod -l app=acp-postgres \
+            -o jsonpath='{.items[0].status.podIP}')"
+          test -n "$PGIP" || { echo "no postgres pod IP; this check would prove nothing"; exit 1; }
+          echo "probing $PGIP from an acp-api pod"
+          kubectl -n "$NAMESPACE" exec -i deploy/acp-api -- python - "$PGIP" <<'PROBE'
+          import socket, sys
+
+          target = sys.argv[1]
+
+          def probe(port, timeout=8):
+              sock = socket.socket()
+              sock.settimeout(timeout)
+              try:
+                  sock.connect((target, port))
+                  return "connected"
+              except socket.timeout:
+                  return "timeout"
+              except ConnectionRefusedError:
+                  return "refused"
+              except OSError as exc:
+                  return f"error: {exc}"
+              finally:
+                  sock.close()
+
+          try:
+              socket.gethostbyname("acp-postgres")
+              print("DNS resolves, so 53/UDP egress is permitted")
+          except OSError as exc:
+              sys.exit(f"DNS failed ({exc}); 53/UDP is not reaching the cluster resolver")
+
+          allowed = probe(5432)
+          if allowed != "connected":
+              sys.exit(f"5432 is in networkPolicy.egressPorts and came back {allowed!r}; "
+                       f"the egress policy is blocking a port the application needs")
+          print("5432 connected, as the egress list says it should")
+
+          denied = probe(12345)
+          if denied == "refused":
+              sys.exit("12345 was REFUSED, not dropped — the packet reached the pod, so the "
+                       "NetworkPolicies are accepted and not enforced. That is the failure this "
+                       "step exists to catch; every policy this chart renders is decoration.")
+          if denied != "timeout":
+              sys.exit(f"12345 came back {denied!r}; expected a timeout from a dropped packet")
+          print("12345 timed out, so the egress policy is dropping what it does not allow")
+          PROBE
+
       - name: Is what is running still what the document says?
         # ONE DRIFT IS EXPECTED HERE, AND EXACTLY ONE. The image is built from this checkout and
         # loaded under a local tag, so `release.version` correctly reports that the cluster runs
@@ -316,6 +432,27 @@ jobs:
           kubectl label namespace acp-dryrun \
             pod-security.kubernetes.io/enforce=restricted \
             pod-security.kubernetes.io/enforce-version=latest
+          # THE CRDs, AND ONLY THE CRDs. `--dry-run=server` validates a custom resource against
+          # its CustomResourceDefinition's schema, which needs the definition present and nothing
+          # else — no controller, no webhook, no reconciliation. Installing the KEDA and External
+          # Secrets OPERATORS would test their behaviour rather than this chart's manifests, take
+          # minutes rather than seconds, and give `acpctl doctor` two fewer blockers to report,
+          # which is the opposite of useful: doctor blocking on their absence is correct.
+          #
+          # Their apiVersions match what these bundles serve — keda.sh/v1alpha1 for ScaledObject
+          # and TriggerAuthentication, external-secrets.io/v1beta1 for ExternalSecret — so a
+          # rejection here is about the manifests, not about a version skew.
+          kubectl apply --server-side -f \
+            "https://github.com/kedacore/keda/releases/download/${KEDA_CRDS_VERSION}/keda-${KEDA_CRDS_VERSION#v}-crds.yaml"
+          kubectl apply --server-side -f \
+            "https://raw.githubusercontent.com/external-secrets/external-secrets/${ESO_CRDS_VERSION}/deploy/crds/bundle.yaml"
+          # A CRD is not servable the instant it is created; applying a custom resource against
+          # one that is not established yet fails with "no matches for kind", which reads as a
+          # broken manifest and is not.
+          for crd in scaledobjects.keda.sh triggerauthentications.keda.sh \
+                     externalsecrets.external-secrets.io; do
+            kubectl wait --for=condition=established --timeout=60s "crd/$crd"
+          done
           python -m acpctl values packaging/examples/standard-production.acp-deployment.yaml \
             > /tmp/full-values.yaml
           helm template acp packaging/chart/acp \
@@ -325,21 +462,22 @@ jobs:
           python - <<'PY'
           import sys, yaml
 
-          NEEDS_CRD = {"ExternalSecret", "ScaledObject", "TriggerAuthentication"}
+          # NOTHING IS SKIPPED NOW, and these three are the reason the CRDs are installed above.
+          # Named rather than counted, because a render that stopped producing them would leave
+          # this step passing over a smaller set and reporting nothing about it.
+          NEEDED_CRDS = {"ExternalSecret", "ScaledObject", "TriggerAuthentication"}
           docs = [d for d in yaml.safe_load_all(open("/tmp/full.yaml")) if d]
-          skipped = sorted({d["kind"] for d in docs if d["kind"] in NEEDS_CRD})
-          if skipped != sorted(NEEDS_CRD):
-              print(f"expected to skip {sorted(NEEDS_CRD)}, actually skipping {skipped} — the "
-                    f"render changed and this step is no longer covering what it claims",
-                    file=sys.stderr)
+          kinds = {d["kind"] for d in docs}
+          missing = sorted(NEEDED_CRDS - kinds)
+          if missing:
+              print(f"the render no longer produces {missing}, so this step covers less than it "
+                    f"claims. Either the chart changed or the example did; do not simply drop "
+                    f"them from this list.", file=sys.stderr)
               sys.exit(1)
-          keep = [d for d in docs if d["kind"] not in NEEDS_CRD]
-          kinds = sorted({d["kind"] for d in keep})
-          print(f"dry-running {len(keep)} manifests: {kinds}")
-          yaml.safe_dump_all(keep, open("/tmp/dryrun.yaml", "w"))
+          print(f"dry-running all {len(docs)} manifests: {sorted(kinds)}")
           PY
           kubectl apply --dry-run=server --warnings-as-errors \
-            -n acp-dryrun -f /tmp/dryrun.yaml
+            -n acp-dryrun -f /tmp/full.yaml
           kubectl delete namespace acp-dryrun --wait=false
 
       - name: Can it be upgraded, or only installed?

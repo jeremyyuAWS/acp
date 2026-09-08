@@ -406,6 +406,32 @@ not a packaging one, so the default stays `false` and
 `test_the_shared_root_filesystem_is_writable_and_that_is_deliberate` pins both halves: the value,
 and the write it exists for.
 
+**THAT WRITE IS ALREADY BROKEN, INDEPENDENTLY OF ANY OF THIS, AND IT IS NOT A KUBERNETES
+PROBLEM.** Tracing it far enough to judge the read-only question turned up something larger.
+`PUT /rubric` writes to the container filesystem of whichever API replica served the request, and
+`core.active_rubric()` reads that same path at request time (`api/core.py:538`). The chart renders
+no volumes, so the path is that one container's ephemeral layer. Three consequences follow, and
+the endpoint's own docstring rules all three out — it calls the rubric "the GLOBAL scoring policy"
+and gates the route on owner-only precisely because it decides "how every tenant is scored":
+
+  - Other API replicas keep the previous rubric. standard-production's floor is TWO.
+  - EVERY WORKER CONTAINER keeps it too, and workers are where scoring happens: `worker_main`
+    calls `core.start_workers()`, the handlers call `core.active_rubric().hash`
+    (`api/handlers.py:2379,4171,4236,4468`), and no worker ever receives the PUT. So the change is
+    invisible to the tier that applies it even on a single-replica API.
+  - It is lost on restart or redeploy, because nothing persists it.
+
+`rubric_hash` is recorded against scans, so pods scoring under different policies also record
+different hashes for the same configuration. This affects Compose and Container Apps as much as
+Kubernetes — anything running the worker as a separate container, which is all three — so it is
+pre-existing rather than something the packaging work introduced.
+
+The fix is the mechanism the application already has for exactly this: `core.store.set_setting`
+/ `get_setting`, which is how `ai_vision_provider` is stored and read. That is an application
+change and an owner decision, not a packaging one, and it is recorded here because it is the
+blocker under the blocker: with the rubric in the database, `readOnlyRootFilesystem: true` costs
+nothing but an `emptyDir` at `/tmp` and three environment variables.
+
 Turning it on later also needs `HOME`, `XDG_CACHE_HOME` and `DOTNET_CLI_HOME` pointed inside the
 writable mount. UID 10001 has no passwd entry — none of the Dockerfiles contains `USER`, `useradd`
 or `HOME`, and the UID comes only from `values.yaml` — so `expanduser("~/.dotnet")`
@@ -430,6 +456,32 @@ forced on. The comment beside it claimed the shared context "sets it true", whic
 so — a reader deciding whether this chart hardens its root filesystems would have concluded it
 does.
 
+**The chart's own network policy blocked the chart's own preflight check, and `helm install`
+failed on any cluster that enforces NetworkPolicy.** Replacing kindnet with Calico made the
+policies enforceable for the first time, and the very next install failed:
+
+    Error: INSTALLATION FAILED: failed post-install: job acp-preflight failed: BackoffLimitExceeded
+    [preflight] could not reach http://acp-api:80/readyz: <urlopen error timed out>
+
+The preflight Job carries this chart's selector labels, so the `-egress` policy applies to it —
+and that policy lists the ports ACP needs to leave the CLUSTER on (53, 443, 5432, 6379, 6380).
+Neither the API's service port nor its container port is among them, because reaching your own API
+is not egress in the sense the list was written for. The request was dropped, the hook exited 1,
+and Helm failed the release. Every production cluster enforces NetworkPolicy; eleven green runs
+said nothing about it because kindnet does not.
+
+The fix is a second egress rule scoped to the API pods rather than a port opened globally — `to`
+plus `ports` is an AND, so ACP's pods may reach ACP's API and nothing else. Both the service port
+and the container port are named: a ClusterIP connection is DNATed to the backend before it
+leaves, and which of the two a given CNI matches on is not something this chart should depend on.
+
+TWO CLAIMS DIED WITH IT. This report's workstream C row called the preflight hook "advisory
+(`backoffLimit: 0`, post-install)", and the hook's own docstring said it was "a report,
+deliberately not a gate" that "does not block". Helm has no hook failure policy: a hook that exits
+non-zero fails the release, and that container exits 1. It is a gate, it always was, and nobody
+had seen it act as one because nothing had ever made it fail. Making it exit 0 to match the
+description would have converted the one thing that caught this into a check that cannot fail.
+
 **What the reference install never creates, counted rather than guessed at.** The reference
 document renders NetworkPolicy, PodDisruptionBudget, ServiceAccount, one Service, four Deployments
 and two Jobs. The standard-production example renders all of that plus a HorizontalPodAutoscaler,
@@ -441,10 +493,14 @@ so the same bug in `ollama.yaml` or `grafana.yaml` would have shipped past a gre
 A server-side dry run of the full-featured render closes that, costs seconds, and is the same kind
 of evidence as the install: the API server validates the schema and runs admission, so the dry-run
 namespace carries the restricted label for the same reason the real one does. Nothing is
-persisted. ExternalSecret, ScaledObject and TriggerAuthentication need CRDs this cluster does not
-have — `doctor` reports both operators as blockers on a real cluster, which is its job — so those
-three are skipped BY NAME, and a kind that starts depending on a CRD fails the step rather than
-being skipped quietly.
+persisted. ExternalSecret, ScaledObject and TriggerAuthentication were skipped at first, needing CRDs the
+cluster did not have. THE CRDs ARE INSTALLED NOW — the definitions only, not the operators, which
+is the right amount: `--dry-run=server` validates a custom resource against its
+CustomResourceDefinition's schema and needs nothing else. Installing KEDA and External Secrets
+themselves would test their behaviour rather than these manifests, take minutes rather than
+seconds, and remove two blockers `acpctl doctor` is correct to report on a real cluster. So
+nothing is skipped, and the three are still NAMED — a render that stopped producing them would
+otherwise leave the step passing over a smaller set and saying nothing about it.
 
 What it still does not establish: that these objects DO anything. An Ingress that validates has
 not routed a request, and an HPA that validates has not scaled a tier. Schema and admission are
@@ -556,18 +612,39 @@ backup or restore Job, which PRD S5.2 lists as part of the Kubernetes package. L
 ungated by Compose and rendered by nothing in the chart — asserted, deliberately, by
 `test_packaging_chart.py::test_compose_deploys_what_the_chart_omits`.
 
-**The blocking gap: there is no reference Kubernetes version, and no cluster to render against.**
-The only version fact in the repository is `doctor.MINIMUM_KUBERNETES = (1, 23)`
-(`packaging/cli/acpctl/doctor.py:41`), a floor derived from when `policy/v1` and `autoscaling/v2`
-went stable — not a version anything has been validated on. `grep -rln "kind create cluster\|k3d\|minikube" tests/ packaging/` matches this
-report and nothing else; CI installs helm (`.github/workflows/ci.yml:211`) solely so
-`helm template` and `helm lint` can run. Every row above is therefore a claim about text, and #1798 is the proof that
-text can be consistently wrong.
+**The blocking gap this section used to describe is closed, and saying so precisely matters more
+than saying so.** It read: "there is no reference Kubernetes version, and no cluster to render
+against… There is no `kind`, `k3d` or `minikube` reference anywhere in the repository; CI installs
+helm solely so `helm template` and `helm lint` can run. Every hardening claim above is therefore a
+claim about text." Every sentence of that is now false. `packaging/reference/kind/` installs this
+chart on `kindest/node:v1.31.4`, pinned to the digest a run recorded, on every packaging pull
+request, and the hardening claims above are decided by an API server rather than asserted about
+YAML.
 
-**Next step.** One test asserting that every projected secret-ref env name is a name the
-application actually reads — it closes B11 and prevents the next one. Then name a reference
-Kubernetes version and stand up a disposable cluster in CI; until one exists, hardening work cannot
-be distinguished from hardening-shaped YAML.
+`doctor.MINIMUM_KUBERNETES = (1, 23)` is still a floor derived from when `policy/v1` and
+`autoscaling/v2` went stable rather than a version anything is supported on, and 1.31.4 is a
+version the chart RUNS on rather than one anybody has certified. Naming a supported distribution
+is PRD §4 and an owner decision, not a task.
+
+Two of `doctor`'s three silent prerequisites are no longer tested only against
+`tests/packaging_kubectl_fake.py`. An enforcing CNI is real — Calico, which is why the egress
+defect above surfaced at all — and KEDA's and External Secrets' CRDs are installed so their
+custom resources are validated by the API server rather than skipped. What is still fake is the
+OPERATORS: nothing has watched a `ScaledObject` scale a tier or an `ExternalSecret` materialise a
+Secret, and installing them would test their behaviour rather than this chart's manifests.
+
+**What remains a claim about text, and it is the sharpest one left.** "No authoritative output
+lives only on ephemeral storage" (PRD §12) is asserted by
+`tests/test_packaging_inventory.py::test_worker_scratch_is_declared_and_disposable` against the
+inventory's declaration. Nothing has observed where a remediated file actually lands, because no
+document has ever been scanned or remediated on this cluster — that is workstream C, and the
+`ACP_BLOB_ACCOUNT` defect (an installation that produced remediated documents and dropped them)
+is the reminder of what that gap can hide.
+
+**Next step.** Not another cluster capability. The remaining workstream B items are each blocked
+on a decision rather than on work: `readOnlyRootFilesystem` on moving the rubric write out of the
+container, a backup/restore Job on RTO/RPO and retention, and a supported-distribution claim on
+PRD §4.
 
 ---
 
@@ -715,8 +792,8 @@ rendered-manifest test was green on.
 
 WHAT IT STILL DOES NOT ESTABLISH, and none of it should be read as `verified` for a customer:
 `kindest/node:v1.31.4` is a version this chart RUNS on, not one anything is supported on. One node
-means NetworkPolicy is accepted and enforced by nothing, zone spreading has one domain, and the
-PodDisruptionBudget is never tested by a drain. No document has been scanned, assessed or
+means zone spreading has one domain, the PodDisruptionBudget is never tested by a drain, and
+NetworkPolicy — enforced by Calico since 2026-09-08 — has no cross-node path to exercise. No document has been scanned, assessed or
 remediated on it, so nothing here is evidence about the application doing its work — that is
 workstream C. And the images are built from the checkout under a local tag, so none of this is
 evidence about a released artifact.
@@ -733,7 +810,7 @@ target has done that.
 |---|---|---|---|---|
 | Release artifacts | in progress | `ACPRelease`, `acpctl release verify`, `--release` on `values`/`plan` (#1797; `tests/test_packaging_release.py`, 37 cases) — a manifest reconciles the plan's eight names, the chart's four components and the built artifacts, and renders every image by digest | Nothing builds, signs, SBOMs or scans an artifact, so no real manifest exists and CI has no release to fail on. Scanning and provenance are not even expressible in the schema | Build the images in CI and emit a signed manifest from that build |
 | Helm hardening | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security **enforced by the API server on the disposable cluster**, not merely rendered (#1808); multi-replica tiers placed, and the chart proven to **upgrade** as well as install (#1809); `terminationGracePeriodSeconds: 300` with a matching drain window (#1805); no worker Service; `doctor` blocks on KEDA, CNI and ESO. Two silent defects closed by #1798 | `kindest/node:v1.31.4` is a version the chart RUNS on, not one anything is supported on — naming a supported distribution is PRD §4 and an owner decision. Zone spreading is soft on every profile and unprovable on a one-node cluster; no `readOnlyRootFilesystem` (blocked on `PUT /rubric` writing into the image); no backup/restore Job | A backup/restore Job, which needs RTO/RPO and retention decided first |
-| Acceptance suite | in progress | `packaging/acceptance/**` **in flight in #1796**, not assessed here: ten scenarios, a validated report schema, and a self-test that runs with no cluster. The disposable kind cluster (#1799) now exists and installs the chart | The suite has never been run against it, so every scenario result is synthetic — and a synthetic run is forced ineligible by construction | Run the suite against the kind cluster and keep the first real report |
+| Acceptance suite | in progress | `packaging/acceptance/**` **in flight in #1796**, not assessed here: ten scenarios, a validated report schema, and a self-test that runs with no cluster. The disposable kind cluster now installs and upgrades the chart, and its preflight hook **does** gate the install — Helm has no hook failure policy and the container exits 1, which corrects what both copies of this report used to say | The suite has never been run against that cluster, so every scenario result is synthetic — and a synthetic run is forced ineligible by construction. No document has been scanned, assessed or remediated on it | Run the suite against the kind cluster and keep the first real report |
 | Lifecycle | in progress | `install`/`uninstall`/`support-bundle` **in flight in #1796**, not assessed here. Read-only commands ship today; `workloadIdentity` renders nothing (D1) | No image, no cluster: `doctor`/`status` exit 2 here | Emit `serviceAccount.annotations`; then exercise `install` against the first real cluster |
 | AKS | not started | `SUPPORT_STATUS["azure"] = "planned"` (`presets.py:68-75`). `deploy/public/` deploys Container Apps, a different topology (ADR 0048) | Everything above, plus a billable environment | Run the acceptance suite against AKS once one exists; do not rename the status before that |
 | On-premises | not started | `SUPPORT_STATUS["onprem"] = "planned"`; `onprem` is `self-hosted`-only, which is the mode the chart refuses to render without an override | Which distribution gets certified first is a customer decision | Pick the distribution, then treat it as a second acceptance target |
