@@ -116,3 +116,22 @@ def test_request_context_defaults_gets_to_read_gate_and_mutations_to_priority(mo
 def test_mutation_reserve_is_bounded_and_never_zero():
     """Protect writes without serializing a read-heavy API."""
     assert 1 <= store._MUTATION_RESERVE_CONN < store._PgAdapter._MAX_CONN
+
+
+def test_connection_returns_to_the_exact_pool_that_issued_it(monkeypatch):
+    """Concurrent lazy initialization must not return a checkout to another pool.
+
+    Two first-use threads can each construct a pool before one wins the ``self._pool`` race.
+    The cursor retains its issuing pool, so returning the connection must use that reference
+    instead of resolving ``self._pool`` again.
+    """
+    adapter = _adapter(monkeypatch, capacity=2)
+    issuing_pool = _CapacityPool(2)
+    replacement_pool = _CapacityPool(2)
+    conn = issuing_pool.getconn()
+    monkeypatch.setattr(adapter, "_get_pool", lambda: replacement_pool)
+
+    adapter._putconn(conn, issuing_pool)
+
+    assert conn not in issuing_pool.used
+    assert replacement_pool.used == set()

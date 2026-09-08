@@ -2621,9 +2621,13 @@ class _PgAdapter:
                     raise
                 time.sleep(0.05)
 
-    def _putconn(self, conn) -> None:
+    def _putconn(self, conn, pool=None) -> None:
         """Return a connection and its read-admission permit, when it held one."""
-        self._get_pool().putconn(conn)
+        # Use the exact pool that issued the connection. Lazy pool initialization can race on
+        # first use: two threads may each construct a pool before one becomes self._pool. Looking
+        # self._pool up again here can therefore return a different pool, which rejects the
+        # connection as unkeyed. Callers that already captured the issuing pool pass it through.
+        (pool or self._get_pool()).putconn(conn)
         gate = getattr(self, "_read_gate", None)
         lock = getattr(self, "_read_connections_lock", None)
         if gate is None or lock is None:
@@ -2656,7 +2660,7 @@ class _PgAdapter:
             conn.rollback()
             raise
         finally:
-            self._putconn(conn)
+            self._putconn(conn, pool)
 
     @contextlib.contextmanager
     def transaction(self):
@@ -2675,7 +2679,7 @@ class _PgAdapter:
             raise
         finally:
             self._transaction_conn.reset(token)
-            pool.putconn(conn)
+            self._putconn(conn, pool)
 
     def execute(self, cur, sql: str, params: tuple = ()) -> None:
         cur.execute(sql, params)
