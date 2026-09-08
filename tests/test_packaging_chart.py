@@ -501,6 +501,50 @@ def test_private_workers_render_a_policy_that_admits_nothing():
 
 
 @needs_helm
+def test_the_application_is_told_which_environment_it_is_in():
+    """ONE UNDERSCORE FROM A SECURITY CONTROL.
+
+    The chart rendered `ACP_ENVIRONMENT` — a name nothing in `api/` reads — while `api/core.py`
+    computes IS_PROD from `ACP_DEPLOY_ENV`, and IS_PROD is what forces TEST_BYPASS_ENABLED off:
+    the X-E2E-Key and X-Demo-Key gate bypasses are refused in production regardless of the opt-in
+    that enables them.
+
+    `api/core.py` records this failing once already, in its own words — "IS_PROD stayed False on
+    the public demo, and the X-E2E-Key bypass stayed live" — because the variable operators were
+    told to set never reached the container. The bypass is fail-closed now, so nothing was open
+    here; what was true is that an installation enabling it for staging and promoting the same
+    values to production kept it, because the chart gave the application no way to know which it
+    was.
+
+    Asserted on every workload, since the bypass is checked wherever a request lands.
+    """
+    doc = load_example("standard-production")
+    assert doc["metadata"]["environment"] == "production"
+    workloads = app_workloads(render(doc))
+    assert workloads, "nothing rendered; this test would prove nothing"
+    for workload in workloads:
+        env = {e["name"]: e.get("value")
+               for e in workload["spec"]["template"]["spec"]["containers"][0]["env"]}
+        assert env.get("ACP_DEPLOY_ENV") == "production", workload["metadata"]["name"]
+        assert "ACP_ENVIRONMENT" not in env, (
+            f"{workload['metadata']['name']} carries both names, leaving a reader to guess which "
+            f"one the application acts on")
+
+
+@needs_helm
+def test_a_non_production_document_does_not_claim_production():
+    """The control, and the direction that matters: a chart hardcoding "production" would satisfy
+    the test above while telling every development installation to refuse its own test bypasses —
+    and, worse, would make the value meaningless the moment anyone relied on it."""
+    doc = load_example("standard-production")
+    doc["metadata"]["environment"] = "staging"
+    api = named(render(doc), "Deployment", "-api")
+    env = {e["name"]: e.get("value")
+           for e in api["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert env["ACP_DEPLOY_ENV"] == "staging"
+
+
+@needs_helm
 def test_the_worker_drains_for_as_long_as_kubernetes_waits_for_it():
     """A GRACE PERIOD IS NOT A DRAIN. Kubernetes waits `terminationGracePeriodSeconds` before
     SIGKILL; how long the worker keeps working is `ACP_SHUTDOWN_DRAIN_SECONDS`, which
