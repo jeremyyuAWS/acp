@@ -47,3 +47,15 @@
 @media(prefers-reduced-motion:reduce){.remediation-forecast-delta{animation:none}}
 
 .remediation-file-items h3{overflow-wrap:anywhere;margin:18px 0 10px}.remediation-file-items__routes{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.remediation-file-items__routes button[aria-pressed=true]{background:#eee6f4;border-color:#76518c;font-weight:700}.remediation-file-items__list{padding:0;list-style:none}.remediation-file-items__list li{margin:12px 0;padding:16px;border:1px solid #e7dfec;border-radius:9px;background:#faf8fc}.remediation-file-items__list h4{margin:0;font-size:15px}.remediation-file-items__list p{overflow-wrap:anywhere}
+
+/* Keep the primary action beside the choices; verbose forecasts are opt-in. */
+.remediation-impact__settings .remediation-impact__actions { margin-block: 14px; flex-wrap: wrap; }
+.remediation-impact__details { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
+.remediation-impact__details > summary { cursor: pointer; font-weight: 650; padding: 8px 0; }
+.remediation-impact__details > summary span { display: block; margin-top: 4px; font-size: 12px; font-weight: 400; color: var(--muted); }
+
+.remediation-impact__startbar { position: sticky; top: 64px; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-block: 12px 20px; padding: 12px 16px; border: 1px solid #d8ccdf; border-radius: 10px; background: #fff; box-shadow: 0 4px 16px #39254312; }
+.remediation-impact__start-summary { display: grid; gap: 3px; min-width: 0; font-size: 12px; color: #65576d; }
+.remediation-impact__start-summary strong { font-size: 14px; color: #332b3a; }
+.remediation-impact__startbar .remediation-impact__run { flex-shrink: 0; }
+@media(max-width: 600px) { .remediation-impact__startbar { flex-wrap: wrap; padding: 10px; gap: 8px; } .remediation-impact__startbar .remediation-impact__run { width: 100%; } }

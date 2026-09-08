@@ -20,6 +20,38 @@ const button = (container, label) => [...container.querySelectorAll('button')].f
 beforeEach(() => { vi.clearAllMocks(); getRemediationImpact.mockImplementation(async (_id, policy) => result(policy || undefined)); saveRemediationImpactPolicy.mockResolvedValue({}) })
 afterEach(unmountAll)
 describe('RemediationImpactCard', () => {
+  it('keeps the start action and key counts visible while secondary plan details begin collapsed', async () => {
+    const onRun = vi.fn()
+    const { container } = await mount({ onRun, renderAssessment: forecast => createElement('div', { 'data-testid': 'assessment-forecast' }, `${forecast.automatic} automatic; ${forecast.human} human`) })
+    const details = container.querySelector('.remediation-impact__details')
+    expect(details.open).toBe(false)
+    expect(details.querySelector('summary').textContent).toContain('Plan details')
+    expect(details.querySelector('.remediation-impact__outlooks')).toBeTruthy()
+    const start = button(container, 'Approve plan and start')
+    expect(start.closest('details')).toBeNull()
+    expect(start.closest('.remediation-impact__startbar')).toBeTruthy()
+    expect(start.closest('.remediation-impact__startbar').textContent).toContain('4 automatic · 2 to approve · 1 manual · 0 blocked')
+    expect(start.disabled).toBe(false)
+    expect(container.querySelector('[data-testid="assessment-forecast"]').textContent).toBe('4 automatic; 3 human')
+    expect(container.querySelector('[data-testid="assessment-forecast"]').closest('details')).toBeNull()
+    await act(async () => start.click())
+    expect(onRun).toHaveBeenCalledWith({ rule_based: 2, ai: 1 }, expect.objectContaining({ open: { findings: 7, files: 3 } }))
+    expect(details.open).toBe(false)
+    await act(async () => details.querySelector('summary').click())
+    expect(details.open).toBe(true)
+  })
+
+  it('opens assessment drilldowns while Plan details remain collapsed', async () => {
+    const { container } = await mount({ renderAssessment: forecast => createElement('button', { onClick: forecast.onHuman }, 'Human review tile') })
+    const details = container.querySelector('.remediation-impact__details')
+    await act(async () => button(container, 'Human review tile').click())
+    expect(details.open).toBe(false)
+    const dialog = container.querySelector('[role="dialog"]')
+    expect(dialog).toBeTruthy()
+    expect(dialog.closest('details')).toBeNull()
+    expect(dialog.textContent).toContain('C.docx')
+  })
+
   it('opens actual saved AI outputs from the live chart without starting remediation', async () => {
     const onRun = vi.fn()
     getRemediationImpact.mockResolvedValue({ ...result(), open: { findings: 2, files: 1 },
