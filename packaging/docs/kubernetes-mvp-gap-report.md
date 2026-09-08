@@ -293,11 +293,12 @@ oversight.** Every runtime write the application makes goes to `$TMPDIR` — per
 `api/scanner.py`, `api/handlers.py`, `api/proposals.py` and the PDF engine, the LibreOffice user
 profile (`api/render.py:106`), the .NET analyser's `_o.json`, `remediated-<name>` beside its input,
 tesseract's scratch images — all of which an `emptyDir` at `/tmp` would cover. One write does not:
-`PUT /rubric` writes `<repo>/config/rubric.active.json` INTO THE IMAGE
-(`api/routes/rubric.py:63`), so a read-only root turns an owner-only admin endpoint into a 500.
-Masking `/app/config` with an `emptyDir` is not a way round it — that hides `rubric.default.json`
-and `rule-catalog.json`. Moving the write to the database or to `$TMPDIR` is an application change,
-not a packaging one, so the default stays `false` and
+`PUT /rubric` used to write `<repo>/config/rubric.active.json` INTO THE IMAGE, so a read-only
+root turned an owner-only admin endpoint into a 500. **THAT WRITE IS GONE**: the rubric is stored
+in `app_settings` now, so the application-side blocker this default existed for no longer exists.
+What remains is packaging work rather than an application change — an `emptyDir` at `/tmp` plus
+`HOME`, `XDG_CACHE_HOME` and `DOTNET_CLI_HOME` pointed into it — and the chart renders no volumes
+at all today. So the default stays `false` until that lands, and
 `test_the_shared_root_filesystem_is_writable_and_that_is_deliberate` pins both halves: the value,
 and the write it exists for.
 
@@ -695,6 +696,6 @@ evidence about a released artifact.
 | Workstream | State | Evidence | Blocker | Next action |
 |---|---|---|---|---|
 | **A. Release artifacts and supply chain** | in progress | The `ACPRelease` contract, `acpctl release verify`, and `--release` on `values`/`plan` (`tests/test_packaging_release.py`), which reconcile the plan's eight names, the chart's four references and the one application artifact — and render every image by digest | Nothing builds, signs, SBOMs or scans an artifact, so no real manifest exists and CI has no release to fail on | Build the release images in CI and emit a signed manifest from that build |
-| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; zone spreading is soft on every profile and unprovable on a one-node cluster, no `readOnlyRootFilesystem` (blocked on `PUT /rubric` writing into the image), no backup/restore Job | A backup/restore Job, which needs RTO/RPO and retention decided first |
+| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; zone spreading is soft on every profile and unprovable on a one-node cluster, no `readOnlyRootFilesystem` (the rubric blocker is cleared; it now needs a writable `/tmp` mount), no backup/restore Job | A backup/restore Job, which needs RTO/RPO and retention decided first |
 | **C. Portable acceptance suite** | not started | None — no `packaging/tests/`; the preflight hook DOES gate the install (Helm has no hook failure policy and the container exits 1), which is not what this row used to say | Eight of ten scenarios need `acpctl install`, which exits 2; the first two need only a cluster and images | Define the structured report format and emit it from the two readiness scenarios |
 | **D. `acpctl` lifecycle** | in progress | Eight read-only commands with documented exit codes; write-refusal and kubectl-verb allow-list both tested; the seven lifecycle commands refuse rather than no-op (`cli.py:27-35`) | `install` has nothing to pin to: the release contract exists but no build produces a manifest, so there are no real digests and no signature to verify | Hold `install` until a build emits a manifest; `support-bundle` is the one command with no upstream dependency |
