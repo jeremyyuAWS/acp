@@ -5,6 +5,8 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { getRemediationImpact, saveRemediationImpactPolicy, assignRemediationImpact } from './api.js'
 import './remediation-impact-card.css'
 import RemediationPlanChoices from './RemediationPlanChoices.jsx'
+import RemediationWaterfallImpact from './RemediationWaterfallImpact.jsx'
+import RemediationAISuggestions from './RemediationAISuggestions.jsx'
 
 const RULE_STOPS = [
   ['Review first', 'Ask a person to approve rule-based proposals before application.'],
@@ -58,6 +60,8 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const [assignmentError, setAssignmentError] = useState('')
   const scopeKey = Array.isArray(scopeFiles) ? JSON.stringify([...scopeFiles].sort()) : null
   const [selectedFile, setSelectedFile] = useState(null)
+  const [impactDetails, setImpactDetails] = useState(null)
+  const closeImpactDetails = useCallback(() => setImpactDetails(null), [])
   const fileTrigger = useRef(null)
   useEffect(() => {
     if (!selectedFile && fileTrigger.current?.isConnected) {
@@ -79,6 +83,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const [fileSearch, setFileSearch] = useState('')
   const [fileTypeFilter, setFileTypeFilter] = useState('all')
   useEffect(() => { setSelectedFile(null); setAssignmentOpen(false); setAssignmentResult(null); setAssignmentError(''); setFileSearch(''); setFileTypeFilter('all') }, [filter, scopeKey, runId])
+  useEffect(() => { setImpactDetails(null) }, [scopeKey, runId])
   const sequence = useRef(0)
   const runRef = useRef(runId)
   // A run switch must not submit the previous run's edited policy.
@@ -111,7 +116,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     human: Number.isFinite(data?.lanes?.review?.findings) && Number.isFinite(data?.lanes?.manual?.findings)
       ? data.lanes.review.findings + data.lanes.manual.findings : undefined,
   })
-  const change = (key, value) => { setNotice(''); setFilter(null); setPolicy(current => ({ ...(current || selected), [key]: value })) }
+  const change = (key, value) => { setNotice(''); setFilter(null); setImpactDetails(null); setPolicy(current => ({ ...(current || selected), [key]: value })) }
   const categoryFiles = (data?.files || []).filter(file => !filter || filter.type === 'all' || (filter.type === 'human' ? file.review > 0 || file.manual > 0 : filter.type === 'outlook' ? file.outlook === filter.key : file[filter.key] > 0))
   const fileTypes = [...new Set(categoryFiles.map(file => fileType(file.file)))].sort()
   const searchText = fileSearch.trim().toLowerCase()
@@ -199,6 +204,24 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       <p>{data.ai_spending.blocked ? 'AI is paused while an uncertain charge or spending overrun is reconciled.' : 'Reservations cover requests that may still be charged. Infrastructure costs are separate.'}</p>
     </section>}
     {ready && <>
+      <RemediationWaterfallImpact data={data}
+        onInspectAI={rows => setImpactDetails({ key: 'ai', rows, filterToRows: true })}
+        onInspectRoute={(key, rows) => setImpactDetails({ key, rows })} />
+      <button type="button" onClick={() => setImpactDetails({ key: 'ai', rows: (data.findings || []).filter(row => row.origin === 'ai') })}>View AI suggestions</button>
+      {impactDetails && <Drawer title={impactDetails.key === 'ai' ? 'AI suggestions and model details' : 'Findings in this part of your plan'}
+        subtitle={impactDetails.key === 'ai' ? `${impactDetails.filterToRows ? 'Saved outputs for these chart findings.' : 'Saved outputs in the selected files.'} Viewing does not generate or approve changes.` : 'Preview only — these findings are not fixed yet.'}
+        onClose={closeImpactDetails}>
+        {impactDetails.key === 'ai' ? <RemediationAISuggestions runId={runId}
+          scopeFiles={scopeKey === null ? undefined : JSON.parse(scopeKey)} rows={impactDetails.rows} providers={data.providers} filterToRows={impactDetails.filterToRows === true} />
+          : <div className="remediation-impact__drilldown">
+            <p>{number(impactDetails.rows.reduce((sum, row) => sum + row.finding_count, 0))} findings in this part of the plan.</p>
+            <ul>{impactDetails.rows.map((row, index) => <li key={row.id || index}>
+              <strong>{row.file}</strong> — {row.plain_name || row.rule_name || row.rule_id || 'Accessibility finding'}
+              {' · '}{number(row.finding_count)} findings
+              <p>{reasonText(row.primary_reason)}</p>
+            </li>)}</ul>
+          </div>}
+      </Drawer>}
       <h3>How the findings will be handled</h3>
       <div className="remediation-impact__routes">{LANES.map(([key, label]) => <button type="button" key={key}
         className={`remediation-impact__route--${key}`} onClick={() => setFilter({ type: 'lane', key, label })}>
@@ -281,7 +304,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     {ready && data?.capabilities?.execute !== true && <p>Execution unavailable: {data?.capabilities?.execute_reason || data?.capabilities?.reason || 'This preview cannot currently be executed.'}</p>}
     <footer className="remediation-impact__actions"><button type="button" className="remediation-impact__run" disabled={readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
       onClick={() => onRun(selected, data)}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>
-      <button type="button" disabled={!validPolicy(data?.active_policy) || runBusy} onClick={() => { setPolicy({ ...data.active_policy }); setFilter(null) }}>Reset to active</button>
+      <button type="button" disabled={!validPolicy(data?.active_policy) || runBusy} onClick={() => { setPolicy({ ...data.active_policy }); setFilter(null); setImpactDetails(null) }}>Reset to active</button>
       <button type="button" disabled={readOnly || !ready || data?.capabilities?.save_future !== true || saving || runBusy} onClick={save}>{saving ? 'Saving…' : 'Save as default for future runs'}</button>
     </footer>
   </section>

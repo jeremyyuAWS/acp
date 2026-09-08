@@ -1,0 +1,23 @@
+.waterfall-impact { margin-block: 1.25rem; padding: 1rem; border: 1px solid #ddd5e7; border-radius: 12px; background: #fff; color: #302b38; }
+.waterfall-impact h3 { margin-block: .35rem .65rem; }
+.waterfall-impact p { font-size: .875rem; line-height: 1.5; }
+.waterfall-impact__eyebrow { color: #65447c; font-weight: 700; }
+.waterfall-impact__stack { display: flex; overflow: hidden; height: 16px; border-radius: 8px; margin-block: 1rem; background: #eeeaf2; }
+.waterfall-impact__color--rule_based { background: #457331; }
+.waterfall-impact__color--ai { background: #785094; }
+.waterfall-impact__color--person { background: #43698b; }
+.waterfall-impact__color--blocked { background: #927015; }
+.waterfall-impact__table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: .875rem; }
+.waterfall-impact__table caption { text-align: left; font-weight: 600; padding-block: .5rem; }
+.waterfall-impact__table th, .waterfall-impact__table td { text-align: left; vertical-align: top; padding: .75rem .25rem; border-bottom: 1px solid #e9e3ef; }
+.waterfall-impact__table th:first-child { width: 66%; }
+.waterfall-impact__table tbody th { font-weight: 600; }
+.waterfall-impact__description { display: block; margin-top: .3rem; color: #5c5365; font-weight: 400; line-height: 1.45; }
+.waterfall-impact__dot { display: inline-block; height: .6rem; width: .6rem; border-radius: 50%; margin-right: .4rem; }
+.waterfall-impact__table button { display: block; margin-top: .4rem; padding: .35rem 0; border: 0; background: transparent; color: #65447c; text-align: left; text-decoration: underline; cursor: pointer; font: inherit; }
+.waterfall-impact__table button:focus-visible { outline: 3px solid #65447c; outline-offset: 3px; border-radius: 2px; }
+.waterfall-impact__track { display: block; height: 7px; margin-top: .65rem; background: #eeeaf2; overflow: hidden; border-radius: 4px; }
+.waterfall-impact__track > span { display: block; height: 100%; }
+.waterfall-impact__incomplete { padding: .75rem; background: #fff7e4; border-left: 3px solid #927015; }
+.waterfall-impact__process { padding-top: .75rem; border-top: 1px solid #e9e3ef; font-weight: 600; }
+@media (max-width: 480px) { .waterfall-impact { padding: .75rem; } .waterfall-impact__table th:first-child { width: 65%; } .waterfall-impact__table td { overflow-wrap: anywhere; } }

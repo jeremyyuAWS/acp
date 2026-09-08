@@ -610,6 +610,21 @@ export const getAppliedFixes = (scanId) => (SIM || !scanId
 export const getScanAiCalls = (scanId) => (SIM || !scanId
   ? sim([])
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/ai_calls`, { headers: headers() }).then(j).catch(() => []))
+// Inspect saved outputs without generating drafts. Missing provenance must not hide
+// saved proposals or be mistaken for a successful empty history response.
+export async function getRemediationAIDetails(scanId) {
+  if (!scanId) throw new Error('Select an assessment to inspect AI suggestions.')
+  if (SIM) return sim({ items: [], calls: [], callsAvailable: false, available: false })
+  const id = encodeURIComponent(scanId)
+  const [queue, ledger] = await Promise.allSettled([
+    fetch(`${BASE}/hitl/queue?scan_id=${id}&include_superseded=true`, { headers: headers(), cache: 'no-store' }).then(j),
+    fetch(`${BASE}/scans/${id}/ai_calls`, { headers: headers(), cache: 'no-store' }).then(j),
+  ])
+  if (queue.status === 'rejected') throw queue.reason
+  if (!Array.isArray(queue.value)) throw new Error('Saved suggestion details are unavailable.')
+  const callsAvailable = ledger.status === 'fulfilled' && Array.isArray(ledger.value)
+  return { items: queue.value, calls: callsAvailable ? ledger.value : [], callsAvailable, available: true }
+}
 // Release review uses a server-scoped projection: reviewer and post-write rows are attached only
 // through their durable AI call id. An empty outcome array means "not recorded", never zero.
 export const getReleaseAiProvenance = (scanId, files = []) => (SIM || !scanId || !files.length
