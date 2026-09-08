@@ -101,15 +101,38 @@ spec:
               path: /api/tags
               port: http
             periodSeconds: 10
-          {{- with .Values.ai.ollama.resources }}
+          {{- /*
+            THE GPU REQUEST GOES HERE, ON THE CONTAINER, AND UNTIL 2026-09-08 IT WENT NOWHERE.
+
+            `ai.ollama.gpu: true` used to gate a pod-level block containing only `nodeSelector`
+            and `tolerations` — both `with`-guarded on values nothing sets — while the comment
+            beside it described an `nvidia.com/gpu` limit that was not written anywhere and could
+            not have been: an extended resource is a CONTAINER resource, not a pod field. So the
+            standard-production example asked for a GPU, `grep nvidia` over the render returned
+            nothing, and the pod scheduled onto whatever node had room and ran CPU inference. The
+            document said GPU; the cluster did CPU; nothing disagreed out loud.
+
+            ONLY THE LIMIT IS SET, which is the part the old comment had right. Kubernetes requires
+            request and limit to be equal for an extended resource and fills the request in from
+            the limit, so writing both invites them to drift apart and the API server rejects the
+            pod when they do.
+          */}}
+          {{- $res := deepCopy (.Values.ai.ollama.resources | default dict) }}
+          {{- if .Values.ai.ollama.gpu }}
+          {{- $limits := merge (dict "nvidia.com/gpu" (.Values.ai.ollama.gpuCount | default 1))
+                               ($res.limits | default dict) }}
+          {{- $_ := set $res "limits" $limits }}
+          {{- end }}
+          {{- with $res }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       {{- if .Values.ai.ollama.gpu }}
       {{- /*
-        Only the limit is set: `nvidia.com/gpu` is an extended resource, and Kubernetes requires
-        request and limit to be equal for those — writing both invites them to drift apart, and
-        the API server rejects the pod when they do.
+        Where a GPU node pool is selected. Operator-supplied and empty by default: the taint keys
+        and labels differ per cloud and per node-pool, so a default here would be a guess that
+        looks like configuration. The limit above is what makes the pod REQUIRE a GPU; these are
+        what let it reach a tainted pool.
       */}}
       {{- with .Values.ai.ollama.nodeSelector }}
       nodeSelector:

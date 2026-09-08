@@ -146,6 +146,9 @@ ai:
   ollama:
     enabled: false
     gpu: false
+    # How many GPUs the ollama container requests when `gpu` is true. One is what a single
+    # model-serving pod uses; more only helps a runtime configured to shard across devices.
+    gpuCount: 1
     port: 11434
     # NO modelVolume. deploy/ollama/Dockerfile bakes llama3.1:8b and moondream into the image and
     # serves them from /models specifically so a mounted volume cannot shadow them — see the
