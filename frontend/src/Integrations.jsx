@@ -89,6 +89,8 @@ const CONNECTABLE = [
   { id: 'sp-root', type: 'onedrive',     name: 'OneDrive'     },
 ]
 
+const CUSTOMER_SHAREPOINT_URL = 'https://fgxlxj.sharepoint.com/Shared%20Documents/Forms/AllItems.aspx?viewid=394d7651%2D488f%2D43e3%2D86b6%2D626214684979&FolderCTID=0x012000B50522C7BE203F4BAA10F38DCC812F75'
+
 // A provider link is navigation, not an ACP management action. Prefer the exact HTTPS URL a
 // connector supplies; otherwise use the provider's signed-in landing page. Never interpolate an
 // item id into a guessed tenant URL — Microsoft site ids are compound identifiers, not web hosts.
@@ -102,7 +104,7 @@ export function sourceManagementDestination(source = {}) {
   if (source.providerType === 'sharepoint' || source.type === 'sharepoint') {
     return { url: 'https://www.microsoft365.com/launch/sharepoint', label: 'Open SharePoint' }
   }
-  if (source.type === 'onedrive') return { url: 'https://www.microsoft365.com/launch/onedrive', label: 'Open OneDrive' }
+  if (source.type === 'onedrive') return { url: CUSTOMER_SHAREPOINT_URL, label: 'Open SharePoint' }
   return null
 }
 

@@ -155,7 +155,10 @@ describe('the Sources page', () => {
     expect(sourceManagementDestination({ type: 'sharepoint', web_url: 'https://movate.sharepoint.com/sites/ACP' }))
       .toEqual({ url: 'https://movate.sharepoint.com/sites/ACP', label: 'Open SharePoint' })
     expect(sourceManagementDestination({ type: 'onedrive', web_url: 'javascript:alert(1)' }))
-      .toEqual({ url: 'https://www.microsoft365.com/launch/onedrive', label: 'Open OneDrive' })
+      .toEqual({
+        url: 'https://fgxlxj.sharepoint.com/Shared%20Documents/Forms/AllItems.aspx?viewid=394d7651%2D488f%2D43e3%2D86b6%2D626214684979&FolderCTID=0x012000B50522C7BE203F4BAA10F38DCC812F75',
+        label: 'Open SharePoint',
+      })
   })
 
   it('lists OneDrive under AVAILABLE SOURCES and the future connectors as a muted line', async () => {
