@@ -44,7 +44,7 @@ spec:
         acp.mova.io/tier: worker
       {{- with $.Values.podAnnotations }}
       annotations:
-        {{- toYaml . | nindent 8 }}
+        {{- include "acp.stringMap" . | nindent 8 }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "acp.serviceAccountName" $ }}
@@ -130,7 +130,7 @@ spec:
       {{- end }}
       {{- with $.Values.nodeSelector }}
       nodeSelector:
-        {{- toYaml . | nindent 8 }}
+        {{- include "acp.stringMap" . | nindent 8 }}
       {{- end }}
       {{- with $.Values.tolerations }}
       tolerations:

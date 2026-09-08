@@ -325,6 +325,66 @@ forced on. The comment beside it claimed the shared context "sets it true", whic
 so — a reader deciding whether this chart hardens its root filesystems would have concluded it
 does.
 
+**What the reference install never creates, counted rather than guessed at.** The reference
+document renders NetworkPolicy, PodDisruptionBudget, ServiceAccount, one Service, four Deployments
+and two Jobs. The standard-production example renders all of that plus a HorizontalPodAutoscaler,
+an Ingress, an ExternalSecret, two ScaledObjects, a TriggerAuthentication, two more Services and
+the Ollama and Grafana Deployments — and none of those had ever been submitted to an API server.
+The annotation-type defect below was in six render sites and this install exercises three of them,
+so the same bug in `ollama.yaml` or `grafana.yaml` would have shipped past a green job.
+
+A server-side dry run of the full-featured render closes that, costs seconds, and is the same kind
+of evidence as the install: the API server validates the schema and runs admission, so the dry-run
+namespace carries the restricted label for the same reason the real one does. Nothing is
+persisted. ExternalSecret, ScaledObject and TriggerAuthentication need CRDs this cluster does not
+have — `doctor` reports both operators as blockers on a real cluster, which is its job — so those
+three are skipped BY NAME, and a kind that starts depending on a CRD fails the step rather than
+being skipped quietly.
+
+What it still does not establish: that these objects DO anything. An Ingress that validates has
+not routed a request, and an HPA that validates has not scaled a tier. Schema and admission are
+what a dry run can answer.
+
+**The upgrade step found a defect on its first run, and it was not an upgrade defect.**
+`toYaml` preserves YAML's types, and both `annotations` and `nodeSelector` are `map[string]string`
+in the Kubernetes API. A value that parses as a number or a boolean renders unquoted, passes
+`helm template` and `helm lint`, and is rejected by the API SERVER:
+
+    cannot patch "acp-api" with kind Deployment: "" is invalid: patch: Invalid value: "{…}":
+    json: cannot unmarshal number into Go struct field
+    ObjectMeta.spec.template.metadata.annotations of type string
+
+It surfaced on an upgrade only because that is where the probe annotation is set, to
+`$GITHUB_RUN_ID`, which is all digits; an install carrying the same value fails identically.
+`--set-string` is not the fix, because the operator most likely to hit this is writing a values
+FILE — `build-number: 1234` is an int before helm sees it, and there is no per-key string flag for
+a file. So `acp.stringMap` quotes every value at all six render sites, and the CI step keeps using
+plain `--set` so it goes on exercising the numeric path.
+
+Worth noting what this says about the render tests. They parse the rendered YAML and assert on the
+result, so an annotation rendered as an integer arrives as a Python `int` and every assertion about
+it still passes — the defect is in the TYPE, which is exactly what a round-trip through a parser
+erases. Only something that submits the manifest can find it.
+
+**`acpctl doctor` evaluates the DOCUMENT, and the job installs something else.** On the
+reference cluster doctor reports `capacity.floor` as a blocker — five `small` pods need 5 CPU and
+the runner has 4 — and the install then succeeds, because the job layers
+`packaging/reference/kind/runner-resources.yaml` to lower the requests. Both are correct. doctor
+is right about the document as written; it is describing a deployment nobody is installing,
+because it takes no values overlay and `check_capacity` is a pure function of the values it is
+handed. Any operator installing with `-f overrides.yaml` gets the same mismatch, and a preflight
+tool that is routinely wrong in the safe direction is one people learn to skip. Giving `doctor`
+the same `-f` the install uses is the fix; it touches `cli.py`, which #1796 also edits, so it is
+recorded rather than taken.
+
+The step that runs it was decorative until now — `|| true` with nobody reading the output, so
+doctor could have stopped producing findings entirely and the job would have gone green. It now
+asserts the exact two: `capacity.floor` FAIL and `networkpolicy.enforcement` UNKNOWN, with nothing
+else non-pass. Writing that down corrected the step's own comment, which had named NetworkPolicy
+as the expected *blocker*: on kind it is UNKNOWN at WARNING severity, because kindnet appears in
+neither the enforcing nor the known-non-enforcing CNI list, so it does not make `ok` false. The
+blocker was the capacity one, and no comment mentioned it.
+
 **The cluster now upgrades as well as installs, which is a different claim.** Every way this
 chart could fail to upgrade is invisible to `helm template` AND to a first install, and each one
 strands a running installation rather than a test cluster. `spec.selector` is immutable, so a
@@ -489,31 +549,39 @@ four image references under different names.
 
 ## What blocks a disposable-cluster acceptance run today
 
-Ordered, smallest first dependency at the top.
+**Four of the seven items this list opened with are done**, and the list is kept with them struck
+through rather than deleted, because the shape of the dependency chain is the useful part and a
+list that only ever grows shorter hides what was actually hard.
 
-1. **The chart and the plan must agree on the artifact set.** Four rendered image references against
-   eight planned ones, with two names in common, and `acp-migrations`/`acp-preflight` not existing as
-   chart components at all. This is the smallest first dependency: it is a decision plus one test,
-   needs no cluster, no registry and no CI change, and every item below is ambiguous until it is
-   made.
-2. **Something must build the images the chart names.** Today `deploy/public/deploy.sh` builds
-   `acp-app` and `acp-grafana`; the chart pulls `acp`, `acp-worker`, `acp-ollama-gateway` and
-   `acp-grafana`. Three of those four references resolve to nothing in any registry, so
-   `helm install` of the shipped example cannot pull.
-3. **A registry the acceptance run can pull from**, and a tag or digest convention for it. The
-   example's `runtime.imageRegistry` is a production ACR; an acceptance run needs a target that a CI
-   job can push to and a throwaway cluster can read.
-4. **A disposable cluster in CI.** No `kind`, `k3d` or `minikube` reference exists anywhere in the
-   repository. `helm` is installed only to render.
-5. **`acpctl install`.** Exits 2 today. Everything from scenario 3 onward — queue processing, restart
-   mid-job, scale-down, upgrade, restore — presupposes it.
+1. ~~**The chart and the plan must agree on the artifact set.**~~ Done. The `ACPRelease` contract
+   reconciles the plan's eight names, the chart's four image references and the one artifact this
+   repository builds, with `serves` and `chartImages` naming which is which
+   (`packaging/schema/acp-release.schema.json`, `tests/test_packaging_release.py`).
+2. ~~**Something must build the images the chart names.**~~ Done for a TEST, not for a release. The
+   reference job builds the application image from the checkout and `kind load`s it, which is why
+   item 3 turned out not to be a prerequisite at all. Nothing yet builds, signs or SBOMs a
+   RELEASED artifact — that is workstream A's remaining half and is what item 7 depends on.
+3. ~~**A registry the acceptance run can pull from.**~~ Not needed, and finding that out was worth
+   more than solving it. `kind load docker-image` with `pullPolicy: Never` puts the image on the
+   node without any registry, so a disposable-cluster run needs no push target and no credentials.
+   A registry is still required for a release, which is item 7's problem rather than this one's.
+4. ~~**A disposable cluster in CI.**~~ Done. `packaging/reference/kind/` and
+   `.github/workflows/packaging-kind.yml` install the chart on `kindest/node:v1.31.4` on every
+   packaging pull request, and the Summary above says exactly what that does and does not
+   establish.
+5. **`acpctl install`.** Still the gate on everything from scenario 3 onward — queue processing,
+   restart mid-job, scale-down, upgrade, restore. An open pull request is building it together
+   with the acceptance suite; nothing here should be read as its being done.
 6. **The acceptance report format**, without which ten passing scenarios produce ten passing
-   scenarios and no artifact anybody can compare across runs.
+   scenarios and no artifact anybody can compare across runs. Same pull request as item 5.
 7. **Digest resolution and signature verification**, which is the point at which the run stops
-   being a smoke test and starts being evidence about a specific release.
+   being a smoke test and starts being evidence about a specific release. Unchanged, and now the
+   only item with no work in flight: it needs a build that produces a signed manifest, which needs
+   a registry, which is an owner decision rather than a task.
 
-Items 1-3 are prerequisites for a manual `helm install`. Items 4-7 are what turn that into a
-repeatable acceptance run.
+What the remaining three have in common is that none of them is about the CHART any more. Items 5
+and 6 are the lifecycle command and its output; item 7 is the supply chain. Workstream B's
+questions are answerable on the cluster that now exists.
 
 ## Not in scope for the MVP
 
@@ -530,12 +598,29 @@ repeatable acceptance run.
 
 ## Summary
 
-`verified` would mean acceptance evidence from a real cluster. Nothing here has any, so nothing here
-is `verified`.
+`verified` would mean acceptance evidence from a real cluster. When this report was written
+nothing had any. That is no longer true, and the correction matters in both directions.
+
+WHAT THE DISPOSABLE CLUSTER NOW ESTABLISHES, on every packaging pull request: the chart installs
+from a document `acpctl` produced; every tier rolls out; the three worker tiers register and
+heartbeat through the API; `acpctl status` reports no drift beyond the one expected release-tag
+difference; the release upgrades to a second revision with the pods actually replaced; every pod
+is admitted by a namespace enforcing the restricted Pod Security Standard; and the manifests this
+install does not create — Ollama, Grafana, the HorizontalPodAutoscaler, the Ingress — pass schema
+validation and admission under a server-side dry run. Four defects were found this way that every
+rendered-manifest test was green on.
+
+WHAT IT STILL DOES NOT ESTABLISH, and none of it should be read as `verified` for a customer:
+`kindest/node:v1.31.4` is a version this chart RUNS on, not one anything is supported on. One node
+means NetworkPolicy is accepted and enforced by nothing, zone spreading has one domain, and the
+PodDisruptionBudget is never tested by a drain. No document has been scanned, assessed or
+remediated on it, so nothing here is evidence about the application doing its work — that is
+workstream C. And the images are built from the checkout under a local tag, so none of this is
+evidence about a released artifact.
 
 | Workstream | State | Evidence | Blocker | Next action |
 |---|---|---|---|---|
 | **A. Release artifacts and supply chain** | in progress | The `ACPRelease` contract, `acpctl release verify`, and `--release` on `values`/`plan` (`tests/test_packaging_release.py`), which reconcile the plan's eight names, the chart's four references and the one application artifact — and render every image by digest | Nothing builds, signs, SBOMs or scans an artifact, so no real manifest exists and CI has no release to fail on | Build the release images in CI and emit a signed manifest from that build |
-| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; zone spreading is soft on every profile and unprovable on a one-node cluster, no `readOnlyRootFilesystem` (blocked on `PUT /rubric` writing into the image), no backup/restore Job | A backup/restore Job, then a PDB outside the high-availability profile |
+| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; zone spreading is soft on every profile and unprovable on a one-node cluster, no `readOnlyRootFilesystem` (blocked on `PUT /rubric` writing into the image), no backup/restore Job | A backup/restore Job, which needs RTO/RPO and retention decided first |
 | **C. Portable acceptance suite** | not started | None — no `packaging/tests/`; the preflight hook is advisory (`backoffLimit: 0`, post-install) | Eight of ten scenarios need `acpctl install`, which exits 2; the first two need only a cluster and images | Define the structured report format and emit it from the two readiness scenarios |
 | **D. `acpctl` lifecycle** | in progress | Eight read-only commands with documented exit codes; write-refusal and kubectl-verb allow-list both tested; the seven lifecycle commands refuse rather than no-op (`cli.py:27-35`) | `install` has nothing to pin to: the release contract exists but no build produces a manifest, so there are no real digests and no signature to verify | Hold `install` until a build emits a manifest; `support-bundle` is the one command with no upstream dependency |

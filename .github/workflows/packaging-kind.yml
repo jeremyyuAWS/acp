@@ -148,12 +148,49 @@ jobs:
 
       # ── the install ────────────────────────────────────────────────────────
       - name: Can this cluster run the document?
-        # `acpctl doctor` before installing, which is what it is for. It is expected to report the
-        # NetworkPolicy check as a blocker here: kind's default CNI accepts policies and enforces
-        # nothing, and doctor treating that as a blocker rather than a pass is correct behaviour,
-        # not a failure of this cluster. `|| true` records the finding without failing the job, and
-        # the next step is the one that has to pass.
-        run: python -m acpctl doctor "$SPEC" -n "$NAMESPACE" || true
+        # `acpctl doctor` before installing, which is what it is for. It cannot exit 0 here, so
+        # `|| true` is right — and on its own that made this step DECORATIVE: it printed a report
+        # nothing read, and doctor could have stopped reporting anything at all without the job
+        # noticing. So the exact findings are asserted, the same way the drift check below names
+        # the one drift it expects.
+        #
+        # THE COMMENT THIS REPLACES WAS WRONG IN BOTH DIRECTIONS, which is the reason for asserting
+        # rather than describing. It said NetworkPolicy was expected "as a blocker". Measured on
+        # the green run of 2026-09-08:
+        #
+        #   [????] networkpolicy.enforcement  UNKNOWN, severity WARNING  — kind runs kindnet, which
+        #          is in neither the enforcing nor the known-non-enforcing list, so doctor says it
+        #          could not tell. That is not a blocker and does not make `ok` false.
+        #   [FAIL] capacity.floor             FAIL, severity BLOCKER     — the real blocker, and it
+        #          went unmentioned. doctor computes the floor from the DOCUMENT (5 CPU for five
+        #          `small` pods) while this job installs with runner-resources.yaml lowering the
+        #          requests, so doctor is right about the document and describes something other
+        #          than what gets installed. `acpctl doctor` takes no values overlay; see the gap
+        #          report.
+        #
+        # Both must be present and nothing else may be non-pass. A check that stops firing fails
+        # this step, which is the point: an expected finding that vanishes is a finding.
+        run: |
+          set -euo pipefail
+          python -m acpctl doctor "$SPEC" -n "$NAMESPACE" || true
+          python -m acpctl doctor "$SPEC" -n "$NAMESPACE" --json > /tmp/doctor.json || true
+          python - <<'PY'
+          import json, sys
+
+          EXPECTED = {"capacity.floor": "fail", "networkpolicy.enforcement": "unknown"}
+          report = json.load(open("/tmp/doctor.json"))
+          assert report["reachable"], report
+          found = {c["id"]: c["status"] for c in report["checks"] if c["status"] != "pass"}
+          if found != EXPECTED:
+              print("doctor's findings on the reference cluster have changed.", file=sys.stderr)
+              print(f"  expected: {EXPECTED}", file=sys.stderr)
+              print(f"  found:    {found}", file=sys.stderr)
+              print("Update this step and packaging/docs/kubernetes-mvp-gap-report.md together, "
+                    "or fix what regressed.", file=sys.stderr)
+              sys.exit(1)
+          print("doctor reports exactly the two findings this cluster is known to produce:")
+          print(json.dumps([c for c in report["checks"] if c["status"] != "pass"], indent=2))
+          PY
 
       - name: Install
         run: |
@@ -251,6 +288,59 @@ jobs:
           print("every check passes except the expected release-tag drift:")
           print(json.dumps(drift[0], indent=2))
           PY
+
+      - name: The manifests this install never creates
+        # WHAT THE REFERENCE DOCUMENT LEAVES UNTESTED, counted rather than guessed at. It renders
+        # NetworkPolicy, PodDisruptionBudget, ServiceAccount, one Service, four Deployments and
+        # two Jobs. The standard-production example renders all of that PLUS a
+        # HorizontalPodAutoscaler, an Ingress, an ExternalSecret, two ScaledObjects, a
+        # TriggerAuthentication, two more Services and the Ollama and Grafana Deployments.
+        #
+        # None of those had ever been submitted to an API server. The annotation-type defect found
+        # on 2026-09-08 was in six render sites and the reference install exercises three of them —
+        # so the same bug in ollama.yaml or grafana.yaml would have shipped.
+        #
+        # A SERVER-SIDE DRY RUN COSTS SECONDS AND IS THE SAME KIND OF EVIDENCE as the install: the
+        # API server validates the schema and runs admission, including Pod Security, so the
+        # namespace carries the restricted label for the same reason the real one does. Nothing is
+        # persisted, so this cannot disturb the release running next door.
+        #
+        # THE THREE CRD-DEPENDENT KINDS ARE SKIPPED, AND THE SKIP IS ASSERTED. ExternalSecret needs
+        # external-secrets.io and ScaledObject/TriggerAuthentication need keda.sh, neither of which
+        # is installed here — `doctor` reports both as blockers on a real cluster, which is its
+        # job. Listing them by name means a NEW kind that depends on a CRD fails this step instead
+        # of being skipped quietly, which is the failure mode the whole job exists to refuse.
+        run: |
+          set -euo pipefail
+          kubectl create namespace acp-dryrun
+          kubectl label namespace acp-dryrun \
+            pod-security.kubernetes.io/enforce=restricted \
+            pod-security.kubernetes.io/enforce-version=latest
+          python -m acpctl values packaging/examples/standard-production.acp-deployment.yaml \
+            > /tmp/full-values.yaml
+          helm template acp packaging/chart/acp \
+            -f /tmp/full-values.yaml \
+            -f packaging/reference/kind/runner-resources.yaml \
+            --set image.pullPolicy=Never > /tmp/full.yaml
+          python - <<'PY'
+          import sys, yaml
+
+          NEEDS_CRD = {"ExternalSecret", "ScaledObject", "TriggerAuthentication"}
+          docs = [d for d in yaml.safe_load_all(open("/tmp/full.yaml")) if d]
+          skipped = sorted({d["kind"] for d in docs if d["kind"] in NEEDS_CRD})
+          if skipped != sorted(NEEDS_CRD):
+              print(f"expected to skip {sorted(NEEDS_CRD)}, actually skipping {skipped} — the "
+                    f"render changed and this step is no longer covering what it claims",
+                    file=sys.stderr)
+              sys.exit(1)
+          keep = [d for d in docs if d["kind"] not in NEEDS_CRD]
+          kinds = sorted({d["kind"] for d in keep})
+          print(f"dry-running {len(keep)} manifests: {kinds}")
+          yaml.safe_dump_all(keep, open("/tmp/dryrun.yaml", "w"))
+          PY
+          kubectl apply --dry-run=server --warnings-as-errors \
+            -n acp-dryrun -f /tmp/dryrun.yaml
+          kubectl delete namespace acp-dryrun --wait=false
 
       - name: Can it be upgraded, or only installed?
         # AN INSTALL THAT CANNOT BE UPGRADED IS A DEMO. Every failure mode below is invisible to
