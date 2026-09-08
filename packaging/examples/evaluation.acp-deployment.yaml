@@ -52,6 +52,7 @@ observability:
   grafana: true
   langfuse:
     mode: self-hosted
+    host: https://langfuse.localhost.example.org
 network:
   privateWorkers: true
   publicIngress: true
@@ -68,6 +69,9 @@ secrets:
     # deploy/public/deploy.sh chooses between exactly these two modes and always sets one.
     acp-google-client-id: { name: acp-env, key: GOOGLE_CLIENT_ID }
     langfuse-secret-key: { name: acp-env, key: LANGFUSE_SECRET_KEY }
+    # THE SECOND OF THE TWO KEYS api/lf.py NEEDS. The secret key alone leaves tracing disabled:
+    # `_ENABLED = bool(_HOST and _PK and _SK)`, and the host is named above under observability.
+    langfuse-public-key: { name: acp-env, key: LANGFUSE_PUBLIC_KEY }
 sources:
   - local-upload
 capacity:

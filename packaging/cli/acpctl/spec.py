@@ -471,7 +471,12 @@ def required_secret_names(doc: dict) -> list[str]:
     if doc["data"]["objectStorage"]["mode"] != "embedded":
         names.append("object-storage")
     if doc["observability"].get("langfuse", {}).get("mode", "disabled") != "disabled":
+        # BOTH KEYS, BECAUSE api/lf.py NEEDS BOTH. `_ENABLED = bool(_HOST and _PK and _SK)` — so
+        # requiring the secret key alone made this rule guarantee a third of a feature, and the
+        # chart projected exactly that third. Requiring one of three is not a weaker version of
+        # requiring three; it is a rule that cannot do the thing it was written for.
         names.append("langfuse-secret-key")
+        names.append("langfuse-public-key")
     # TELEMETRY IS A CREDENTIAL, NOT A WORKLOAD. api/telemetry.py configures the Azure Monitor
     # OpenTelemetry distribution and starts nothing without APPLICATIONINSIGHTS_CONNECTION_STRING
     # — `configure()` returns {"enabled": false, "reason": "not configured"} and no exporter, SDK
@@ -766,6 +771,36 @@ def _warn_object_storage_is_azure_only(doc: dict, out: Result) -> None:
         "objectstorage.azure-only"))
 
 
+def _rule_langfuse_host(doc: dict, out: Result) -> None:
+    """PRD S14: tracing is part of what an installation must provide when it says it does.
+
+    `api/lf.py` enables itself only when LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY
+    are all set — `_ENABLED = bool(_HOST and _PK and _SK)` — and reports itself disabled rather
+    than failing when they are not. So an installation naming a Langfuse mode with no host writes
+    no traces, raises nothing, and looks configured on every surface that reads the document.
+
+    AN ERROR, and it is the same requirement that already existed rather than a new one. The
+    contract has always demanded `langfuse-secret-key` whenever a mode is set; that demand exists
+    so tracing can work, and on its own it guaranteed a third of what tracing needs. The two keys
+    are references and belong in `secrets.refs`; the host is an endpoint and belongs in the
+    document, which is why it is a field and a rule rather than a third reference.
+
+    Required for `cloud` as well as `self-hosted`, because Langfuse Cloud is regional and
+    cloud.langfuse.com is not us.cloud.langfuse.com — a default here would send someone's traces
+    to the wrong continent quietly.
+    """
+    langfuse = doc["observability"].get("langfuse", {})
+    if langfuse.get("mode", "disabled") == "disabled":
+        return
+    if not langfuse.get("host"):
+        out.errors.append(Finding(
+            "observability.langfuse.host",
+            f"langfuse mode is '{langfuse['mode']}' but no host is named, so LANGFUSE_HOST is "
+            f"unset and api/lf.py reports itself disabled: this installation writes no traces "
+            f"and raises nothing about it (PRD S14)",
+            "langfuse.no-host"))
+
+
 _SEMANTIC_RULES = (
     _rule_replica_bounds,
     _rule_profile_replica_floor,
@@ -780,6 +815,7 @@ _SEMANTIC_RULES = (
     _rule_ha_posture,
     _rule_private_workers,
     _rule_public_ingress_is_authenticated,
+    _rule_langfuse_host,
     _rule_public_url,
     _rule_egress_allowlist,
     _rule_autoscale_signals,

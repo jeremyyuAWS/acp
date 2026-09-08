@@ -203,7 +203,14 @@ def build(*, profile: str, platform: str, name: str, environment: str, release: 
             "exporter": _LOCAL_EXPORTER if (regulated or compose)
                         else _EXPORTERS.get(platform, _LOCAL_EXPORTER),
             "grafana": True,
-            "langfuse": {"mode": "self-hosted" if not compose else "disabled"},
+            # A PLACEHOLDER HOST, LIKE publicUrl AND imageRegistry, and for the same reason: a
+            # document that names a Langfuse mode and no host writes no traces and says nothing
+            # about it (api/lf.py needs the host and both keys), so `validate` requires one — and
+            # a generator that emitted an invalid document would be a generator nobody could
+            # start from. The file's header lists this among the values to replace.
+            "langfuse": ({"mode": "disabled"} if compose else
+                         {"mode": "self-hosted",
+                          "host": f"https://langfuse.{name}.example.org"}),
         },
         "network": {
             # PRD S13: workers hold document content and are reachable by nothing.
@@ -322,6 +329,7 @@ _HEADER = """\
 # placeholders you are expected to replace:
 #
 #   runtime.publicUrl      the hostname ACP is served on
+#   observability.langfuse.host   where traces are written, when tracing is on
 #   runtime.imageRegistry  where your images are pulled from
 #   secrets.refs.*         the vault entries holding your credentials
 #

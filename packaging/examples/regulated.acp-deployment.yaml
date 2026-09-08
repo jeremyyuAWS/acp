@@ -59,6 +59,7 @@ observability:
   grafana: true
   langfuse:
     mode: self-hosted
+    host: https://langfuse.internal.example.org
 network:
   privateWorkers: true
   publicIngress: true
@@ -80,6 +81,9 @@ secrets:
     redis-url: { name: acp-vault, key: redis-url }
     object-storage: { name: acp-vault, key: object-storage }
     langfuse-secret-key: { name: acp-vault, key: langfuse-secret-key }
+    # THE SECOND OF THE TWO KEYS api/lf.py NEEDS. The secret key alone leaves tracing disabled:
+    # `_ENABLED = bool(_HOST and _PK and _SK)`, and the host is named above under observability.
+    langfuse-public-key: { name: acp-vault, key: langfuse-public-key }
     microsoft-oauth-client-secret: { name: acp-vault, key: microsoft-oauth-client-secret }
     smb-credentials: { name: acp-vault, key: smb-credentials }
 sources:

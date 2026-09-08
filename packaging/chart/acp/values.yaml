@@ -193,6 +193,11 @@ observability:
     env: {}
   langfuse:
     mode: disabled
+    # The endpoint traces are written to. NO DEFAULT: `api/lf.py` enables tracing only with the
+    # host and both keys, and a guessed host would send an installation's traces somewhere its
+    # operator did not choose. `acpctl values` fills this from the document's
+    # `observability.langfuse.host`, which `acpctl validate` requires whenever a mode is set.
+    host: ""
 
 # Schema migrations run as a hook BEFORE the new code is admitted, with backoffLimit 0 — a failed
 # migration must stop the release rather than retry against a database it has already half
