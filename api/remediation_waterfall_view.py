@@ -95,8 +95,9 @@ def _proposal_models(store, scan_id, batch_id):
         db.execute(cur, """SELECT DISTINCT h.id,h.file,h.proposals FROM hitl_queue h
             JOIN finding_disposition d ON d.review_item_id=h.id AND d.scan_id=h.scan_id
                 AND d.file=h.file WHERE d.scan_id=%s AND d.batch_id=%s
-                AND d.batch_id=(SELECT batch_id FROM jobs WHERE scan_id=%s
-                    AND type='remediate_file' ORDER BY created_at DESC,id DESC LIMIT 1)""",
+                AND d.batch_id=(SELECT execution_id FROM stage_executions WHERE scan_id=%s
+                    AND stage='remediate' AND is_current=1
+                    ORDER BY created_at DESC,execution_id DESC LIMIT 1)""",
                    (scan_id, batch_id, scan_id))
         linked = {}
         for row in db.fetchall(cur):

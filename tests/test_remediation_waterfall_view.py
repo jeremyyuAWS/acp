@@ -128,7 +128,7 @@ def test_new_proposals_cannot_relabel_a_historical_run(isolated_store):
          'remediation_impact_policy': {'ai': 1, 'rule_based': 2, 'ai_budget_usd': '5.00'}}],
         snapshot_id='snapshot-2', request_fingerprint='fixture-2')
     with s._db.cursor() as cur:
-        s._db.execute(cur, 'UPDATE jobs SET created_at=%s WHERE batch_id=%s', ('2099-01-01T00:00:00Z', new['batch_id']))
+        s._db.execute(cur, 'UPDATE jobs SET created_at=%s WHERE batch_id=%s', ('2099-01-01T00:00:00Z', batch))
         s._db.execute(cur, 'INSERT INTO ai_calls(id,scan_id,file,provider,model,cost_usd) VALUES(%s,%s,%s,%s,%s,%s)', ('new-call', 'scan', 'a.html', 'openai', 'new-model', 0.2))
         s._db.execute(cur, 'UPDATE hitl_queue SET proposals=%s WHERE id=%s', (json.dumps([{'model_call_id': 'new-call'}]), 'review'))
         s._db.execute(cur, 'INSERT INTO finding_disposition(scan_id,batch_id,finding_id,file,review_item_id) VALUES(%s,%s,%s,%s,%s)', ('scan', new['batch_id'], 'finding', 'a.html', 'review'))
