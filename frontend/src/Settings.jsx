@@ -757,6 +757,19 @@ const PROVIDER_LABELS = {
   azure_openai: 'Azure OpenAI', openai: 'OpenAI', anthropic: 'Anthropic',
   gemini: 'Google Gemini', bedrock: 'AWS Bedrock', huggingface: 'Hugging Face',
 }
+// Examples describe the adapter's expected fields; placeholders are never saved as values.
+const PROVIDER_FIELDS = {
+  azure_openai: { endpoint: 'https://your.openai.azure.com', deployment: 'your-deployment-name', model: 'gpt-4o', secret: 'AZURE_OPENAI_API_KEY' },
+  openai: { endpoint: 'https://api.openai.com/v1', model: 'gpt-4o', secret: 'OPENAI_API_KEY', optionalEndpoint: true },
+  anthropic: { endpoint: 'https://api.anthropic.com/v1', model: 'claude-sonnet-5', secret: 'ANTHROPIC_API_KEY', optionalEndpoint: true },
+  gemini: { endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash', secret: 'GEMINI_API_KEY', optionalEndpoint: true },
+  bedrock: { model: 'your-bedrock-model-id', secret: 'AWS_SECRET_ACCESS_KEY' },
+  huggingface: { endpoint: 'https://your-endpoint.endpoints.huggingface.cloud', model: 'your-model-id', secret: 'HF_API_TOKEN' },
+}
+const validSecretReference = (value) => !value || (
+  /^(?:[A-Za-z_][A-Za-z0-9_]*|keyvault:[A-Za-z0-9-]+)$/.test(value)
+  && !/^(?:sk-|hf_|AIza)/.test(value)
+)
 // Providers with a real adapter behind them — the ones that can be ENABLED here, because enabling
 // anything else would arm an escalation that silently never fires.
 //
@@ -835,6 +848,7 @@ export function AIProvidersPanel({ onAccess }) {
         // form for the rest of the session, and a retry is one paste away.
         setKeyDraft((k) => ({ ...k, [row.provider]: '' }))
         setProviders(res.providers)
+        setDraft((d) => { const { key_secret_ref, ...rest } = d[row.provider] || {}; return { ...d, [row.provider]: rest } })
         setNote(`✓ ${PROVIDER_LABELS[row.provider] || row.provider} key stored in the vault`)
       })
       .catch((e) => { setKeyDraft((k) => ({ ...k, [row.provider]: '' }))
@@ -843,6 +857,7 @@ export function AIProvidersPanel({ onAccess }) {
   }
   const save = (row) => {
     const d = draft[row.provider] || {}
+    if (!validSecretReference(field(row, 'key_secret_ref').trim())) return
     setBusy(row.provider); setNote('')
     putAiProvider({
       provider: row.provider,
@@ -850,7 +865,7 @@ export function AIProvidersPanel({ onAccess }) {
       endpoint: field(row, 'endpoint'),
       deployment: field(row, 'deployment'),
       model: field(row, 'model'),
-      key_secret_ref: field(row, 'key_secret_ref'),
+      key_secret_ref: field(row, 'key_secret_ref').trim(),
     })
       .then((res) => { setProviders(res.providers); setDraft((x) => ({ ...x, [row.provider]: {} }))
                        setNote(wrote(res, `✓ ${PROVIDER_LABELS[row.provider] || row.provider} saved`)) })
@@ -900,10 +915,11 @@ export function AIProvidersPanel({ onAccess }) {
         the finding. Disable every provider to keep all inference local.
       </p>
       <p className="muted" style={{ fontSize: 13, background: 'var(--card, #f7f4fb)', border: '1px solid var(--line)', borderRadius: 8, padding: '8px 12px' }}>
-        🔐 <b>The key value never reaches the database.</b> Your ops team provisions it as a container / Key
-        Vault secret; you enter only the secret’s <b>reference name</b> (e.g.
-        <code> AZURE_OPENAI_API_KEY</code>). The key value never touches the database, this page, or
-        a log — only whether it’s present is shown.
+        🔐 <b>The key value never reaches the database.</b> Enter the secret’s <b>reference name</b>,
+        such as <code>ANTHROPIC_API_KEY</code> or <code>keyvault:acp-ai-anthropic-key</code>, not the API key.
+        The secret must be available to the running ACP app. A GitHub secret alone is not available
+        here until your deployment provisions it. Where a vault is configured, use the separate
+        “Store key in the vault” control below. Connection tests use your saved settings.
       </p>
       <section aria-labelledby="remediation-pilot-heading" style={{ border: `1px solid ${pilot.running ? '#6a9b3c' : 'var(--line)'}`, borderRadius: 10, padding: '12px 14px', margin: '14px 0' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -988,15 +1004,22 @@ export function AIProvidersPanel({ onAccess }) {
       </section>
       {providers.map((row) => {
         const ready = ADAPTER_READY.has(row.provider)
-        const dirty = !!draft[row.provider] && Object.keys(draft[row.provider]).length > 0
+        const dirty = Object.entries(draft[row.provider] || {}).some(([f, value]) => value !== (row[f] ?? ''))
+        const examples = PROVIDER_FIELDS[row.provider] || { model: 'your-model-id', secret: 'PROVIDER_API_KEY' }
+        const invalidRef = !validSecretReference(field(row, 'key_secret_ref').trim())
+        const pendingKey = !!(keyDraft[row.provider] || '').trim()
+        const testBlocked = dirty ? 'Save changes before testing.'
+          : pendingKey ? 'Store the key in the vault before testing.'
+          : busy === row.provider ? 'Wait for saving to finish before testing.' : ''
         return (
           <div key={row.provider} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 14px', margin: '10px 0', opacity: ready ? 1 : 0.7 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <b style={{ fontSize: 14 }}>{PROVIDER_LABELS[row.provider] || row.provider}</b>
               {!ready && <span className="muted" style={{ fontSize: 11 }}>· adapter coming (config saved)</span>}
-              {ready && <TestConnection provider={row.provider} />}
+              {ready && <TestConnection key={JSON.stringify([row, draft[row.provider], pendingKey])}
+                provider={row.provider} blockedReason={testBlocked} />}
               <span style={{ marginLeft: 'auto', fontSize: 12 }}
-                    title="Whether the ops-provisioned secret named below is present in this environment">
+                    title="Whether the saved secret reference is available to the running ACP app; unsaved edits are not checked">
                 {row.key_present
                   ? <span style={{ color: '#2C5209' }}>🔵 key present · {row.credential_source}</span>
                   : <span className="muted">key not set</span>}
@@ -1004,19 +1027,29 @@ export function AIProvidersPanel({ onAccess }) {
             </div>
             <label style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '10px 0', fontSize: 13 }}>
               <input type="checkbox" checked={draft[row.provider]?.enabled ?? row.enabled}
-                     onChange={(e) => edit(row.provider, 'enabled', e.target.checked)} disabled={!ready} />
+                     onChange={(e) => edit(row.provider, 'enabled', e.target.checked)} disabled={!ready || busy === row.provider} />
               <span>Enable as an escalation fallback {row.enabled ? '' : '(off — local-only)'}</span>
             </label>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <L label="Endpoint"><input value={field(row, 'endpoint')} placeholder="https://your.openai.azure.com"
-                     onChange={(e) => edit(row.provider, 'endpoint', e.target.value)} style={INP} /></L>
-              <L label="Deployment / model"><input value={field(row, 'deployment')} placeholder="gpt-4o"
-                     onChange={(e) => edit(row.provider, 'deployment', e.target.value)} style={INP} /></L>
-              <L label="Model (for cost)"><input value={field(row, 'model')} placeholder="gpt-4o"
-                     onChange={(e) => edit(row.provider, 'model', e.target.value)} style={INP} /></L>
-              <L label="Secret reference NAME (not the key)"><input value={field(row, 'key_secret_ref')} placeholder="AZURE_OPENAI_API_KEY"
-                     onChange={(e) => edit(row.provider, 'key_secret_ref', e.target.value)} style={INP} /></L>
+              {examples.endpoint && <L label={examples.optionalEndpoint ? 'Endpoint (optional override)' : 'Endpoint'}>
+                <input value={field(row, 'endpoint')} placeholder={examples.endpoint} disabled={busy === row.provider}
+                       onChange={(e) => edit(row.provider, 'endpoint', e.target.value)} style={INP} /></L>}
+              {examples.deployment && <L label="Deployment name"><input value={field(row, 'deployment')}
+                     placeholder={examples.deployment} disabled={busy === row.provider}
+                     onChange={(e) => edit(row.provider, 'deployment', e.target.value)} style={INP} /></L>}
+              <L label={row.provider === 'azure_openai' ? 'Model (for cost)' : 'Model ID (required)'}>
+                <input value={field(row, 'model')} placeholder={examples.model} disabled={busy === row.provider}
+                       onChange={(e) => edit(row.provider, 'model', e.target.value)} style={INP} /></L>
+              <L label="Secret reference NAME (not the key)"><input value={field(row, 'key_secret_ref')}
+                     placeholder={examples.secret} autoComplete="off" spellCheck={false} disabled={busy === row.provider}
+                     aria-invalid={invalidRef} onChange={(e) => edit(row.provider, 'key_secret_ref', e.target.value)} style={INP} /></L>
             </div>
+            <p className="muted" style={{ fontSize: 12, margin: '8px 0' }}>
+              Examples are hints, not saved values.{examples.optionalEndpoint && ' Leave Endpoint blank to use the provider’s default API.'}
+              {row.provider === 'bedrock' && ' AWS region and access key ID must also be provisioned in the provider configuration.'}
+              {' '}The key indicator reflects the saved reference.
+            </p>
+            {invalidRef && <p role="alert">Enter a secret name, not an API key. Use an environment variable name or keyvault:secret-name.</p>}
             {/* The key field appears ONLY where the deployment can actually store one. It is
                 write-only by construction: `value` comes from local state that starts empty and
                 is cleared after every attempt, never from the server — no read path returns a key,
@@ -1024,7 +1057,7 @@ export function AIProvidersPanel({ onAccess }) {
             {secretWrite.available && (
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--line)' }}>
                 <L label={`Or paste the key — stored in ${secretWrite.kind === 'azure_key_vault' ? 'Key Vault' : 'the secret store'}, never in the database`}>
-                  <input type="password" autoComplete="off" value={keyDraft[row.provider] || ''}
+                  <input type="password" autoComplete="off" value={keyDraft[row.provider] || ''} disabled={busy === row.provider}
                          placeholder="paste the provider API key"
                          onChange={(e) => setKeyDraft((k) => ({ ...k, [row.provider]: e.target.value }))}
                          style={INP} />
@@ -1040,7 +1073,7 @@ export function AIProvidersPanel({ onAccess }) {
               </div>
             )}
             <button className="ghost small" style={{ marginTop: 10 }} onClick={() => save(row)}
-                    disabled={busy === row.provider || !dirty}>
+                    disabled={busy === row.provider || !dirty || invalidRef}>
               {busy === row.provider ? 'Saving…' : 'Save'}
             </button>
           </div>
@@ -1060,9 +1093,10 @@ export function AIProvidersPanel({ onAccess }) {
 // Reports the outcome the adapter distinguished — a transport failure, an HTTP status, or a 200
 // with nothing in it — because those need three different fixes. Never renders a key, and the
 // backend does not return the model's caption of the probe either.
-export function TestConnection({ provider }) {
+export function TestConnection({ provider, blockedReason = '' }) {
   const [state, setState] = useState(null)     // null | 'testing' | result object
   const run = () => {
+    if (blockedReason) return
     setState('testing')
     testAiProvider(provider)
       .then((r) => setState(r))
@@ -1071,11 +1105,12 @@ export function TestConnection({ provider }) {
   const r = state && state !== 'testing' ? state : null
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-      <button className="ghost small" onClick={run} disabled={state === 'testing'}
-              title="Sends a small synthetic test image generated by the server — never one of your documents">
+      <button className="ghost small" onClick={run} disabled={state === 'testing' || !!blockedReason}
+              title="Tests the saved settings. Sends a small synthetic test image generated by the server — never one of your documents">
         {state === 'testing' ? 'Testing…' : 'Test connection'}
       </button>
-      {r && (
+      {blockedReason && <span role="status" style={{ fontSize: 11 }}>{blockedReason}</span>}
+      {r && !blockedReason && (
         <span role="status" style={{ fontSize: 11, color: r.ok ? '#2C5209' : '#8A1C1C' }}>
           {r.ok
             ? `✓ reached ${r.model || provider} · ${r.zone} · ${r.latency_ms}ms`
