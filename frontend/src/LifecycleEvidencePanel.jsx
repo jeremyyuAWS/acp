@@ -2,7 +2,7 @@ export default function LifecycleEvidencePanel({ file }) {
   if (!file) return <div className="panel"><p>Select a file to inspect its lifecycle evidence.</p></div>
   return <section className="panel lifecycle-evidence-panel" aria-labelledby="lifecycle-evidence-heading">
     <h2 id="lifecycle-evidence-heading">Why this was recommended</h2>
-    <p><b className="machine-value">{file.file}</b><br /><span className="muted machine-value">{file.path || 'Path not recorded'}</span> <span className="muted">· {file.lifecycle_status || 'Active'}</span></p>
+    <p><b className="fname">{file.file}</b><br /><span className="muted machine-value">{file.path || 'Path not recorded'}</span> <span className="muted">· {file.lifecycle_status || 'Active'}</span></p>
     <p>{file.lifecycle_reason || 'No lifecycle reason was recorded.'}</p>
     {(file.evaluations || []).map((evaluation) => <details key={evaluation.evaluation_id} open={evaluation.policy_id === file.lifecycle_rule_id}>
       <summary>Policy {evaluation.policy_id} · version {evaluation.policy_version} · {evaluation.result}</summary>
