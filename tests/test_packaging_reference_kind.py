@@ -327,6 +327,23 @@ def test_the_data_services_meet_the_standard_the_namespace_enforces():
                 f"{name} mounts a volume it will not be able to write to")
 
 
+def test_the_doctor_step_asserts_its_findings_rather_than_printing_them():
+    """`acpctl doctor` cannot exit 0 on this cluster, so the step runs it with `|| true` — and on
+    its own that made the step DECORATIVE. It printed a report nothing read, so doctor could have
+    stopped reporting anything at all and the job would have gone green.
+
+    The comment it replaced was wrong in both directions, which is why this is asserted rather
+    than described: it named NetworkPolicy as the expected blocker, and on kind that check is
+    UNKNOWN at WARNING severity (kindnet is in neither CNI list), while the actual blocker —
+    `capacity.floor` — went unmentioned.
+    """
+    script = run_steps()
+    assert "acpctl doctor" in script and "--json" in script
+    assert "capacity.floor" in script and "networkpolicy.enforcement" in script, (
+        "the step must name the findings it expects, or it cannot tell a changed report from a "
+        "report that stopped being produced")
+
+
 def test_the_reference_cluster_upgrades_as_well_as_installs():
     """AN INSTALL THAT CANNOT BE UPGRADED IS A DEMO, and every way this chart could fail to
     upgrade is invisible to `helm template` and to a first install:

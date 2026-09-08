@@ -325,6 +325,25 @@ forced on. The comment beside it claimed the shared context "sets it true", whic
 so — a reader deciding whether this chart hardens its root filesystems would have concluded it
 does.
 
+**`acpctl doctor` evaluates the DOCUMENT, and the job installs something else.** On the
+reference cluster doctor reports `capacity.floor` as a blocker — five `small` pods need 5 CPU and
+the runner has 4 — and the install then succeeds, because the job layers
+`packaging/reference/kind/runner-resources.yaml` to lower the requests. Both are correct. doctor
+is right about the document as written; it is describing a deployment nobody is installing,
+because it takes no values overlay and `check_capacity` is a pure function of the values it is
+handed. Any operator installing with `-f overrides.yaml` gets the same mismatch, and a preflight
+tool that is routinely wrong in the safe direction is one people learn to skip. Giving `doctor`
+the same `-f` the install uses is the fix; it touches `cli.py`, which #1796 also edits, so it is
+recorded rather than taken.
+
+The step that runs it was decorative until now — `|| true` with nobody reading the output, so
+doctor could have stopped producing findings entirely and the job would have gone green. It now
+asserts the exact two: `capacity.floor` FAIL and `networkpolicy.enforcement` UNKNOWN, with nothing
+else non-pass. Writing that down corrected the step's own comment, which had named NetworkPolicy
+as the expected *blocker*: on kind it is UNKNOWN at WARNING severity, because kindnet appears in
+neither the enforcing nor the known-non-enforcing CNI list, so it does not make `ok` false. The
+blocker was the capacity one, and no comment mentioned it.
+
 **The cluster now upgrades as well as installs, which is a different claim.** Every way this
 chart could fail to upgrade is invisible to `helm template` AND to a first install, and each one
 strands a running installation rather than a test cluster. `spec.selector` is immutable, so a
