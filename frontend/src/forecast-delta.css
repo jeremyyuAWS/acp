@@ -1,0 +1,3 @@
+.forecast-delta { display: inline-block; vertical-align: middle; margin-left: 8px; padding: 3px 7px; border-radius: 999px; background: #F3EEFC; color: var(--plum); font-size: 13px; line-height: 1.2; font-weight: 600; animation: forecast-delta-enter 180ms ease-out; }
+@keyframes forecast-delta-enter { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .forecast-delta { animation: none; } }

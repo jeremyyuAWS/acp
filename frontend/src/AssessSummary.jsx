@@ -1,3 +1,5 @@
+import { useForecastDelta } from './useForecastDelta.js'
+import './forecast-delta.css'
 import { assessMetrics, reconcile, coverageSentence, SEVERITIES, SEVERITY_LABEL,
          STATUS_LABEL } from './assessMetrics.js'
 
@@ -37,7 +39,8 @@ const lab = { fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.35 }
 const val = { fontSize: 26, fontWeight: 700, fontVariantNumeric: 'tabular-nums', marginTop: 5, lineHeight: 1 }
 const sub = { fontSize: 11.5, color: 'var(--muted)', marginTop: 5, lineHeight: 1.45 }
 
-function Metric({ label, value, unit, children, tone, onClick }) {
+function Metric({ label, value, unit, children, tone, onClick, deltaCount, deltaContext, deltaSetting }) {
+  const change = useForecastDelta(deltaCount, deltaContext, deltaSetting)
   const Tag = onClick ? 'button' : 'div'
   return (
     <Tag type={onClick ? "button" : undefined} onClick={onClick} style={{ ...card, textAlign: 'left' }}>
@@ -45,6 +48,7 @@ function Metric({ label, value, unit, children, tone, onClick }) {
       {value !== undefined && (
         <div style={{ ...val, color: tone }}>
           {value}
+          {change && <span key={change.id} className="forecast-delta" role="status" aria-label={`${change.amount > 0 ? "Increased" : "Decreased"} by ${Math.abs(change.amount)} findings`}>{change.amount > 0 ? "+" : "−"}{Math.abs(change.amount).toLocaleString()}</span>}
           {unit && <span style={{ fontSize: 15, fontWeight: 400, color: 'var(--muted)' }}> {unit}</span>}
         </div>
       )}
@@ -328,12 +332,14 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
         </div>
 
         <Metric label={remediationForecast ? "Auto-fix available · plan preview" : "Auto-fix available"} value={remediationForecast ? remediationForecast.automatic : m.autoFixAvailable} tone="#2F7D32"
-                onClick={remediationForecast?.onAutomatic}>
+                onClick={remediationForecast?.onAutomatic} deltaCount={remediationForecast?.automaticCount}
+                deltaContext={remediationForecast?.deltaContext} deltaSetting={remediationForecast?.deltaSetting}>
           {remediationForecast ? <>Live forecast for the selected remediation scope and settings. Eligible for application without approval. {remediationForecast.onAutomatic && <b>View details →</b>}</> : <>Findings with a deterministic remediation. Excludes AI-drafted suggestions, which need approval and are counted under review.</>}
         </Metric>
 
         <Metric label={remediationForecast ? "Human review required · plan preview" : "Human review required"} value={remediationForecast ? remediationForecast.human : m.humanReviewRequired}
-                onClick={remediationForecast?.onHuman}>
+                onClick={remediationForecast?.onHuman} deltaCount={remediationForecast?.humanCount}
+                deltaContext={remediationForecast?.deltaContext} deltaSetting={remediationForecast?.deltaSetting}>
           {remediationForecast ? <>Live forecast: proposal approvals and manual work in the selected scope. Blocked findings are listed separately below. {remediationForecast.onHuman && <b>View details →</b>}</> : <>Findings needing a person’s judgement, including every AI-drafted fix awaiting approval.</>}
         </Metric>
 
