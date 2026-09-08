@@ -394,18 +394,38 @@ the apply runs `--warnings-as-errors` so the message that names the fields is th
 fails.
 
 **`readOnlyRootFilesystem` is `false`, and that is now a recorded decision rather than an
-oversight.** Every runtime write the application makes goes to `$TMPDIR` — per-document scratch in
+on now.** Every runtime write the application makes goes to `$TMPDIR` — per-document scratch in
 `api/scanner.py`, `api/handlers.py`, `api/proposals.py` and the PDF engine, the LibreOffice user
-profile (`api/render.py:106`), the .NET analyser's `_o.json`, `remediated-<name>` beside its input,
-tesseract's scratch images — all of which an `emptyDir` at `/tmp` would cover. One write does not:
-`PUT /rubric` used to write `<repo>/config/rubric.active.json` INTO THE IMAGE, so a read-only
-root turned an owner-only admin endpoint into a 500. **THAT WRITE IS GONE**: the rubric is stored
-in `app_settings` now, so the application-side blocker this default existed for no longer exists.
-What remains is packaging work rather than an application change — an `emptyDir` at `/tmp` plus
-`HOME`, `XDG_CACHE_HOME` and `DOTNET_CLI_HOME` pointed into it — and the chart renders no volumes
-at all today. So the default stays `false` until that lands, and
-`test_the_shared_root_filesystem_is_writable_and_that_is_deliberate` pins both halves: the value,
-and the write it exists for.
+profile, the .NET analyser's `_o.json`, `remediated-<name>` beside its input, tesseract's scratch
+images, and `/tmp/adc.json` from the image entrypoint. An `emptyDir` at `/tmp` covers all of it.
+
+Three caches do NOT live under `$TMPDIR`, and each is written by a library rather than by this
+application, so none would have failed in a way anyone attributed to the flag: `HOME` (UID 10001
+has no passwd entry, and `api/scanner.py` reads `~/.dotnet`), `XDG_CACHE_HOME` (fontconfig, under
+the report renderer) and `DOTNET_CLI_HOME`. All three are redirected onto the scratch volume, with
+`PYTHONDONTWRITEBYTECODE` so a read-only `/app` does not take a failed `__pycache__` write per
+module on first import.
+
+The volume carries NO `sizeLimit` and is not memory-backed, both deliberately: an `emptyDir`
+already counts against the pod's `ephemeral-storage` limit, which this chart sets per tier from
+the preset, so a second bound would silently cap a remediate worker below the 8Gi its own preset
+promises; and memory-backing is charged to the memory limit, so one large document would OOM-kill
+the worker instead of filling a disk it was given.
+
+**Ollama and Grafana pin the flag back to false, each with its reason recorded in its template.**
+Both are third-party images that write outside `/tmp` — Grafana keeps `grafana.db` under
+`/var/lib/grafana`, where the image also bakes its dashboards, so an `emptyDir` there would make
+it writable and mask them, the same trap that stops `/app/config` being masked. Redirecting with
+`GF_PATHS_DATA` would work and is not done, because it could not be VALIDATED: **the reference
+cluster runs neither**, so a read-only claim for either would be a claim about a render, which
+PRD §4 is explicit about refusing.
+
+WHY THIS NEEDED THE CLUSTER RATHER THAN A RENDER TEST. Getting it wrong fails SILENTLY. An
+unwritable scratch directory crashes nothing: `render_page_png` and `_office_to_pdf` return `None`
+on any exception and `_analyse_office` turns `OSError` into an engine-error bucket that scores as
+`uncertain`. Office documents would degrade with no startup signal, on an installation that looks
+healthy. The disposable cluster runs the API, all three worker tiers and both hook Jobs with the
+flag on, so the install itself is what establishes the mounts are sufficient.
 
 **THAT WRITE IS ALREADY BROKEN, INDEPENDENTLY OF ANY OF THIS, AND IT IS NOT A KUBERNETES
 PROBLEM.** Tracing it far enough to judge the read-only question turned up something larger.
@@ -810,8 +830,8 @@ target has done that.
 | Target | State | Evidence | Blocker | Next action |
 |---|---|---|---|---|
 | Release artifacts | in progress | `ACPRelease`, `acpctl release verify`, `--release` on `values`/`plan` (#1797; `tests/test_packaging_release.py`, 37 cases) — a manifest reconciles the plan's eight names, the chart's four components and the built artifacts, and renders every image by digest | Nothing builds, signs, SBOMs or scans an artifact, so no real manifest exists and CI has no release to fail on. Scanning and provenance are not even expressible in the schema | Build the images in CI and emit a signed manifest from that build |
-| Helm hardening | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security **enforced by the API server on the disposable cluster**, not merely rendered (#1808); multi-replica tiers placed, and the chart proven to **upgrade** as well as install (#1809); `terminationGracePeriodSeconds: 300` with a matching drain window (#1805); no worker Service; `doctor` blocks on KEDA, CNI and ESO. Two silent defects closed by #1798 | `kindest/node:v1.31.4` is a version the chart RUNS on, not one anything is supported on — naming a supported distribution is PRD §4 and an owner decision. Zone spreading is soft on every profile and unprovable on a one-node cluster; no `readOnlyRootFilesystem` (the `PUT /rubric` blocker is cleared; it now needs a writable `/tmp` mount); no backup/restore Job | A backup/restore Job, which needs RTO/RPO and retention decided first |
-| Acceptance suite | in progress | **Run against the disposable cluster on every packaging PR** (`packaging-kind.yml`, runs 34233469967 and 34234894950). MEASURED there: the API is ready and names its build (`0.0.0-kind.46`); all three worker tiers register and heartbeat; and **6 documents were queued and processed by the worker tier** — the first documents this packaging work has moved through a real installation | Three MVP scenarios cannot be answered at all, because the surfaces they read do not exist in any build: `/scans/{sid}/artifacts` (PRD §12's durable-output inventory), `/admin/audit-events` and `/admin/support-bundle` (PRD §13). They report `unknown`, never pass, so **no MVP claim is reachable until those three ship** — that is now the concrete blocker, measured rather than predicted. **and scenario 4 is unanswerable on this cluster for a second, separate reason**: `POST /scans/{sid}/assess` answers 503 `DB_CAPACITY_BUSY` and keeps answering it (run 34236164828), so the fixture workflow never reaches the artifact probe. Two independent readings agree on the cause — `capacity.floor` FAILs with "needs 5000m, cluster has 4000m allocatable", and the application's own admission gate times out on a mutation. Connections are NOT the constraint: Postgres serves the document's declared 200 and each API replica asks for ~20. A one-node runner sharing 4 CPU between the control plane, Calico, Postgres, Redis, two API replicas and three workers cannot also run a download-and-analyse fan-out. kind itself certifies nothing either way: no registry, so no digest to pin | Serve the three surfaces; then the same job answers the MVP scenarios end to end |
+| Helm hardening | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security **enforced by the API server on the disposable cluster**, not merely rendered (#1808); multi-replica tiers placed, and the chart proven to **upgrade** as well as install (#1809); `terminationGracePeriodSeconds: 300` with a matching drain window (#1805); no worker Service; `doctor` blocks on KEDA, CNI and ESO. Two silent defects closed by #1798 | `kindest/node:v1.31.4` is a version the chart RUNS on, not one anything is supported on — naming a supported distribution is PRD §4 and an owner decision. Zone spreading is soft on every profile and unprovable on a one-node cluster; `readOnlyRootFilesystem` is ON for every ACP workload, with Ollama and Grafana exempt and recorded (#1818); no backup/restore Job | A backup/restore Job, which needs RTO/RPO and retention decided first |
+| Acceptance suite | in progress | **Run against the disposable cluster on every packaging PR** (`packaging-kind.yml`; four runs, latest 34237399304 green). MEASURED there: the API is ready and names its build (`0.0.0-kind.50`); all three worker tiers register and heartbeat; and **6 documents were queued and processed by the worker tier** — the first documents this packaging work has moved through a real installation | Three MVP scenarios cannot be answered at all, because the surfaces they read do not exist in any build: `/scans/{sid}/artifacts` (PRD §12's durable-output inventory), `/admin/audit-events` and `/admin/support-bundle` (PRD §13). They report `unknown`, never pass, so **no MVP claim is reachable until those three ship** — that is now the concrete blocker, measured rather than predicted. **and scenario 4 is unanswerable on this cluster for a second, separate reason**: `POST /scans/{sid}/assess` answers 503 `DB_CAPACITY_BUSY` and keeps answering it (run 34236164828), so the fixture workflow never reaches the artifact probe. Two independent readings agree on the cause — `capacity.floor` FAILs with "needs 5000m, cluster has 4000m allocatable", and the application's own admission gate times out on a mutation. Connections are NOT the constraint: Postgres serves the document's declared 200 and each API replica asks for ~20. A one-node runner sharing 4 CPU between the control plane, Calico, Postgres, Redis, two API replicas and three workers cannot also run a download-and-analyse fan-out. kind itself certifies nothing either way: no registry, so no digest to pin | Serve the three surfaces; then the same job answers the MVP scenarios end to end |
 | Lifecycle | in progress | `install`/`uninstall`/`support-bundle` **in flight in #1796**, not assessed here. Read-only commands ship today; `workloadIdentity` renders nothing (D1) | No image, no cluster: `doctor`/`status` exit 2 here | Emit `serviceAccount.annotations`; then exercise `install` against the first real cluster |
 | AKS | not started | `SUPPORT_STATUS["azure"] = "planned"` (`presets.py:68-75`). `deploy/public/` deploys Container Apps, a different topology (ADR 0048) | Everything above, plus a billable environment | Run the acceptance suite against AKS once one exists; do not rename the status before that |
 | On-premises | not started | `SUPPORT_STATUS["onprem"] = "planned"`; `onprem` is `self-hosted`-only, which is the mode the chart refuses to render without an override | Which distribution gets certified first is a customer decision | Pick the distribution, then treat it as a second acceptance target |

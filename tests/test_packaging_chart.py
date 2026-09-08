@@ -658,12 +658,16 @@ def test_every_pod_meets_the_restricted_pod_security_standard():
             container_security = container.get("securityContext", {})
             assert container_security.get("allowPrivilegeEscalation") is False, name
             assert container_security.get("capabilities", {}).get("drop") == ["ALL"], name
-        # `restricted` also constrains volume types. The chart renders none, which is the easiest
-        # way to satisfy that and worth asserting so a future volume has to be a deliberate choice
-        # against a named list rather than an addition nobody weighed.
-        assert not spec.get("volumes"), (
-            f"{name} gained a volume; the restricted standard allows only configMap, secret, "
-            f"emptyDir, projected, downwardAPI, PVC and ephemeral")
+        # `restricted` also constrains volume TYPES, and the chart now renders one: the scratch
+        # emptyDir that makes `readOnlyRootFilesystem` possible. Asserted against the standard's
+        # named list rather than against "none", so a hostPath — the type this actually exists to
+        # refuse — fails here instead of at admission on someone's cluster.
+        allowed = {"configMap", "secret", "emptyDir", "projected", "downwardAPI",
+                   "persistentVolumeClaim", "ephemeral"}
+        for volume in spec.get("volumes") or []:
+            kinds = set(volume) - {"name"}
+            assert kinds <= allowed, (
+                f"{name} mounts {sorted(kinds)}, which the restricted standard does not allow")
 
 
 @needs_helm
@@ -1065,46 +1069,81 @@ def test_ollamas_root_stays_writable_whatever_the_shared_value_says():
 
 
 @needs_helm
-def test_the_shared_root_filesystem_is_writable_and_that_is_deliberate():
-    """The other half, and the one that makes the gap report's entry checkable.
+def test_the_root_filesystem_is_read_only_and_the_writes_have_somewhere_to_go():
+    """THIS TEST HAS NOW BEEN WRONG-FOOTED TWICE, WHICH IS WHAT IT IS FOR.
 
-    THIS TEST DID ITS JOB AND THE ANSWER CHANGED. It used to assert that `PUT /rubric` still wrote
-    `config/rubric.active.json` into the image, because that was the one runtime write not going
-    to `$TMPDIR` and therefore the reason a read-only root would have turned an owner-only admin
-    endpoint into a 500. Its docstring said "when the rubric write moves, this is the test that
-    fails and says where to look" — the write moved to the database, and it did.
+    It began asserting that `readOnlyRootFilesystem` was false and that `PUT /rubric` still wrote
+    into the image, because that write was the reason. The rubric moved to the database and it
+    failed, as its docstring said it would. It was then re-pointed at the packaging work that
+    remained — a writable /tmp, which the chart did not render — and it failed again when that
+    landed. Both times the failure said where to look, which is the whole job.
 
-    WHAT BLOCKS THE FLIP NOW IS PACKAGING WORK, NOT AN APPLICATION CHANGE, which is the whole
-    reason to keep the guard rather than delete it. Every remaining runtime write goes to
-    `$TMPDIR`, plus caches under `HOME`, `XDG_CACHE_HOME` and `DOTNET_CLI_HOME`. Turning
-    `readOnlyRootFilesystem` on therefore needs an `emptyDir` at `/tmp` and those three variables
-    pointed into it — and the chart renders NO volumes at all today, which is what the second
-    assertion pins. When someone adds that volume, this fails and asks whether the flag can flip
-    with it.
-
-    The failure mode if it were flipped without the volume is why this is not left to a reviewer's
-    memory: an unwritable scratch directory crashes nothing. `render_page_png` and `_office_to_pdf`
-    return None on any exception and `_analyse_office` turns OSError into an engine-error bucket
-    that scores as `uncertain`, so Office documents would degrade silently with no startup signal.
+    It now asserts the flag is ON and, more usefully, that the three things the flag DEPENDS ON
+    are all present. Turning it on without them fails silently: `render_page_png` and
+    `_office_to_pdf` return None on any exception and `_analyse_office` turns OSError into an
+    engine-error bucket that scores as `uncertain`, so Office documents would degrade with no
+    startup signal at all. There is no loud failure to catch this in production.
     """
     values = yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
-    assert values["securityContext"]["readOnlyRootFilesystem"] is False, (
-        "if this is now true, the chart must mount a writable /tmp and point HOME, "
-        "XDG_CACHE_HOME and DOTNET_CLI_HOME into it; see "
-        "packaging/docs/kubernetes-mvp-gap-report.md")
+    assert values["securityContext"]["readOnlyRootFilesystem"] is True
+    scratch = values["scratch"]["mountPath"]
 
-    # The rubric write is gone, and stays gone: putting it back would restore the application-side
-    # blocker this default used to exist for.
-    rubric = (ROOT / "api" / "routes" / "rubric.py").read_text(encoding="utf-8")
-    assert "write_text" not in rubric, (
-        "PUT /rubric writes to the container again; that is the defect fixed alongside this test")
+    manifests = render(load_example("standard-production"))
+    checked = 0
+    for workload in manifests:
+        if workload["kind"] not in ("Deployment", "Job"):
+            continue
+        spec = workload["spec"]["template"]["spec"]
+        name = workload["metadata"]["name"]
+        container = spec["containers"][0]
+        if container["securityContext"].get("readOnlyRootFilesystem") is not True:
+            continue  # Ollama and Grafana pin it false; their own tests cover that.
+        checked += 1
 
-    # No workload mounts anything yet, so there is nowhere for a read-only root's scratch to go.
+        mounts = {m["mountPath"] for m in container.get("volumeMounts") or []}
+        assert scratch in mounts, f"{name} has a read-only root and nowhere to write"
+        mounted = {m["name"] for m in container["volumeMounts"] if m["mountPath"] == scratch}
+        declared = {v["name"] for v in spec.get("volumes") or []}
+        assert mounted <= declared, f"{name} mounts a volume the pod does not declare"
+
+        # The caches that do NOT live under $TMPDIR, each redirected onto the scratch volume.
+        # Without these the writes fail in libraries — fontconfig, the .NET CLI — rather than in
+        # this application, which is why they are asserted rather than left to review.
+        env = {e["name"]: e.get("value") for e in container.get("env") or []}
+        for key in ("HOME", "XDG_CACHE_HOME", "DOTNET_CLI_HOME"):
+            assert key in env, f"{name} is missing {key}; that cache write has nowhere to go"
+            assert env[key].startswith(scratch), (
+                f"{name} points {key} at {env[key]}, which is not on the writable volume")
+        assert env.get("PYTHONDONTWRITEBYTECODE") == "1", (
+            f"{name} will attempt a __pycache__ write per module against a read-only /app")
+
+    assert checked >= 5, f"only {checked} workloads checked; expected the API, three workers and "\
+                         f"the hook Jobs"
+
+
+@needs_helm
+def test_the_scratch_volume_does_not_shrink_the_storage_the_preset_promises():
+    """An emptyDir counts against the pod's `ephemeral-storage` LIMIT, which this chart already
+    sets per tier from the preset — 8Gi for remediate. A `sizeLimit` here would be a second bound
+    on one budget, and the tighter one would win by accident, silently capping a worker below the
+    storage its own preset promises.
+
+    Memory-backing would be worse still: charged to the pod's MEMORY limit, so one large document
+    OOM-kills the worker instead of filling a disk it was given.
+    """
     for workload in render(load_example("standard-production")):
-        if workload["kind"] in ("Deployment", "Job"):
-            assert not workload["spec"]["template"]["spec"].get("volumes"), (
-                f"{workload['metadata']['name']} mounts a volume — if that is a writable /tmp, "
-                f"re-check whether readOnlyRootFilesystem can now be turned on")
+        if workload["kind"] not in ("Deployment", "Job"):
+            continue
+        for volume in workload["spec"]["template"]["spec"].get("volumes") or []:
+            empty = volume.get("emptyDir")
+            if empty is None:
+                continue
+            assert not empty.get("sizeLimit"), (
+                f"{workload['metadata']['name']}: a sizeLimit here is a second bound on the "
+                f"ephemeral-storage budget the preset already sets")
+            assert empty.get("medium") != "Memory", (
+                f"{workload['metadata']['name']}: memory-backed scratch is charged to the memory "
+                f"limit, so a large document OOM-kills the pod")
 
 
 @needs_helm

@@ -92,6 +92,19 @@ UNREAD_BY_THE_APPLICATION = {
     "OLLAMA_HOST": "the ollama server's own bind address",
     "GF_SERVER_ROOT_URL": "Grafana's own absolute-link base",
     "OTEL_SERVICE_NAME": "read by the OpenTelemetry SDK, not by api/",
+    # THE READ-ONLY ROOT'S CACHE REDIRECTIONS. Read by libraries and by CPython rather than by
+    # api/, which is precisely why they belong here: grep the application for them and you find
+    # nothing, and every one of them fails QUIETLY if it is wrong. `securityContext.
+    # readOnlyRootFilesystem` is true, so each names a path on the scratch volume.
+    "HOME": "UID 10001 has no passwd entry — no Dockerfile sets USER, useradd or HOME — so "
+            "expanduser('~') resolved somewhere unverified; api/scanner.py reads ~/.dotnet when "
+            "it invokes the Office analyser",
+    "XDG_CACHE_HOME": "fontconfig, under WeasyPrint/Pango in the report renderer; an unwritable "
+                      "cache is a warning and a slow render rather than an error",
+    "DOTNET_CLI_HOME": "the .NET CLI's own first-run state, for the Office analyser",
+    "PYTHONDONTWRITEBYTECODE": "read by CPython: /app is read-only now, so without it every "
+                               "module attempts a __pycache__ write on first import, fails, and "
+                               "continues silently",
     # DEAD WIRING, and the only entries here that are defects rather than decisions. Each is a
     # `secrets.refs` key the contract REQUIRES, projected to a name no application code reads.
     # Renaming them changes which documents are valid, so it needs an owner decision (PRD S2.8)
