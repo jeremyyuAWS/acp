@@ -1440,8 +1440,8 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 [data-wcag="on"] .seg-review { background: #8A5A00; } /* 5.93:1 on white */
 /* Verify-track progress bar: #BF8C00 on #faf8fb = 2.85:1 (FAIL 1.4.11); darken to match amber fix pattern */
 [data-wcag="on"] .verify-track > i { background: #7A5000; } /* 6.68:1 on --bg */
-.setoverlay { position: fixed; inset: 0; background: rgba(40, 30, 48, 0.38); backdrop-filter: blur(2px); z-index: 80; display: flex; align-items: flex-start; justify-content: center; padding: 36px 20px; overflow-y: auto; }
-.setpanel { background: var(--bg); border-radius: 16px; width: min(1360px, 97vw); box-shadow: 0 24px 64px rgba(30, 22, 34, 0.4); overflow: hidden; }
+.setoverlay { position: fixed; inset: 0; background: rgba(40, 30, 48, 0.38); backdrop-filter: blur(2px); z-index: 80; display: flex; align-items: center; justify-content: center; padding: 20px; overflow-y: auto; box-sizing: border-box; }
+.setpanel { background: var(--bg); border-radius: 16px; width: min(1360px, 97vw); max-height: calc(100vh - 40px); box-shadow: 0 24px 64px rgba(30, 22, 34, 0.4); overflow: auto; }
 .sethead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 22px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 15px; position: sticky; top: 0; }
 .setpanel .subtabs { padding: 12px 22px 0; }
 .setbody { padding: 14px 22px 24px; max-height: 78vh; overflow-y: auto; }
