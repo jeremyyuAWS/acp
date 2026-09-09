@@ -2,9 +2,38 @@
 
 This is an **opt-in orchestration module and fixture-tested contract**, not a shipped
 remediation path. It makes no network calls, alters no source document, changes no
-provider setting, and has no route/worker/store wiring. Target integration deadline:
-September 9, 2026, 10 a.m. Pacific. Parent owns product/UI integration; the spending
-sibling owns the durable reservation ledger.
+provider setting, and has no route/worker/store wiring. Parent owns product/UI
+integration; the spending sibling owns the durable reservation ledger.
+
+## Status, 2026-09-09: still unwired, and NOT the waterfall that ships
+
+The September 9, 2026 integration deadline passed with this module unreached from any
+production path. Verified by call-site trace, not by reading this file:
+`run_waterfall` has exactly one caller, `api/ai.py::run_verified_remediation`, and that
+function is itself called only from `tests/test_llm_waterfall_provider.py`. No route
+handler and no worker reaches either.
+
+**Two different things are called "the waterfall", and only one of them ships.** Anyone
+reasoning about production behaviour from this document is reasoning about the wrong
+module:
+
+| | This contract | What actually runs |
+|---|---|---|
+| Entry point | `run_waterfall` (via `run_verified_remediation`) | `managed_text_generate` → `managed_generate_attempts` |
+| Reached in production | **No** — tests only | Yes, via `api/providers.py:285` |
+| Fix families | `html-root-language` only | generic text proposals + `pptx-slide-title.v1` |
+| Independent verifier | Yes — five evidence fields, all literal `True` | **None** |
+| What gates a change | `verify()`, then approval mode | A person approving the proposal |
+
+The approval contract below — the five-field evidence object, `AUTO_FAMILIES`,
+`auto_eligible` — governs **only** the left-hand column. It does not describe, constrain,
+or certify the shipped path. The shipped path's safety property is different and simpler:
+`api/remediation_impact.py` sets `ai_automatic: False`, so every AI proposal requires a
+person. That is a real guarantee, but it is not this contract's guarantee, and the shared
+name has already invited the confusion.
+
+Treat this module as the *design target* for supervised auto-application (ADR 0056), not
+as a description of current behaviour.
 
 ## API and approval
 
