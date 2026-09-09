@@ -1863,7 +1863,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`}
             renderAssessment={forecast => <AssessSummary files={files} cap={cap} assessment={assessment}
               assessedAt={assessedAt} run={run} notStarted={run?.not_assessed?.count}
-              remediationForecast={forecast} />}
+              remediationForecast={forecast} reviewSummary={reviewCounts}
+              onOpenReview={() => setWorkspaceRequest({ mode: 'review' })} />}
             releaseOption={<RemediationReleasePlan scanId={runId} files={impactScope.map(file => file.file)}
               intent={releasePlanIntent} onChange={setReleasePlanIntent} disabled={readOnly || remBusy} />}
             onRun={readOnly ? undefined : (policy) => {
