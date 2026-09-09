@@ -953,14 +953,23 @@ export default function RemediationInbox({
                              border: `1px solid ${tab === t ? 'transparent' : 'rgba(255,255,255,.22)'}`,
                              background: tab === t ? '#3b6fd6' : 'transparent', color: '#fff',
                              fontWeight: tab === t ? 700 : 500 }}>
-              {WORKFLOW_LABELS[t]} {(t === 'needs-review' ? readyAcrossScan.length : counts[t]) || ''}
+              {/* Every badge counts the rows ITS OWN tab lists. Needs-review used to show the
+                  bulk-approvable count instead, so a tab reading "5" opened onto six rows — the
+                  applied fix awaiting confirmation was in the list and not in the badge. The
+                  ready/inspect split #1888 wanted is still said, in the run summary below and on
+                  the approve button, where a number can carry its own noun. */}
+              {WORKFLOW_LABELS[t]} {counts[t] || ''}
             </button>
           ))}
         </div>
       </div>
       <section className="run-approval-summary" aria-label="Whole-run approval">
         <div><strong>Approve proposals for this run</strong>
-          <p>{runCounts.ready} ready review items · {runCounts.individual} need proposal information or individual review · {runCounts.manual} manual review items</p>
+          {/* A ledger, not a highlight: these terms sum to the workflow tabs above, so the
+              headline count and the tab badges can be reconciled by reading. `inspection` (an
+              applied fix still awaiting the reviewer's confirmation) used to appear in the
+              needs-review LIST and in no count on screen. */}
+          <p>{runCounts.ready} ready review items · {runCounts.individual} need proposal information or individual review · {runCounts.inspection} applied changes to confirm · {runCounts.manual} manual review items</p>
           <p>Inspection is optional. Confirm all ready proposals together; writing and verification follow approval.</p>
           {preparingProposals && <p role="status">Preparing proposals — remediation is still processing. Readiness updates as work finishes.</p>}
         </div>
@@ -1143,7 +1152,15 @@ export default function RemediationInbox({
           visible={batchScopeIds ? queue.filter(f => batchScopeIds.includes(f.id)) : queue}
           decisions={decisions} drafts={drafts}
           confirmRequest={confirmRunRequest} onConfirmRequestHandled={() => setConfirmRunRequest(0)} preparingProposals={preparingProposals} onOpenPlan={onOpenPlan}
-          scopeKey={JSON.stringify([scanId, batchScopeIds, tab])}
+          // What this key NAMES is the set of findings the batch covers — and that set is the
+          // `visible` prop above, which reads scanId and batchScopeIds and does not read `tab` at
+          // all. `tab` was in the key anyway, so switching category counted as a scope change and
+          // reset the panel: a reviewer who had frozen five proposals and touched a tab lost all
+          // five, with no prompt, no undo, and nothing on screen to say it had happened. The stale
+          // ARMED CONFIRMATION that reset also cleared is still cleared — by `open` below, which is
+          // what actually goes stale when the panel closes.
+          scopeKey={JSON.stringify([scanId, batchScopeIds])}
+          open={bulkPreviewOpen}
           scopeLabel={batchScopeIds ? 'Selected matching issue in this scan' : 'All documents in this scan'}
           readyOutsideScope={batchScopeIds ? readyAcrossScan.filter(f => !batchScopeIds.includes(f.id)).length : 0}
           onShowAllReady={() => setBatchScopeIds(null)}

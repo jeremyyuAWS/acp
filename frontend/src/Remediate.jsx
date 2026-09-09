@@ -27,7 +27,7 @@ import FindingComments from './FindingComments.jsx'
 import DueDate from './DueDate.jsx'
 import UndoFix from './UndoFix.jsx'
 import FixOutcomes from './FixOutcomes.jsx'
-import { autoFixRows, matchesWorkflow } from './remediationInboxModel.js'
+import { autoFixRows, matchesWorkflow, progress } from './remediationInboxModel.js'
 import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
@@ -946,6 +946,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const reviewNeeds = inboxQueue.filter((f) => matchesWorkflow(f, 'needs-review', inboxDecisions))
   const reviewCount = reviewNeeds.length
   const reviewCounts = remediationReviewCounts(inboxQueue, inboxDecisions)
+  // The Review queue's progress, from the SAME (queue, decisions) pair the inbox pane's own
+  // "N of M reviewed" counter reads — RemediationInbox calls progress(queue, decisions) on exactly
+  // these props. It used to read `totalHitl`/`hitlProgress`, a session tally of the raw human queue
+  // plus this session's decisions and self-fixes, so the header said "6 of 15" two lines above a
+  // sentence counting 9 of a different 12. Two numbers, two denominators, no way to reconcile them
+  // by reading. `totalHitl` still drives the Advanced block's engine-level "HITL queue" metric,
+  // which is a different question asked in a different place.
+  const reviewProgress = progress(inboxQueue, inboxDecisions)
+  const reviewPct = reviewProgress.total > 0 ? Math.round((reviewProgress.resolved / reviewProgress.total) * 100) : 0
   const reviewDocCount = new Set(reviewNeeds.map((f) => f.file).filter(Boolean)).size
   // Navigation counts pending human review items, excluding already-applied inspection rows.
   useEffect(() => { onHitlCount?.(reviewCounts.pendingItems) }, [reviewCounts.pendingItems, onHitlCount])
@@ -1536,15 +1545,25 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               ? <p className="rem-review-lead" style={{ margin: '2px 0 0', fontSize: 13 }}>
                   <b>{reviewCounts.pendingItems}</b> review item{reviewCounts.pendingItems === 1 ? '' : 's'} require attention across{' '}
                   <b>{reviewCounts.documents}</b> document{reviewCounts.documents === 1 ? '' : 's'}
+                  {/* Applied fixes awaiting the reviewer's confirmation are deliberately OUT of this
+                      count and out of the nav badge (#1888 — a run with 2000 of them would drown the
+                      346 items that need a decision). They are in the Needs-review LIST, though, so
+                      leaving them unsaid is what made the headline and the tab disagree. Said here,
+                      quietly, rather than folded into a number that means something else. */}
+                  {reviewCounts.inspection > 0 && <span className="muted">
+                    {' · '}{reviewCounts.inspection} applied change{reviewCounts.inspection === 1 ? '' : 's'} to confirm
+                  </span>}
                 </p>
               // NOT unconditionally "All clear": an unreadable document is not a clear one, and
               // the reader who sees "All clear" stops reading (reviewQueueCopy.js).
               : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>{reviewLeadLine(files, reviewCounts.pendingItems)}</p>}
           </div>
-          {totalHitl > 0 && (
+          {reviewProgress.total > 0 && (
             <div className="rem-sec-prog">
-              <div className="conftrack" style={{ width: 120 }}><i style={{ width: `${hitlProgress}%`, background: hitlProgress === 100 ? 'var(--success-fg)' : 'var(--info-fg)' }} /></div>
-              <span className="muted">{totalHitl - queue.length} of {totalHitl} resolved</span>
+              <div className="conftrack" style={{ width: 120 }}><i style={{ width: `${reviewPct}%`, background: reviewPct === 100 ? 'var(--success-fg)' : 'var(--info-fg)' }} /></div>
+              {/* "reviewed", the inbox pane's word — an approved fix awaiting the re-scan has been
+                  reviewed and is not yet Completed, so "resolved" here contradicted the tabs. */}
+              <span className="muted">{reviewProgress.resolved} of {reviewProgress.total} reviewed</span>
             </div>
           )}
           {/* Reviewer analytics (vision #39) — real counts from hitl_events, not a fabricated score:
