@@ -8,6 +8,15 @@ const old = (value, now) => {
 export function waterfallRunNotice({ snapshot = {}, view, error = false, paused = false, now = Date.now() } = {}) {
   if (error) return { code: 'unavailable', title: 'Live updates delayed', detail: view ? 'Showing the last recorded activity; motion will resume with fresh updates.' : 'Activity could not be loaded. No AI outcome is inferred.' }
   if (paused) return { code: 'paused', title: 'Animation paused', detail: 'This does not stop remediation. Recorded counts and details remain available.' }
+  const runStates = {
+    cancelled: ['Run cancelled', 'Recorded results remain available. Unfinished work was not completed.'],
+    cancel_requested: ['Stopping safely', 'Cancellation was requested; active work may still be finishing.'],
+    paused: ['Remediation is paused', 'The run is paused, not completed. Review its controls before resuming.'],
+    stalled: ['Worker progress has stopped', 'Inspect worker activity and retries before starting this work again.'],
+    retry_scheduled: ['Retry scheduled', 'A temporary issue delayed this work. Recorded results remain available.'],
+    failed: ['Remediation failed', 'Inspect failed documents and remaining work before retrying.'],
+  }
+  if (runStates[snapshot.state]) return { code: snapshot.state, title: runStates[snapshot.state][0], detail: runStates[snapshot.state][1] }
   if (!snapshot.terminal && old(snapshot.generated_at, now)) return { code: 'stale', title: 'Waiting for a fresh update', detail: 'The last snapshot does not confirm current activity.' }
   if (snapshot.terminal) {
     if (positive(snapshot.documents?.failed) || snapshot.state === 'failed') return { code: 'failed', title: 'Processing finished with failures', detail: 'Inspect failed documents and remaining review items.' }

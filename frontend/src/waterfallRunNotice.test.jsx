@@ -47,3 +47,10 @@ describe('recorded tier state labels', () => {
     expect(waterfallStageStatus(stage, options)).toContain(expected)
   })
 })
+
+it.each(['cancelled', 'cancel_requested', 'paused', 'stalled', 'retry_scheduled', 'failed'])('keeps server %s state explicit even with retained processing counts', state => {
+  const notice = waterfallRunNotice({ snapshot: { state, terminal: state === 'cancelled', generated_at: new Date().toISOString(), documents: { processing: 2 } } })
+  expect(notice.code).toBe(state)
+  expect(notice.title).not.toContain('Documents are processing')
+  expect(notice.title).not.toContain('Automatic processing finished')
+})
