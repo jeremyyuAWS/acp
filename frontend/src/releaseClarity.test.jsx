@@ -289,3 +289,24 @@ it('publishes a saved partial copy only after explicit opt-in without approving 
   await c.rerender({ run: { id: 'other' }, files })
   expect([...c.querySelectorAll('label')].find(el => el.textContent.includes('Publish with remaining issues')).querySelector('input').checked).toBe(false)
 })
+
+it('offers partial publication in the visible release actions without opening advanced details', async () => {
+  const files = [held('one.pdf', { remediated_at: '2026-09-09', corrected_sha256: 'one-digest' }),
+    held('two.pdf', { remediated_at: '2026-09-09', corrected_sha256: 'two-digest' }), held('draft.pdf')]
+  listHitlQueue.mockResolvedValue(files.map((f, i) => ({ id: i, file: f.file, status: 'pending' })))
+  const c = await mount({ run, files })
+  const optIn = [...c.querySelectorAll('label')].find(el => el.textContent.includes('Publish with remaining issues')).querySelector('input')
+  expect(optIn.closest('details')).toBeNull()
+  expect(optIn.closest('.release-quick')).not.toBeNull()
+  await click(optIn)
+  const publish = button(c, 'Publish saved copies (2)')
+  expect(publish.disabled).toBe(false)
+  expect(publish.closest('details')).toBeNull()
+  await click(publish)
+  expect(publishAllFiles).toHaveBeenCalledWith(run.id, ['one.pdf', 'two.pdf'], '', {
+    destination: null, allowRemainingIssues: true,
+    expectedArtifacts: { 'one.pdf': 'one-digest', 'two.pdf': 'two-digest' },
+  })
+  expect(previewReleaseDestination).not.toHaveBeenCalled()
+  expect(files.every(f => f.compliant === false)).toBe(true)
+})

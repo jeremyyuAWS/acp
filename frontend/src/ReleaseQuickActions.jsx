@@ -3,7 +3,7 @@ import { planReleaseContinuation, authorizeReleaseContinuation, getReleaseContin
 import './release-quick-actions.css'
 
 export default function ReleaseQuickActions({ runId, files = [], ready = [], destination, folderName = '', destinationLabel,
-  destinationPicker, readOnly, publishing, readyReasons = [], onReady, onProgress }) {
+  destinationPicker, readOnly, publishing, releaseOptions, allowRemainingIssues = false, readyReasons = [], onReady, onProgress }) {
   const reasonId = useId()
   const [plan, setPlan] = useState(null)
   const [active, setActive] = useState(null)
@@ -97,13 +97,14 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
   const count = state => outcomes.filter(([, result]) => result.state === state).length
   return <section className="panel release-quick" aria-label="Publish ready files and approved changes">
     <h3 className="release-quick-title">Release actions</h3>
+    {releaseOptions}
     <div className="release-quick-summary"><strong>{ready.length} ready to publish</strong><span>{files.length} files in this scope</span></div>
     <p><b>Destination:</b> {plan?.intent?.destination?.folder_name ? `${plan.intent.destination.folder_name} / Remediated / ${plan.intent.release_folder_name || folderName || 'Timestamp + user email'}` : destinationLabel}. Originals stay unchanged.</p>
     {!readOnly && <details><summary>Change destination</summary>{destinationPicker}</details>}
     <div className="release-quick-buttons">
       <div className="release-quick-action">
         <button className="qbtn approve" disabled={Boolean(readyReason)} aria-describedby={readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(ready.map(f => f.file))}>
-          {publishing ? 'Publishing ready files…' : `Publish ready files (${ready.length})`}
+          {publishing ? 'Publishing copies…' : allowRemainingIssues ? `Publish saved copies (${ready.length})` : `Publish ready files (${ready.length})`}
         </button>
         {readyReason && <div id={`${reasonId}-ready`}><p>{readyReason}</p>
           {!readOnly && !ready.length && readyReasons.slice(0, 3).map(reason => <p key={reason}>{reason}</p>)}
