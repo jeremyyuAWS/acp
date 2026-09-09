@@ -73,8 +73,11 @@ def estimate_readiness(reason=None, *, available=False):
         ('Estimate unavailable', 'The evidence required for a safe estimate is not available.',
          ('Continue with deterministic results and human review until evidence is available.',)),
     )
+    # Keep compatibility with both the original single-string entries and any
+    # future entries that provide an ordered list of next steps.
+    next_step = next_steps if isinstance(next_steps, str) else next_steps[0]
     return {'state': 'unavailable', 'label': label, 'detail': detail,
-            'next_step': next_steps[0], 'reason': reason}
+            'next_step': next_step, 'reason': reason}
 
 
 def _timestamp(value):
