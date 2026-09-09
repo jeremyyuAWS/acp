@@ -1,0 +1,9 @@
+.remediation-generation-chain { margin-top: 16px; font-size: 13px; line-height: 1.5; }
+.remediation-generation-chain summary { cursor: pointer; font-weight: 600; }
+.remediation-generation-chain ol { padding-left: 22px; }
+.remediation-generation-chain li { margin: 10px 0; overflow-wrap: anywhere; }
+.remediation-generation-chain li span, .remediation-generation-chain li small { display: block; }
+.remediation-generation-chain small { color: var(--muted); }
+.remediation-generation-chain__toggle { display: flex; align-items: center; gap: 8px; }
+.remediation-generation-chain__model { display: block; margin-top: 12px; }
+.remediation-generation-chain select { display: block; box-sizing: border-box; max-width: 100%; width: 100%; padding: 8px; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 8px; }

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { getRemediationImpact, saveRemediationImpactPolicy, assignRemediationImpact } from './api.js'
 import './remediation-impact-card.css'
 import RemediationPlanChoices from './RemediationPlanChoices.jsx'
+import { generationChainProblem } from './remediationGenerationChain.js'
 import RemediationEstimateDisclosure from './RemediationEstimateDisclosure.jsx'
 import { apiBase, authEpoch } from './apiIdentity.js'
 import RemediationWaterfallImpact from './RemediationWaterfallImpact.jsx'
@@ -114,10 +115,11 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
 
   const basePolicy = policy || (validPolicy(data?.policy) ? data.policy : { rule_based: 0, ai: 0 })
   const selected = data?.capabilities?.ai_budget === true ? { ai_budget_usd: '0.00', ...basePolicy } : basePolicy
-  const ready = !!data && !loading && !error && data.integrity?.complete === true
+  const chainProblem = generationChainProblem(selected, data?.capabilities?.generation_chain, data?.capabilities?.ai_budget === true)
+  const ready = !chainProblem && !!data && !loading && !error && data.integrity?.complete === true
   const countDeltas = useForecastDeltas({
     identity: JSON.stringify([runId, scopeKey]), ready,
-    policyKey: JSON.stringify([data?.policy?.rule_based, data?.policy?.ai, data?.policy?.ai_budget_usd, data?.policy?.ai_review]),
+    policyKey: JSON.stringify([data?.policy?.rule_based, data?.policy?.ai, data?.policy?.ai_budget_usd, data?.policy?.ai_review, data?.policy?.generation_chain]),
     automatic: data?.lanes?.automatic?.findings,
     human: Number.isFinite(data?.lanes?.review?.findings) && Number.isFinite(data?.lanes?.manual?.findings)
       ? data.lanes.review.findings + data.lanes.manual.findings : undefined,
@@ -174,14 +176,15 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       <div className="remediation-impact__start-summary">
         <strong>{ready ? `${number(data.open?.findings)} findings · ${number(data.open?.files)} files` : 'Preview not ready'}</strong>
         <span>{ready ? `${number(data.lanes?.automatic?.findings)} automatic · ${number(data.lanes?.review?.findings)} to approve · ${number(data.lanes?.manual?.findings)} manual · ${number(data.lanes?.blocked?.findings)} blocked` : 'Review the current preview before starting.'}</span>
-        <span>{selected.ai > 0 ? `AI drafts need approval${data?.capabilities?.ai_budget === true ? ` · AI limit $${selected.ai_budget_usd}` : ' · Spending cap unavailable'}` : 'Rules only · No new AI suggestions'}</span>
+        <span>{selected.ai > 0 ? `AI drafts need approval · Up to ${selected.generation_chain?.steps?.length === 3 ? 3 : 2} generation models${data?.capabilities?.ai_budget === true ? ` · AI limit $${selected.ai_budget_usd}` : ' · Spending cap unavailable'}` : 'Rules only · No new AI suggestions'}</span>
       </div>
       <button type="button" className="remediation-impact__run" disabled={readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
       onClick={() => onRun(selected, data)}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>
     </div>
     <div className="remediation-impact__split"><div className="remediation-impact__settings">
-    <RemediationPlanChoices policy={selected} providers={data?.providers}
-      disabled={!runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true}
+    {chainProblem && <p role="alert">{chainProblem}</p>}
+    <RemediationPlanChoices generationChainOptions={data?.capabilities?.generation_chain} policy={selected} providers={data?.providers}
+      disabled={readOnly || !runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true}
       reviewSupported={data?.capabilities?.ai_review?.review_supported === true}
       automaticReviewSupported={data?.capabilities?.ai_review?.automatic_application_supported === true}
       reviewEligibleFamilies={data?.capabilities?.ai_review?.eligible_families || []}
