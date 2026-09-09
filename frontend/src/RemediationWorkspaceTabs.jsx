@@ -8,17 +8,11 @@ function modeFromLocation() {
   } catch { return null }
 }
 
-function storedMode(runId) {
-  try {
-    const mode = sessionStorage.getItem(`acp-remediation-mode-${runId || 'none'}`)
-    return MODES.includes(mode) ? mode : null
-  } catch { return null }
-}
-
 export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snapshot = null,
   plan, review, live, workspaceRequest = null }) {
-  // Null means the user has not chosen: the live server facts may still select the best default.
-  const [chosen, setChosen] = useState(() => modeFromLocation() || storedMode(runId))
+  // Open on Plan unless navigation explicitly names another tab. Background work and prior
+  // session choices must not skip the planning screen.
+  const [chosen, setChosen] = useState(() => modeFromLocation())
   const tabs = useRef([])
   const panels = useRef({})
   const pendingFocus = useRef(null)
@@ -28,16 +22,16 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
   }
   const lastWorkspaceRequest = useRef(workspaceRequest)
   const activeWork = !!snapshot && !snapshot.terminal && snapshot.state !== 'draft'
-  const mode = chosen || (reviewCount > 0 ? 'review' : activeWork ? 'live' : 'plan')
+  const mode = chosen || 'plan'
 
   useEffect(() => {
     cancelPanelFocus()
-    setChosen(modeFromLocation() || storedMode(runId))
+    setChosen(modeFromLocation())
     return cancelPanelFocus
   }, [runId])
 
   useEffect(() => {
-    const restore = () => { cancelPanelFocus(); setChosen(modeFromLocation() || storedMode(runId)) }
+    const restore = () => { cancelPanelFocus(); setChosen(modeFromLocation()) }
     window.addEventListener('popstate', restore)
     return () => window.removeEventListener('popstate', restore)
   }, [runId])
@@ -46,7 +40,6 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
     cancelPanelFocus()
     setChosen(next)
     try {
-      sessionStorage.setItem(`acp-remediation-mode-${runId || 'none'}`, next)
       const url = new URL(window.location.href)
       url.searchParams.set('tab', 'remediate')
       url.searchParams.set('mode', next)
