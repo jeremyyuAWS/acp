@@ -63,3 +63,23 @@ it('matches HTTPS URL boundaries and prefers the deepest matching library', () =
   expect(matchingLocation(rows, CUSTOMER_SHAREPOINT_URL).id).toBe('library')
   expect(matchingLocation(rows, 'http://fgxlxj.sharepoint.com/Shared Documents')).toBeNull()
 })
+
+it('gives the source row one type treatment, set once on the row', async () => {
+  // #1904 put small monospace on the breadcrumb alone, leaving it beside two default-size
+  // actions — one row, two typefaces. The type belongs to the row so all three children
+  // inherit it; .linklike carries `font: inherit`, so the button follows too.
+  const c = await mount()
+  const row = c.querySelector('.linklike').closest('div')
+  expect(row.style.fontFamily).toBe('var(--font-mono)')
+  expect(row.style.fontSize).toBe('12px')
+
+  // The breadcrumb must NOT re-declare the font. If it does, the row and the child can
+  // disagree again, which is exactly the state this replaced.
+  const breadcrumb = row.querySelector('span')
+  expect(breadcrumb.style.fontFamily).toBe('')
+  expect(breadcrumb.style.fontSize).toBe('')
+
+  // Layout is not typography: these stop a long site → library name blowing the row out.
+  expect(breadcrumb.style.overflowWrap).toBe('anywhere')
+  expect(breadcrumb.style.minWidth).toBe('0px')
+})
