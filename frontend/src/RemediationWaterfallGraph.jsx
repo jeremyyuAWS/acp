@@ -38,7 +38,7 @@ const nodeTypes = { waterfall: WaterfallNode }
 // This graph is the configured path, not evidence that every finding visits every stage.
 // Only the parent's confirmed motion stage can illuminate a connection.
 export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules', motion = {}, paused = false,
-  identity, reviewCount, verifiedCount, width = 1100, onSelect, onKeyDown = () => {} }) {
+  identity, reviewCount, verifiedCount, reducedMotion = false, width = 1100, onSelect, onKeyDown = () => {} }) {
   const narrow = width < 850
   const columns = narrow ? 2 : 5
   const nodeWidth = Math.max(120, (width - 32 - (columns - 1) * 26) / columns)
@@ -68,14 +68,14 @@ export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules
     id, type: 'waterfall', position: { x: 16 + coords[index][0] * (nodeWidth + 26), y: 16 + coords[index][1] * (height + 36) },
     style: { width: nodeWidth }, draggable: false, selectable: false, focusable: false,
     data: { ...facts[index], id, index, identity, height, selected: selection === id, active: !paused && motion.stage === id,
-      paused, onSelect, onKeyDown,
+      paused: paused || reducedMotion, onSelect, onKeyDown,
       source: index < 4 ? side(coords[index], coords[index + 1]) : null,
       target: index > 0 ? (coords[index - 1][1] < coords[index][1] ? Position.Top : coords[index - 1][0] < coords[index][0] ? Position.Left : Position.Right) : null,
     },
   }))
   const edges = ORDER.slice(1).map((target, index) => ({
     id: `${ORDER[index]}-${target}`, source: ORDER[index], target, type: 'smoothstep',
-    animated: !paused && motion.stage === target,
+    animated: !paused && !reducedMotion && motion.stage === target,
     className: !paused && motion.stage === target ? 'wf-graph-edge-working' : '',
     markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: !paused && motion.stage === target ? '#8359ab' : '#c5b8d0' },
     style: { stroke: !paused && motion.stage === target ? '#8359ab' : '#c5b8d0', strokeWidth: !paused && motion.stage === target ? 2.5 : 1.5 },
@@ -89,7 +89,7 @@ export default function RemediationWaterfallGraph({ stages, aiEnabled, selection
   const host = useRef(null)
   const [width, setWidth] = useState(1100)
   const reduced = useReducedMotion()
-  const stopped = paused || error || motion.hidden || reduced
+  const stopped = paused || error || motion.hidden
   useEffect(() => {
     const measure = () => { const next = host.current?.clientWidth; if (next > 0) setWidth(next) }
     measure()
@@ -104,9 +104,9 @@ export default function RemediationWaterfallGraph({ stages, aiEnabled, selection
     onSelect?.(ORDER[next])
     host.current?.querySelector(`[data-stage="${ORDER[next]}"]`)?.focus()
   }
-  const graph = waterfallGraphModel({ stages, aiEnabled, selection, onSelect, motion, paused: stopped, identity,
+  const graph = waterfallGraphModel({ stages, aiEnabled, selection, onSelect, motion, paused: stopped, reducedMotion: reduced, identity,
     reviewCount: count(reviewCount) ? reviewCount : undefined, verifiedCount: count(verifiedCount) ? verifiedCount : undefined, width, onKeyDown })
-  return <section ref={host} className={`wf-graph${stopped ? ' wf-graph-stopped' : ''}`} aria-label="Remediation waterfall stages">
+  return <section ref={host} className={`wf-graph${stopped || reduced ? ' wf-graph-stopped' : ''}`} aria-label="Remediation waterfall stages">
     <div className="wf-graph-heading"><h4>Live AI waterfall</h4><span>Select a stage to inspect its evidence</span></div>
     <div className="wf-graph-canvas" style={{ height: graph.height }}>
       <ReactFlow nodes={graph.nodes} edges={graph.edges} nodeTypes={nodeTypes}

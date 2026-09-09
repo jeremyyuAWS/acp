@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -8,6 +8,9 @@ import { dirname, join } from 'node:path'
 import RemediationOpsPanel from './RemediationOpsPanel.jsx'
 import { freshness, integrityAffects, partitionSums, headline, isNewer, counterRows, secondaryRows }
   from './remediationSnapshot.js'
+
+beforeEach(() => vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }))
+afterEach(() => vi.unstubAllGlobals())
 
 const here = dirname(fileURLToPath(import.meta.url))
 

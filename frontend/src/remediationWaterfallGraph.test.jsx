@@ -13,8 +13,8 @@ vi.mock('@xyflow/react', () => ({
     createElement('span', { 'data-testid': 'moving-edges' }, edges.filter(edge => edge.animated).map(edge => edge.target).join(',')), children),
 }))
 const stages = [
-  { tier: 1, operations: 4, models: [{ provider: 'OpenAI', model: 'gpt-4.1-mini' }] },
-  { tier: 2, operations: 2, models: [{ provider: 'Anthropic', model: 'claude-sonnet-4-20250514' }] },
+  { tier: 1, operations: 4, models: [{ provider: 'provider-one', model: 'recorded-first-v2' }] },
+  { tier: 2, operations: 2, models: [{ provider: 'provider-two', model: 'recorded-fallback-version-20250514' }] },
 ]
 beforeEach(() => { vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))) })
 afterEach(async () => { await unmountAll(); vi.unstubAllGlobals() })
@@ -28,10 +28,10 @@ describe('the connected remediation waterfall', () => {
   it('shows recorded model names and providers, with attempt units distinct from changes', async () => {
     const { container } = await mount({ reviewCount: 8, verifiedCount: 404 })
     expect(container.querySelectorAll('button')).toHaveLength(5)
-    expect(container.querySelector('[data-stage=first]').textContent).toContain('gpt-4.1-mini')
-    expect(container.querySelector('[data-stage=first]').textContent).toContain('OpenAI')
-    expect(container.querySelector('[data-stage=next]').textContent).toContain('claude-sonnet-4-20250514')
-    expect(container.querySelector('[data-stage=next]').textContent).toContain('Anthropic')
+    expect(container.querySelector('[data-stage=first]').textContent).toContain('recorded-first-v2')
+    expect(container.querySelector('[data-stage=first]').textContent).toContain('provider-one')
+    expect(container.querySelector('[data-stage=next]').textContent).toContain('recorded-fallback-version-20250514')
+    expect(container.querySelector('[data-stage=next]').textContent).toContain('provider-two')
     expect(container.querySelector('[data-stage=next]').textContent).toContain('2 recorded operations')
     expect(container.querySelector('[data-stage=approval]').textContent).toContain('8 review items')
     expect(container.querySelector('[data-stage=verify]').textContent).toContain('404 verified changes')
@@ -63,6 +63,7 @@ describe('the connected remediation waterfall', () => {
     matchMedia.mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })
     const { container } = await mount({ motion: { stage: 'verify' } })
     expect(container.querySelector('[data-testid=moving-edges]').textContent).toBe('')
+    expect(container.querySelector('[data-stage=verify] .wf-graph-node-working').textContent).toContain('Verification in progress')
     const css = readFileSync(`${import.meta.dirname}/remediation-waterfall-graph.css`, 'utf8')
     expect(css).toMatch(/prefers-reduced-motion:reduce[\s\S]*animation:none/)
   })
