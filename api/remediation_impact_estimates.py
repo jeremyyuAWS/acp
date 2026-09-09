@@ -13,6 +13,69 @@ from math import sqrt
 MINIMUM_SAMPLES = 30
 CONFIDENCE_LEVEL = 0.95
 
+# Keep the machine reason and the user-facing explanation together.  The estimate
+# remains fail-closed; this metadata only tells the planner what evidence is
+# missing and never turns a missing estimate into a forecast.
+_READINESS = {
+    'calibration_unavailable': ('Evaluation not configured',
+                                'No independent evaluation has been supplied for this change type and model configuration.',
+                                ('Run a representative evaluation before using an impact estimate.')),
+    'unsupported_cohort': ('No matching evaluation',
+                           'The available evaluation covers a different change type or model configuration.',
+                           ('Evaluate the selected change type with the active configuration.')),
+    'calibration_not_validated': ('Evaluation needs validation',
+                                  'The evaluation is present but has not been independently validated.',
+                                  ('Complete independent validation before publishing an estimate.')),
+    'incomplete_evaluation_population': ('Evaluation is incomplete',
+                                         'The evaluation does not account for every case in its declared population.',
+                                         ('Finish and reconcile the evaluation population.')),
+    'invalid_evaluation_policy': ('Evaluation policy is invalid',
+                                  'The configured evidence policy cannot be applied safely.',
+                                  ('Use the server evidence policy and retry the evaluation.')),
+    'invalid_evaluation_dates': ('Evaluation dates are invalid',
+                                 'The evaluation timestamps are missing, contradictory, or in the future.',
+                                 ('Correct the evaluation timestamps before publishing an estimate.')),
+    'calibration_expired': ('Evaluation has expired',
+                            'The evaluation is outside the allowed freshness window.',
+                            ('Run a current evaluation for this change type and configuration.')),
+    'samples_unavailable': ('Evaluation cases unavailable',
+                            'The independent evaluation cases could not be read.',
+                            ('Restore access to the evaluation evidence and retry.')),
+    'invalid_sample_evidence': ('Evaluation evidence is invalid',
+                                'At least one case is missing a required identity, outcome, or timestamp.',
+                                ('Repair the case evidence and reconcile the population.')),
+    'conflicting_sample_evidence': ('Evaluation evidence conflicts',
+                                    'The same independent case has more than one recorded outcome.',
+                                    ('Resolve the conflicting case before publishing an estimate.')),
+    'insufficient_samples': ('Evaluation needs more cases',
+                             'The independent evaluation has fewer cases than the minimum evidence policy.',
+                             ('Evaluate more representative cases before using an impact estimate.')),
+}
+
+
+def estimate_readiness(reason=None, *, available=False):
+    """Return safe, user-facing readiness metadata for an impact estimate.
+
+    ``reason`` remains the stable machine value.  The additional fields are
+    deliberately explanatory only: callers must still gate execution on
+    ``available`` and must never use this helper as evidence of reliability.
+    """
+    if available:
+        return {
+            'state': 'ready',
+            'label': 'Validated estimate available',
+            'detail': 'A complete, current independent evaluation matches this change type and model configuration.',
+            'next_step': 'Use the estimate as planning context; it does not approve or guarantee a specific fix.',
+            'reason': None,
+        }
+    label, detail, next_steps = _READINESS.get(
+        reason,
+        ('Estimate unavailable', 'The evidence required for a safe estimate is not available.',
+         ('Continue with deterministic results and human review until evidence is available.',)),
+    )
+    return {'state': 'unavailable', 'label': label, 'detail': detail,
+            'next_step': next_steps[0], 'reason': reason}
+
 
 def _timestamp(value):
     try:
@@ -47,7 +110,8 @@ def build_impact_estimate(samples, *, config_id, change_family, evaluation=None,
     must be allocated once upstream; this helper never divides or repeats their cost.
     Replayed identical samples are deduplicated; conflicting evidence fails closed.
     """
-    result = {'available': False, 'reason': 'calibration_unavailable', 'sample_size': 0,
+    result = {'available': False, 'reason': 'calibration_unavailable',
+              'readiness': estimate_readiness('calibration_unavailable'), 'sample_size': 0,
               'config_id': config_id, 'change_family': change_family,
               'evaluation_version': None, 'reliability_lower_bound': None,
               'reliability_range': None, 'confidence_level': CONFIDENCE_LEVEL,
@@ -56,7 +120,7 @@ def build_impact_estimate(samples, *, config_id, change_family, evaluation=None,
               'metric': 'independently_evaluated_success_rate',
               'method': 'wilson_score_95_two_sided', 'evaluated_at': None, 'expires_at': None}
     def unavailable(reason):
-        return {**result, 'reason': reason}
+        return {**result, 'reason': reason, 'readiness': estimate_readiness(reason)}
     if not isinstance(evaluation, dict):
         return result
     if not config_id or not change_family or evaluation.get('config_id') != config_id or evaluation.get('change_family') != change_family:
@@ -103,7 +167,7 @@ def build_impact_estimate(samples, *, config_id, change_family, evaluation=None,
         return unavailable('insufficient_samples')
     successes = sum(sample['outcome'] == 'success' for sample in matched.values())
     interval = wilson_interval(successes, len(matched))
-    result.update(available=True, reason=None, successes=successes,
+    result.update(available=True, reason=None, readiness=estimate_readiness(available=True), successes=successes,
                   reliability_lower_bound=interval[0], reliability_range=interval)
     costs = []
     for sample in matched.values():

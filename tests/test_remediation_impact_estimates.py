@@ -1,7 +1,7 @@
 from copy import deepcopy
 from datetime import datetime, timezone
 import pytest
-from remediation_impact_estimates import build_impact_estimate, wilson_interval
+from remediation_impact_estimates import build_impact_estimate, estimate_readiness, wilson_interval
 
 NOW = datetime(2026, 9, 8, tzinfo=timezone.utc)
 
@@ -32,6 +32,8 @@ def test_measured_complete_cohort_has_interval_and_observed_cost_range():
     assert result['cost_range_usd'] == ['0.002', '0.005']
     assert result['cost_range_kind'] == 'observed_sample_min_max'
     assert result['evaluation_version'] == 'evaluation-7'
+    assert result['readiness']['state'] == 'ready'
+    assert 'planning context' in result['readiness']['next_step']
 
 def test_missing_calibration_does_not_treat_generation_as_success():
     _, samples = cohort()
@@ -39,6 +41,22 @@ def test_missing_calibration_does_not_treat_generation_as_success():
     assert result['available'] is False
     assert result['reason'] == 'calibration_unavailable'
     assert result['reliability_lower_bound'] is None
+    assert result['readiness']['label'] == 'Evaluation not configured'
+    assert result['readiness']['reason'] == 'calibration_unavailable'
+
+
+def test_readiness_explains_unknown_reasons_without_granting_availability():
+    missing = estimate_readiness('insufficient_samples')
+    assert missing == {
+        'state': 'unavailable',
+        'label': 'Evaluation needs more cases',
+        'detail': 'The independent evaluation has fewer cases than the minimum evidence policy.',
+        'next_step': 'Evaluate more representative cases before using an impact estimate.',
+        'reason': 'insufficient_samples',
+    }
+    unknown = estimate_readiness('future_reason')
+    assert unknown['state'] == 'unavailable'
+    assert unknown['reason'] == 'future_reason'
 
 @pytest.mark.parametrize('field,value,reason', [
     ('validated', False, 'calibration_not_validated'),
