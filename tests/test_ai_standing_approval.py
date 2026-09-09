@@ -325,3 +325,21 @@ def test_partial_first_attempt_then_complete_fallback_needs_no_new_authorization
         approve_file(s,ctx)
     assert s.get_hitl_item(item)['status']=='approved'
     assert len(apply_jobs(s))==1
+
+
+def test_saved_writer_receipt_attaches_to_system_authorization(isolated_store):
+    from test_remediation_contribution import seed_exact_writer
+    import remediation_contribution as contribution
+    s=isolated_store
+    run,item=seed_exact_writer(s)
+    with s._db.cursor() as cur:
+        s._db.execute(cur,"UPDATE hitl_events SET action='standing_approve',reviewer='system' WHERE item_id=%s",(item,))
+    before=contribution.read_contribution(s,'owner','scan',run)
+    assert before['outcomes']['fixed']==0
+    tickets=contribution.writer_tickets(s,'scan','a.docx',[item],'a'*64,actual_values={'image':'A tree'})
+    assert len(tickets)==1
+    contribution.record_writer_result(s,tickets,outcome='verified_cleared',artifact_sha256='b'*64,
+        reference='stored fixture artifact',writer_attempt_id='system-write')
+    after=contribution.read_contribution(s,'owner','scan',run)
+    assert after['outcomes']['fixed']==1
+    assert after['findings'][0]['approval_kind']=='run_authorization'
