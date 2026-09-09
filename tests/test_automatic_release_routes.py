@@ -76,3 +76,78 @@ def test_automatic_release_capabilities_do_not_grant_review_authority():
     assert ROUTE_CAPABILITIES[('GET','/scans/{sid}/release/automatic')] == {'release.view'}
     for path in ('/scans/{sid}/release/automatic','/scans/{sid}/release/automatic/{authorization_id}/stop'):
         assert ROUTE_CAPABILITIES[('POST',path)] == {'release.publish'}
+
+
+def test_plan_preview_before_start_is_read_only(prepared, monkeypatch):
+    from test_automatic_release_service import count_jobs
+    import routes.automatic_release as route
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, "UPDATE stage_executions SET is_current=0 WHERE execution_id=%s", (prepared.run,))
+    monkeypatch.setattr(route, 'credentials', lambda *a: pytest.fail('Plan registered credentials'))
+    monkeypatch.setattr(route, '_preflight_release_destination', lambda *a: pytest.fail('Plan called provider'))
+    before = count_jobs(prepared)
+    result = status(SID, request(), Response(), [FILE])
+    assert result['available'] is False and result['run_id'] is None
+    assert result['authorization'] is None
+    plan = result['planning']
+    assert plan['available'] is True and plan['files'] == [FILE]
+    assert plan['source_revision'] == prepared.store.remediation_source_revision(SID)
+    assert plan['destination']['folder_id'] == 'library/root'
+    assert plan['destination_label'].startswith('SharePoint / ')
+    assert count_jobs(prepared) == before and not prepared.calls
+    assert persistence.latest(prepared.store, SID, OWNER) is None
+    with pytest.raises(ValueError):
+        flow.authorize(prepared.store, SID, OWNER, '', [FILE], plan['destination'], 'no-run', plan['source_revision'])
+
+
+@pytest.mark.parametrize('change', ['owner', 'grant', 'unassessed', 'untracked', 'selection'])
+def test_plan_preview_rejects_invalid_scope(prepared, monkeypatch, change):
+    owner = OWNER
+    if change == 'owner':
+        owner = 'other'
+    elif change == 'grant':
+        import workspace_roles
+        monkeypatch.setattr(workspace_roles, 'access_for_email', lambda *a, **k: {'capabilities': ['release.view']})
+    elif change == 'selection':
+        monkeypatch.setattr(prepared.store, 'get_decisions', lambda *a, **k: {'other.pptx': {'triage': 'inscope'}})
+    else:
+        column = 'score' if change == 'unassessed' else 'source_modified'
+        with prepared.store._db.cursor() as cur:
+            prepared.store._db.execute(cur, f'UPDATE file_records SET {column}=NULL WHERE scan_id=%s', (SID,))
+    assert flow.planning_preview(prepared.store, SID, owner, [FILE])['available'] is False
+
+
+def test_plan_source_revision_fences_post_and_replay(prepared, monkeypatch):
+    import routes.automatic_release as route
+    from test_automatic_release_service import count_jobs
+    monkeypatch.setattr(route, 'credentials', lambda *a: None)
+    monkeypatch.setattr(route, '_preflight_release_destination', lambda *a: {'ready': True})
+    plan = status(SID, request(), Response(), [FILE])['planning']
+    args = dict(run_id=prepared.run, files=plan['files'], destination=plan['destination'], request_id='planned')
+    before = count_jobs(prepared)
+    with pytest.raises(HTTPException) as exc:
+        authorize_route(SID, AuthorizationRequest(**args, expected_source_revision='old-source'), request(), Response())
+    assert exc.value.status_code == 409
+    assert count_jobs(prepared) == before and persistence.latest(prepared.store, SID, OWNER) is None
+    body = AuthorizationRequest(**args, expected_source_revision=plan['source_revision'])
+    accepted = authorize_route(SID, body, request(), Response())
+    assert accepted['run_id'] == prepared.run
+    assert accepted['request_id'] == 'planned' and accepted['source_revision'] == plan['source_revision']
+    assert authorize_route(SID, body, request(), Response())['id'] == accepted['id']
+    with pytest.raises(HTTPException):
+        authorize_route(SID, AuthorizationRequest(**args, expected_source_revision='other-source'), request(), Response())
+
+
+def test_source_changed_between_plan_and_start_cannot_authorize(prepared, monkeypatch):
+    plan = flow.planning_preview(prepared.store, SID, OWNER, [FILE])
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, "UPDATE scan_inventory SET checksum='new-source' WHERE scan_id=%s", (SID,))
+    revision = prepared.store.remediation_source_revision(SID)
+    assert revision != plan['source_revision']
+    started = prepared.store.enqueue_stage_batch(SID, 'remediate', 'remediate_file',
+        [{'owner': OWNER, 'scan_id': SID, 'file': FILE}], snapshot_id=revision,
+        request_fingerprint='new-source-run')['batch_id']
+    with pytest.raises(ValueError, match='changed after Plan'):
+        flow.authorize(prepared.store, SID, OWNER, started, plan['files'], plan['destination'],
+                       'stale-plan', plan['source_revision'])
+    assert persistence.latest(prepared.store, SID, OWNER) is None

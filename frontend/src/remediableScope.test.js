@@ -99,7 +99,7 @@ describe('the Run Remediation button is reachable after a review', () => {
     expect(rem).toContain("label: 'Review remediation plan', onClick: openRemediationPlan")
     expect(rem).not.toContain('runServerRemediation(autoBatch.files)')
     expect(rem).not.toContain('runServerRemediation(remediable)')
-    expect(rem).toContain('runServerRemediation(impactScope, policy)')
+    expect(rem).toContain('runServerRemediation(impactScope, policy, intent)')
   })
 
   it('but a run in flight shows as running rather than re-offering the button', () => {
