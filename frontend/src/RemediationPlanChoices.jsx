@@ -4,6 +4,8 @@ import RemediationOptionHelp from './RemediationOptionHelp.jsx'
 import RemediationReviewPolicy from './RemediationReviewPolicy.jsx'
 import RemediationAutoApproval from './RemediationAutoApproval.jsx'
 import RemediationGenerationChain from './RemediationGenerationChain.jsx'
+import ProviderMark from './ProviderMark.jsx'
+import { generationSteps } from './remediationGenerationChain.js'
 
 const MODES = [
   ['Review every change', 'Prepare proposed fixes. A person approves each change before application.'],
@@ -60,6 +62,9 @@ export function RetiredRemediationPlanChoices({ policy, providers, disabled, onC
 // The previous detailed panel is retained above for restoration, but is no longer mounted.
 export default function RemediationPlanChoices({ policy, disabled, onChange, generationChainOptions, budgetSupported = false, reviewSupported = false, automaticReviewSupported = false, automaticReviewReason = '', reviewAdministratorFloor = null, reviewEligibleFamilies = [], standingApprovalSupported = false, standingApprovalReason = '' }) {
   const id = useId()
+  const configured = generationSteps(policy, generationChainOptions)
+  const catalogFor = step => generationChainOptions?.models?.find(
+    model => model.provider === step.provider && model.model === step.model)
   return <div className="remediation-plan-choices">
     <fieldset disabled={disabled}>
       <legend>1. Which changes may ACP apply?</legend>
@@ -98,6 +103,25 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, gen
           <RemediationOptionHelp label="AI waterfall">A waterfall tries AI in stages, with up to {policy.generation_chain?.steps?.length === 3 ? 'three' : 'two'} generation models for a supported text suggestion. Later models run only after an empty or incomplete suggestion. Spending limits and availability still apply. Your approval choice below applies throughout the run. Document text or images may be sent to the configured providers; choose Rules only if those destinations are unsuitable for the content.</RemediationOptionHelp>
         </div>
       </div>
+      {/* Where content actually goes, before Start. Read from the server's verified
+          catalog (generationChainOptions) rather than a hardcoded provider list, so this
+          can never advertise a destination this deployment has not configured. Provider
+          routing is an owner-level setting, not a per-run choice -- every position in a
+          chain must share one provider (llm_waterfall_provider: "all models must use the
+          owner-selected text provider"), so this reports the configuration rather than
+          offering a choice it cannot honor. */}
+      {policy.ai > 0 && configured.length > 0 && <div className="remediation-plan-providers">
+        <h4 id={`${id}-destinations`}>Where your content may go</h4>
+        <ol aria-labelledby={`${id}-destinations`}>{configured.map((step, index) => <li key={step.step_id || index}>
+          <ProviderMark provider={step.provider} />
+          <span><strong>{['Primary', 'Fallback 1', 'Fallback 2'][index] || `Step ${index + 1}`}</strong>
+            <span>{step.provider} · {step.model}</span></span>
+          <small>{catalogFor(step)?.access_verified === true ? 'Account access verified'
+            : catalogFor(step)?.allowed === true ? 'Permitted by current settings; account access not tested'
+            : 'Provider permission not confirmed'}</small>
+        </li>)}</ol>
+        <p>Later steps run only after an empty or incomplete suggestion. Provider selection is an application setting, not a per-run choice.</p>
+      </div>}
       {policy.ai > 0 && <div className="simple-remediation-budget">
         <label htmlFor={`${id}-budget`}>AI spending limit for this run (USD)</label>
         <input id={`${id}-budget`} type="number" min="0" max="1000000" step="0.01"

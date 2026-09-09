@@ -14,3 +14,19 @@
 .remediation-auto-approval summary { cursor: pointer; font-weight: 600; }
 
 .remediation-plan-choices > details > summary { font-size: 13px; font-weight: 600; line-height: 1.5; }
+
+/* Where your content may go — provider marks beside the configured chain. The mark is
+   decorative; the provider name next to it is the accessible text. */
+.remediation-plan-providers { margin: .75rem 0 0; padding: .75rem; border: 1px solid var(--border, #d5d7de); border-radius: 8px; }
+.remediation-plan-providers h4 { margin: 0 0 .5rem; font-size: .875rem; }
+.remediation-plan-providers ol { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.remediation-plan-providers li { display: grid; grid-template-columns: 24px 1fr; column-gap: .5rem; align-items: center; }
+.remediation-plan-providers li > span { display: flex; flex-direction: column; }
+.remediation-plan-providers li > span > span { font-size: .8125rem; opacity: .8; }
+.remediation-plan-providers li > small { grid-column: 2; font-size: .75rem; opacity: .7; }
+.remediation-plan-providers > p { margin: .5rem 0 0; font-size: .75rem; opacity: .8; }
+.provider-mark { width: 24px; height: 24px; object-fit: contain; }
+.provider-mark--monogram { display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px; background: var(--chip-bg, #eceef2); color: var(--chip-fg, #3a3f4b);
+  font-size: .75rem; font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .provider-mark { transition: none; } }
