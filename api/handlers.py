@@ -1038,6 +1038,8 @@ def _remediation_source_bytes(scan_id: str, filename: str, payload: dict,
     resubmitted (twice, on two worker revisions) on the strength of the "re-trigger" it asks for.
     An unsupported source now fails by NAME instead of borrowing Drive's identity.
     """
+    from remediation_contribution import SOURCE
+    SOURCE.set(None)
     source = payload.get("source") or "drive"
     if source in ("local", "sharepoint"):
         from scanner import read_cached_source
@@ -1061,6 +1063,8 @@ def _remediation_source_bytes(scan_id: str, filename: str, payload: dict,
             # Reading only the first key is a cache miss that looks like "never cached".
             data = read_cached_source(scan_id, filename, owner)
         if data is not None:
+            from remediation_contribution import bind_assessed_input
+            bind_assessed_input(scan_id, filename, data, data)
             return data, None
         if source == "local":
             # Local corpus remains the deterministic development/demo fallback when Blob caching
@@ -1086,7 +1090,21 @@ def _remediation_source_bytes(scan_id: str, filename: str, payload: dict,
             raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
         svc = _drive_client(token)
         file_id = drive_file_id or payload.get("drive_file_id")
-        return svc.files().get_media(fileId=file_id).execute(), svc
+        data = svc.files().get_media(fileId=file_id).execute()
+        # Drive may have changed since Assess. Remediation can continue, but a live
+        # download never manufactures the assessment-to-proposal source binding.
+        from remediation_contribution import bind_assessed_input
+        assessed = None
+        try:
+            from scanner import read_cached_source
+            checksum = core.store.get_source_checksum(scan_id, filename)
+            assessed = read_cached_source(scan_id, filename, payload.get("owner"), checksum=checksum)
+            if assessed is None and checksum:
+                assessed = read_cached_source(scan_id, filename, payload.get("owner"))
+        except Exception:
+            swallowed("_remediation_source_bytes: assessed source proof unavailable", scan_id)
+        bind_assessed_input(scan_id, filename, data, assessed)
+        return data, svc
     raise FatalJobError(f"unsupported remediation source {source!r} — expected one of "
                         f"{', '.join(REMEDIATION_SOURCES)}")
 
@@ -1136,10 +1154,13 @@ def _rem_event(scan_id: str, kind: str, job: dict | None, file: str | None, **de
 @handler("remediate_file")
 def _remediate_file(payload: dict, job: dict) -> None:
     from ai_run_policy import run_context
+    from remediation_contribution import SOURCE
     with run_context(core.store, payload, job) as context:
+        source_token = SOURCE.set(None)
         try:
             return _remediate_file_with_policy(payload, job)
         finally:
+            SOURCE.reset(source_token)
             if context is not None:
                 for reason in sorted(set(str(item) for item in context.deferred)):
                     core.store.log_decision("system", "remediate.ai_deferred",
@@ -4899,6 +4920,12 @@ def _apply_one_value_kind(
     # every locator failed to resolve: nothing of it was written, so the re-scan says nothing
     # about it and it must not inherit a verified_cleared from its neighbours.
     lane_items = list(review_item_ids)
+    from remediation_contribution import writer_tickets, record_writer_result
+    from hashlib import sha256 as _proof_sha256
+    import uuid as _proof_uuid
+    writer_attempt_id = (f"{job['id']}:{job.get('attempts')}" if job.get('id') else _proof_uuid.uuid4().hex)
+    exact_tickets = writer_tickets(core.store, scan_id, filename, review_item_ids,
+                                   _proof_sha256(working).hexdigest(), actual_values=values)
 
     def _model_outcome(outcome: str, detail: str, *, item_ids=None, regressions=None) -> None:
         try:
@@ -4906,6 +4933,28 @@ def _apply_one_value_kind(
                 scan_id, filename, diff_rule_id,
                 lane_items if item_ids is None else item_ids,
                 outcome, detail=detail, regressions=regressions)
+            selected_items = set(lane_items if item_ids is None else item_ids)
+            # Partial writes and unknown regressions cannot qualify as exact fixes.
+            exact_outcome = outcome
+            if outcome == "verified_cleared" and (regressions is None or unresolved):
+                exact_outcome = "could_not_verify"
+            with core.store._db.cursor() as proof_cur:
+                core.store._db.execute(proof_cur, "SELECT corrected_sha256 FROM file_records WHERE scan_id=%s AND file=%s", (scan_id, filename))
+                artifact = (core.store._db.fetchone(proof_cur) or {}).get("corrected_sha256")
+            final_check = (residual_state or {}).get("verification")
+            for ticket in exact_tickets:
+                if ticket['item_id'] not in selected_items:
+                    continue
+                ticket_outcome = exact_outcome
+                if exact_outcome == "verified_cleared":
+                    actually_written = any(a.get('locator') == ticket['locator'] and
+                                           a.get('after') == ticket['approved_value'] for a in applied)
+                    if not actually_written or not final_check or not final_check.ok:
+                        ticket_outcome = "could_not_verify"
+                    elif not final_check.cleared({ticket['rule_id']}):
+                        ticket_outcome = "verified_still_failing"
+                record_writer_result(core.store, [ticket], outcome=ticket_outcome,
+                    artifact_sha256=artifact, reference=detail, writer_attempt_id=writer_attempt_id)
         except Exception:
             swallowed("_apply_one_value_kind: recording the AI post-write outcome failed", scan_id)
 
