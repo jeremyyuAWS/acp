@@ -1,0 +1,13 @@
+.remediation-contribution { border-top: 1px solid var(--border, #cbd5e1); margin-top: 16px; padding-top: 8px; }
+.contribution-bars { display: grid; gap: 12px; max-width: 720px; margin: 16px 0; }
+.contribution-bar-row { display: grid; gap: 6px; }
+.contribution-bar-row button { justify-self: start; text-align: left; }
+.contribution-track { height: 10px; border: 1px solid var(--border, #cbd5e1); border-radius: 4px; overflow: hidden; background: var(--surface, #f1f5f9); }
+.contribution-track span { display: block; height: 100%; background: var(--accent, #2563eb); }
+.remediation-contribution table { width: 100%; margin: 16px 0; text-align: left; }
+.remediation-contribution caption { text-align: left; font-weight: 600; margin-bottom: 8px; }
+.remediation-contribution th, .remediation-contribution td { padding: 8px; }
+.remediation-contribution th button { text-align: left; }
+.contribution-findings { padding: 16px; overflow-wrap: anywhere; }
+.contribution-findings ul { padding-left: 20px; }
+.contribution-findings li { padding: 8px 0; border-bottom: 1px solid var(--border, #cbd5e1); }
