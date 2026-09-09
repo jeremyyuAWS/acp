@@ -18,8 +18,11 @@ it('maps a provider name to the asset filename convention', () => {
 })
 
 it('finds an official asset that exists and returns null for one that does not', () => {
-  // sharepoint-logo.svg is vendored; the AI providers are not, until someone adds them.
+  // sharepoint-logo.svg, openai-logo.svg and ollama-logo.svg are vendored; nothing else is,
+  // until someone adds it -- this is the "drop a file, no code change" convention working.
   expect(providerLogo('sharepoint')).toBeTruthy()
+  expect(providerLogo('openai')).toBeTruthy()
+  expect(providerLogo('ollama')).toBeTruthy()
   expect(providerLogo('definitely-not-a-vendored-provider')).toBeNull()
   expect(providerLogo('')).toBeNull()
 })
@@ -42,6 +45,19 @@ it('renders the image once an official asset is vendored', async () => {
   expect(mark.tagName).toBe('IMG')
   expect(mark.getAttribute('alt')).toBe('')
   expect(mark.getAttribute('aria-hidden')).toBe('true')
+})
+
+// RemediationPlanChoices renders one of these per generation-chain step, keyed off
+// `step.provider` as reported by the server (e.g. "openai", "ollama") -- so vendoring
+// these two assets is the whole fix; this locks that wiring in as a regression test.
+it('renders the vendored logo for each AI provider RemediationPlanChoices can report', async () => {
+  for (const provider of ['openai', 'ollama']) {
+    const { root, container } = createTestRoot()
+    await act(async () => root.render(createElement(ProviderMark, { provider })))
+    const mark = container.querySelector('.provider-mark')
+    expect(mark.tagName).toBe('IMG')
+    expect(mark.getAttribute('src')).toBe(providerLogo(provider))
+  }
 })
 
 it('builds a readable monogram from multi-word and empty names', () => {
