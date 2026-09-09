@@ -153,6 +153,9 @@ def configured_providers(url='https://api.openai.com/v1', *, endpoint=True, deri
     import providers
     namespace = {'_ANTHROPIC_MESSAGES_URL': 'https://api.anthropic.com/v1/messages',
                  'active_text_provider': staticmethod(lambda: 'openai'),
+                 # These fixtures are about ZONE derivation, not vendor authorisation: every
+                 # spec here is the selected provider, so the permitted set is just that one.
+                 'permitted_text_providers': staticmethod(lambda: frozenset({'openai'})),
                  '_text_key_for': staticmethod(lambda provider: 'fixture-not-a-secret')}
     if endpoint:
         namespace['_OPENAI_TEXT_BASE_URL'] = url
