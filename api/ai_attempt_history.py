@@ -35,7 +35,8 @@ STATUSES = frozenset({'drafted', 'unusable_response', 'empty_response', 'refused
                      'usage_unknown', 'rejected_before_dispatch', 'settlement_failed_or_breached',
                      'provider_limit_exceeded', 'accepted', 'revision_requested', 'unable_to_judge'})
 RESULT_KEYS = frozenset({'text', 'response_issue', 'cost_usd', 'call_id', 'model',
-                         'provider', 'zone', 'prompt_tokens', 'completion_tokens', 'bounds_exceeded'})
+                         'provider', 'zone', 'prompt_tokens', 'completion_tokens', 'bounds_exceeded',
+                         'execution', 'validation_outcome'})
 
 
 def _hash(value):
@@ -77,7 +78,7 @@ class AttemptHistory:
                 self.db.execute(cur, statement)
 
     def begin(self, owner_id, scan_id, run_id, operation_id, attempt_id, *,
-              file, input_sha256, model, provider, purpose='draft'):
+              file, input_sha256, model, provider, purpose='draft', execution=None):
         for value in (owner_id, scan_id, run_id, operation_id, attempt_id, model, provider):
             _identifier(value)
         if not isinstance(file, str) or not file or len(file) > 4096:
@@ -85,20 +86,25 @@ class AttemptHistory:
         _hash(input_sha256)
         if purpose not in PURPOSES:
             raise ValueError('unsupported attempt purpose')
+        if execution is not None:
+            from ai_generation_chain import normalize_execution
+            execution = normalize_execution(execution)
+        initial = json.dumps({'execution': execution}, sort_keys=True) if execution is not None else None
         now = datetime.now(timezone.utc).isoformat()
         identity = dict(scan_id=scan_id, operation_id=operation_id, file=file,
                         input_sha256=input_sha256, model=model, provider=provider, purpose=purpose)
         with self.ledger._locked(owner_id, run_id) as (cur, _budget):
             self.db.execute(cur, """INSERT INTO ai_attempt_history
                 (owner_id,scan_id,run_id,operation_id,attempt_id,file,input_sha256,model,provider,
-                 purpose,status,output_retention,created_at,updated_at)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'started','unavailable',%s,%s)
+                 purpose,status,output_retention,result_json,created_at,updated_at)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'started','unavailable',%s,%s,%s)
                 ON CONFLICT(owner_id,run_id,attempt_id) DO NOTHING""",
-                (owner_id,scan_id,run_id,operation_id,attempt_id,file,input_sha256,model,provider,purpose,now,now))
+                (owner_id,scan_id,run_id,operation_id,attempt_id,file,input_sha256,model,provider,purpose,initial,now,now))
             self.db.execute(cur, 'SELECT * FROM ai_attempt_history WHERE owner_id=%s AND run_id=%s AND attempt_id=%s',
                             (owner_id,run_id,attempt_id))
             row = self.db.fetchone(cur)
-            if any(row[key] != value for key, value in identity.items()):
+            retained_execution = (json.loads(row['result_json'] or '{}') or {}).get('execution')
+            if retained_execution != execution or any(row[key] != value for key, value in identity.items()):
                 raise AttemptConflict('attempt history identity is immutable')
         return self._decode(row)
 
@@ -109,7 +115,6 @@ class AttemptHistory:
             raise ValueError('unsupported terminal history status')
         if reason is not None and (not isinstance(reason, str) or len(reason) > 512):
             raise ValueError('bounded reason required')
-        encoded, digest, retention = _result(result)
         with self.ledger._locked(owner_id, run_id) as (cur, _budget):
             self.db.execute(cur, 'SELECT * FROM ai_attempt_history WHERE owner_id=%s AND scan_id=%s AND run_id=%s AND attempt_id=%s',
                             (owner_id,scan_id,run_id,attempt_id))
@@ -118,6 +123,12 @@ class AttemptHistory:
                 raise AttemptConflict('attempt history does not exist in this scope')
             if result is not None and (result.get('model') != row['model'] or result.get('provider') != row['provider']):
                 raise AttemptConflict('recorded model identity differs from the actual result')
+            execution = (json.loads(row['result_json'] or '{}') or {}).get('execution')
+            if execution is not None:
+                if result is not None and result.get('execution', execution) != execution:
+                    raise AttemptConflict('attempt execution lineage is immutable')
+                result = {**(result or {}), 'execution': execution}
+            encoded, digest, retention = _result(result)
             values = dict(status=status,result_json=encoded,output_sha256=digest,output_retention=retention,reason=reason)
             if row['status'] != 'started':
                 if any(row[key] != value for key,value in values.items()):

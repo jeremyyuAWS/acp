@@ -21,6 +21,10 @@ class PreDispatchRejected(ValueError):
     """Transport was never invoked; this attempt cannot incur a provider charge."""
 
 
+class ProviderAccessDenied(ValueError):
+    """Provider rejected model access; never try another provider/model."""
+
+
 @dataclass(frozen=True)
 class TextModelSpec:
     provider: str
@@ -32,6 +36,7 @@ class TextModelSpec:
     output_token_limit: int
     verified_until: int  # expiry of the server-owned pricing/model-limit snapshot
     timeout_seconds: int = 30
+    plain_text_only: bool = False
 
     def validate(self, now: float) -> None:
         if self.provider not in {'openai', 'anthropic'} or not self.model.strip() or not self.pricing_ref.strip():
@@ -42,6 +47,9 @@ class TextModelSpec:
         for value in (self.context_token_limit, self.output_token_limit, self.verified_until, self.timeout_seconds):
             if type(value) is not int or value <= 0:
                 raise ValueError('positive integer model bounds and expiry required')
+        if type(self.plain_text_only) is not bool or (self.plain_text_only and
+                (self.provider != 'anthropic' or self.model != 'claude-opus-5')):
+            raise ValueError('unsupported explicit plain-text transport mode')
         if self.output_token_limit > self.context_token_limit or self.timeout_seconds > 120:
             raise ValueError('invalid output or timeout bound')
         if now >= self.verified_until:
@@ -55,22 +63,22 @@ class TextModelSpec:
 
 
 class StrictTextGenerator:
-    def __init__(self, specs: tuple[TextModelSpec, TextModelSpec], *,
+    def __init__(self, specs: tuple[TextModelSpec, ...], *,
                  post: Callable | None = None, clock: Callable = time.time,
                  provider_module=None):
         if provider_module is None:
             import providers as provider_module
         self.providers = provider_module
         self.clock = clock
-        if len(specs) != 2 or specs[0].model == specs[1].model:
-            raise ValueError('exactly two distinct model IDs required')
+        if len(specs) not in (2, 3) or len({spec.model for spec in specs}) != len(specs):
+            raise ValueError('two or three distinct model IDs required')
         for spec in specs:
             spec.validate(clock())
         # Reuse existing owner opt-in; mere credential presence never activates
         # a second provider or changes the global selection.
         active = self.providers.active_text_provider()
         if any(spec.provider != active for spec in specs):
-            raise ValueError('both models must use the owner-selected text provider')
+            raise ValueError('all models must use the owner-selected text provider')
         if not self.providers._text_key_for(active):
             raise ValueError('selected provider credential unavailable')
         self.specs = {spec.model: spec for spec in specs}
@@ -122,12 +130,19 @@ class StrictTextGenerator:
             else:
                 endpoint = self.providers._ANTHROPIC_MESSAGES_URL
                 payload['max_tokens'] = spec.output_token_limit
+                if spec.plain_text_only:
+                    # This adapter accepts text only. Opus 5 defaults to thinking
+                    # blocks; its documented disabled mode requires effort <= high.
+                    payload['thinking'] = {'type': 'disabled'}
+                    payload['output_config'] = {'effort': 'high'}
                 headers = {'x-api-key': key, 'anthropic-version': self.providers._ANTHROPIC_API_VERSION}
         except Exception as exc:
             raise PreDispatchRejected(str(exc) if isinstance(exc, ValueError) else "request rejected before transport") from exc
         # One request, redirects off, no SDK retry. Never log headers/body/errors.
         response = self.post(endpoint, json=payload, headers=headers,
                              timeout=spec.timeout_seconds, follow_redirects=False)
+        if getattr(response, 'status_code', None) in (401, 403):
+            raise ProviderAccessDenied('provider access denied')
         response.raise_for_status()
         data = response.json()
         if not isinstance(data, dict) or data.get('model') != spec.model:
@@ -226,7 +241,7 @@ def managed_text_generate(prompt: str) -> dict:
 
 
 def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
-                              tier_indices=(1, 2), operation_id=None):
+                              tier_indices=None, operation_id=None):
     """One bounded generation operation, also usable for explicit review stages.
 
     The caller supplies a trusted configured generator and immutable run context.
@@ -235,15 +250,49 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
     """
     from ai_attempt_history import AttemptHistory, PURPOSES
     from llm_remediation_waterfall import BudgetAdapter
-    if purpose not in PURPOSES or not tier_indices or any(i not in (1, 2) for i in tier_indices) or len(set(tier_indices)) != len(tier_indices):
+    from ai_generation_chain import normalize_chain, STEP_IDS, ELIGIBLE
+    chain = getattr(ctx, 'policy', {}).get('generation_chain')
+    if chain is not None:
+        try:
+            chain = normalize_chain(chain)
+            if any(index >= len(generator.models) or generator.models[index].name != step['model']
+                   or generator.specs[step['model']].provider != step['provider']
+                   for index, step in enumerate(chain['steps'])):
+                return defer_managed('approved_generation_models_unavailable')
+        except (ValueError, KeyError, TypeError):
+            return defer_managed('approved_generation_chain_invalid')
+    expected_indices = tuple(range(1, len(chain['steps']) + 1)) if chain else (1, 2)
+    if tier_indices is None:
+        tier_indices = expected_indices
+    if purpose == 'draft' and chain and tuple(tier_indices) != expected_indices:
+        return defer_managed('approved_generation_chain_mismatch')
+    if purpose not in PURPOSES or not tier_indices or any(i not in (expected_indices if purpose == 'draft' else (1, 2)) for i in tier_indices) or len(set(tier_indices)) != len(tier_indices):
         raise ValueError('supported purpose and unique model tiers required')
     if not ctx.enabled:
         return defer_managed('ai_disabled_or_budget_zero')
+    adapter = None
+    if purpose == 'draft' and chain and len(chain['steps']) == 3:
+        from ai_generation_adapter import current_generation_adapter
+        adapter = current_generation_adapter()
+        if adapter is None or not getattr(ctx, 'scan_id', None) or not getattr(ctx, 'file', None):
+            return defer_managed('supported_generation_adapter_required')
     budget = BudgetAdapter(ctx.ledger, ctx.owner_id, ctx.run_id, generator.pricing_refs)
     input_hash = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
     operation = operation_id or (input_hash if purpose == 'draft' else
         hashlib.sha256((purpose + ':' + prompt).encode('utf-8')).hexdigest())
+    if adapter:
+        # New-chain identities bind the exact assessed source and finding; an
+        # identical prompt for another location can never replay its proposal.
+        binding = {key: adapter[key] for key in ('source_sha256', 'assessment_revision',
+                   'finding_ids', 'locator', 'adapter_id')}
+        from remediation_contribution import SOURCE
+        if SOURCE.get() != (ctx.scan_id, ctx.file, adapter['source_sha256']):
+            return defer_managed('assessed_source_changed')
+        operation = hashlib.sha256(json.dumps({'prompt': input_hash, 'binding': binding,
+                     'chain': chain}, sort_keys=True).encode()).hexdigest()
     attempts = []
+    parent_attempt_id = None
+    escalation_reason = None
     history = None
     previous = []
     # Production RunContext always supplies canonical scan/file identity. Small
@@ -264,7 +313,9 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
                     and row['provider'] == generator.specs[row['model']].provider
                     and row['purpose'] in ({'draft', 'fallback'} if purpose == 'draft' else {purpose}) and isinstance(result.get('text'), str)
                     and result['text'].strip() and not result.get('response_issue')
-                    and result.get('bounds_exceeded') is False):
+                    and result.get('bounds_exceeded') is False
+                    and (not adapter or (result.get('validation_outcome') == 'usable'
+                         and all((result.get('execution') or {}).get(k) == v for k,v in binding.items())))):
                 return {**result, 'attempts': [_history_attempt(r) for r in previous],
                         'approval_required': True, 'replayed': True, 'operation_id': operation,
                         'input_sha256': input_hash, 'history_attempt_id': row['attempt_id']}
@@ -284,22 +335,45 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
         # A worker can stop after committing an unusable first response but
         # before reserving fallback. Reuse that completed step, not its charge.
         # The second tier still passes normal current budget/dispatch admission.
-        if purpose == 'draft' and index == 1 and 2 in tier_indices:
+        if purpose == 'draft' and index < max(tier_indices):
             completed = [row for row in previous
-                if row['purpose'] == 'draft' and row['model'] == model.name
+                if row['purpose'] == ('draft' if index == 1 else 'fallback') and row['model'] == model.name
                 and row['provider'] == generator.specs[model.name].provider
                 and row['input_sha256'] == input_hash and row['spending_state'] == 'settled'
                 and row['output_retention'] == 'full'
-                and row['attempt_id'].startswith(f'text:{operation}:1:')
+                and row['attempt_id'].startswith(f'text:{operation}:{index}:')
                 and (row.get('result') or {}).get('bounds_exceeded') is False
                 and ((row['status'] == 'empty_response'
                       and not (row.get('result') or {}).get('response_issue')
                       and (row.get('result') or {}).get('text') == '')
                      or (row['status'] == 'unusable_response'
-                         and (row.get('result') or {}).get('response_issue') == 'truncated'))]
+                         and (row.get('result') or {}).get('response_issue') in (ELIGIBLE if adapter else {'truncated'})))
+                and (not adapter or all(((row.get('result') or {}).get('execution') or {}).get(k) == v for k,v in binding.items()))]
             if len(completed) == 1:
                 attempts.append(_history_attempt(completed[0]))
+                parent_attempt_id = completed[0]['attempt_id']
+                escalation_reason = (completed[0].get('result') or {}).get('response_issue') or 'empty_response'
                 continue
+        if adapter:
+            from remediation_contribution import SOURCE
+            if SOURCE.get() != (ctx.scan_id, ctx.file, adapter['source_sha256']):
+                return defer_managed('assessed_source_changed', attempts=attempts)
+        if chain and len(chain['steps']) == 3:
+            try:
+                from worker import check_cancel
+                check_cancel()
+                with ctx.ledger.db.cursor() as cur:
+                    ctx.ledger.db.execute(cur, '''SELECT cancel_requested_at,state FROM stage_executions
+                        WHERE execution_id=%s AND scan_id=%s AND owner_email=%s''',
+                        (ctx.run_id, ctx.scan_id, ctx.owner_id))
+                    execution = ctx.ledger.db.fetchone(cur)
+                if execution is None or execution['cancel_requested_at'] or execution['state'] in ('cancelled','failed','interrupted','superseded'):
+                    return defer_managed('run_stopped_or_unavailable', attempts=attempts)
+            except Exception:
+                return defer_managed('run_dispatch_permission_unavailable', attempts=attempts)
+        if adapter:
+            if index > 1 and (parent_attempt_id is None or escalation_reason not in ELIGIBLE):
+                return defer_managed('eligible_predecessor_unavailable', attempts=attempts)
         attempt_id = f'text:{operation}:{index}:0'
         attempt = {'attempt_id': attempt_id, 'model': model.name,
                    'max_cost_usd': model.max_cost_usd, 'status': 'reserving'}
@@ -321,7 +395,10 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
                     history.begin(ctx.owner_id, ctx.scan_id, ctx.run_id, operation, attempt_id,
                         file=ctx.file, input_sha256=input_hash, model=model.name,
                         provider=generator.specs[model.name].provider,
-                        purpose='fallback' if purpose == 'draft' and index == 2 else purpose)
+                        purpose='fallback' if purpose == 'draft' and index > 1 else purpose,
+                        **({'execution': {**binding, 'chain_version': 1, 'step_id': STEP_IDS[index-1],
+                            'generation_position': index-1, 'parent_attempt_id': parent_attempt_id,
+                            'escalation_reason': escalation_reason, 'request_id': attempt_id}} if adapter else {}))
                 except Exception:
                     if row['state'] == 'reserved':
                         ctx.ledger.release(ctx.owner_id, ctx.run_id, token, confirmed_not_charged=True)
@@ -343,14 +420,15 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
                 return defer_managed('budget_release_failed', attempts=attempts)
             retain(attempt, 'rejected_before_dispatch')
             return defer_managed('request_rejected_before_dispatch', attempts=attempts)
-        except Exception:
+        except Exception as exc:
+            failure = 'provider_access_denied' if isinstance(exc, ProviderAccessDenied) else 'provider_usage_unknown'
             attempt['status'] = 'usage_unknown'
             try:
                 budget.mark_uncertain(token, 'provider_failure_or_unknown_usage')
             except Exception:
                 attempt['reconciliation_required'] = True
-            retain(attempt, 'usage_unknown')
-            return defer_managed('provider_usage_unknown', attempts=attempts)
+            retain(attempt, 'usage_unknown', reason=failure)
+            return defer_managed(failure, attempts=attempts)
         attempt.update(cost_usd=result['cost_usd'], call_id=result['call_id'], status='settling')
         try:
             budget.settle(token, result['cost_usd'])
@@ -359,6 +437,17 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
             retain(attempt, attempt['status'], result)
             return defer_managed('budget_settlement_failed_or_breached', attempts=attempts)
         issue = result.get('response_issue')
+        if adapter and not issue and not result['bounds_exceeded'] and result['text'].strip():
+            try:
+                issue = adapter['validator'](result['text'])
+            except Exception:
+                issue = 'validation_unavailable'
+            if issue is not None and issue not in ELIGIBLE:
+                issue = 'validation_unavailable'
+            result['response_issue'] = issue
+            result['validation_outcome'] = 'usable' if issue is None else issue
+        if adapter and not result.get('validation_outcome'):
+            result['validation_outcome'] = issue or ('empty_response' if not result['text'].strip() else 'unavailable')
         status = ('provider_limit_exceeded' if result['bounds_exceeded'] else
                   'refused' if issue == 'refused' else 'unusable_response' if issue else
                   'drafted' if result['text'].strip() else 'empty_response')
@@ -371,10 +460,14 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
             return defer_managed('provider_limit_exceeded', attempts=attempts)
         if status == 'refused':
             return defer_managed('provider_refused', attempts=attempts)
+        if adapter and issue and issue not in ELIGIBLE:
+            return defer_managed('generation_validation_unavailable', attempts=attempts)
         if status == 'drafted':
             return {**result, 'attempts': attempts, 'approval_required': True,
                     'operation_id': operation, 'input_sha256': input_hash,
                     'history_attempt_id': attempt_id if history else None}
+        parent_attempt_id = attempt_id
+        escalation_reason = issue or 'empty_response'
     return defer_managed('attempts_exhausted', attempts=attempts)
 
 
@@ -389,11 +482,11 @@ def configured_generator() -> StrictTextGenerator:
     raw = os.environ.get('ACP_BOUNDED_TEXT_MODELS_JSON')
     if raw is None and os.environ.get('ACP_BOUNDED_TEXT_PROFILE'):
         from ai_model_profiles import model_config
-        config = model_config(os.environ['ACP_BOUNDED_TEXT_PROFILE'])
+        config = model_config(os.environ['ACP_BOUNDED_TEXT_PROFILE'], include_second_fallback=True)
     else:
         config = json.loads(raw or 'null')
-    if not isinstance(config, list) or len(config) != 2:
-        raise ValueError('two verified model configurations required')
+    if not isinstance(config, list) or len(config) not in (2, 3):
+        raise ValueError('two or three verified model configurations required')
     return StrictTextGenerator(tuple(TextModelSpec(**item) for item in config))
 
 

@@ -37,6 +37,11 @@ def normalize_policy(policy):
         if Decimal(amount) > Decimal("1000000"):
             raise ValueError("AI spending limit must not exceed 1,000,000 USD.")
         result["ai_budget_usd"] = format(Decimal(amount), ".2f")
+    if "generation_chain" in policy:
+        from ai_generation_chain import normalize_chain
+        result['generation_chain'] = normalize_chain(policy['generation_chain'])
+        if 'ai_budget_usd' not in result:
+            raise ValueError('An explicit generation chain requires a run spending limit.')
     if "ai_review" in policy:
         from ai_review_policy import normalize_review_policy
         result["ai_review"] = normalize_review_policy(policy["ai_review"])
