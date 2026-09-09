@@ -35,10 +35,19 @@ def read_run_graph(store, owner, scan_id, run_id):
             FROM ai_review_receipts WHERE owner_id=%s AND scan_id=%s AND run_id=%s
             ORDER BY created_at,operation_id,proposal_sha256''', scope)
         receipts = db.fetchall(cur)
-    return project_run_graph(policy, records, receipts)
+    return project_run_graph(policy, records, receipts,
+                             terminal=execution.get('state') in ('completed', 'succeeded'))
 
 
-def project_run_graph(policy, records, receipts):
+def _has_binding(attempt):
+    ids = attempt['finding_ids']
+    return (isinstance(attempt['source_sha256'], str) and bool(attempt['source_sha256'])
+            and isinstance(attempt['assessment_revision'], str) and bool(attempt['assessment_revision'])
+            and bool(ids) and all(isinstance(fid, str) and bool(fid) for fid in ids)
+            and len(ids) == len(set(ids)))
+
+
+def project_run_graph(policy, records, receipts, *, terminal=False):
     chain = _object(policy.get('generation_chain'))
     configured = chain.get('steps') if chain.get('version') == 1 else []
     configured = configured if isinstance(configured, list) else []
@@ -80,6 +89,7 @@ def project_run_graph(policy, records, receipts):
                        escalation_reason=lineage.get('escalation_reason'),
                        lineage_available=linked if purpose in ('draft', 'fallback') else False,
                        validation_outcome=result.get('validation_outcome'),
+                       skipped_step_ids=result.get('skipped_step_ids') if isinstance(result.get('skipped_step_ids'), list) else [],
                        source_sha256=lineage.get('source_sha256'),
                        assessment_revision=lineage.get('assessment_revision'),
                        finding_ids=lineage.get('finding_ids') if isinstance(lineage.get('finding_ids'), list) else [])
@@ -95,14 +105,39 @@ def project_run_graph(policy, records, receipts):
         parent = by_id.get(attempt['parent_attempt_id'])
         # Same operation/file and an explicit reference are mandatory. Created-at
         # order is never treated as proof of an escalation or review dependency.
-        if parent and parent is not attempt and parent['operation_id'] == attempt['operation_id'] and parent['file'] == attempt['file'] and parent['source_sha256'] == attempt['source_sha256'] and parent['assessment_revision'] == attempt['assessment_revision']:
+        if (parent and parent is not attempt and parent['lineage_available'] and attempt['lineage_available']
+                and parent['generation_position'] + 1 == attempt['generation_position']
+                and parent['operation_id'] == attempt['operation_id'] and parent['file'] == attempt['file']
+                and _has_binding(parent) and _has_binding(attempt)
+                and parent['source_sha256'] == attempt['source_sha256']
+                and parent['assessment_revision'] == attempt['assessment_revision']
+                and set(parent['finding_ids']) == set(attempt['finding_ids'])):
             edges.append({'source': parent['attempt_id'], 'target': attempt['attempt_id'], 'kind': 'parent_attempt'})
         elif attempt['parent_attempt_id']:
             ambiguous = True
             attempt['parent_attempt_id'] = None
+    generation_operations = {}
+    for attempt in attempts:
+        if attempt['purpose'] in ('draft', 'fallback'):
+            generation_operations.setdefault(attempt['operation_id'], []).append(attempt)
     for step in steps:
         linked = [by_id[aid] for aid in step['attempt_ids']]
-        if any(a['spending_state'] == 'uncertain' or a['status'] == 'usage_unknown' for a in linked):
+        # A terminal execution and saved skip decisions are both required. A
+        # success in one operation says nothing about an unrecorded/blocked one.
+        skipped_everywhere = (terminal is True and not ambiguous and not linked
+            and bool(generation_operations) and all(
+                all(a['spending_state'] in ('settled', 'released')
+                    and a['status'] not in ('usage_unknown', 'refused', 'settlement_failed_or_breached', 'provider_limit_exceeded')
+                    for a in operation)
+                and any(a['lineage_available'] and _has_binding(a)
+                        and a['generation_position'] < step['position']
+                        and a['status'] == 'drafted' and a['validation_outcome'] == 'usable'
+                        and a['spending_state'] == 'settled'
+                        and step['step_id'] in a['skipped_step_ids'] for a in operation)
+                for operation in generation_operations.values()))
+        if skipped_everywhere:
+            step.update(state='not_needed', reason='Every recorded generation operation succeeded earlier and explicitly skipped this position in the completed run.')
+        elif any(a['spending_state'] == 'uncertain' or a['status'] == 'usage_unknown' for a in linked):
             step.update(state='outcome_unknown', reason='An attempt outcome or charge needs reconciliation.')
         elif any(a['spending_state'] == 'dispatched' and a['status'] == 'started' for a in linked):
             step.update(state='outcome_unknown', reason='Dispatch is recorded, but a current worker lease is not linked to this attempt.')
