@@ -73,10 +73,23 @@ it('closes with Escape or Close and restores focus to the tile; a different run 
   expect(tile(container).getAttribute('aria-expanded')).toBe('false')
 })
 
-it('opens a truthful empty breakdown for zero incomplete checks', async () => {
+it('omits the incomplete-check tile when all selected checks ran', async () => {
   const { container } = await mount({ files: [files[31]] })
-  expect(tile(container).textContent).toContain('0 checks')
+  expect(tile(container)).toBeUndefined()
+  expect(container.textContent).toContain('2 checks evaluated + 0 unable to assess = 2 selected checks')
+  expect(breakdown(container)).toBeNull()
+})
+
+it('keeps the numeric count readable on a light clickable card', async () => {
+  const { container } = await mount()
+  const count = tile(container).children[1]
+  expect(count.style.color).toBe('var(--ink, #2b2330)')
+})
+
+it('removes an open breakdown when the incomplete count becomes zero', async () => {
+  const { container, render } = await mount()
   await click(tile(container))
-  expect(breakdown(container).textContent).toContain('No checks are in this bucket')
-  expect(breakdown(container).querySelector('table')).toBeNull()
+  await render({ files: [files[31]] })
+  expect(tile(container)).toBeUndefined()
+  expect(breakdown(container)).toBeNull()
 })
