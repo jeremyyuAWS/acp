@@ -92,7 +92,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     : !runId ? 'Choose a scan before approving changes.' : !files.length ? 'No files are selected in this scope.'
     : checking ? 'Checking which proposals can be approved and published.'
     : !plan || plan.key !== key ? 'Eligibility is not confirmed. Refresh eligibility before approving changes.'
-    : !eligible ? 'No eligible proposals are available. Resolve remaining manual work in Remediate → Review, then verify the corrected files.' : ''
+    : !eligible ? 'No complete, versioned proposals are ready for this action. See remaining requirements below.' : ''
   const outcomes = Object.entries(active?.progress || {}).filter(([file]) => file !== '_deadline')
   const count = state => outcomes.filter(([, result]) => result.state === state).length
   return <section className="panel release-quick" aria-label="Publish ready files and approved changes">

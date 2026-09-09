@@ -116,7 +116,7 @@ it('keeps both actions visible outside disclosure panels at zero readiness with 
     await click(button)
   }
   expect(v.container.textContent).toContain('Verification incomplete')
-  expect(v.container.textContent).toContain('No eligible proposals are available')
+  expect(v.container.textContent).toContain('No complete, versioned proposals are ready')
   expect(v.props.onReady).not.toHaveBeenCalled()
   expect(api.authorizeReleaseContinuation).not.toHaveBeenCalled()
 })
