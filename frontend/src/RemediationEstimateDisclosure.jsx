@@ -24,6 +24,7 @@ export default function RemediationEstimateDisclosure({ estimate, aiEnabled, loa
         across {estimate.eligible_findings} eligible findings. Suggestions still require the approved review and verification process.</p>
       <p>{estimate.uncertainty}</p>
       <p>Applies to {estimate.applicability?.format} · {estimate.applicability?.change_family} · configuration {estimate.applicability?.config_id}.</p>
+      {estimate.models && <p>Generator: {estimate.models.generator_provider || 'Not reported'} / {estimate.models.generator_model || 'Not reported'}; reviewer: {estimate.models.reviewer_provider || 'Not reported'} / {estimate.models.reviewer_model || 'Not reported'}.</p>}
       <p>Based on {estimate.sample_size} evaluated findings · evaluation {estimate.evaluation_version} · evaluated {estimate.evaluated_at} · expires {estimate.expires_at}.</p>
       {range(estimate.expected_provider_cost_range_usd) ? <>
         <p>Estimated provider cost: {estimate.expected_provider_cost_range_usd.map(money).join('–')}.</p>

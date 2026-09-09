@@ -117,3 +117,30 @@ def test_source_revisions_are_not_independent_finding_samples():
     r['impact_evidence']['samples'].append(duplicate)
     r['impact_evidence']['population_size'] += 1
     assert estimate(r)['reason'] == 'missing_or_conflicting_lineage'
+
+
+def test_registry_failure_preserves_routing_and_hides_private_exception(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from remediation_cohort_estimates import read_plan_estimate
+    def broken(*args):
+        raise RuntimeError('private record contents')
+    monkeypatch.setitem(sys.modules, 'ai_review_calibration', SimpleNamespace(load_calibration_records=broken))
+    result = read_plan_estimate(object(), 'owner', {'estimate_population': {'complete': True}})
+    assert result['reason'] == 'evaluation_read_unavailable'
+    assert 'private' not in str(result)
+
+
+def test_shared_registry_reader_is_owner_scoped(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from remediation_cohort_estimates import read_plan_estimate
+    seen = []
+    def read(store, owner):
+        seen.append(owner)
+        return []
+    monkeypatch.setitem(sys.modules, 'ai_review_calibration', SimpleNamespace(load_calibration_records=read))
+    row = dict(**APPLIES, finding_id='f', source_revision='s', eligible=True)
+    result = read_plan_estimate(object(), 'alice', {'estimate_population': dict(complete=True, scope_revision='current', findings=[row])})
+    assert seen == ['alice']
+    assert not result['available'] and result['scope_revision'] == 'current'

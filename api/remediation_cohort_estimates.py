@@ -156,10 +156,14 @@ def estimate_plan(records, population, *, now=None):
     if not isinstance(findings, list) or not findings:
         return unavailable
     identities = set()
+    sources = {}
     dimensions = set()
     for row in findings:
         if not isinstance(row, dict) or row.get('eligible') is not True or not all(isinstance(row.get(k), str) and row[k] for k in (*DIMENSIONS, 'finding_id', 'source_revision')):
             return unavailable
+        if row['finding_id'] in sources and sources[row['finding_id']] != row['source_revision']:
+            return unavailable
+        sources[row['finding_id']] = row['source_revision']
         identities.add((row['finding_id'], row['source_revision']))
         dimensions.add(tuple(row[k] for k in DIMENSIONS))
     if len(dimensions) != 1:
@@ -183,5 +187,10 @@ def read_plan_estimate(store, owner, preview):
     population = preview.get('estimate_population')
     if not population:
         return estimate_plan([], None)
-    from ai_review_calibration import load_calibration_records
-    return estimate_plan(load_calibration_records(store, owner), population)
+    try:
+        from ai_review_calibration import load_calibration_records
+        return estimate_plan(load_calibration_records(store, owner), population)
+    except Exception:
+        # Optional estimate failures must not break the rules-only routing preview.
+        # Do not log record content, source text or exception payloads.
+        return {**estimate_plan([], None), 'reason': 'evaluation_read_unavailable'}
