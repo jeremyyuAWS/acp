@@ -144,3 +144,9 @@ def test_shared_registry_reader_is_owner_scoped(monkeypatch):
     result = read_plan_estimate(object(), 'alice', {'estimate_population': dict(complete=True, scope_revision='current', findings=[row])})
     assert seen == ['alice']
     assert not result['available'] and result['scope_revision'] == 'current'
+
+
+@pytest.mark.parametrize('policy', [{'ai': 0}, {'ai': 1, 'ai_budget_usd': '0.00'}])
+def test_rules_only_or_zero_budget_does_not_offer_future_ai_estimates(policy):
+    from remediation_cohort_estimates import read_plan_estimate
+    assert read_plan_estimate(object(), 'owner', {'policy': policy})['reason'] == 'ai_not_planned'

@@ -184,6 +184,9 @@ def read_plan_estimate(store, owner, preview):
     Existing routing groups lack exact model/family lineage. They intentionally do
     not manufacture estimate_population. This adapter is ready for that producer.
     """
+    policy = preview.get('policy') or {}
+    if policy.get('ai') == 0 or policy.get('ai_budget_usd') in ('0', '0.00', '0.0'):
+        return {**estimate_plan([], None), 'reason': 'ai_not_planned'}
     population = preview.get('estimate_population')
     if not population:
         return estimate_plan([], None)
