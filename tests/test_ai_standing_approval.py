@@ -31,11 +31,41 @@ def seed(store, monkeypatch, enabled=True, review=False):
     return store.get_job(batch['job_ids'][0])
 
 
-def proposal(store, rule='2.4.6', locator='slide:1', value='Clear title', model='fallback-2'):
+def register_review(store, ctx, p, verdict='accept'):
+    """Record the independent second-model review this path now requires.
+
+    Mirrors what the review chain writes in production: an attempt whose retained
+    output IS the drafted value, a trace link binding it to the paid call, and a
+    receipt over the exact draft digest.
+    """
+    from ai_attempt_history import AttemptHistory
+    from ai_review_chain import _save_review
+    operation, attempt = f'op-{p["model_call_id"]}', f'attempt-{p["model_call_id"]}'
+    AttemptHistory(store._db).begin(OWNER, SID, ctx.run_id, operation, attempt, file=FILE,
+        input_sha256=DIGEST, model=p['model'], provider='synthetic', purpose='draft')
+    with store._db.cursor() as cur:
+        store._db.execute(cur, 'UPDATE ai_attempt_history SET result_json=%s WHERE attempt_id=%s',
+            (json.dumps({'text': p['proposed_value']}), attempt))
+        store._db.execute(cur, 'INSERT INTO ai_attempt_trace_links VALUES(%s,%s,%s,%s)',
+            (OWNER, ctx.run_id, attempt, p['model_call_id']))
+    _save_review(ctx, operation, sha256(p['proposed_value'].encode()).hexdigest(), {'verdict': verdict})
+    return p
+
+
+def proposal(store, rule='2.4.6', locator='slide:1', value='Clear title', model='fallback-2', review='accept'):
     call_id = store.record_ai_call(surface='synthetic', provider='synthetic', model=model,
         zone='local', latency_ms=0, ok=True, scan_id=SID, file=FILE)
-    return {'locator': locator, 'before': '', 'proposed_value': value, 'source': 'AI synthetic fixture',
-            'model': model, 'model_call_id': call_id}
+    p = {'locator': locator, 'before': '', 'proposed_value': value, 'source': 'AI synthetic fixture',
+         'model': model, 'model_call_id': call_id}
+    # Standing approval is the one path with no human reading the draft, so the
+    # second-model review is mandatory there. Fixtures that expect auto-approval must
+    # carry one; pass review=None to exercise the fail-closed path.
+    if review is not None:
+        from ai_run_policy import optional_current_run_context
+        ctx = optional_current_run_context()
+        if ctx is not None:
+            register_review(store, ctx, p, review)
+    return p
 
 
 def rows(store, table):
@@ -239,7 +269,8 @@ def test_incomplete_exception_does_not_hold_back_eligible_file_row(isolated_stor
 def test_future_defaults_roundtrip_but_do_not_reauthorize_existing_run(isolated_store,monkeypatch):
     from remediation_impact_settings import read_impact_policy, save_impact_policy
     s=isolated_store;job=seed(s,monkeypatch,False)
-    selected={'rule_based':2,'ai':1,'ai_budget_usd':'1.00','auto_approve_ai':True}
+    selected={'rule_based':2,'ai':1,'ai_budget_usd':'1.00','auto_approve_ai':True,
+              'ai_review':{'enabled':True}}
     saved=save_impact_policy(s,OWNER,OWNER,selected,0)
     assert saved['policy']['auto_approve_ai'] is True
     assert read_impact_policy(s,OWNER)['auto_approve_ai'] is True
@@ -251,6 +282,33 @@ def test_future_defaults_roundtrip_but_do_not_reauthorize_existing_run(isolated_
         assert ctx.policy['auto_approve_ai'] is False
         assert read_run_budget(s,OWNER,SID,ctx.run_id)['policy']['auto_approve_ai'] is False
         with pytest.raises(ValueError):authorization(s,OWNER,SID,ctx.run_id)
+
+
+def test_standing_approval_refuses_to_save_without_the_reviewer():
+    """The one remaining check on a draft nobody reads cannot be the operator's option."""
+    base={'rule_based':2,'ai':1,'ai_budget_usd':'1.00','auto_approve_ai':True}
+    for review in (None,{'enabled':False}):
+        policy=dict(base) if review is None else {**base,'ai_review':review}
+        with pytest.raises(ValueError,match='AI reviewer'):normalize_policy(policy)
+    assert normalize_policy({**base,'ai_review':{'enabled':True}})['auto_approve_ai'] is True
+    # ...and turning automatic approval off leaves the reviewer genuinely optional.
+    assert normalize_policy({'rule_based':2,'ai':1,'ai_budget_usd':'1.00'})['ai'] == 1
+
+
+def test_no_accepted_review_means_no_automatic_approval(isolated_store,monkeypatch):
+    """Fail closed: an eligible row with no review receipt stays for a human.
+
+    This is the bite check for the mandatory reviewer. Every other fixture here now
+    carries a receipt via `proposal(...)`; if the requirement stopped being enforced
+    at approval time, this test would go green while proving nothing.
+    """
+    s=isolated_store;job=seed(s,monkeypatch)
+    with run_context(s,job['payload'],job) as ctx:
+        item=s.enqueue_proposals(SID,FILE,'2.4.6',[proposal(s,review=None)])
+        approve_file(s,ctx)
+    assert s.get_hitl_item(item)['status']=='pending'
+    assert not apply_jobs(s)
+    assert not [r for r in rows(s,'decision_log') if r['action']=='hitl.approved_under_run_policy']
 
 
 @pytest.mark.parametrize('policy',[{'ai':1},{'ai':0,'ai_budget_usd':'1.00'},{'ai':1,'ai_budget_usd':'0.00'}])
@@ -296,7 +354,7 @@ def test_optional_review_must_resolve_for_exact_draft(isolated_store,monkeypatch
     from ai_review_chain import _save_review
     s=isolated_store;job=seed(s,monkeypatch,review=True)
     with run_context(s,job['payload'],job) as ctx:
-        p=proposal(s)
+        p=proposal(s,review=None)
         h=AttemptHistory(s._db)
         h.begin(OWNER,SID,ctx.run_id,'operation','attempt',file=FILE,input_sha256=DIGEST,
             model=p['model'],provider='synthetic',purpose='draft')

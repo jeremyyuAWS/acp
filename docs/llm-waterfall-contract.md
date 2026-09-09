@@ -27,10 +27,17 @@ module:
 
 The approval contract below — the five-field evidence object, `AUTO_FAMILIES`,
 `auto_eligible` — governs **only** the left-hand column. It does not describe, constrain,
-or certify the shipped path. The shipped path's safety property is different and simpler:
-`api/remediation_impact.py` sets `ai_automatic: False`, so every AI proposal requires a
-person. That is a real guarantee, but it is not this contract's guarantee, and the shared
-name has already invited the confusion.
+or certify the shipped path.
+
+**Do not assume the shipped path always requires a person.** `api/remediation_impact.py`
+sets `ai_automatic: False`, but that gates AI policy levels above 1 and nothing else.
+`auto_approve_ai` is legal precisely at level 1, and under it the worker approves its own
+AI proposals (`handlers.py:1184` → `ai_standing_approval`), applies them, and automatic
+release publishes them — the release gate checks `status`, never who approved. So the
+shipped path has *no* independent verifier AND an unattended mode. Its remaining check on
+the draft is the second-model AI review, which ADR 0056 makes mandatory on that path.
+One model's verdict on another's draft is not the evidence contract below, and must not
+be described as if it were.
 
 Treat this module as the *design target* for supervised auto-application (ADR 0056), not
 as a description of current behaviour.

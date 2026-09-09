@@ -1,7 +1,9 @@
-# ADR 0056 — The bounded AI remediation waterfall: spend it once, prove it later, apply it never (yet)
+# ADR 0056 — The bounded AI remediation waterfall: spend it once, trace it always, and be honest about what unattended application does and does not prove
 
-**Status:** Accepted — describes what is built and running as of 2026-09-09; the
-auto-application half is explicitly **not** decided here and is gated on ADR 0030 §3
+**Status:** Accepted — describes what is built and running as of 2026-09-09. Unattended
+application of AI values SHIPS (owner decision, 2026-09-09); what remains gated on
+ADR 0030 §3 is the *evidence* that those values are correct, not the permission to apply
+them. An earlier draft of this ADR asserted the opposite and is corrected inline below.
 **Date:** 2026-09-09
 **Related:** ADR 0019 (AI provider gateway + governance), ADR 0030 (the auto-apply gate —
 what evidence lets ACP write a fix), ADR 0031 (certification is gated by coverage, not
@@ -34,8 +36,10 @@ into an unbounded-spend problem multiplied by three. So the ledger had to come f
 ## Decision
 
 **A remediation run admits a bounded, ordered sequence of paid generation attempts
-against an immutable per-run ceiling, records the lineage of every attempt, and produces
-proposals that a human still has to approve.**
+against an immutable per-run ceiling, and records the lineage of every attempt.** Whether
+the resulting proposal reaches a person is a separate, explicit run-level choice — see
+*Unattended application* below; by default it does, and under `auto_approve_ai` it does
+not.
 
 Five parts, each with its own contract document:
 
@@ -95,13 +99,55 @@ eligible predecessors. Where a measure cannot be computed the UI says **"Not yet
 This is the part most likely to erode under product pressure, and it is the part that
 makes the rest defensible.
 
-## What this ADR does NOT decide
+## Unattended application: what actually ships, and the two guards added here
 
-**It does not authorize applying an AI proposal without a person.**
-`api/remediation_impact.py:6-7` sets `ai_automatic: False` with the reason "Automatic
-application of AI proposals is not supported by this execution path," and that remains
-the shipped behaviour. Everything above governs how a *suggestion* is produced, priced
-and explained. A human approving it is still the only thing that makes it a change.
+**An AI-drafted value CAN reach a published customer file with no per-change human
+review.** This ADR's first draft said the opposite, on the strength of
+`api/remediation_impact.py`'s `ai_automatic: False` and its reason string. That reading
+was wrong, and the way it was wrong is worth recording because the code invites it.
+
+`ai_automatic: False` gates **AI policy levels above 1 and nothing else** — it is enforced
+by `require_executable` and `execution_controls`, both of which raise only on `ai > 1`.
+`auto_approve_ai` is validated as legal *precisely at* `ai == 1`
+(`remediation_impact_settings.py`), so the two conditions never overlap. The live path:
+
+```
+auto_approve_ai (one checkbox, Plan tab, RemediationPlanChoices.jsx)
+  → handlers.py:1184        worker calls approve_file() after each file is remediated
+  → ai_standing_approval    writes status='approved', actor=system, executed_by=system
+  → apply_approved_values   writes the AI value into the corrected copy
+  → automatic_release.py    gate is `status not in {approved, resolved}` — never WHO
+  → publish_file            → the customer's Drive / SharePoint Release folder
+```
+
+Both human authorizations happen *before the proposal exists*: `automatic_release.ready`
+blocks on the run still being in flight, so release is authorized while the drafts are
+still being generated. Neither can have inspected what ships.
+
+**This is the intended product** (owner decision, 2026-09-09) — the seven rules in
+`ai_standing_approval.RULES` are alt text, link text, PDF field names, sensory
+characteristics, language of parts, and headings/labels. What is *not* acceptable is the
+operator being told otherwise, so two things change with this ADR:
+
+1. **The second-model AI review is REQUIRED on this path**, not the run policy's option.
+   It was `policy['ai_review']['enabled'] is True`, so an operator could turn off the only
+   remaining check on the draft. It is now unconditional in `ai_standing_approval`, and
+   `remediation_impact_settings` refuses to save `auto_approve_ai` without it. A run
+   queued before this rule fails closed: nothing is auto-approved, items stay for a human.
+2. **The forecast no longer contradicts the run.** `_route` sent every AI row to the
+   `review` lane under a comment reading "no safe unattended AI apply path yet" — so the
+   Review count the operator approved contained precisely the findings that would be
+   published without review. Rows the standing approval can act on now forecast as
+   `automatic` with reason `ai_standing_approval`.
+
+**What the evidence is, stated honestly.** `_apply_one_value_kind` credits a fix when the
+WCAG detector stops reporting FAIL. For 1.1.1 that establishes *an alt attribute is
+present and non-empty* — alt text reading `"image"` passes. `ai_standing_approval`'s
+provenance, snapshot-digest, source-revision and artifact-byte pinning are unusually
+thorough and reliably stop a *stale or tampered* proposal; they do not establish that the
+model was *right*, and do not claim to. With the reviewer now mandatory, the check on
+correctness is one model's verdict on another's draft. **That is not calibration** (see
+below), and it should not be described as verification.
 
 Two separate modules are both called "the waterfall", and the distinction is
 load-bearing:
@@ -114,9 +160,15 @@ load-bearing:
 
 The first is a **design target for supervised auto-application**, fixture-tested and
 deliberately unwired. The second is what ships. Reading the first as a description of
-production behaviour is the specific error this table exists to prevent.
+production behaviour is the specific error this table exists to prevent — and note that
+the shipped path is the one *without* the independent verifier, while the unattended
+application described above runs on that shipped path.
 
-### What would let auto-application happen
+### What would let auto-application be *verified* rather than merely permitted
+
+Unattended application ships today as a product decision. What is still outstanding is
+the evidence that would let ACP claim the applied values are *correct* — which is what an
+auditor is being asked to accept.
 
 ADR 0030 §3 already answers this and is not superseded: auto-apply is granted **per
 criterion by verification completeness**, not by model strength or confidence. ADR 0031
