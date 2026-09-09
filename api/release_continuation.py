@@ -63,6 +63,18 @@ def plan(store, sid, owner, files, destination, folder_name):
     if not files or set(files) - available.keys() or (selection is not None and set(files) - selection):
         raise ValueError('Release scope changed; choose the current files')
     revision = store.stage_snapshot_id(sid)
+    existing = store.release_for_scan(sid, owner)
+    if existing:
+        actual_parent = existing.get('parent_folder_id')
+        if destination and destination['folder_id'] != actual_parent:
+            raise ValueError('This scan already has a different Release destination')
+        destination = ({'provider': scan['run'].get('source'), 'folder_id': actual_parent,
+                        'folder_name': existing.get('parent_folder_name') or 'Existing Release parent'}
+                       if actual_parent else None)
+        folder_name = existing['folder_name']
+    if not folder_name:
+        import publish
+        folder_name = publish.release_folder_name()
     planned = {}
     for file in sorted(set(files)):
         record = store.get_file_record(sid, file) or {}
@@ -94,6 +106,11 @@ def request_for(owner, sid):
 def current_inputs(store, row, file, *, authorized):
     from assessment_policy import selected_documents
     intent, sid, owner = row['intent'], row['scan_id'], row['owner_email']
+    require_grants(store, owner, review=any(r['authorize'] for r in intent['files'][file]['rows']))
+    existing = store.release_for_scan(sid, owner)
+    if existing and (existing.get('parent_folder_id') != (intent['destination'] or {}).get('folder_id')
+                     or existing.get('folder_name') != intent['release_folder_name']):
+        raise ValueError('Release destination changed; confirm again')
     if store.get_scan(sid, owner=owner) is None:
         raise ValueError('Scan access changed')
     selection = selected_documents(store.get_decisions(sid, owner=owner))
@@ -154,8 +171,16 @@ def authorize(store, intent_id, owner):
             if not selected['ready'] and not any(r['authorize'] for r in selected['rows']):
                 continue
             current_inputs(store, row, file, authorized=False)
+        # Reserve the immutable scan Release destination in the approval transaction, so an
+        # independent ready-only action cannot choose a different folder between ticks.
+        store.ensure_release_execution(row['scan_id'], owner, row['intent']['source'], 0,
+            preferred_folder_name=row['intent']['release_folder_name'],
+            parent_folder_id=(row['intent']['destination'] or {}).get('folder_id'),
+            parent_folder_name=(row['intent']['destination'] or {}).get('folder_name'))
         progress = {}
         for file, selected in row['intent']['files'].items():
+            if selected['ready'] or any(r['authorize'] for r in selected['rows']):
+                current_inputs(store, row, file, authorized=False)
             approvals = [r for r in selected['rows'] if r['authorize']]
             progress[file] = {'state': 'applying' if approvals else 'ready' if selected['ready'] else 'blocked',
                               'message': '; '.join(selected['blockers']) or 'Verification is required'}
@@ -227,7 +252,8 @@ def advance(store, payload, job):
             result = publish_files(row['scan_id'], request_for(row['owner_email'], row['scan_id']),
                 {'files': [file], 'destination': row['intent']['destination'],
                  'release_folder_name': row['intent']['release_folder_name'],
-                 'expected_artifacts': {file: record['corrected_sha256']}})
+                 'expected_artifacts': {file: record['corrected_sha256']},
+                 'expected_destination': row['intent']['destination']})
             outcome = next((r for r in result.get('published', []) if r.get('file') == file), {})
             if outcome.get('status') == 'published':
                 progress[file] = {'state': 'published', 'message': 'Delivered', 'receipt': outcome}
@@ -265,3 +291,16 @@ def resume(store, intent_id, owner):
             return row
         progress['_deadline'] = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
         return persistence.save(store, row, status='waiting', progress=progress, schedule=True)
+
+
+def require_grants(store, owner, *, review):
+    import core
+    import workspace_roles
+    import workspace_rollout
+    if not workspace_rollout.enforcement_active():
+        return
+    access = workspace_roles.access_for_email(store, owner, owner_email=core.OWNER_EMAIL,
+                                               is_suspended=core.is_suspended)
+    required = {'release.publish'} | ({'remediate.review'} if review else set())
+    if not required <= set(access.get('capabilities') or ()):
+        raise ValueError('Approval or publish permission changed; access must be restored before proceeding')

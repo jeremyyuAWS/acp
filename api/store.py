@@ -4797,7 +4797,7 @@ class Store:
                          "remediation_policy_action", "remediation_run_policy_snapshot",
                          # Release executions and their provider destinations are customer data.
                          "release_documents", "release_roots", "release_root_claims",
-                         "release_executions",
+                         "release_executions", "release_continuations",
                          # Canonical execution history, delivery state, manifests and receipts
                          # are all records of customer work and must leave with the scan data.
                          "stage_executions", "stage_work_items", "stage_attempts", "stage_events",
@@ -4878,7 +4878,7 @@ class Store:
                                # Both are scan_id-keyed, so the standard subquery scopes them to
                                # this owner's runs exactly as it does the rest.
                                "remediation_delivery", "remediation_run_hold",
-                               "remediation_run_policy_snapshot"]
+                               "remediation_run_policy_snapshot", "release_continuations"]
     # Tables that key on doc_id (not scan_id), scoped via a documents.owner_email join.
     _RESET_USER_DOC_TABLES = ["disposition_audit", "remediation_state"]
 

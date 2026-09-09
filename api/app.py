@@ -192,7 +192,7 @@ async def _workspace_capability_gate(request, call_next):
     # which is the carve-out doing its job: they cannot be measured into a denial either.
     effective = access.get("calculated") or access
     held = frozenset(effective.get("capabilities") or ())
-    if held & needed:
+    if capmap.allows(request.method, route.path, held):
         return await call_next(request)
 
     # 403, not 404. PRD §11 reserves 404 for "confirming another tenant's object exists would

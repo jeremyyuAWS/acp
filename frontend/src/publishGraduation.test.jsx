@@ -59,7 +59,7 @@ describe('Publish — W5 conditional-to-full graduation', () => {
     const c = await mount({ run, files: [held('b.pdf')], certified: [] })
     expect(c.textContent).toContain('Review 1 file')
     expect([...c.querySelectorAll('a')].map(a => a.getAttribute('href'))).toContain('?tab=remediate&mode=review')
-    expect(c.textContent).toContain('Approved changes must be applied and verified')
+    expect(c.textContent).toContain('Only applied and verified changes make a document ready')
   })
 
   it('loads and applies a saved delivery template in the guided workspace', async () => {

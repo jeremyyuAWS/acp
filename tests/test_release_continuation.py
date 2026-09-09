@@ -180,3 +180,80 @@ def test_authorize_route_cannot_cross_scan_or_owner(prepared):
     assert _client('foreign@example.com').post(f'/scans/{SID}/release/continuation/{row["id"]}/authorize').status_code == 404
     assert _client(OWNER).post(f'/scans/other/release/continuation/{row["id"]}/authorize').status_code == 404
     assert persistence.get(st, row['id'], OWNER)['status'] == 'draft'
+
+
+def test_existing_destination_is_resolved_and_a_later_change_requires_confirmation(prepared):
+    st, item_id, row = prepared
+    st.ensure_release_execution(SID, OWNER, 'drive', 0, preferred_folder_name='Other release',
+                                parent_folder_id='other-folder', parent_folder_name='Other folder')
+    with pytest.raises(ValueError, match='destination changed'):
+        flow.authorize(st, row['id'], OWNER)
+    assert st.get_hitl_item(item_id)['status'] == 'pending'
+    refreshed = flow.plan(st, SID, OWNER, [FILE], None, '')
+    assert refreshed['intent']['destination']['folder_id'] == 'other-folder'
+    assert refreshed['intent']['release_folder_name'] == 'Other release'
+
+
+def test_publish_permission_does_not_also_grant_batch_approval(prepared, monkeypatch):
+    import workspace_roles
+    import workspace_rollout
+    st, item_id, row = prepared
+    monkeypatch.setattr(workspace_rollout, 'enforcement_active', lambda: True)
+    monkeypatch.setattr(workspace_roles, 'access_for_email', lambda *args, **kwargs: {'capabilities': ['release.publish']})
+    with pytest.raises(ValueError, match='permission changed'):
+        flow.authorize(st, row['id'], OWNER)
+    assert st.get_hitl_item(item_id)['status'] == 'pending'
+
+
+def test_permission_revocation_stops_continuation_before_delivery(prepared, monkeypatch):
+    import workspace_roles
+    import workspace_rollout
+    from routes import scans
+    st, _, row = prepared
+    row = flow.authorize(st, row['id'], OWNER)
+    complete_application(st, row)
+    monkeypatch.setattr(workspace_rollout, 'enforcement_active', lambda: True)
+    monkeypatch.setattr(workspace_roles, 'access_for_email', lambda *args, **kwargs: {'capabilities': []})
+    monkeypatch.setattr(scans, 'publish_files', lambda *args: pytest.fail('revoked permission cannot publish'))
+    assert tick(st, row)['progress'][FILE]['state'] == 'needs_confirmation'
+
+
+def test_composite_route_requires_both_capabilities_but_shared_reads_remain_any_of():
+    import workspace_capability_map as caps
+    path = '/scans/{sid}/release/continuation/{intent_id}/authorize'
+    assert not caps.allows('POST', path, {'release.publish'})
+    assert not caps.allows('POST', path, {'remediate.review'})
+    assert caps.allows('POST', path, {'release.publish', 'remediate.review'})
+    assert caps.allows('GET', '/scans/{sid}', {'release.view'})
+
+
+def test_owner_reset_purges_the_continuation_without_touching_other_owner(isolated_store):
+    from test_release_store import _scan
+    st = isolated_store
+    _scan(st, 'mine', OWNER); _scan(st, 'other', 'other@example.com')
+    mine = persistence.create(st, OWNER, 'mine', {'files': {}})
+    other = persistence.create(st, 'other@example.com', 'other', {'files': {}})
+    st.reset_user_data(OWNER)
+    assert persistence.get(st, mine['id'], OWNER) is None
+    assert persistence.get(st, other['id'], 'other@example.com') is not None
+
+
+def test_normal_publish_refuses_a_changed_frozen_destination_or_artifact(isolated_store, monkeypatch):
+    import core
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+    from routes import scans
+    from test_release_artifact_readers import seed
+    st = isolated_store
+    seed(st, b'A')
+    monkeypatch.setattr(core, 'store', st)
+    request = SimpleNamespace(state=SimpleNamespace(user_email='reader@example.com'), headers={})
+    with pytest.raises(HTTPException) as changed:
+        scans.publish_files('reader-scan', request, {'files': ['one.pdf'], 'expected_artifacts': {'one.pdf': hashlib.sha256(b'B').hexdigest()}})
+    assert changed.value.status_code == 409
+    st.ensure_release_execution('reader-scan', 'reader@example.com', 'local', 0,
+                                parent_folder_id='prior-parent', parent_folder_name='Prior parent')
+    with pytest.raises(HTTPException) as destination:
+        scans.publish_files('reader-scan', request, {'files': ['one.pdf'], 'expected_destination': None})
+    assert destination.value.status_code == 409
+    assert st.get_file_record('reader-scan', 'one.pdf')['published_at'] is None

@@ -22,6 +22,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     const load = async () => {
       try {
         const result = await planReleaseContinuation(runId, files.map(f => f.file), destination, folderName)
+        if (!result?.id || !result?.intent) throw new Error('Eligibility could not be confirmed. Refresh before authorizing changes.')
         if (live) setPlan({ ...result, key })
       } catch (e) { if (live) setError(e?.message || 'Eligible changes could not be checked. Ready files can still be published.') }
     }
@@ -73,7 +74,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
   const count = state => outcomes.filter(([, result]) => result.state === state).length
   return <section className="panel release-quick" aria-label="Publish ready files and approved changes">
     <div className="release-quick-summary"><strong>{ready.length} ready to publish</strong><span>{files.length} files in this scope</span></div>
-    <p><b>Destination:</b> {destinationLabel}. Originals stay unchanged.</p>
+    <p><b>Destination:</b> {plan?.intent?.destination?.folder_name ? `${plan.intent.destination.folder_name} / Remediated` : destinationLabel}. Originals stay unchanged.</p>
     {!readOnly && <details><summary>Change destination</summary>{destinationPicker}</details>}
     <div className="release-quick-buttons">
       <button className="qbtn approve" disabled={readOnly || publishing || !ready.length} onClick={() => onReady(ready.map(f => f.file))}>
@@ -95,7 +96,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     {active && <div role="status" aria-label="Authorized Release progress">
       <b>{count('published')} delivered · {count('applying') + count('ready') + count('publishing')} in progress · {count('blocked') + count('failed') + count('needs_confirmation')} need attention</b>
       <p>{activeRunning ? 'Progress is saved. You can leave and return while approved changes are applied and verified.' : 'This authorized batch has finished. Files needing attention were not published.'}</p>
-      <p>Authorized destination: {active.intent.destination?.folder_name || destinationLabel}</p>
+      <p>Authorized destination: {active.intent.destination?.folder_name || 'Default Remediated folder for this source' }</p>
       <details><summary>Delivery results and remaining work</summary>{outcomes.map(([file, result]) => <p key={file}><b>{file}</b>: {result.message}
         {result.receipt?.published_url && <> · <a href={result.receipt.published_url} target="_blank" rel="noopener noreferrer">Open delivered copy</a></>}</p>)}</details>
       {count('failed') > 0 && <button className="ghost" disabled={busy || readOnly || activeRunning} onClick={retry}>Retry failed delivery with the same authorization</button>}

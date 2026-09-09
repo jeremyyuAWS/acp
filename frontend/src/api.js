@@ -1586,7 +1586,7 @@ export const publishAllFiles = (scanId, files, releaseFolderName = '', options =
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ files, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}),
         ...(options.destination ? { destination: options.destination } : {}),
-        ...(options.expectedArtifacts ? { expected_artifacts: options.expectedArtifacts } : {}) }),
+        ...(options.expectedArtifacts ? { expected_artifacts: options.expectedArtifacts, expected_destination: options.destination || null } : {}) }),
     }).then(j))
 export const getReleaseStatus = (scanId) => (SIM
   ? sim({ release_id: null, roots: [], documents: [], documents_total: 0, published: 0, failed: 0, remaining: 0 }, 50)

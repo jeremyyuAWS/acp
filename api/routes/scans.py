@@ -3577,6 +3577,8 @@ def publish_files(sid: str, request: Request, body: dict):
     release = core.store.ensure_release_execution(
         sid, owner, source, len(eligible), **execution_options)
     release_id = release["id"]
+    if "expected_destination" in body and release.get("parent_folder_id") != (body["expected_destination"] or {}).get("folder_id"):
+        raise HTTPException(409, "The authorized Release destination changed; confirm again")
     created_at = release["created_at"]
     folder_name = release["folder_name"]
     drive_token = request.headers.get("x-drive-token")

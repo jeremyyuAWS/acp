@@ -17,7 +17,8 @@ holds ANY of the capabilities listed for it. Routes do not belong to one tab: GE
 backs Discover, Assess, Remediate and Release, and requiring `discover.view` for it would break
 Assess for a Viewer whose Discover is hidden — a role the PRD's own §7 grid defines. So a shared
 READ route lists the view capability of every tab that legitimately uses it, and a MUTATING route
-lists the single capability that names the action.
+lists the single capability that names the action. Composite approval-and-publish is explicitly
+listed in ALL_OF_ROUTES and requires both grants.
 
     read  /scans/{sid}          -> {discover.view, assess.view, remediate.view, release.view}
     write POST /scans/{sid}/remediate -> {remediate.run}
@@ -229,9 +230,16 @@ _map_many([("GET", "/ai/suggest"), ("GET", "/ai/explain"), ("GET", "/ai/validate
 # ── Release ───────────────────────────────────────────────────────────────────
 # Publishing is a GRANT (PRD §5), never implied by seeing the Release tab.
 _map_many([("POST", "/scans/{sid}/publish")], {"release.publish"})
+_map_many([("POST", "/scans/{sid}/release/continuation/{intent_id}/authorize")],
+          {"release.publish", "remediate.review"})
+_map_many([("POST", "/scans/{sid}/release/continuation/{intent_id}/resume")], {"release.publish"})
+ALL_OF_ROUTES = {("POST", "/scans/{sid}/release/continuation/{intent_id}/authorize")}
+
 _map_many([
     ("GET", "/releases"),
     ("GET", "/scans/{sid}/release"),
+    ("GET", "/scans/{sid}/release/continuation"),
+    ("POST", "/scans/{sid}/release/continuation/plan"),
     ("GET", "/scans/{sid}/release/manifest"),
     # This is a read-only projection despite using POST: the selected filenames are carried in
     # the body so a large release is not constrained by URL length. It does not publish, approve,
@@ -553,3 +561,12 @@ def unknown_capabilities() -> list[str]:
     produces a route nobody can ever reach, since no role can hold a capability that is not real."""
     named = {cap for caps in ROUTE_CAPABILITIES.values() for cap in caps}
     return sorted(named - rbac.CAPABILITIES)
+
+
+def allows(method: str, path: str, held) -> bool:
+    needed = required_capabilities(method, path)
+    if not needed:
+        return True
+    if (method.upper(), path) in ALL_OF_ROUTES:
+        return needed <= frozenset(held)
+    return bool(needed & frozenset(held))
