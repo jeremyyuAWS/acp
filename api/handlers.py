@@ -1038,6 +1038,8 @@ def _remediation_source_bytes(scan_id: str, filename: str, payload: dict,
     resubmitted (twice, on two worker revisions) on the strength of the "re-trigger" it asks for.
     An unsupported source now fails by NAME instead of borrowing Drive's identity.
     """
+    from remediation_contribution import SOURCE
+    SOURCE.set(None)
     source = payload.get("source") or "drive"
     if source in ("local", "sharepoint"):
         from scanner import read_cached_source
@@ -1061,6 +1063,8 @@ def _remediation_source_bytes(scan_id: str, filename: str, payload: dict,
             # Reading only the first key is a cache miss that looks like "never cached".
             data = read_cached_source(scan_id, filename, owner)
         if data is not None:
+            from remediation_contribution import bind_assessed_input
+            bind_assessed_input(scan_id, filename, data, data)
             return data, None
         if source == "local":
             # Local corpus remains the deterministic development/demo fallback when Blob caching
@@ -1086,7 +1090,21 @@ def _remediation_source_bytes(scan_id: str, filename: str, payload: dict,
             raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
         svc = _drive_client(token)
         file_id = drive_file_id or payload.get("drive_file_id")
-        return svc.files().get_media(fileId=file_id).execute(), svc
+        data = svc.files().get_media(fileId=file_id).execute()
+        # Drive may have changed since Assess. Remediation can continue, but a live
+        # download never manufactures the assessment-to-proposal source binding.
+        from remediation_contribution import bind_assessed_input
+        assessed = None
+        try:
+            from scanner import read_cached_source
+            checksum = core.store.get_source_checksum(scan_id, filename)
+            assessed = read_cached_source(scan_id, filename, payload.get("owner"), checksum=checksum)
+            if assessed is None and checksum:
+                assessed = read_cached_source(scan_id, filename, payload.get("owner"))
+        except Exception:
+            pass  # This read-only attribution guard must not block existing delivery.
+        bind_assessed_input(scan_id, filename, data, assessed)
+        return data, svc
     raise FatalJobError(f"unsupported remediation source {source!r} — expected one of "
                         f"{', '.join(REMEDIATION_SOURCES)}")
 
@@ -1235,9 +1253,6 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
     # `svc` stays None unless this really is a Drive job, so the mirror block below cannot
     # reach a client a non-Drive job never built.
     data, svc = _remediation_source_bytes(scan_id, filename, payload, drive_file_id)
-    from remediation_contribution import SOURCE
-    from hashlib import sha256 as _source_sha256
-    SOURCE.set((scan_id, filename, _source_sha256(data).hexdigest()))
 
     # Format-agnostic text proposers (3.1.2 language-of-parts + 1.3.3 sensory rewrite) run on
     # the original bytes — the prose these check is unchanged by remediation, and running

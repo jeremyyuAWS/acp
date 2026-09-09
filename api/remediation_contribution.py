@@ -47,6 +47,18 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def bind_assessed_input(scan_id, file, proposal_input, assessed_input):
+    """Bind only retained assessment bytes; a fresh download cannot define its own baseline."""
+    SOURCE.set(None)
+    if not isinstance(proposal_input, bytes) or not isinstance(assessed_input, bytes):
+        return False
+    source_hash = sha256(proposal_input).hexdigest()
+    if source_hash != sha256(assessed_input).hexdigest():
+        return False
+    SOURCE.set((scan_id, file, source_hash))
+    return True
+
+
 def freeze_baseline(db, cur, owner, scan_id, run_id, snapshot_id, findings, files):
     """Admission-only transaction seam, including the empty-baseline case."""
     baseline = [{key: row.get(key) for key in ('finding_id', 'file', 'rule_id', 'instance_key')}

@@ -263,3 +263,26 @@ def test_ownerless_legacy_admission_has_no_unscoped_contribution_baseline(store)
         assert store._db.fetchone(cur)['n']==0
     for owner in ('owner','other',None):
         with pytest.raises(PermissionError): c.read_contribution(store,owner,'legacy',run)
+
+
+@pytest.mark.parametrize('assessed,live,attributed', [(b'old',b'new',False),(b'old',b'old',True),(None,b'new',False)])
+def test_drive_draft_input_must_match_retained_assessment_bytes(store,monkeypatch,assessed,live,attributed):
+    import handlers, core, scanner
+    run=admitted(store,count=1)
+    monkeypatch.setattr(core,'store',store)
+    svc=SimpleNamespace(files=lambda:SimpleNamespace(get_media=lambda **kwargs:SimpleNamespace(execute=lambda:live)))
+    monkeypatch.setattr(handlers,'_drive_client',lambda token:svc)
+    monkeypatch.setattr(scanner,'read_cached_source',lambda *args,**kwargs:assessed)
+    source_token=c.SOURCE.set(None)
+    try:
+        data,_=handlers._remediation_source_bytes('scan','a.docx',{'source':'drive','owner':'owner','drive_token':'fixture-token','drive_file_id':'fixture-id'})
+        assert data==live  # delivery can proceed independently of attribution
+        ctx=SimpleNamespace(owner_id='owner',run_id=run,scan_id='scan',file='a.docx')
+        with store._db.cursor() as cur:
+            c.capture(store._db,cur,ctx,snapshot_id='p',proposal={'locator':'image','proposed_value':'A tree','source':'rules'},scan_id='scan',file='a.docx',rule_id='1.1.1',item_id='item',attempt_id=None)
+        result=c.read_contribution(store,'owner','scan',run)
+        assert result['contributions']['rules']==(1 if attributed else 0)
+        if not attributed:
+            assert result['coverage']=='partial'
+            assert c.SOURCE.get() is None
+    finally: c.SOURCE.reset(source_token)

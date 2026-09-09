@@ -33,6 +33,7 @@ the same writer attempt is deduplicated.
 
 ## Limits and prerequisites
 
+- Live Drive input must match retained assessed bytes before attribution is recorded. Changed Drive content or a missing assessment cache can still follow the existing remediation path, with contribution unavailable; reassessment is needed to establish a new attributable baseline. Local corpus fallback without retained assessed bytes is likewise unattributed.
 - Missing multi-instance mappings remain unavailable; the implementation does not
   manufacture per-element identities from aggregate assessment counts.
 - An edited human value does not inherit exact-version proof for the old AI draft.
