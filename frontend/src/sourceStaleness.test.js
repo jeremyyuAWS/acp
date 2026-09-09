@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 // classification is proven server-side; this pins that the UI fetches it, warns honestly, and
 // only ever offers a re-scan for files it actually found changed.
 const HERE = dirname(fileURLToPath(import.meta.url))
-const pub = () => ['Publish.jsx', 'ReleaseFileSelection.jsx']
+const pub = () => ['Publish.jsx', 'ReleaseFileSelection.jsx', 'releaseClarityModel.js']
   .map((file) => readFileSync(join(HERE, file), 'utf8')).join('\n')
 const api = () => readFileSync(join(HERE, 'api.js'), 'utf8')
 const mon = () => readFileSync(join(HERE, 'Monitor.jsx'), 'utf8')
@@ -25,7 +25,7 @@ describe('Release Center: source-staleness UI', () => {
     const s = pub()
     expect(s).toMatch(/import \{[^}]*getSourceStatus[^}]*rescoreFile[^}]*\} from '\.\/api\.js'/)
     expect(s).toMatch(/getSourceStatus\(run\.id\)/)
-    expect(s).toMatch(/const srcOf = \(f\) => srcStatus\.byFile\[f\.file\]\?\.state/)
+    expect(s).toMatch(/const srcOf = \(f\) => releaseSourceState\(srcStatus\.byFile\[f\.file\]\)/)
     expect(s).toMatch(/const staleReady = ready\.filter\(\(f\) => !done\[f\.file\] && srcOf\(f\) === 'stale'\)/)
   })
 

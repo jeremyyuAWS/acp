@@ -8,6 +8,7 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 // worktree changes are proven in vitest, not the shared-checkout preview server).
 
 const publishAllFiles = vi.fn(() => Promise.resolve({ published: [] }))
+const listHitlQueue = vi.fn(() => Promise.resolve([]))
 const getSettings = vi.fn(() => Promise.resolve({ drive_mirror_enabled: false, drive_mirror_folder: 'Remediated' }))
 const putMyReleaseTemplates = vi.fn((templates) => Promise.resolve({ release_templates: templates }))
 vi.mock('./api.js', () => ({
@@ -16,7 +17,7 @@ vi.mock('./api.js', () => ({
   getReleaseStatus: vi.fn(() => Promise.resolve({ release_id: null })),
   listReleaseHistory: vi.fn(() => Promise.resolve({ releases: [] })),
   getReleaseManifest: vi.fn(() => Promise.resolve({ manifest: {} })),
-  listHitlQueue: vi.fn(() => Promise.resolve([])),
+  listHitlQueue: (...args) => listHitlQueue(...args),
   getSettings: (...a) => getSettings(...a),
   putMyReleaseTemplates: (...a) => putMyReleaseTemplates(...a),
   getSourceStatus: vi.fn(() => Promise.resolve({ files: [], stale_count: 0 })),
@@ -40,7 +41,7 @@ vi.mock('./remediableScope.js', () => ({
 
 const { default: Publish } = await import('./Publish.jsx')
 
-afterEach(unmountAll)
+afterEach(async () => { await unmountAll(); vi.clearAllMocks(); listHitlQueue.mockResolvedValue([]) })
 const flush = async () => { for (let k = 0; k < 5; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
 const mount = async (props) => {
   const { container, root } = createTestRoot()
@@ -48,11 +49,19 @@ const mount = async (props) => {
   await flush()
   return container
 }
-const verified = (file, over = {}) => ({ file, compliant: true, score: 100, department: 'D', sourceName: 'S', ...over })
+const verified = (file, over = {}) => ({ file, compliant: true, remediated_at: '2026-07-31T00:00:00Z', score: 100, department: 'D', sourceName: 'S', ...over })
 const held = (file, over = {}) => ({ file, compliant: false, score: 40, issues: [{ wcag: 'SC_1_1_1' }], department: 'D', sourceName: 'S', ...over })
 const run = { id: 'scan1', files: 3, certifiable: 2 }
 
 describe('Publish — W5 conditional-to-full graduation', () => {
+  it('links blocked documents directly to the Review workspace', async () => {
+    listHitlQueue.mockResolvedValue([{ file: 'b.pdf' }])
+    const c = await mount({ run, files: [held('b.pdf')], certified: [] })
+    expect(c.textContent).toContain('Review 1 file')
+    expect([...c.querySelectorAll('a')].map(a => a.getAttribute('href'))).toContain('?tab=remediate&mode=review')
+    expect(c.textContent).toContain('Approved changes must be applied and verified')
+  })
+
   it('loads and applies a saved delivery template in the guided workspace', async () => {
     getSettings.mockResolvedValueOnce({ release_templates: [{ name: 'Finance ZIP', method: 'download', preserve_hierarchy: false }] })
     const c = await mount({ run: { ...run, source: 'drive' }, files: [verified('a.pdf')], certified: [], onPublish: vi.fn() })
@@ -85,30 +94,29 @@ describe('Publish — W5 conditional-to-full graduation', () => {
     expect([...c.querySelectorAll('button')].some((b) => /Graduate to full/i.test(b.textContent))).toBe(false)
   })
 
-  it('offers GRADUATE once every held document is remediated, and releases them without a re-scan', async () => {
+  it('routes remaining verified documents through delivery review without publishing', async () => {
     // a.pdf released; b.pdf was held but is now compliant (remediated) and unreleased.
     const onPublish = vi.fn()
     const files = [verified('a.pdf', { published_at: '2026-08-01T00:00:00Z' }), verified('b.pdf')]
     const c = await mount({ run, files, certified: [], onPublish })
-    const gradBtn = [...c.querySelectorAll('button')].find((b) => /Graduate to full certification/i.test(b.textContent))
+    const gradBtn = [...c.querySelectorAll('button')].find((b) => /Review delivery for/i.test(b.textContent))
     expect(gradBtn).toBeTruthy()
-    expect(c.textContent).toMatch(/Ready to graduate to full certification/i)
+    expect(c.textContent).toMatch(/Ready to release remaining documents/i)
 
     await act(async () => { gradBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await flush()
-    // graduation releases exactly the formerly-held, now-verified document — via the ordinary
-    // publish path, no rescoreFile / re-scan involved.
-    expect(publishAllFiles).toHaveBeenCalledWith('scan1', ['b.pdf'])
-    expect(onPublish).toHaveBeenCalledWith('b.pdf')
+    // The shortcut only selects the remaining file; delivery review must precede publishing.
+    expect(publishAllFiles).not.toHaveBeenCalled()
+    expect(onPublish).not.toHaveBeenCalled()
+    expect(c.querySelector('#release-delivery-step')).toBeTruthy()
+    expect(c.textContent).toContain('1 selected · 2 in scope')
   })
 
-  it('reports FULL once the graduation completes (all in-scope documents released)', async () => {
-    const files = [verified('a.pdf', { published_at: '2026-08-01T00:00:00Z' }), verified('b.pdf')]
+  it('reports completed delivery without claiming overall certification', async () => {
+    const files = [verified('a.pdf', { published_at: '2026-08-01T00:00:00Z' })]
     const c = await mount({ run, files, certified: [], onPublish: vi.fn() })
-    const gradBtn = [...c.querySelectorAll('button')].find((b) => /Graduate to full certification/i.test(b.textContent))
-    await act(async () => { gradBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    await flush()
-    expect(c.textContent).toMatch(/Fully certified/i)
+    expect(c.textContent).toContain('Release complete')
+    expect(c.textContent).not.toMatch(/fully certified/i)
   })
 
   it('shows no graduation surface before any release has started', async () => {

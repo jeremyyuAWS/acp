@@ -41,8 +41,8 @@ const nodeTypes = { waterfall: WaterfallNode }
 export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules', motion = {}, paused = false,
   identity, reviewCount, verifiedCount, snapshot = {}, viewAvailable, reducedMotion = false, width = 1100, onSelect, onKeyDown = () => {} }) {
   const narrow = width < 850
-  const columns = narrow ? 2 : 5
-  const nodeWidth = Math.max(120, (width - 32 - (columns - 1) * 26) / columns)
+  const columns = width < 420 ? 1 : narrow ? 2 : 5
+  const nodeWidth = Math.max(1, (width - 32 - (columns - 1) * 26) / columns)
   const aiNode = tier => {
     const stage = stages.find(item => item.tier === tier)
     const models = (stage?.models || []).filter(item => typeof item.model === 'string' && item.model.trim())
@@ -63,7 +63,8 @@ export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules
   // Long recorded model names grow the rows; text is never clipped or replaced by an alias.
   const charsPerLine = Math.max(12, Math.floor((nodeWidth - 24) / 7))
   const height = Math.max(174, ...facts.map(item => 130 + Math.ceil(item.title.length / charsPerLine) * 18 + Math.ceil(item.provider.length / charsPerLine) * 14))
-  const coords = narrow ? [[0, 0], [1, 0], [1, 1], [0, 1], [0, 2]] : ORDER.map((_, index) => [index, 0])
+  const coords = columns === 1 ? ORDER.map((_, index) => [0, index])
+    : narrow ? [[0, 0], [1, 0], [1, 1], [0, 1], [0, 2]] : ORDER.map((_, index) => [index, 0])
   const side = (from, to) => from[1] < to[1] ? Position.Bottom : from[0] < to[0] ? Position.Right : Position.Left
   const nodes = ORDER.map((id, index) => ({
     id, type: 'waterfall', position: { x: 16 + coords[index][0] * (nodeWidth + 26), y: 16 + coords[index][1] * (height + 36) },
@@ -82,7 +83,8 @@ export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules
     style: { stroke: !paused && motion.stage === target ? '#8359ab' : '#c5b8d0', strokeWidth: !paused && motion.stage === target ? 2.5 : 1.5 },
     focusable: false,
   }))
-  return { nodes, edges, height: narrow ? height * 3 + 104 : height + 32 }
+  const rowCount = Math.ceil(ORDER.length / columns)
+  return { nodes, edges, height: height * rowCount + (rowCount - 1) * 36 + 32 }
 }
 
 export default function RemediationWaterfallGraph({ stages, aiEnabled, selection, onSelect, motion = {}, paused = false,
@@ -102,13 +104,14 @@ export default function RemediationWaterfallGraph({ stages, aiEnabled, selection
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
     event.preventDefault()
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? 4 : (ORDER.indexOf(id) + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + 5) % 5
-    onSelect?.(ORDER[next])
+    // Navigation must not invoke the parent's drawer-opening action. Native Enter/Space
+    // activates the focused button when the reader chooses to inspect it.
     host.current?.querySelector(`[data-stage="${ORDER[next]}"]`)?.focus()
   }
   const graph = waterfallGraphModel({ stages, aiEnabled, snapshot, viewAvailable, selection, onSelect, motion, paused: stopped, reducedMotion: reduced, identity,
     reviewCount: count(reviewCount) ? reviewCount : undefined, verifiedCount: count(verifiedCount) ? verifiedCount : undefined, width, onKeyDown })
   return <section ref={host} className={`wf-graph${stopped || reduced ? ' wf-graph-stopped' : ''}`} aria-label="Remediation waterfall stages">
-    <div className="wf-graph-heading"><h4>Live AI waterfall</h4><span>Select a stage to inspect its evidence</span></div>
+    <div className="wf-graph-heading"><h4>Live AI waterfall</h4><span>Select a stage to inspect its evidence · arrow keys move focus</span></div>
     <div className="wf-graph-canvas" style={{ height: graph.height }}>
       <ReactFlow nodes={graph.nodes} edges={graph.edges} nodeTypes={nodeTypes}
         defaultViewport={{ x: 0, y: 0, zoom: 1 }} minZoom={1} maxZoom={1}

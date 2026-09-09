@@ -167,6 +167,7 @@ _map_many([
     ("GET", "/scans/{sid}/remediation/waterfall/{batch_id}"),
     ("GET", "/scans/{sid}/remediation/insights/{batch_id}"),
     ("POST", "/scans/{sid}/remediation/impact-preview"),
+    ("POST", "/scans/{sid}/remediation/impact-estimate"),
 ], {"remediate.view", "remediate.run"})
 _map_many([
     ("POST", "/scans/{sid}/remediation/automation-policy/actions"),

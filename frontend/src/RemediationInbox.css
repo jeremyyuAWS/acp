@@ -1,10 +1,10 @@
-.remediation-comparison {
+.rinbox-wrap .remediation-comparison {
   display: grid;
   gap: 8px;
   margin-top: 18px;
 }
 
-.remediation-comparison > div {
+.rinbox-wrap .remediation-comparison > div {
   display: grid;
   grid-template-columns: 92px minmax(0, 1fr) auto;
   gap: 14px;
@@ -15,11 +15,11 @@
   background: var(--bg, #fff);
 }
 
-.remediation-comparison > div + div {
+.rinbox-wrap .remediation-comparison > div + div {
   background: var(--surface-2, #f6f5f8);
 }
 
-.remediation-comparison span {
+.rinbox-wrap .remediation-comparison span {
   min-width: 0;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -33,12 +33,12 @@
 }
 
 @media (max-width: 820px) {
-  .remediation-comparison > div {
+  .rinbox-wrap .remediation-comparison > div {
     grid-template-columns: 1fr;
     gap: 6px;
   }
 
-  .remediation-comparison .remediation-copy-value {
+  .rinbox-wrap .remediation-comparison .remediation-copy-value {
     justify-self: start;
   }
 
@@ -46,4 +46,17 @@
     position: sticky;
     padding-bottom: env(safe-area-inset-bottom, 0);
   }
+}
+
+/* Queue rows replace the global filled button background, so they must also set its foreground. */
+.rinbox-wrap .rinbox-row, .rinbox-wrap .rinbox-document-toggle { color: var(--ink, #2a2340); }
+.rinbox-wrap .rinbox-row:focus-visible { outline: 3px solid var(--plum, #493446); outline-offset: -3px; }
+.remediation-full-text { margin-top: 10px; font-size: 13px; }
+.remediation-full-text > summary { cursor: pointer; font-weight: 600; padding-block: 4px; }
+.remediation-full-text > summary:focus-visible { outline: 3px solid var(--plum, #493446); outline-offset: 3px; }
+.remediation-full-text > p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
+.remediation-review-problem { overflow-wrap: anywhere; }
+@media (max-width: 820px) {
+  .remediation-detail-content { padding: 14px !important; }
+  .remediation-review-header > div { flex-wrap: wrap; gap: 8px !important; }
 }
