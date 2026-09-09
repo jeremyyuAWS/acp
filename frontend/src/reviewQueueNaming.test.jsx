@@ -64,7 +64,7 @@ describe('the review queue is named for the work, not for its generator', () => 
     expect(bell).toContain('<b>Review queue</b>')
     // Publish tells a blocked operator where to go. If it still named the old section the
     // instruction would point at a heading that no longer exists anywhere in the product.
-    expect(read('Publish.jsx')).toContain('Remediate → step 3 · Review queue')
+    expect(read('Publish.jsx')).toContain('Remediate → Review')
     expect(read('Upload.jsx')).toContain('>Review queue →</button>')
   })
 
