@@ -35,7 +35,7 @@ try {
     await panel.getByRole('button', { name: 'Confirm approval of 1 findings' }).click()
     await page.waitForFunction(() => window.fixtureDecisions.length === 1)
     assert.equal(await page.evaluate(() => window.fixtureDecisions[0].id), 'finding-10')
-    assert.ok(await panel.getByText('1 recorded · 0 not recorded · 0 uncertain').isVisible())
+    assert.ok(await panel.getByText('Approved', { exact: true }).isVisible())
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)
     assert.equal(overflow, false, `horizontal overflow at ${width}`)
     await page.screenshot({ path: `/tmp/acp-batch-${width}.png`, fullPage: true })
