@@ -174,14 +174,15 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
             WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s''', scope)
         reviewed_items = {str(row['item_id']) for row in db.fetchall(cur)}
         measured_contribution = {
-            'available': bool(item_purposes) and complete,
-            'first_model_findings': len(draft_items),
-            'fallback_additional_findings': len(fallback_items - draft_items),
-            'reviewed_findings': len(reviewed_items),
-            'baseline_findings': len(item_purposes),
-            'reason': 'unique_queue_items_with_exact_attempt_lineage' if item_purposes and complete
-                      else 'exact_finding_lineage_incomplete',
+            'available': False,
+            'first_model_findings': None, 'fallback_additional_findings': None,
+            'reviewed_findings': None, 'baseline_findings': None,
+            'queue_items': {'first_model':len(draft_items),
+                            'fallback_only':len(fallback_items - draft_items),
+                            'reviewed':len(reviewed_items)},
+            'reason': 'immutable_baseline_finding_membership_unavailable',
         }
+
         events = {}
         event_details_complete = True
         if proposals:
@@ -221,17 +222,12 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
     for proposal in proposals:
         proposal['proposal'] = json.loads(proposal.pop('proposal_json') or 'null')
         proposal.update(events.get(proposal['snapshot_id'], {}))
-        validations = proposal.get('validation_events') or []
-        exact = [event for event in validations
-                  if event.get('proposal_snapshot_id') == proposal.get('snapshot_id')
-                  and event.get('source_revision') and event.get('approved_value_sha256')
-                  and event.get('outcome') == 'verified_cleared'
-                  and event.get('regressions') in (None, '[]', [])]
-        proposal['version_verified'] = bool(exact)
-        proposal['verification_reason'] = (
-            'Exact saved proposal, source revision, and post-write verification match.'
-            if exact else
-            'Recorded events do not identify this exact proposal version and source revision.')
+        # Approval metadata copied to a result is not actual writer evidence. Until
+        # the writer records the bytes/value it used, even a cleared event cannot
+        # prove this exact version. Keep historical evidence inspectable only.
+        proposal['version_verified'] = False
+        proposal['verification_reason'] = 'Actual writer source and approved-value proof unavailable.'
+
     return {
         'contract_version': 'remediation-run-insights.v1', 'scan_id': scan_id, 'run_id': run_id, 'batch_id': run_id,
         'attempts': attempts, 'proposals': proposals, 'review_receipts': reviews,
@@ -242,16 +238,6 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
                          'complete': complete,
                          'note': 'Saved proposal versions, not unique findings or verified fixes. Revisions may cover the same issue.'},
         'measured_contribution': measured_contribution,
-        'outcomes': {
-            'verified_fix_count': (
-                sum(1 for proposal in proposals if proposal.get('version_verified'))
-                if any(event.get('proposal_snapshot_id') and event.get('source_revision')
-                       and event.get('approved_value_sha256')
-                       for proposal in proposals for event in (proposal.get('validation_events') or []))
-                else None),
-            'reason': 'exact_proposal_lineage_verified' if any(
-                proposal.get('version_verified') for proposal in proposals
-            ) else 'proposal_version_verification_unavailable',
-        },
+        'outcomes': {'verified_fix_count': None, 'reason': 'actual_writer_proof_unavailable'},
         'estimate': build_impact_estimate([], config_id='unavailable', change_family='unavailable'),
     }
