@@ -13,6 +13,17 @@ SCHEMA = 'ai-impact-cohort.v1'
 DIMENSIONS = ('format', 'change_family', 'config_id')
 
 
+def _same_generation_chain(*records):
+    """Absence is historical provenance, never an alias for an explicit chain."""
+    from ai_generation_chain import normalize_chain
+    try:
+        chains = [normalize_chain(r['generation_chain']) if 'generation_chain' in r else None
+                  for r in records]
+        return all(value == chains[0] for value in chains[1:])
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
 def normalize_impact_evidence(value):
     """Validate ingestion; omit content-bearing fields and reject ambiguous replays."""
     if not isinstance(value, dict) or value.get('schema_version') != SCHEMA:
@@ -82,6 +93,11 @@ def estimate_cohort(record, *, applicability, eligible_findings, now=None):
         return result
     if any(not applicability.get(k) or record.get(k) != applicability[k] for k in DIMENSIONS):
         return fail('out_of_population')
+    if not _same_generation_chain(record, applicability):
+        return fail('generation_chain_mismatch')
+    if 'generation_chain' in applicability:
+        from ai_generation_chain import normalize_chain
+        result['applicability']['generation_chain'] = normalize_chain(applicability['generation_chain'])
     if not isinstance(record.get('evaluation_version'), str) or not record['evaluation_version']:
         return fail('evaluation_version_missing')
     provenance = record.get('provenance') or {}
@@ -171,6 +187,12 @@ def estimate_plan(records, population, *, now=None):
     applies = dict(zip(DIMENSIONS, next(iter(dimensions))))
     if population['configuration_revision'] != applies['config_id']:
         return {**unavailable, 'reason': 'configuration_revision_mismatch'}
+    if 'generation_chain' in population:
+        from ai_generation_chain import normalize_chain
+        try:
+            applies['generation_chain'] = normalize_chain(population['generation_chain'])
+        except (ValueError, TypeError):
+            return {**unavailable, 'reason': 'generation_chain_invalid'}
     matching = [r for r in records if all(r.get(k) == applies[k] for k in DIMENSIONS)]
     # Deterministic newest evaluation; never fall back to an older, better-looking rate.
     matching.sort(key=lambda r: str(r.get('evaluated_at', '')), reverse=True)
@@ -204,6 +226,8 @@ def read_plan_estimate(store, owner, preview):
     if not isinstance(context, dict) or any(not context.get(k) or context[k] != population.get(k)
                                             for k in ('scope_revision', 'assessment_revision', 'configuration_revision')):
         return {**estimate_plan([], None), 'reason': 'current_estimate_context_unavailable'}
+    if not _same_generation_chain(policy, context, population):
+        return {**estimate_plan([], None), 'reason': 'generation_chain_mismatch'}
     try:
         scan_id = preview.get('scan_id')
         if not scan_id or store.get_scan(scan_id, owner=owner) is None:
