@@ -16,8 +16,8 @@ const fixtures = {
 fixtures.authorizeReleaseContinuation = {...fixtures.planReleaseContinuation, status:'waiting', progress:{'Eligible proposal.pptx':{state:'applying',message:'Applying the authorized proposal'}}}
 const app = `import React from 'react'; import {createRoot} from 'react-dom/client'; import Publish from '/src/Publish.jsx'; import '/src/styles.css';
 const verified=(file,extra={})=>({file,compliant:1,remediated_at:'2026-09-01',corrected_sha256:'fixture-digest',score:100,...extra});
-createRoot(document.getElementById('root')).render(<main style={{maxWidth:1100,margin:'auto',padding:16}}><Publish run={{id:'isolated-release-fixture',source:'local',files:5}} files={[verified('Ready corrected policy.pdf'),verified('Delivered annual report.pdf'),verified('Needs another attempt.pdf'),{file:'Unknown readiness.docx'},verified('Eligible proposal.pptx',{compliant:0})]} /></main>);`
-const server = await createServer({ configFile:false, root:process.cwd(), plugins:[{name:'isolated-release-fixture', enforce:'pre', resolveId(id){if(id==='./api.js'||id.endsWith('/src/api.js'))return '\0fixture-api'; if(id==='/fixture.jsx')return process.cwd()+'/fixture.jsx'}, load(id){if(id==='\0fixture-api')return names.map(n=>`export const ${n}=async(...args)=>{(globalThis.__releaseCalls??=[]).push([${JSON.stringify(n)},args]);return (${ JSON.stringify(Object.hasOwn(fixtures,n)?fixtures[n]:{})});}`).join('\n'); if(id===process.cwd()+'/fixture.jsx')return app},configureServer(s){s.middlewares.use(async (req,res,next)=>{if(req.url==='/release-fixture'){res.setHeader('Content-Type','text/html');res.end(await s.transformIndexHtml('/release-fixture','<html><head><title>Isolated Release fixture</title></head><body><div id="root"></div><script type="module" src="/fixture.jsx"></script></body></html>'))}else next()})}},react()],server:{host:'127.0.0.1',port:5190,strictPort:true} })
+createRoot(document.getElementById('root')).render(<main style={{maxWidth:1100,margin:'auto',padding:16}}><Publish run={{id:'isolated-release-fixture',source:'local',files:5}} files={location.search.includes('zero') ? [{file:'Unknown readiness.docx'}] : [verified('Ready corrected policy.pdf'),verified('Delivered annual report.pdf'),verified('Needs another attempt.pdf'),{file:'Unknown readiness.docx'},verified('Eligible proposal.pptx',{compliant:0})]} /></main>);`
+const server = await createServer({ configFile:false, root:process.cwd(), plugins:[{name:'isolated-release-fixture', enforce:'pre', resolveId(id){if(id==='./api.js'||id.endsWith('/src/api.js'))return '\0fixture-api'; if(id==='/fixture.jsx')return process.cwd()+'/fixture.jsx'}, load(id){if(id==='\0fixture-api')return names.map(n=>`export const ${n}=async(...args)=>{(globalThis.__releaseCalls??=[]).push([${JSON.stringify(n)},args]);return (${n==='planReleaseContinuation' ? `location.search.includes('zero') ? {id:'zero-plan',intent:{files:{}}} : ` : ''}${ JSON.stringify(Object.hasOwn(fixtures,n)?fixtures[n]:{})});}`).join('\n'); if(id===process.cwd()+'/fixture.jsx')return app},configureServer(s){s.middlewares.use(async (req,res,next)=>{if(req.url.startsWith('/release-fixture')){res.setHeader('Content-Type','text/html');res.end(await s.transformIndexHtml('/release-fixture','<html><head><title>Isolated Release fixture</title></head><body><div id="root"></div><script type="module" src="/fixture.jsx"></script></body></html>'))}else next()})}},react()],server:{host:'127.0.0.1',port:5190,strictPort:true} })
 await server.listen()
 const browser = await chromium.launch({channel:'chrome',headless:true})
 try {
@@ -40,6 +40,18 @@ try {
  const approvals = calls.filter(([name])=>name==='authorizeReleaseContinuation')
  if(approvals.length!==1 || approvals[0][1][1]!=='exact-fixture-plan') throw Error('Approval must bind exactly one server plan')
  if(calls.some(([name])=>name==='publishAllFiles')) throw Error('Approving must not bypass verification with a client publish')
+ await page.goto('http://127.0.0.1:5190/release-fixture?zero');
+ for(const width of [1280,390,320]){
+  await page.setViewportSize({width,height:900})
+  const ready = page.getByRole('button',{name:'Publish ready files (0)',exact:true})
+  const approve = page.getByRole('button',{name:'Approve eligible changes and publish when ready',exact:true})
+  await ready.waitFor(); await approve.waitFor()
+  if(!await ready.isDisabled() || !await approve.isDisabled())throw Error('Zero-ready actions must remain disabled')
+  await page.getByText('No eligible proposals are available.',{exact:false}).waitFor()
+  if(await page.locator('.release-quick').evaluate(el=>Boolean(el.closest('details'))))throw Error('Primary actions hidden in disclosure')
+  if(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth))throw Error(`Zero-ready overflow at ${width}`)
+  await page.screenshot({path:`/tmp/release-visible-zero-${width}.png`,fullPage:true})
+ }
  if(errors.length)throw Error(errors.join('\n'))
  console.log('Isolated current-worktree fixture passed at 1280, 390 and 320px, reduced motion; no horizontal overflow or page errors. Screenshots: /tmp/release-quick-{width}.png')
 } finally { await browser.close(); await server.close() }
