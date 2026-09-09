@@ -113,6 +113,11 @@ def download_remediated(owner: str | None, scan_id: str, filename: str) -> bytes
     svc = _service_client()
     if svc is None:
         return None
+    blob = svc.get_blob_client(container=_CONTAINER, blob=_blob_path(owner, scan_id, filename))
+    try:
+        return blob.download_blob(**_timeouts()).readall()
+    except Exception:
+        return None
 
 
 def upload_release_package(owner: str, scan_id: str, job_id: str, stream) -> str | None:
@@ -149,11 +154,6 @@ def open_release_package(owner: str, scan_id: str, job_id: str):
         blob=_blob_path(owner, scan_id, f"{job_id}.zip"))
     try:
         return blob.download_blob(**_timeouts())
-    except Exception:
-        return None
-    blob = svc.get_blob_client(container=_CONTAINER, blob=_blob_path(owner, scan_id, filename))
-    try:
-        return blob.download_blob().readall()
     except Exception:
         return None
 

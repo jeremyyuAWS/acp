@@ -1014,3 +1014,94 @@ def test_a_failed_request_names_what_the_target_said():
     run, _ = run_fake(world=world, scenario_ids=["fixture-workflow"])
     detail = entry_for(run.report, "fixture-workflow")["detail"]
     assert "WIDGET_EXPLODED" in detail, detail
+
+
+def test_an_empty_inventory_with_no_object_storage_is_unknown_not_a_failure():
+    """TWO READINGS THAT LOOK IDENTICAL AND MEAN OPPOSITE THINGS. Zero authoritative artifacts on
+    an installation with no object storage says nothing about remediation — nothing there was
+    going to keep a corrected copy. Reporting it as a §20.5 FAILURE would accuse the application
+    of the deployment's shortfall, which is the same false-accusation shape as the restart
+    scenario's lost-work finding and the 503."""
+    world = fake.world()
+    world["object_storage_configured"] = False
+    world["local_corpus"] = []                      # nothing to remediate, so nothing is stored
+    run, _ = run_fake(world=world, scenario_ids=["fixture-workflow"])
+    entry = entry_for(run.report, "fixture-workflow")
+    assert entry["state"] == UNKNOWN, f"{entry['state']}: {entry['detail']}"
+    assert "no object storage" in entry["detail"].lower()
+
+
+def test_an_empty_inventory_WITH_object_storage_is_still_a_failure():
+    """The other direction, and the one that keeps the rule from becoming "empty is always fine":
+    storage is configured, the documents went through, and the artifacts are missing. That is
+    remediation producing nothing, and it must fail."""
+    world = fake.world()
+    world["object_storage_configured"] = True
+    world["local_corpus"] = []
+    run, _ = run_fake(world=world, scenario_ids=["fixture-workflow"])
+    assert state_of(run.report, "fixture-workflow") == FAIL
+
+
+def test_every_remediation_job_is_polled_before_artifact_inventory():
+    run, backend = run_fake(scenario_ids=["fixture-workflow"])
+    assert state_of(run.report, "fixture-workflow") == PASS
+    paths = [e['path'] for e in backend.log if e['kind'] == 'http' and e['method'] == 'GET']
+    jobs = [p for p in paths if '/scans/jobs/' in p]
+    assert len(set(jobs)) == 2
+    artifacts = next(i for i, path in enumerate(paths) if path.endswith('/artifacts'))
+    assert all(paths.index(job) < artifacts for job in jobs)
+
+
+@pytest.mark.parametrize('status', ['failed', 'cancelled', 'running'])
+def test_failed_or_stalled_remediation_never_reaches_artifacts(status):
+    world = fake.world(faults={'GET /scans/jobs/{jid}': {'status': 200, 'json': {'status': status}}})
+    run, backend = run_fake(world=world, scenario_ids=['fixture-workflow'])
+    assert state_of(run.report, 'fixture-workflow') == FAIL
+    assert not any(e['kind'] == 'http' and e['path'].endswith('/artifacts') for e in backend.log)
+
+
+@pytest.mark.parametrize('body', [{}, {'job_ids': []}])
+def test_remediation_response_without_job_set_is_not_success(body):
+    world = fake.world(faults={'POST /scans/{sid}/remediate': {'status': 200, 'json': body}})
+    run, _ = run_fake(world=world, scenario_ids=['fixture-workflow'])
+    assert state_of(run.report, 'fixture-workflow') == FAIL
+
+
+def test_an_assessment_timeout_says_how_far_it_got():
+    """"did not complete within 120s" was true and told me nothing: a run stalled at 0 of 6 and a
+    run one document short produce the identical line, and they are completely different findings.
+    Run 34246784436 cost a cycle to that."""
+    world = fake.world()
+    world["stall_assessment"] = True        # discovery completes, assessment never does
+    run, _ = run_fake(world=world, scenario_ids=["fixture-workflow"])
+    entry = entry_for(run.report, "fixture-workflow")
+    assert entry["state"] == FAIL, entry
+    assert "eligible documents finished" in entry["detail"], (
+        f"the timeout does not say how far it got: {entry['detail']}")
+    assert entry["evidence"]["completed"] == 0
+    assert entry["evidence"]["eligible"] > 0
+
+
+def test_assessment_gets_a_longer_budget_than_discovery():
+    """Different work, different budget: discovery lists metadata, assessment downloads each
+    document and runs the analysers over it. Sizing the second with the first's number is what
+    produced a timeout on a cluster that was merely slow.
+
+    ASSERTED BY COUNTING THE POLLS, not by comparing the two constants. The first version of this
+    test checked `ASSESS_MAX_POLLS > MAX_POLLS`, which stayed true when the wait was changed back
+    to use MAX_POLLS — a test that passed for a change it existed to catch. Caught by reverting
+    the wait and watching it not fail.
+    """
+    assert scenarios_mod.ASSESS_MAX_POLLS > scenarios_mod.MAX_POLLS
+    world = fake.world()
+    world["stall_assessment"] = True
+    run, backend = run_fake(world=world, scenario_ids=["fixture-workflow"])
+    live_polls = sum(1 for e in backend.log
+                     if e["kind"] == "http" and e["method"] == "GET" and e["path"].endswith("/live"))
+    # `>= ASSESS_MAX_POLLS`, not `> MAX_POLLS`: the scenario also polls `/live` in `_await_scan`
+    # and once more for the final counts, so the loose bound was satisfied by 25 polls and stayed
+    # green when the wait was reverted to the discovery budget. Two bite checks to get this right.
+    assert live_polls >= scenarios_mod.ASSESS_MAX_POLLS, (
+        f"the assessment wait gave up after {live_polls} polls, which is the DISCOVERY budget "
+        f"({scenarios_mod.MAX_POLLS}); it must use ASSESS_MAX_POLLS "
+        f"({scenarios_mod.ASSESS_MAX_POLLS})")

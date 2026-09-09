@@ -1761,6 +1761,7 @@ def scan_artifacts(sid: str, request: Request):
     inventory is a fact, and 404 would make "no remediation has run" indistinguishable from "no
     such scan" to a client that can see neither.
     """
+    import blob as _blob
     owner = _owner(request)
     if core.store.get_scan_head(sid, owner=owner) is None:
         raise HTTPException(404, "scan not found")
@@ -1775,6 +1776,12 @@ def scan_artifacts(sid: str, request: Request):
         "ephemeral": ephemeral,
         "all_durable": not ephemeral,
         "durable_schemes": sorted(core.store.DURABLE_ARTIFACT_SCHEMES),
+        # WHETHER THIS INSTALLATION COULD STORE ONE AT ALL, which is the difference between two
+        # readings of an empty inventory that look identical and mean opposite things: remediation
+        # produced nothing (a defect), or nothing here is configured to keep what it produced (a
+        # deployment fact). Without this field a caller sees zero artifacts and cannot tell which,
+        # and §20.5 is exactly the criterion that must not be answered by guessing.
+        "object_storage_configured": _blob.enabled(),
     }
 
 

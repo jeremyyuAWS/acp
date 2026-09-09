@@ -101,7 +101,9 @@ PATH_SCAN_LIVE = "/scans/{sid}/live"                  # exists — api/routes/sc
 PATH_SCAN_EVENTS = "/scans/{sid}/events"              # exists (SSE) — api/routes/scans.py:1253
 PATH_SCAN_ASSESS = "/scans/{sid}/assess"              # exists — api/routes/scans.py:1359
 PATH_SCAN_REMEDIATE = "/scans/{sid}/remediate"        # exists — api/routes/scans.py:647
-PATH_JOB = "/scans/jobs/{jid}"                        # exists — api/routes/scans.py:826
+# Assessment uses scan-level progress from #1827; remediation waits for its exact
+# returned job set now that durable jobs are supported by the status endpoint.
+PATH_JOB = "/scans/jobs/{jid}"
 PATH_ARTIFACTS = "/scans/{sid}/artifacts"             # SUITE REQUIREMENT — the durable-artifact
                                                       # inventory PRD §12 needs; a build without
                                                       # it cannot demonstrate §20.5 at all
@@ -144,6 +146,22 @@ HEARTBEAT_MAX_SECONDS = 90
 
 POLL_SECONDS = 5.0
 MAX_POLLS = 24                    # two minutes at the poll interval above
+
+# ASSESSMENT GETS ITS OWN BUDGET, because it is a different kind of work from the one MAX_POLLS
+# was sized for. Discovery lists metadata; assessment DOWNLOADS each document and runs the WCAG
+# analysers over it — LibreOffice for Office formats, the PDF engine for PDFs — which is minutes
+# of CPU per corpus rather than seconds of I/O.
+#
+# NOT A NUMBER CHOSEN TO MAKE A SCENARIO PASS. Run 34246784436 reported "assessment did not
+# complete within 120s" on the reference cluster, which is a one-node runner already measured at
+# 1000m of CPU BELOW ACP's own minimum (`capacity.floor`: needs 5000m, has 4000m) and which had
+# earlier refused the assess request outright with DB_CAPACITY_BUSY. Two minutes was the discovery
+# budget applied to a job that is not discovery.
+#
+# Still bounded, and a timeout is still a FAIL: a target that accepts work and never finishes it
+# is a finding, and the message below carries the progress counts so the next run says whether it
+# stalled at zero or was one document short.
+ASSESS_MAX_POLLS = 120            # ten minutes at the poll interval above
 
 # The run states, taken from what `api/store.py` actually WRITES to `scan_runs.status`. The first
 # real run against a cluster is why this list is not `live_snapshot._ACTIVE_STATES`: copying that
@@ -398,6 +416,10 @@ def _await_scan(ctx: ScenarioContext, sid: str, *, max_polls: int = MAX_POLLS
 
 
 def _artifacts(ctx: ScenarioContext, sid: str) -> tuple[list[dict] | None, Outcome | None]:
+    """The artifact inventory. Also stashes the whole body on the context for `_artifacts_body`,
+    because one field of it — `object_storage_configured` — decides whether an empty inventory is
+    a failure or a deployment fact, and threading a second return value through every caller would
+    change four signatures for one reader."""
     path = PATH_ARTIFACTS.format(sid=sid)
     resp = ctx.get(path)
     bad = _unavailable(resp, path)
@@ -408,7 +430,12 @@ def _artifacts(ctx: ScenarioContext, sid: str) -> tuple[list[dict] | None, Outco
     if not isinstance(items, list):
         return None, Outcome.failed(f"{path} answered {resp.status} with no artifact list",
                                     status=resp.status)
+    _LAST_ARTIFACT_BODY[id(ctx)] = body
     return items, None
+
+
+# Keyed by context identity and never read across runs; see `_artifacts`.
+_LAST_ARTIFACT_BODY: dict[int, dict] = {}
 
 
 def _authoritative(items: list[dict]) -> list[dict]:
@@ -680,27 +707,73 @@ def fixture_workflow(ctx: ScenarioContext) -> Outcome:
             return Outcome.failed(
                 f"starting {label} answered {resp.status}: {_detail(resp)}",
                 status=resp.status, body=_detail(resp))
-        job_id = (_json(resp) or {}).get("job_id")
-        if job_id:
-            job_path = PATH_JOB.format(jid=job_id)
-            for _ in range(MAX_POLLS):
-                jr = ctx.get(job_path)
-                bad = _unavailable(jr, job_path)
-                if bad is not None:
-                    return bad
-                status = str((_json(jr) or {}).get("status", ""))
-                if status in ("complete", "completed", "done"):
-                    break
-                if status in ("failed", "error"):
-                    return Outcome.failed(f"the {label} job ended {status!r}", job=job_id)
-                ctx.backend.sleep(POLL_SECONDS)
-            else:
-                return Outcome.failed(f"the {label} job did not finish within "
-                                      f"{MAX_POLLS * POLL_SECONDS:.0f}s", job=job_id)
+        if label == "remediation":
+            accepted = _json(resp) or {}
+            jobs = accepted.get("job_ids")
+            if (not isinstance(jobs, list) or any(not isinstance(j, str) or not j for j in jobs)
+                    or (not jobs and accepted.get("enqueued") != 0)):
+                return Outcome.failed("remediation did not return its accepted job IDs")
+            for job_id in jobs:
+                job_path = PATH_JOB.format(jid=job_id)
+                for _ in range(ASSESS_MAX_POLLS):
+                    result = ctx.get(job_path)
+                    bad = _unavailable(result, job_path)
+                    if bad is not None:
+                        return bad
+                    status = str((_json(result) or {}).get("status", ""))
+                    if status in ("complete", "completed", "done"):
+                        break
+                    if status in ("failed", "error", "dead", "cancelled"):
+                        return Outcome.failed(f"the remediation job ended {status!r}", job=job_id)
+                    ctx.backend.sleep(POLL_SECONDS)
+                else:
+                    return Outcome.failed("the remediation job did not finish within "
+                                          f"{ASSESS_MAX_POLLS * POLL_SECONDS:.0f}s", job=job_id)
+            continue
+        # Assessment completion is scan-level progress, as adopted from #1827.
+        # `kpis.completed` REACHING `totals.eligible` is the completion signal, and it has to be
+        # that rather than "the run reached a terminal state": a Discover-only run is ALREADY
+        # terminal at `discovered` (see RUN_SUCCEEDED_STATES), so a terminal-state wait here would
+        # return immediately and report an assessment that had not started as finished.
+        progressed = False
+        for _ in range(ASSESS_MAX_POLLS):
+            snap = ctx.get(PATH_SCAN_LIVE.format(sid=sid))
+            bad = _unavailable(snap, PATH_SCAN_LIVE.format(sid=sid))
+            if bad is not None:
+                return bad
+            body = _json(snap) or {}
+            state = str(body.get("state") or "").strip().lower()
+            if state in RUN_FAILED_STATES:
+                return Outcome.failed(f"the run ended in state {state!r} during {label}",
+                                      state=state, **_counts(body))
+            counts = _counts(body)
+            if counts["eligible"] and counts["completed"] >= counts["eligible"]:
+                progressed = True
+                break
+            if not counts["eligible"] and state in RUN_SUCCEEDED_STATES:
+                # NOTHING ELIGIBLE AND THE RUN IS TERMINAL: there is no work to wait for, and
+                # waiting for zero documents to complete waits forever. The artifact check below
+                # is what then reports the absence, with the reason it deserves.
+                progressed = True
+                break
+            ctx.backend.sleep(POLL_SECONDS)
+        if not progressed:
+            # THE COUNTS GO IN THE MESSAGE, not only the evidence. "did not complete within 120s"
+            # was true and told me nothing: a run stalled at 0 of 6 and a run one document short
+            # produce the identical line, and they are completely different findings. The 503
+            # taught the same lesson one round earlier.
+            final_counts = _counts(_json(ctx.get(PATH_SCAN_LIVE.format(sid=sid))) or {})
+            return Outcome.failed(
+                f"{label} did not complete within "
+                f"{ASSESS_MAX_POLLS * POLL_SECONDS:.0f}s — "
+                f"{final_counts['completed']} of {final_counts['eligible']} eligible documents "
+                f"finished ({final_counts['discovered']} discovered)",
+                **final_counts)
 
     items, failure = _artifacts(ctx, sid)
     if failure is not None:
         return failure
+    items_body = _LAST_ARTIFACT_BODY.get(id(ctx), {})
     authoritative = _authoritative(items or [])
     ephemeral = _ephemeral(items or [])
     manifest = ctx.artifact(
@@ -708,6 +781,22 @@ def fixture_workflow(ctx: ScenarioContext) -> Outcome:
         "\n".join(f"{a.get('file')}\t{a.get('location')}" for a in authoritative),
         scenario_id="fixture-workflow")
     if len(authoritative) < len(FIXTURES):
+        # TWO READINGS OF AN EMPTY INVENTORY THAT LOOK IDENTICAL AND MEAN OPPOSITE THINGS. If the
+        # installation has no object storage configured, nothing here was ever going to keep a
+        # corrected copy, and reporting that as a §20.5 FAILURE would accuse the application of a
+        # defect that belongs to the deployment. If storage IS configured and the artifacts are
+        # still missing, remediation produced nothing and that is a failure.
+        #
+        # The distinction is the target's answer, not a guess: `/artifacts` reports
+        # `object_storage_configured` for exactly this.
+        if not (items_body or {}).get("object_storage_configured", True):
+            return Outcome.unknown(
+                f"the workflow ran and {len(authoritative)} authoritative artifacts exist, and "
+                f"this installation has NO object storage configured — so nothing here was going "
+                f"to keep a corrected copy and §20.5 cannot be evaluated. That is a fact about "
+                f"the deployment, not a defect in remediation.",
+                expected=len(FIXTURES), found=len(authoritative), objectStorage=False
+            ).with_artifacts([manifest])
         return Outcome.failed(
             f"{len(FIXTURES)} synthetic documents produced {len(authoritative)} authoritative "
             f"artifacts", expected=len(FIXTURES), found=len(authoritative)
