@@ -1,3 +1,4 @@
+import { reviewBadgeTitle } from './remediationCountSummary.js'
 import { prepareWorkflowEntry } from './workflowEntry.js'
 import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
 import HitlBell from './HitlBell.jsx'
@@ -2014,7 +2015,7 @@ export default function App() {
                 {step > 0 && <span className="stepnum" aria-hidden="true">{done ? '✓' : step}</span>}
                 <span className="tablbl">{done && <span className="vh">completed: </span>}{label}</span>
                 <span className="rg">{rg}</span>
-                {k === 'remediate' && hitlCount > 0 && <span title={`${hitlCount} document${hitlCount !== 1 ? 's' : ''} awaiting your review`} style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, minWidth: 16, height: 16, lineHeight: '16px', textAlign: 'center', padding: '0 5px', borderRadius: 9, background: '#B4690E', color: '#fff', display: 'inline-block' }}>{hitlCount}</span>}
+                {k === 'remediate' && hitlCount > 0 && <span title={reviewBadgeTitle(hitlCount)} style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, minWidth: 16, height: 16, lineHeight: '16px', textAlign: 'center', padding: '0 5px', borderRadius: 9, background: '#B4690E', color: '#fff', display: 'inline-block' }}>{hitlCount}</span>}
                 {/* Every fix so far for "does the user know their scan is still running" lived
                     entirely inside the Discover tab body — a user who navigates to Overview or
                     Assess while a scan is queued/running saw nothing anywhere telling them so,

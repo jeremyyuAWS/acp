@@ -301,7 +301,8 @@ describe('RemediationInbox — workflow-status queue', () => {
     // Needs review holds the unconfirmed auto-fix (id1) and the AI draft (id2); the manual finding
     // (id3) is in Manual fixes. Document sort → id1 first.
     expect(detailHeading()).toBe('Heading contrast is too low')
-    expect(container.textContent).toContain('Approve AI suggestions 2')
+    expect(container.textContent).toContain('Approve AI suggestions')
+    expect(container.textContent).not.toContain('Approve AI suggestions 2') // Applied inspection and unversioned drafts are not ready batch approvals.
     expect(container.textContent).toContain('Fix manually 1')
     expect(container.textContent).toContain('0 of 3 reviewed')        // progress is a separate lens
   })

@@ -663,10 +663,10 @@ export const undoAppliedFix = (scanId, file, ruleId) => (SIM
           { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ rule_id: ruleId }) }).then(j))
 
-export const getScanRemediationDiffs = (scanId) => {
+export const getScanRemediationDiffs = (scanId, includeSummary = false) => {
   if (SIM) return sim(_simRemed.total ? simRemediationDiffs() : [])
   if (!scanId) return sim([])
-  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-diffs`,
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-diffs${includeSummary ? '?include_summary=true' : ''}`,
                { headers: headers() }).then(j).catch(() => [])
 }
 // Audit trail (maturity Phase 4): chronological provenance of one document in one scan —

@@ -18,7 +18,7 @@
 // Segment builders, in the order the summary reads them. Each returns a string or null; null is
 // dropped. Zero is dropped everywhere EXCEPT autoFixed — see the note above.
 function summarySegments(counts) {
-  const { autoFixed, needsApproval, manual, revalidating, blocked, documents } = counts || {}
+  const { autoFixed, autoFixedLoaded, needsApproval, manual, individualReview, inspection, revalidating, blocked, documents } = counts || {}
   const out = []
 
   if (typeof autoFixed === 'number') {
@@ -31,6 +31,9 @@ function summarySegments(counts) {
       out.push(`${autoFixed} fix${autoFixed === 1 ? '' : 'es'} applied automatically${docs}`)
     }
   }
+  if (typeof autoFixed !== 'number' && typeof autoFixedLoaded === 'number') out.push(`${autoFixedLoaded} applied-change records loaded · total unavailable`)
+  if (typeof individualReview === 'number' && individualReview > 0) out.push(`${individualReview} need individual review`)
+  if (typeof inspection === 'number' && inspection > 0) out.push(`${inspection} loaded changes available to inspect`)
   if (typeof needsApproval === 'number' && needsApproval > 0) out.push(`${needsApproval} need approval`)
   if (typeof manual === 'number' && manual > 0) out.push(`${manual} require manual work`)
   if (typeof revalidating === 'number' && revalidating > 0) out.push(`${revalidating} awaiting revalidation`)

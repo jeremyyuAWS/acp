@@ -8238,6 +8238,23 @@ class Store:
                 "WHERE scan_id=%s ORDER BY rule_id, file, seq LIMIT %s", (scan_id, limit))
             return self._db.fetchall(cur)
 
+    def remediation_diff_page(self, scan_id: str, limit: int = 2000) -> dict:
+        """Bounded details and full totals from one database statement/snapshot."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "WITH totals AS (SELECT COUNT(*) AS total, COUNT(DISTINCT file) AS documents "
+                "FROM remediation_diff WHERE scan_id=%s), "
+                "page AS (SELECT file,rule_id,seq,before,after,note FROM remediation_diff "
+                "WHERE scan_id=%s ORDER BY rule_id,file,seq LIMIT %s) "
+                "SELECT totals.total,totals.documents,page.* FROM totals LEFT JOIN page ON 1=1 "
+                "ORDER BY page.rule_id,page.file,page.seq", (scan_id, scan_id, limit))
+            rows = self._db.fetchall(cur)
+        total, documents = int(rows[0]['total']), int(rows[0]['documents'])
+        items = [{key: row[key] for key in ('file', 'rule_id', 'seq', 'before', 'after', 'note')}
+                 for row in rows if row['file'] is not None]
+        return {'items': items, 'total': total, 'documents': documents,
+                'loaded': len(items), 'complete': len(items) == total}
+
     def get_remediation_evidence(self, scan_id: str) -> list[dict]:
         """Per-file remediation evidence for the certification report's evidence appendix.
 

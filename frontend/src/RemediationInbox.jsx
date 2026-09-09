@@ -948,7 +948,7 @@ export default function RemediationInbox({
                              border: `1px solid ${tab === t ? 'transparent' : 'rgba(255,255,255,.22)'}`,
                              background: tab === t ? '#3b6fd6' : 'transparent', color: '#fff',
                              fontWeight: tab === t ? 700 : 500 }}>
-              {WORKFLOW_LABELS[t]} {counts[t] > 0 ? counts[t] : ''}
+              {WORKFLOW_LABELS[t]} {(t === 'needs-review' ? readyAcrossScan.length : counts[t]) || ''}
             </button>
           ))}
         </div>
