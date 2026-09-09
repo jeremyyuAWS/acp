@@ -31,3 +31,4 @@
 @keyframes wf-travel{0%{transform:translateY(0);opacity:0}25%{opacity:.7}80%,100%{transform:translateY(17px);opacity:0}}
 .wf-paused .wf-connector:after{animation:none!important}
 @media(prefers-reduced-motion:reduce){.wf-card .wf-connector:after{animation:none!important;display:none}}
+.wf-stage-button>strong,.wf-working{overflow-wrap:anywhere}

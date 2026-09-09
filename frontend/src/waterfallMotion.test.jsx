@@ -68,3 +68,15 @@ it('shows signed deltas for actual results, and stops when the document is hidde
   expect(container.querySelector('.wf-stage-active')).toBeNull()
   expect(container.querySelector('.wf-delta')).toBeNull()
 })
+it('titles stages with actual recorded models and keeps activity independent of their names', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(now)
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot()} activity={{ view: view({ stages: [
+    { tier: 1, active: 1, operations: 2, models: [{ provider: 'openai', model: 'recorded-model' }] },
+    { tier: 2, active: 0, operations: 0, models: [] },
+  ] }) }} />))
+  expect(container.textContent).toContain('02 · recorded-model')
+  expect(container.textContent).toContain('First attempt · openai')
+  expect(container.textContent).toContain('03 · Not used yet')
+  expect(container.querySelector('.wf-working').textContent).toContain('Request dispatched')
+})

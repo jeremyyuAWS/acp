@@ -24,7 +24,7 @@ const money = value => Number.isSafeInteger(value) ? new Intl.NumberFormat('en-U
 }).format(value / 1000000) : 'Unavailable'
 const count = value => Number.isSafeInteger(value) && value >= 0
 
-function Stage({ title, detail, children, stamp, paused, identity, onClick, selected, active = false }) {
+function Stage({ title, detail, children, stamp, paused, identity, onClick, selected, active = false, activeLabel = 'Checking corrected documents' }) {
   const previous = useRef(null)
   const [pulse, setPulse] = useState(0)
   useEffect(() => {
@@ -38,7 +38,7 @@ function Stage({ title, detail, children, stamp, paused, identity, onClick, sele
   }, [stamp, paused, identity])
   return <li className={`wf-stage${active ? ' wf-stage-active' : ''}`}><button type="button" className={`wf-stage-button${selected ? ' wf-selected' : ''}`} onClick={onClick} aria-pressed={selected}>
     {pulse > 0 && !paused && <span key={pulse} className="wf-stage-flare" aria-hidden="true" />}
-    <strong>{title}</strong>{active && <span className="wf-working"><i aria-hidden="true" />{title.includes('AI') ? 'Request dispatched · awaiting response or charge' : 'Checking corrected documents'}</span>}<span className="wf-secondary">{detail}</span>{children}
+    <strong>{title}</strong>{active && <span className="wf-working"><i aria-hidden="true" />{activeLabel}</span>}<span className="wf-secondary">{detail}</span>{children}
   </button><span className="wf-connector" aria-hidden="true">↓</span></li>
 }
 
@@ -107,7 +107,11 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
       {[1, 2].map(tier => {
         const stage = stages.find(item => item.tier === tier)
         const selected = tier === 1 ? 'first' : 'next'
-        return <Stage key={tier} title={tier === 1 ? '02 · First AI' : '03 · Next AI'} detail={data?.available ? data.ai_enabled ? 'Drafts and optional reviews' : 'AI disabled for this run' : 'Attempt history unavailable'} identity={identity} stamp={JSON.stringify(stage)} paused={visualsPaused || state.error} active={motion.stage === selected} selected={selection === selected} onClick={() => setSelection(selected)}>
+        const models = stage?.models || []
+        const modelTitle = models.length ? [...new Set(models.map(item => item.model))].join(' + ') : stage?.operations === 0 ? 'Not used yet' : 'Model not recorded'
+        const role = tier === 1 ? 'First attempt' : 'Fallback'
+        const modelDetail = models.length ? `${role} · ${[...new Set(models.map(item => item.provider))].join(', ')}` : `${role} · ${data?.ai_enabled === false ? 'AI disabled for this run' : 'Recorded model identity unavailable'}`
+        return <Stage key={tier} title={`${tier + 1 < 10 ? '0' : ''}${tier + 1} · ${modelTitle}`} detail={modelDetail} activeLabel="Request dispatched · awaiting response or charge" identity={identity} stamp={JSON.stringify(stage)} paused={visualsPaused || state.error} active={motion.stage === selected} selected={selection === selected} onClick={() => setSelection(selected)}>
           {stage ? <><span className="wf-stage-total">{displayCount(stage.operations)} recorded operations</span><span className="wf-secondary">{displayCount(stage.active)} dispatched · {displayCount(stage.settled)} settled · {displayCount(stage.uncertain)} uncertain</span><span className="wf-secondary">{money(stage.spent_units)} settled · {money(stage.held_units)} reserved</span></> : <span className="wf-secondary">No measured count available</span>}
         </Stage>
       })}

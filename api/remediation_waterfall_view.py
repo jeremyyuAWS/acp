@@ -1,7 +1,7 @@
 """Read-only, owner-scoped presentation of durable waterfall activity.
 
 A settled provider charge is NOT a usable suggestion. The current ledger records
-attempt identity and cost, but no finding/proposal join or historical model ID.
+attempt identity and cost; immutable history supplies recorded model identities.
 Keep that contribution explicitly unavailable instead of deriving it from calls.
 """
 import datetime as dt
@@ -21,13 +21,15 @@ def read_waterfall(store, owner, scan_id, batch_id):
     # No ledger admission, provider call, source content, prompt hash or pricing ref is exposed.
     with db.cursor() as cur:
         db.execute(cur, """SELECT p.policy_json,b.cap_units,b.currency,
-            a.attempt_id,a.state,a.max_cost_units,a.actual_cost_units
+            a.attempt_id,a.state,a.max_cost_units,a.actual_cost_units,h.provider,h.model
             FROM ai_spending_run_policies p
             JOIN scan_runs s ON s.id=p.scan_id AND s.owner_email=p.owner_id
             JOIN stage_executions e ON e.execution_id=p.run_id AND e.scan_id=p.scan_id
                 AND e.owner_email=p.owner_id AND e.stage='remediate'
             JOIN ai_spending_budgets b ON b.owner_id=p.owner_id AND b.run_id=p.run_id
             LEFT JOIN ai_spending_attempts a ON a.owner_id=p.owner_id AND a.run_id=p.run_id
+            LEFT JOIN ai_attempt_history h ON h.owner_id=a.owner_id AND h.run_id=a.run_id
+                AND h.attempt_id=a.attempt_id AND h.scan_id=p.scan_id
             WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s""",
             (owner, scan_id, batch_id))
         rows = db.fetchall(cur)
@@ -42,9 +44,10 @@ def read_waterfall(store, owner, scan_id, batch_id):
         policy = json.loads(rows[0]['policy_json'])
         stages = {tier: {'tier': tier, 'operations': 0, 'active': 0, 'settled': 0,
                          'reserved': 0, 'uncertain': 0, 'released': 0, 'breached': 0,
-                         'spent_units': 0, 'held_units': 0}
+                         'spent_units': 0, 'held_units': 0, 'models': []}
                   for tier in (1, 2)}
         operations = {1: set(), 2: set()}
+        model_counts = {1: {}, 2: {}}
         spent = held = unknown = other = 0
         blocked = False
         for row in rows:
@@ -64,6 +67,10 @@ def read_waterfall(store, owner, scan_id, batch_id):
                 continue
             tier = int(match[2])
             operations[tier].add(match[1])
+            # A reservation names a proposed model, not proof it was called.
+            if row['provider'] and row['model'] and state not in ('reserved', 'released'):
+                key = (row['provider'], row['model'])
+                model_counts[tier][key] = model_counts[tier].get(key, 0) + 1
             stages[tier]['active' if state == 'dispatched' else state] += 1
             if state in ('settled', 'breached'):
                 stages[tier]['spent_units'] += row['actual_cost_units']
@@ -71,6 +78,8 @@ def read_waterfall(store, owner, scan_id, batch_id):
                 stages[tier]['held_units'] += row['max_cost_units']
         for tier in stages:
             stages[tier]['operations'] = len(operations[tier])
+            stages[tier]['models'] = [dict(provider=provider, model=model, recorded_attempts=total)
+                                      for (provider, model), total in sorted(model_counts[tier].items())]
         result.update(stages=list(stages.values()), other_attempts=other,
                       ai_enabled=policy['ai'] > 0 and rows[0]['cap_units'] > 0,
                       spending={'cap_units': rows[0]['cap_units'], 'currency': rows[0]['currency'],
