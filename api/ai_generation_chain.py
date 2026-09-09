@@ -86,5 +86,13 @@ def chain_options(rows=()):
                and row.get('finding_count') == 1 for row in rows):
         result['reason'] = 'Second fallback requires a supported PPTX slide-title finding with an exact source binding.'
         return result
+    # A supported scope gets the complete verified chain by default. The run
+    # policy still snapshots this choice, and execution remains fail-closed on
+    # the exact source/adapter checks before any third-model dispatch.
+    third = generator.models[2]
+    third_spec = generator.specs[third.name]
+    result['default_steps'].append({'step_id': STEP_IDS[2], 'position': 2,
+        'provider': third_spec.provider, 'model': third.name, 'enabled': True,
+        'capabilities': ['text']})
     result.update(supported=True, reason=None)
     return result

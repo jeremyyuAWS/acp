@@ -8,7 +8,7 @@ import './remediation-waterfall-graph.css'
 
 const ORDER = ['rules', 'first', 'next', 'approval', 'verify']
 // The same restrained workflow colors used by LiveOps, paired with textual roles.
-const COLORS = { rules: '#246B79', first: '#5269A8', next: '#7B4D91', approval: '#A65A2E', verify: '#356B3F', review: '#9A3F62', unknown: '#51606D' }
+const COLORS = { rules: '#246B79', first: '#5269A8', next: '#7B4D91', next2: '#6D4C86', approval: '#A65A2E', verify: '#356B3F', review: '#9A3F62', unknown: '#51606D' }
 const count = value => Number.isSafeInteger(value) && value >= 0
 
 function useReducedMotion() {
@@ -84,9 +84,20 @@ export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules
     }))
   }
   const recorded = recordedRunGraphGroups(runGraph)
+  // Older runs can contain a draft record without a saved three-position chain.
+  // Keep the second fallback visible so the graph never makes the configured
+  // capability look like it ends after the first recorded model. A saved,
+  // linked fallback_2 replaces this placeholder automatically.
+  const recordedWithFallback = recorded && aiEnabled !== false
+    && !recorded.some(group => group.some(fact => fact.stepId === 'fallback_2'))
+    ? [...recorded, [{ id: 'configured:fallback_2:placeholder', stage: 'next2', role: 'Fallback 2',
+        title: 'Second fallback', provider: 'Available for supported text findings',
+        detail: 'Not configured for this saved run · enable it in the remediation plan',
+        identityKind: 'configured', stepId: 'fallback_2', attemptIds: [], canAnimate: false, in_flight: false }]]
+    : recorded
   const groups = [
     [{ id: 'rules', stage: 'rules', role: 'Rules', title: 'Rule-based fixes', provider: 'No LLM call required', detail: 'Supported corrections under your plan' }],
-    ...(recorded || [aiNodes(1), aiNodes(2)]),
+    ...(recordedWithFallback || [aiNodes(1), aiNodes(2)]),
     [{ id: 'approval', stage: 'approval', role: 'Your approval', title: 'Human review', provider: 'You decide what is applied', value: reviewCount, metric: 'review items', detail: 'Suggestions are not verified fixes' }],
     [{ id: 'verify', stage: 'verify', role: 'Verify', title: 'Check the changes', provider: 'Evidence of completion', value: verifiedCount, metric: 'verified changes', detail: 'Across all correction origins' }],
   ]
