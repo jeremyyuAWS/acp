@@ -1,6 +1,6 @@
 """Read-only remediation automation policy preview API."""
 from fastapi import APIRouter
-from pydantic import BaseModel, Field, StrictInt, StrictStr
+from pydantic import BaseModel, Field, StrictInt, StrictStr, StrictBool
 
 from remediation_automation_policy import build_policy_preview
 
@@ -23,6 +23,7 @@ class ImpactPreviewRequest(BaseModel):
     ai: StrictInt | None = Field(default=None, ge=0, le=3)
     ai_budget_usd: StrictStr | None = Field(default=None, pattern=r'^\d{1,7}(?:\.\d{1,2})?$', max_length=10)
     ai_review: dict | None = None
+    auto_approve_ai: StrictBool | None = None
     generation_chain: dict | None = None
 
 
@@ -58,6 +59,10 @@ def remediation_impact_preview(sid: str, body: ImpactPreviewRequest, request: Re
         result['providers'] = provider_summary(result['capabilities']['ai_enabled'])
         from ai_review_policy import capabilities
         result['capabilities']['ai_review'] = capabilities(core.store, _impact_owner(request))
+        from ai_standing_approval import capabilities as standing_capabilities
+        result['capabilities']['ai_standing_approval'] = standing_capabilities(core.store, _impact_owner(request))
+        if result['policy'].get('auto_approve_ai') and not result['capabilities']['ai_standing_approval']['supported']:
+            result['capabilities'].update(execute=False, reason=result['capabilities']['ai_standing_approval']['reason'])
         from remediation_cohort_estimates import read_plan_estimate
         result['estimated_impact'] = read_plan_estimate(core.store, _impact_owner(request), result)
         return result

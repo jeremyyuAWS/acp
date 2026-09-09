@@ -1173,7 +1173,16 @@ def _remediate_file(payload: dict, job: dict) -> None:
     with run_context(core.store, payload, job) as context:
         source_token = SOURCE.set(None)
         try:
-            return _remediate_file_with_policy(payload, job)
+            result = _remediate_file_with_policy(payload, job)
+            if context is not None and context.policy.get('auto_approve_ai') is True:
+                try:
+                    from ai_standing_approval import approve_file
+                    approve_file(core.store, context)
+                except Exception as exc:
+                    core.store.log_decision('system', 'ai.standing_approval.deferred',
+                        scan_id=context.scan_id, file=context.file,
+                        detail=f'Automatic approval did not complete; suggestions remain reviewable: {type(exc).__name__}: {str(exc)[:200]}')
+            return result
         finally:
             SOURCE.reset(source_token)
             if context is not None:
@@ -5125,6 +5134,13 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     if not (scan_id and filename):
         raise FatalJobError("apply_approved_values job missing scan_id/file")
 
+    if payload.get('standing_approval'):
+        from ai_standing_approval import check_application
+        if check_application(core.store, payload):
+            return
+    from ai_standing_approval import check_file_approvals
+    check_file_approvals(core.store, scan_id, filename)
+
     if payload.get("release_intent_id"):
         from release_continuation import check_application
         check_application(core.store, payload["release_intent_id"], scan_id, filename)
@@ -5170,6 +5186,10 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         core.store.log_decision("system", "apply.no_remediated_copy", scan_id=scan_id,
                                 file=filename, detail="no stored remediated copy to write into")
         return
+
+    if payload.get('standing_approval'):
+        from ai_standing_approval import check_application
+        check_application(core.store, payload, working=working)
 
     # The residual of the copy BEFORE anything is written — one extra re-scan per apply job, and
     # the only way a lane can tell a criterion it caused to fail from one that was failing all
@@ -5333,6 +5353,10 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
 
     if payload.get("release_intent_id"):
         check_application(core.store, payload["release_intent_id"], scan_id, filename)
+    if payload.get('standing_approval'):
+        from ai_standing_approval import check_application as check_standing_application
+        check_standing_application(core.store, payload)
+    check_file_approvals(core.store, scan_id, filename)
     _phase(job, "storing the corrected copy")
     blob_url = _blob.upload_remediated(
         owner, scan_id, filename, working, _OFFICE_ALT_MIME.get(ext, "application/pdf"))

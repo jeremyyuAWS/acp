@@ -108,6 +108,9 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
     db = store._db
     scope = (owner, scan_id, run_id)
     with db.cursor() as cur:
+        db.execute(cur, 'SELECT policy_json FROM ai_spending_run_policies WHERE owner_id=%s AND scan_id=%s AND run_id=%s', scope)
+        saved_policy = db.fetchone(cur)
+        standing_approval = json.loads(saved_policy['policy_json']).get('auto_approve_ai') is True if saved_policy else False
         totals = {}
         for table, key in (('ai_attempt_history', 'total_attempts'),
                            ('ai_proposal_snapshots', 'total_proposals'),
@@ -156,13 +159,14 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
         if proposals:
             marks = ','.join(['%s'] * len(proposals))
             for table, fields, key in (
-                ('hitl_events', 'e.id,e.action,e.edited,e.created_at', 'human_reviews'),
+                ('hitl_events', 'e.id,e.action,e.edited,e.proposal_snapshot_ids,e.created_at', 'human_reviews'),
                 ('ai_validation_outcomes', 'e.id,e.outcome,e.detail,e.regressions,e.proposal_snapshot_id,e.source_revision,e.approved_value_sha256,e.created_at', 'validation_events'),
             ):
+                attempt_filter = '' if table == 'hitl_events' else 'AND p.attempt_id IS NOT NULL'
                 query = f'''SELECT p.snapshot_id,{fields} FROM ai_proposal_snapshots p
                     JOIN {table} e ON e.model_call_id=p.model_call_id AND e.scan_id=p.scan_id
                     AND e.file=p.file AND e.item_id=p.item_id AND e.rule_id=p.rule_id
-                    WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s AND p.attempt_id IS NOT NULL
+                    WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s {attempt_filter}
                     AND p.snapshot_id IN ({marks}) ORDER BY e.created_at DESC,e.id,p.snapshot_id LIMIT 1001'''
                 try:
                     db.execute(cur, query, (*scope, *(row['snapshot_id'] for row in proposals)))
@@ -186,7 +190,12 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
                 for event in rows[:1000]:
                     value = dict(event)
                     snapshot_id = value.pop('snapshot_id')
-                    events.setdefault(snapshot_id, {}).setdefault(key, []).append(value)
+                    event_key = key
+                    if key == 'human_reviews' and value.get('action') == 'standing_approve':
+                        if snapshot_id not in json.loads(value.get('proposal_snapshot_ids') or '[]'):
+                            continue
+                        event_key = 'system_approvals'
+                    events.setdefault(snapshot_id, {}).setdefault(event_key, []).append(value)
     from remediation_contribution import read_contribution
     measured_contribution = read_contribution(store, owner, scan_id, run_id)
     verified_ids = {f['proposal_id'] for f in measured_contribution.get('findings', []) if f['state'] == 'fixed'}
@@ -202,6 +211,7 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
 
     return {
         'contract_version': 'remediation-run-insights.v1', 'scan_id': scan_id, 'run_id': run_id, 'batch_id': run_id,
+        'standing_approval': {'enabled': standing_approval, 'authorized_by': owner if standing_approval else None},
         'attempts': attempts, 'proposals': proposals, 'review_receipts': reviews,
         'pagination': {'offset': offset, 'limit': limit, 'has_more': any(offset + limit < total for total in totals.values()), **totals},
         'coverage': 'complete' if complete else 'partial', 'event_details_complete': event_details_complete,
