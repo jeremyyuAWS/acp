@@ -8,7 +8,7 @@ APPLIES = dict(format='html', change_family='link-label', config_id='exact-confi
 
 def cohort(n=40):
     return dict(**APPLIES, evaluation_version='v1', evaluated_at='2026-09-07T00:00:00Z',
-                provenance=dict(kind='evaluated', dataset_sha256='a'*64, evaluation_report_sha256='b'*64),
+                provenance=dict(kind='evaluated', representative=True, production_approved=True, approval_ref='fixture-only-not-production', dataset_sha256='a'*64, evaluation_report_sha256='b'*64),
                 impact_evidence=dict(schema_version='ai-impact-cohort.v1', representative=True,
                     population_size=n, expires_at='2026-09-20T00:00:00Z', charges_complete=True,
                     samples=[dict(finding_id=str(i), source_revision='s1', operation_id=str(i), evidence_id='label-'+str(i),
@@ -126,7 +126,7 @@ def test_registry_failure_preserves_routing_and_hides_private_exception(monkeypa
     def broken(*args):
         raise RuntimeError('private record contents')
     monkeypatch.setitem(sys.modules, 'ai_review_calibration', SimpleNamespace(load_calibration_records=broken))
-    result = read_plan_estimate(object(), 'owner', {'estimate_population': {'complete': True}})
+    result = read_plan_estimate(ContextStore(), 'owner', bound_preview())
     assert result['reason'] == 'evaluation_read_unavailable'
     assert 'private' not in str(result)
 
@@ -141,9 +141,9 @@ def test_shared_registry_reader_is_owner_scoped(monkeypatch):
         return []
     monkeypatch.setitem(sys.modules, 'ai_review_calibration', SimpleNamespace(load_calibration_records=read))
     row = dict(**APPLIES, finding_id='f', source_revision='s', eligible=True)
-    result = read_plan_estimate(object(), 'alice', {'estimate_population': dict(complete=True, scope_revision='current', assessment_revision='a1', configuration_revision=APPLIES['config_id'], findings=[row])})
+    result = read_plan_estimate(ContextStore(), 'alice', bound_preview())
     assert seen == ['alice']
-    assert not result['available'] and result['scope_revision'] == 'current'
+    assert not result['available'] and result['assessment_revision'] == 'a1'
 
 
 @pytest.mark.parametrize('policy', [{'ai': 0}, {'ai': 1, 'ai_budget_usd': '0.00'}])
@@ -170,3 +170,39 @@ def test_unversioned_producer_cannot_enable_numeric_estimates(missing):
                       findings=[dict(**APPLIES, finding_id='f', source_revision='v', eligible=True)])
     population.pop(missing)
     assert not estimate_plan([cohort()], population, now=NOW)['available']
+
+
+class ContextStore:
+    def get_scan(self, scan_id, owner=None):
+        return {'id': scan_id}
+    def current_stage_output_manifest(self, scan_id, stage):
+        return {'manifest_id': 'a1'}
+
+
+def bound_preview():
+    from remediation_cohort_estimates import estimate_scope_revision
+    context = dict(assessment_revision='a1', configuration_revision=APPLIES['config_id'],
+                   scope_revision=estimate_scope_revision('a1', ['selected.html']))
+    return dict(scan_id='s', files=[{'file': 'selected.html'}], estimate_context=context,
+                estimate_population=dict(**context, complete=True,
+                    findings=[dict(**APPLIES, finding_id='f', source_revision='v1', eligible=True)]))
+
+
+def test_reader_rejects_missing_current_config_and_changed_manifest():
+    from remediation_cohort_estimates import read_plan_estimate
+    preview = bound_preview()
+    preview.pop('estimate_context')
+    assert read_plan_estimate(ContextStore(), 'owner', preview)['reason'] == 'current_estimate_context_unavailable'
+    preview = bound_preview()
+    preview['files'] = [{'file': 'other.html'}]
+    assert read_plan_estimate(ContextStore(), 'owner', preview)['reason'] == 'stale_assessment_or_scope'
+    class NewAssessment(ContextStore):
+        def current_stage_output_manifest(self, *args):
+            return {'manifest_id': 'a2'}
+    assert read_plan_estimate(NewAssessment(), 'owner', bound_preview())['reason'] == 'stale_assessment_or_scope'
+
+
+@pytest.mark.parametrize('field', ['representative', 'production_approved', 'approval_ref'])
+def test_hashes_alone_do_not_qualify_production_evidence(field):
+    r = cohort(); r['provenance'].pop(field)
+    assert not estimate(r)['available']

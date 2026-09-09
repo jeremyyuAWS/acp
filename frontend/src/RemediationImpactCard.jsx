@@ -5,6 +5,8 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { getRemediationImpact, saveRemediationImpactPolicy, assignRemediationImpact } from './api.js'
 import './remediation-impact-card.css'
 import RemediationPlanChoices from './RemediationPlanChoices.jsx'
+import RemediationEstimateDisclosure from './RemediationEstimateDisclosure.jsx'
+import { apiBase, authEpoch } from './apiIdentity.js'
 import RemediationWaterfallImpact from './RemediationWaterfallImpact.jsx'
 import RemediationAISuggestions from './RemediationAISuggestions.jsx'
 
@@ -73,6 +75,9 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const policy = draft?.runId === runId ? draft.policy : null
   const setPolicy = value => setDraft(current => ({ runId, policy: typeof value === 'function' ? value(current?.runId === runId ? current.policy : null) : value }))
   const [reload, setReload] = useState(0)
+  const epoch = authEpoch()
+  const estimateKey = JSON.stringify([apiBase(), epoch, myEmail, runId, scopeKey, policy, refreshKey, reload])
+  const [estimateResponse, setEstimateResponse] = useState(null)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -99,12 +104,13 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       return
     }
     Promise.resolve().then(() => getRemediationImpact(runId, requestedPolicy, scopeKey === null ? undefined : JSON.parse(scopeKey))).then(result => {
-      if (cancelled || request !== sequence.current) return
+      if (cancelled || request !== sequence.current || epoch !== authEpoch()) return
       setData(result)
-    }).catch(err => { if (!cancelled && request === sequence.current) { setError(err?.message || 'The preview could not be loaded.') } })
-      .finally(() => { if (!cancelled && request === sequence.current) setLoading(false) })
+      setEstimateResponse({ key: estimateKey, value: result?.estimated_impact })
+    }).catch(err => { if (!cancelled && request === sequence.current && epoch === authEpoch()) { setError(err?.message || 'The preview could not be loaded.') } })
+      .finally(() => { if (!cancelled && request === sequence.current && epoch === authEpoch()) setLoading(false) })
     return () => { cancelled = true }
-  }, [runId, policy, refreshKey, reload, scopeKey])
+  }, [runId, policy, refreshKey, reload, scopeKey, epoch, myEmail, estimateKey])
 
   const basePolicy = policy || (validPolicy(data?.policy) ? data.policy : { rule_based: 0, ai: 0 })
   const selected = data?.capabilities?.ai_budget === true ? { ai_budget_usd: '0.00', ...basePolicy } : basePolicy
@@ -177,9 +183,13 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     <RemediationPlanChoices policy={selected} providers={data?.providers}
       disabled={!runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true}
       reviewSupported={data?.capabilities?.ai_review?.review_supported === true}
-      automaticReviewSupported={data?.capabilities?.ai_automatic === true && data?.capabilities?.ai_review?.automatic_application_supported === true}
+      automaticReviewSupported={data?.capabilities?.ai_review?.automatic_application_supported === true}
+      reviewEligibleFamilies={data?.capabilities?.ai_review?.eligible_families || []}
       automaticReviewReason={data?.capabilities?.ai_review?.reason || data?.capabilities?.ai_automatic_reason || ''}
-      reviewAdministratorFloor={data?.capabilities?.ai_review?.administrator_floor ?? 95} />
+      reviewAdministratorFloor={data?.capabilities?.ai_review?.administrator_floor ?? null} />
+    <RemediationEstimateDisclosure estimate={estimateResponse?.key === estimateKey ? estimateResponse.value : null}
+      aiEnabled={selected.ai > 0 && Number(selected.ai_budget_usd ?? 1) > 0}
+      loading={loading || !!error || estimateResponse?.key !== estimateKey} />
     {ready && data?.capabilities?.execute !== true && <p>Execution unavailable: {data?.capabilities?.execute_reason || data?.capabilities?.reason || 'This preview cannot currently be executed.'}</p>}
 
     <div className="remediation-impact__actions">

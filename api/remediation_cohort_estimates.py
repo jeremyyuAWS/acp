@@ -85,7 +85,7 @@ def estimate_cohort(record, *, applicability, eligible_findings, now=None):
     if not isinstance(record.get('evaluation_version'), str) or not record['evaluation_version']:
         return fail('evaluation_version_missing')
     provenance = record.get('provenance') or {}
-    if provenance.get('kind') != 'evaluated' or not all(provenance.get(k) for k in ('dataset_sha256', 'evaluation_report_sha256')):
+    if provenance.get('kind') != 'evaluated' or provenance.get('representative') is not True or provenance.get('production_approved') is not True or not provenance.get('approval_ref') or not all(provenance.get(k) for k in ('dataset_sha256', 'evaluation_report_sha256')):
         return result
     try:
         evidence = normalize_impact_evidence(record.get('impact_evidence'))
@@ -180,6 +180,14 @@ def estimate_plan(records, population, *, now=None):
     return result
 
 
+def estimate_scope_revision(assessment_revision, files):
+    """Privacy-preserving identity of one selected immutable assessment population."""
+    import hashlib
+    import json
+    payload = [assessment_revision, sorted(set(files))]
+    return hashlib.sha256(json.dumps(payload, separators=(',', ':')).encode()).hexdigest()
+
+
 def read_plan_estimate(store, owner, preview):
     """Read shared calibration storage; absent trusted targeting fails closed.
 
@@ -192,7 +200,19 @@ def read_plan_estimate(store, owner, preview):
     population = preview.get('estimate_population')
     if not population:
         return estimate_plan([], None)
+    context = preview.get('estimate_context')
+    if not isinstance(context, dict) or any(not context.get(k) or context[k] != population.get(k)
+                                            for k in ('scope_revision', 'assessment_revision', 'configuration_revision')):
+        return {**estimate_plan([], None), 'reason': 'current_estimate_context_unavailable'}
     try:
+        scan_id = preview.get('scan_id')
+        if not scan_id or store.get_scan(scan_id, owner=owner) is None:
+            return {**estimate_plan([], None), 'reason': 'current_estimate_context_unavailable'}
+        manifest = store.current_stage_output_manifest(scan_id, 'assess') or {}
+        files = [row['file'] for row in preview.get('files', [])]
+        if (manifest.get('manifest_id') != context['assessment_revision']
+                or estimate_scope_revision(context['assessment_revision'], files) != context['scope_revision']):
+            return {**estimate_plan([], None), 'reason': 'stale_assessment_or_scope'}
         from ai_review_calibration import load_calibration_records
         return estimate_plan(load_calibration_records(store, owner), population)
     except Exception:
