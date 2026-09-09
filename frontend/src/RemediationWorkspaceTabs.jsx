@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import useConfirmedRemediationActivity from './useConfirmedRemediationActivity.js'
 const MODES = ['plan', 'live', 'review']
 
 function modeFromLocation() {
@@ -21,7 +22,7 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
     pendingFocus.current = null
   }
   const lastWorkspaceRequest = useRef(workspaceRequest)
-  const activeWork = !!snapshot && !snapshot.terminal && snapshot.state !== 'draft'
+  const activeWork = useConfirmedRemediationActivity(snapshot)
   const mode = chosen || 'plan'
 
   useEffect(() => {

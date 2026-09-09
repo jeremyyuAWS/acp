@@ -408,12 +408,12 @@ describe('counters flash their increase like Discovery does', () => {
 
 describe('the v2 live operations hierarchy', () => {
   it('adds focusable segment details, retry timing, activity density, and documents in their phases', () => {
-    const snapshot = { ...SNAP, retry_at: '2026-09-05T12:00:14Z', active_attempts: [
+    const snapshot = { ...SNAP, generated_at: new Date().toISOString(), progress: { lease_healthy: true }, retry_at: '2026-09-05T12:00:14Z', active_attempts: [
       { file: 'Patient Guide.docx', phase: 're-verifying the corrected copy', elapsed_s: 8, attempt: 2,
         trail: [{ label: '4 fixes applied' }] },
     ] }
     const html = render({ snapshot, connected: true, receivedAt: Date.now(), events: [
-      { key: '17', tone: 'success', occurredAt: '2026-09-05T11:59:58Z', line: 'Verified Patient Guide.docx' },
+      { key: '17', tone: 'success', occurredAt: new Date(Date.now() - 2_000).toISOString(), line: 'Verified Patient Guide.docx' },
     ] })
     expect(html).toContain('data-detail="Completed: 4"')
     expect(html).toContain('tabindex="0"')
@@ -597,5 +597,46 @@ describe('the v2 live operations hierarchy', () => {
     expect(html.match(/<details class="remops-disclosure" open="">/g)).toHaveLength(4)
     const css = readFileSync(join(here, 'remediation-live-detail.css'), 'utf8')
     expect(css).toContain('.remops-work .fname{overflow-wrap:anywhere;word-break:break-word}')
+  })
+})
+
+
+describe('confirmed activity is separate from outstanding review and final run state', () => {
+  const eyebrow = html => html.match(/class="remops-eyebrow">([^<]*)</)?.[1]
+  const fresh = extra => ({ ...SNAP, generated_at: new Date().toISOString(), progress: { lease_healthy: true },
+    active_attempts: [{ file: 'active.docx', phase: 'applying', lease_valid: true, lease_expires_at: new Date(Date.now() + 30_000).toISOString() }], ...extra })
+
+  it('keeps 177 review documents review-required without advertising active work or completion', () => {
+    const review = fresh({ state: 'needs_attention', message: 'Review required', also: [], terminal: false,
+      total_documents: 177, documents: { completed: 0, processing: 0, waiting: 0, review: 177, failed: 0, skipped: 0 },
+      review: { documents: 177, items: 177 }, active_attempts: [] })
+    const html = render({ snapshot: review, connected: true, receivedAt: Date.now() })
+    expect(eyebrow(html)).toBe('Remediation run')
+    expect(html).toContain('<h2>Review required</h2>')
+    expect(html).not.toContain('remops-pipeline-moving')
+    expect(review.state).toBe('needs_attention')
+    expect(review.terminal).toBe(false)
+  })
+
+  it('advertises progress and pipeline motion only with fresh healthy active processing', () => {
+    const html = render({ snapshot: fresh(), connected: true, receivedAt: Date.now() })
+    expect(eyebrow(html)).toBe('Remediation in progress')
+    expect(html).toContain('remops-pipeline-moving')
+  })
+
+  it.each(['stale', 'expired'])('removes pipeline motion when activity evidence is %s', kind => {
+    const snapshot = kind === 'stale'
+      ? fresh({ generated_at: new Date(Date.now() - 60_001).toISOString() })
+      : fresh({ documents: { ...SNAP.documents, processing: 0 }, progress: {}, active_attempts: [{ file: 'expired.docx', phase: 'applying', lease_valid: true, lease_expires_at: new Date(Date.now() - 1).toISOString() }] })
+    const html = render({ snapshot, connected: true, receivedAt: Date.now() })
+    expect(eyebrow(html)).toBe('Remediation run')
+    expect(html).not.toContain('remops-pipeline-moving')
+  })
+
+  it.each([['failed', 'Remediation failed'], ['cancelled', 'Remediation stopped']])('does not label a %s run complete', (state, label) => {
+    const html = render({ snapshot: fresh({ state, terminal: true, message: label }), connected: true, receivedAt: Date.now() })
+    expect(eyebrow(html)).toBe(label)
+    expect(eyebrow(html)).not.toMatch(/complete|results/i)
+    expect(html).not.toContain('remops-pipeline-moving')
   })
 })

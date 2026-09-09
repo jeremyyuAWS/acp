@@ -9,6 +9,7 @@ import RemediationWorkspaceTabs from './RemediationWorkspaceTabs.jsx'
 const snapshot = {
   run_id: 'scan-1', state: 'running', terminal: false, total_documents: 10,
   message: 'Remediation in progress', phases: [],
+  generated_at: new Date().toISOString(), progress: { lease_healthy: true },
   documents: { completed: 2, processing: 3, waiting: 4, review: 1, failed: 0, skipped: 0 },
   fixes: { applied: 4, verified: 4 }, delivery: { delivered: 0, pending: 0, awaiting_release: 2 },
   integrity: { ok: true, affected: [] },
@@ -54,6 +55,16 @@ describe('the three-mode remediation workspace', () => {
     expect(host.querySelector('[data-testid="live-state"]')).toBeTruthy()
     expect(host.querySelector('#rem-panel-live').hidden).toBe(true)
     expect(host.querySelector('[data-testid="rem-run-card"]')).toBeNull()
+  })
+
+  it('keeps review-only work inactive without changing its state or completed label', async () => {
+    const waiting = { ...snapshot, state: 'needs_attention', terminal: false, documents: { processing: 0, waiting: 0, review: 177 } }
+    const { host } = await mount({ snapshot: waiting, reviewCount: 177 })
+    expect(host.querySelector('.rem-mode-live-dot')).toBeNull()
+    expect(host.querySelector('#rem-mode-live').textContent).toBe('Live')
+    expect(host.querySelector('#rem-mode-review').textContent).toBe('Review177')
+    expect(waiting.state).toBe('needs_attention')
+    expect(waiting.terminal).toBe(false)
   })
 
   it('defaults to Plan when automated work is active and review is empty', async () => {
