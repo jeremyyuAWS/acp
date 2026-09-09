@@ -288,6 +288,10 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         event_kwargs = {
             "review_ms": body.review_ms,
             "reviewer": (getattr(request.state, "user_email", None) if request is not None else None),
+            "proposal_snapshot_ids": updated.get("approved_proposal_snapshot_ids")
+                or updated.get("proposal_snapshot_ids"),
+            "source_revision": updated.get("approved_source_revision"),
+            "approved_value_sha256": updated.get("approved_value_sha256"),
         }
         if body.model_call_ids is not None:
             proposals = item.get("proposals") or item.get("evidence") or []

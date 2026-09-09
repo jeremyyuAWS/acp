@@ -506,6 +506,13 @@ _SCHEMA = [
     "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS decision_version INT DEFAULT 0",
     "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS last_decision_request_id TEXT",
     "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS last_decision_fingerprint TEXT",
+    # Immutable proposal lineage for a human decision. Snapshot IDs identify the exact saved
+    # proposal versions shown to the reviewer; source_revision identifies the assessment input
+    # those versions were based on; the approved-value digest binds the final human value.
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS proposal_snapshot_ids TEXT",
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS approved_proposal_snapshot_ids TEXT",
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS approved_source_revision TEXT",
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS approved_value_sha256 TEXT",
     # Where the finding IS, in words, for the formats that have no page number. `page`/`pages`
     # above are integers and answer this for PDF only; a spreadsheet's answer is "Sheet
     # 'Findings' cell B2" and a deck's is "Slide 3". Without this column the review card's
@@ -839,6 +846,9 @@ _SCHEMA = [
     # Explicit provenance join: which recorded model call a reviewer acted on. Nullable for
     # human-authored and historical decisions; never inferred from timestamps or filenames.
     "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS model_call_id TEXT",
+    "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS proposal_snapshot_ids TEXT",
+    "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS source_revision TEXT",
+    "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS approved_value_sha256 TEXT",
     # Append-only post-write evidence for model-generated proposals. A reviewer acceptance says
     # the draft looked right; this row says whether the corrected bytes subsequently cleared the
     # detector. Keeping those as separate immutable events prevents transport success or approval
@@ -853,6 +863,9 @@ _SCHEMA = [
     # before this column, or a baseline re-scan that could not run), which is "unknown" and must
     # never be read as "none". Additive; placed AFTER the CREATE above.
     "ALTER TABLE ai_validation_outcomes ADD COLUMN IF NOT EXISTS regressions TEXT",
+    "ALTER TABLE ai_validation_outcomes ADD COLUMN IF NOT EXISTS proposal_snapshot_id TEXT",
+    "ALTER TABLE ai_validation_outcomes ADD COLUMN IF NOT EXISTS source_revision TEXT",
+    "ALTER TABLE ai_validation_outcomes ADD COLUMN IF NOT EXISTS approved_value_sha256 TEXT",
     # Configurable file disposition (ADR 0003, Phase 3). PREVIEW ONLY as of this
     # migration -- api/disposition.py's matches() tells you which documents a policy
     # would select; nothing executes a real move/rename/archive/delete yet. That
@@ -2452,8 +2465,8 @@ class _PgAdapter:
     # v42 adds the tenant policy, exactly-once command receipt, and immutable run-policy
     # snapshot tables. All are additive and ignored by older replicas during rolling deploys.
     # v44 adds durable owner/run provider reservations and immutable spending policy.
-    _SCHEMA_VERSION = 45
-    _SCHEMA_CHECKSUM_AT_VERSION = "6dc56556323ed8aa8221b9a314ba6c16"
+    _SCHEMA_VERSION = 46
+    _SCHEMA_CHECKSUM_AT_VERSION = "dbef33e91d0cb94be38719d3c659e9b0"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -7890,7 +7903,10 @@ class Store:
                           action: str, *, edited: bool = False, review_ms: int | None = None,
                           ai_value: str | None = None, final_value: str | None = None,
                           reviewer: str | None = None, reject_reason: str | None = None,
-                          model_call_id: str | None = None) -> None:
+                          model_call_id: str | None = None,
+                          proposal_snapshot_ids: list[str | None] | None = None,
+                          source_revision: str | None = None,
+                          approved_value_sha256: str | None = None) -> None:
         """One immutable row per human review decision — the telemetry the review workspace
         reports on (reviewer time saved) and calibrates from (edit rate on High-confidence
         proposals). `reject_reason` (Reviewer Feedback Intelligence) records WHY a rejection
@@ -7900,12 +7916,16 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO hitl_events(id,scan_id,file,rule_id,item_id,action,edited,"
-                "review_ms,ai_value,final_value,reviewer,created_at,reject_reason,model_call_id) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "review_ms,ai_value,final_value,reviewer,created_at,reject_reason,model_call_id,"
+                "proposal_snapshot_ids,source_revision,approved_value_sha256) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (uuid.uuid4().hex, scan_id, file, rule_id, item_id, action,
                  1 if edited else 0, review_ms, ai_value or None, final_value or None,
                  reviewer, datetime.now(timezone.utc).isoformat(), reject_reason or None,
-                 model_call_id or None))
+                 model_call_id or None,
+                 json.dumps(proposal_snapshot_ids, separators=(",", ":"))
+                 if proposal_snapshot_ids else None,
+                 source_revision or None, approved_value_sha256 or None))
 
     # Every outcome a post-write validation row may carry. Each names what the applier OBSERVED
     # about ONE approved draft, never what it hoped:
@@ -7951,27 +7971,37 @@ class Store:
         inserted = 0
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                f"SELECT item_id,model_call_id,rule_id FROM hitl_events WHERE item_id IN ({marks}) "
+                f"SELECT item_id,model_call_id,rule_id,proposal_snapshot_ids,source_revision,"
+                f"approved_value_sha256 FROM hitl_events WHERE item_id IN ({marks}) "
                 "AND model_call_id IS NOT NULL AND action IN ('approve','edit') "
                 "ORDER BY created_at DESC", tuple(ids))
             rows = self._db.fetchall(cur)
-            latest: dict[tuple[str, str], str] = {}
+            latest: dict[tuple[str, str], dict] = {}
             for row in rows:
                 key = (str(row["item_id"]), str(row["model_call_id"]))
-                latest.setdefault(key, str(row.get("rule_id") or rule_id))
-            for (item_id, call_id), event_rule_id in latest.items():
-                event_id = hashlib.sha256(
-                    f"post-write:{call_id}:{scan_id}:{file}:{event_rule_id}:{item_id}:{outcome}"
-                    f":{reg_json or ''}".encode()
-                ).hexdigest()[:32]
-                self._db.execute(cur,
-                    "INSERT INTO ai_validation_outcomes(id,model_call_id,scan_id,file,rule_id,"
-                    "item_id,outcome,detail,created_at,regressions) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
-                    "ON CONFLICT(id) DO NOTHING",
-                    (event_id, call_id, scan_id, file, event_rule_id, item_id, outcome,
-                     (detail or None), now, reg_json))
-                inserted += max(0, int(cur.rowcount or 0))
+                latest.setdefault(key, row)
+            for (item_id, call_id), event in latest.items():
+                try:
+                    snapshot_ids = json.loads(event.get("proposal_snapshot_ids") or "[]")
+                except (TypeError, ValueError):
+                    snapshot_ids = []
+                snapshot_ids = [str(value) for value in snapshot_ids if value]
+                event_rule_id = str(event.get("rule_id") or rule_id)
+                for snapshot_id in (snapshot_ids or [None]):
+                    event_id = hashlib.sha256(
+                        f"post-write:{call_id}:{scan_id}:{file}:{event_rule_id}:{item_id}:"
+                        f"{snapshot_id or ''}:{outcome}:{reg_json or ''}".encode()
+                    ).hexdigest()[:32]
+                    self._db.execute(cur,
+                        "INSERT INTO ai_validation_outcomes(id,model_call_id,scan_id,file,rule_id,"
+                        "item_id,outcome,detail,created_at,regressions,proposal_snapshot_id,"
+                        "source_revision,approved_value_sha256) "
+                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                        "ON CONFLICT(id) DO NOTHING",
+                        (event_id, call_id, scan_id, file, event_rule_id, item_id, outcome,
+                         (detail or None), now, reg_json, snapshot_id,
+                         event.get("source_revision"), event.get("approved_value_sha256")))
+                    inserted += max(0, int(cur.rowcount or 0))
         return inserted
 
     def list_ai_validation_outcomes(self, scan_id: str | None = None, file: str | None = None,
@@ -10238,8 +10268,13 @@ class Store:
                     (blob, vflag, merged, row["id"]))
                 from ai_run_policy import optional_current_run_context
                 from remediation_run_insights import capture_proposals
-                capture_proposals(self._db, cur, optional_current_run_context(), scan_id=scan_id,
-                                  file=file, rule_id=sc, item_id=row['id'], proposals=proposals)
+                snapshot_ids = capture_proposals(
+                    self._db, cur, optional_current_run_context(), scan_id=scan_id,
+                    file=file, rule_id=sc, item_id=row['id'], proposals=proposals)
+                if snapshot_ids:
+                    self._db.execute(cur,
+                        "UPDATE hitl_queue SET proposal_snapshot_ids=%s WHERE id=%s",
+                        (_json.dumps(snapshot_ids), row['id']))
                 self.sync_hitl_finding_dispositions(row["id"], "pending")
                 return row["id"]
             item_id = uuid.uuid4().hex[:12]
@@ -10250,8 +10285,13 @@ class Store:
                 (item_id, now, scan_id, file, sc, rule_name or sc, count, blob, vflag))
             from ai_run_policy import optional_current_run_context
             from remediation_run_insights import capture_proposals
-            capture_proposals(self._db, cur, optional_current_run_context(), scan_id=scan_id,
-                              file=file, rule_id=sc, item_id=item_id, proposals=proposals)
+            snapshot_ids = capture_proposals(
+                self._db, cur, optional_current_run_context(), scan_id=scan_id,
+                file=file, rule_id=sc, item_id=item_id, proposals=proposals)
+            if snapshot_ids:
+                self._db.execute(cur,
+                    "UPDATE hitl_queue SET proposal_snapshot_ids=%s WHERE id=%s",
+                    (_json.dumps(snapshot_ids), item_id))
         self.sync_hitl_finding_dispositions(item_id, "pending")
         return item_id
 
@@ -11047,7 +11087,8 @@ class Store:
         if not row:
             return row
         import json as _json
-        for col in ("proposals", "evidence"):
+        for col in ("proposals", "evidence", "proposal_snapshot_ids",
+                    "approved_proposal_snapshot_ids"):
             if row.get(col):
                 try:
                     row[col] = _json.loads(row[col])
@@ -11148,6 +11189,36 @@ class Store:
             if status == "approved" and approved_values is not None:
                 self.approve_proposal_values(
                     item_id, approved_values, draft_fallback=draft_fallback)
+            if status == "approved":
+                # Bind this decision to the exact immutable proposal versions and assessment
+                # input revision the reviewer saw. The aligned list preserves one snapshot slot
+                # per proposal; null means this instance had no captured snapshot (legacy data).
+                instances = current.get("proposals") or current.get("evidence") or []
+                captured = current.get("proposal_snapshot_ids") or []
+                if not isinstance(captured, list):
+                    captured = []
+                approved_aligned = []
+                approved_values_for_digest = []
+                for index, instance in enumerate(instances):
+                    if not isinstance(instance, dict):
+                        continue
+                    supplied = ((approved_values[index] if approved_values and index < len(approved_values)
+                                 else None) or "").strip()
+                    value = supplied
+                    if not value and current.get("proposals") and draft_fallback:
+                        value = str(instance.get("proposed_value") or "").strip()
+                    approved_values_for_digest.append(value)
+                    approved_aligned.append(captured[index] if index < len(captured) else None)
+                digest = hashlib.sha256(json.dumps(
+                    approved_values_for_digest, separators=(",", ":"), ensure_ascii=False).encode()
+                ).hexdigest() if approved_values_for_digest else None
+                source_revision = self.stage_snapshot_id(current["scan_id"]) if current.get("scan_id") else None
+                with self._db.cursor() as cur:
+                    self._db.execute(cur,
+                        "UPDATE hitl_queue SET approved_proposal_snapshot_ids=%s,"
+                        "approved_source_revision=%s,approved_value_sha256=%s WHERE id=%s",
+                        (json.dumps(approved_aligned, separators=(",", ":")),
+                         source_revision, digest, item_id))
             if (status == "approved" and resolution == self.DESCRIBED_RESOLUTION
                     and self.queue_described_image_alt(item_id) is None):
                 raise ValueError("described decision produced no alt-text obligation")

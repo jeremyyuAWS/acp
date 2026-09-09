@@ -76,6 +76,24 @@ def test_real_enqueue_captures_exact_context_and_update_keeps_original_version(i
     assert values == [original, 'An edited description']
 
 
+def test_exact_proposal_lineage_marks_only_the_verified_snapshot(isolated_store):
+    store = isolated_store
+    result, job = managed_run(store)
+    item = retain(store, job)
+    queue = store.get_hitl_item(item)
+    snapshot_id = queue['proposal_snapshot_ids'][0]
+    store.record_hitl_event(
+        'scan', 'a.html', '1.1.1', item, 'approve', model_call_id=queue['proposals'][0]['model_call_id'],
+        proposal_snapshot_ids=[snapshot_id], source_revision=store.stage_snapshot_id('scan'),
+        approved_value_sha256='approved-digest')
+    assert store.record_ai_validation_outcomes(
+        'scan', 'a.html', '1.1.1', [item], 'verified_cleared') == 1
+    proposal = read_insights(store, 'owner', 'scan', result['batch_id'])['proposals'][0]
+    assert proposal['version_verified'] is True
+    assert proposal['validation_events'][0]['proposal_snapshot_id'] == snapshot_id
+    assert read_insights(store, 'owner', 'scan', result['batch_id'])['outcomes']['verified_fix_count'] == 1
+
+
 def test_enqueue_outside_matching_worker_context_cannot_claim_execution(isolated_store):
     store = isolated_store
     result, job = managed_run(store)

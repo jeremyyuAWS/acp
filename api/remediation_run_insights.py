@@ -154,7 +154,7 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
             marks = ','.join(['%s'] * len(proposals))
             for table, fields, key in (
                 ('hitl_events', 'e.id,e.action,e.edited,e.created_at', 'human_reviews'),
-                ('ai_validation_outcomes', 'e.id,e.outcome,e.detail,e.regressions,e.created_at', 'validation_events'),
+                ('ai_validation_outcomes', 'e.id,e.outcome,e.detail,e.regressions,e.proposal_snapshot_id,e.source_revision,e.approved_value_sha256,e.created_at', 'validation_events'),
             ):
                 db.execute(cur, f'''SELECT p.snapshot_id,{fields} FROM ai_proposal_snapshots p
                     JOIN {table} e ON e.model_call_id=p.model_call_id AND e.scan_id=p.scan_id
@@ -172,8 +172,17 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
     for proposal in proposals:
         proposal['proposal'] = json.loads(proposal.pop('proposal_json') or 'null')
         proposal.update(events.get(proposal['snapshot_id'], {}))
-        proposal['version_verified'] = False
-        proposal['verification_reason'] = 'Recorded events do not identify this exact proposal version and source revision.'
+        validations = proposal.get('validation_events') or []
+        exact = [event for event in validations
+                  if event.get('proposal_snapshot_id') == proposal.get('snapshot_id')
+                  and event.get('source_revision') and event.get('approved_value_sha256')
+                  and event.get('outcome') == 'verified_cleared'
+                  and event.get('regressions') in (None, '[]', [])]
+        proposal['version_verified'] = bool(exact)
+        proposal['verification_reason'] = (
+            'Exact saved proposal, source revision, and post-write verification match.'
+            if exact else
+            'Recorded events do not identify this exact proposal version and source revision.')
     return {
         'contract_version': 'remediation-run-insights.v1', 'scan_id': scan_id, 'run_id': run_id, 'batch_id': run_id,
         'attempts': attempts, 'proposals': proposals, 'review_receipts': reviews,
@@ -183,6 +192,11 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
         'contribution': {'unit': 'proposal_versions', **counts, 'total': totals['total_proposals'],
                          'complete': complete,
                          'note': 'Saved proposal versions, not unique findings or verified fixes. Revisions may cover the same issue.'},
-        'outcomes': {'verified_fix_count': None, 'reason': 'proposal_version_verification_unavailable'},
+        'outcomes': {
+            'verified_fix_count': sum(1 for proposal in proposals if proposal.get('version_verified')),
+            'reason': 'exact_proposal_lineage_verified' if any(
+                proposal.get('version_verified') for proposal in proposals
+            ) else 'proposal_version_verification_unavailable',
+        },
         'estimate': build_impact_estimate([], config_id='unavailable', change_family='unavailable'),
     }
