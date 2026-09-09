@@ -45,7 +45,7 @@ function Metric({ label, value, unit, children, tone, onClick, delta }) {
       {value !== undefined && (
         <div style={{ ...val, color: tone }}>
           {value}
-          {Number.isFinite(delta) && delta !== 0 && <span className="remediation-forecast-delta"
+          {Number.isFinite(delta) && delta !== 0 && <span key={delta} className={`remediation-forecast-delta remediation-forecast-delta--${delta > 0 ? 'increase' : 'decrease'}`}
             aria-label={`${delta > 0 ? 'Increase' : 'Decrease'} of ${Math.abs(delta).toLocaleString()} findings from previous selection`}>
             {delta > 0 ? '+' : '−'}{Math.abs(delta).toLocaleString()}
           </span>}

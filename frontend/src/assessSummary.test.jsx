@@ -436,6 +436,8 @@ describe('remediation forecast change badges', () => {
     } })
     const badges = [...c.querySelectorAll('.remediation-forecast-delta')]
     expect(badges.map(node => node.textContent)).toEqual(['+8', '−8'])
+    expect(badges[0].classList.contains('remediation-forecast-delta--increase')).toBe(true)
+    expect(badges[1].classList.contains('remediation-forecast-delta--decrease')).toBe(true)
     expect(badges[0].getAttribute('aria-label')).toBe('Increase of 8 findings from previous selection')
     expect(badges[1].getAttribute('aria-label')).toBe('Decrease of 8 findings from previous selection')
     expect(badges[0].parentElement.textContent).toBe('40+8')
