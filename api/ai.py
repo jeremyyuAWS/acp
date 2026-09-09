@@ -1393,7 +1393,8 @@ _SUGGEST_KIND: dict[str, tuple[str, str]] = {
 
 
 def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str,
-                    guidance: str = "", document_context: dict | None = None) -> str:
+                    guidance: str = "", document_context: dict | None = None,
+                    finding_id: str | None = None) -> str:
     kind, want = _SUGGEST_KIND.get(rule_id, ("fix", "a concrete corrected value"))
     ctx = f"\nFinding detail: {detail}" if detail else ""
     house = f"\n{guidance}" if guidance else ""    # ADR 0021 org house style (memory active)
@@ -1401,9 +1402,16 @@ def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str,
     if document_context:
         # Context is optional enrichment. A malformed or stale model-produced package must
         # never block a deterministic/cheap suggestion, so omit it and retain the normal prompt.
+        #
+        # Keyed by FINDING id, not rule id. A document with twelve alt-text findings has
+        # twelve finding ids and one rule id ("1.1.1"), so looking the package up by rule
+        # matched at most one of them and raised for the rest -- and the raise is caught
+        # right here, so the feature silently produced a context-free prompt instead of
+        # failing. Falling back to rule_id keeps a package that genuinely keys by
+        # criterion working; it is not a substitute for passing the real finding id.
         try:
             from document_context import ContextValidationError, context_prompt
-            compiled = "\n" + context_prompt(document_context, rule_id)
+            compiled = "\n" + context_prompt(document_context, finding_id or rule_id)
         except (ContextValidationError, TypeError, ValueError):
             compiled = ""
     vision_note = ""
@@ -1427,7 +1435,8 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                 detail: str = "", image_bytes: bytes | None = None, style: str = "",
                 guidance: str = "", scan_id: str | None = None,
                 file: str | None = None, file_format: str | None = None,
-                document_context: dict | None = None) -> dict | None:
+                document_context: dict | None = None,
+                finding_id: str | None = None) -> dict | None:
     """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
     semantic finding via the local model. Returns None when Ollama is unavailable.
 
@@ -1463,7 +1472,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                     out[k] = res[k]
             return out
         # vision unavailable / unusable → fall through to the text template below.
-    prompt = _suggest_prompt(rule_id, rule_name, filename, detail, guidance, document_context)
+    prompt = _suggest_prompt(rule_id, rule_name, filename, detail, guidance, document_context, finding_id)
     import time as _t
     _t0 = _t.monotonic()
     # Only the two evidence-approved 2.4.4 lanes may override the default cloud model. The
