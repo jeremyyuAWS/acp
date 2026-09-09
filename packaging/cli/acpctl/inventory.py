@@ -97,7 +97,7 @@ LANE_JOB_TYPES = {
     "assess": ("scan", "scan_assess", "scan_batch", "scan_file", "workspace_scan_file",
                "workspace_scan_discover", "scan_finalize", "assess_trace"),
     "remediate": ("remediate_file", "deliver_corrected_copy", "rescore_file",
-                  "apply_approved_values", "publish_file", "prepare_release_package"),
+                  "apply_approved_values", "publish_file", "prepare_release_package", "release_continue"),
 }
 
 

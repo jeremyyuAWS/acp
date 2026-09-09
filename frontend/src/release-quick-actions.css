@@ -1,0 +1,10 @@
+.release-quick { display:grid; gap:12px; }
+.release-quick p { margin:0; overflow-wrap:anywhere; }
+.release-quick-summary,.release-quick-buttons { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
+.release-quick-summary strong { font-size:20px; }
+.release-quick details { border-top:1px solid var(--line); padding-top:10px; }
+.release-quick summary { cursor:pointer; font-weight:600; }
+.release-quick details > div,.release-quick details > p { padding:8px 0; overflow-wrap:anywhere; }
+.release-quick-buttons button { white-space:normal; }
+.release-advanced > summary { padding:16px; font-weight:600; cursor:pointer; }
+@media(max-width:480px) { .release-quick-buttons button { width:100%; } }

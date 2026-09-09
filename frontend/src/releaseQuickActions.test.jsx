@@ -1,0 +1,64 @@
+import { createElement as h, act } from 'react'
+import { afterEach, expect, it, vi } from 'vitest'
+import { createTestRoot, unmountAll } from './testRoots.js'
+const api = vi.hoisted(() => ({ planReleaseContinuation: vi.fn(), authorizeReleaseContinuation: vi.fn(), getReleaseContinuation: vi.fn(), resumeReleaseContinuation: vi.fn() }))
+vi.mock('./api.js', () => api)
+import Quick from './ReleaseQuickActions.jsx'
+const plan = { id: 'fixed-intent', status: 'draft', intent: { destination: { folder_name: 'Approved folder' }, files: {
+  'ready.pdf': { ready: true, rows: [], blockers: [] },
+  'changes.pdf': { rows: [{ id: 'v1', rule_id: '1.1.1', authorize: true, proposals: [{ proposed_value: 'Exact draft' }] }], blockers: [] },
+  'manual.pdf': { rows: [], blockers: ['Manual repair required'] },
+} } }
+const flush = async () => act(async () => { await new Promise(r => setTimeout(r, 0)) })
+const click = async el => { await act(async () => el.click()); await flush() }
+async function mount(extra = {}) {
+  api.planReleaseContinuation.mockResolvedValue(plan); api.getReleaseContinuation.mockResolvedValue(null)
+  api.authorizeReleaseContinuation.mockResolvedValue({ ...plan, status: 'waiting', progress: {} })
+  const props = { runId: 'run-1', files: ['ready.pdf', 'changes.pdf', 'manual.pdf'].map(file => ({ file, corrected_sha256: 'v1' })),
+    ready: [{ file: 'ready.pdf' }], destination: { folder_id: 'fixed', folder_name: 'Approved folder' }, destinationLabel: 'Approved folder', onReady: vi.fn(), ...extra }
+  const { container, root } = createTestRoot()
+  await act(async () => root.render(h(Quick, props))); await flush()
+  return { container, props, button: text => [...container.querySelectorAll('button')].find(b => b.textContent.includes(text)),
+    render: async update => { await act(async () => root.render(h(Quick, { ...props, ...update }))); await flush() } }
+}
+afterEach(async () => { await unmountAll(); vi.resetAllMocks() })
+it('publishes only ready files without opening details or reviewing others', async () => {
+  const v = await mount(); await click(v.button('Publish ready files (1)'))
+  expect(v.props.onReady).toHaveBeenCalledWith(['ready.pdf'])
+  expect(api.authorizeReleaseContinuation).not.toHaveBeenCalled()
+  expect([...v.container.querySelectorAll('details')].every(d => !d.open)).toBe(true)
+})
+it('authorizes the exact server plan once with optional inspection', async () => {
+  const v = await mount(); expect(v.container.textContent).toContain('Destination: Approved folder')
+  expect(v.container.textContent).toContain('Manual repair required')
+  let resolve; api.authorizeReleaseContinuation.mockImplementation(() => new Promise(r => { resolve = r }))
+  const button = v.button('Approve eligible changes'); await click(button); await click(button)
+  expect(api.authorizeReleaseContinuation).toHaveBeenCalledTimes(1)
+  expect(api.authorizeReleaseContinuation).toHaveBeenCalledWith('run-1', 'fixed-intent')
+  await act(async () => resolve({ ...plan, status: 'waiting', progress: {} }))
+})
+it('invalidates the plan when destination changes', async () => {
+  const v = await mount(); api.planReleaseContinuation.mockImplementation(() => new Promise(() => {}))
+  await v.render({ destination: { folder_id: 'changed', folder_name: 'New folder' } })
+  expect(v.button('Approve eligible changes')).toBeUndefined()
+  expect(api.authorizeReleaseContinuation).not.toHaveBeenCalled()
+})
+it('keeps ready-only publishing available while the continuation runs', async () => {
+  const v = await mount(); api.getReleaseContinuation.mockResolvedValue({ ...plan, status: 'waiting', progress: { 'changes.pdf': { state: 'applying', message: 'Applying' } } })
+  await v.render({ runId: 'restored-run' })
+  expect(v.button('Publish ready files').disabled).toBe(false)
+  expect(v.button('Approve eligible changes').disabled).toBe(true)
+  expect(v.container.textContent).toContain('Progress is saved')
+})
+it('restores partial delivery and retries only the original intent', async () => {
+  const v = await mount(); api.getReleaseContinuation.mockResolvedValue({ ...plan, status: 'completed', progress: {
+    'ready.pdf': { state: 'published', message: 'Delivered' }, 'changes.pdf': { state: 'failed', message: 'Reconnect' }, 'manual.pdf': { state: 'blocked', message: 'Manual repair required' },
+  } })
+  await v.render({ runId: 'restored-run' }); expect(v.container.textContent).toContain('1 delivered · 0 in progress · 2 need attention')
+  api.resumeReleaseContinuation.mockResolvedValue({ ...plan, status: 'waiting' }); await click(v.button('Retry failed delivery'))
+  expect(api.resumeReleaseContinuation).toHaveBeenCalledWith('restored-run', 'fixed-intent')
+})
+it('prevents writes in read-only replay', async () => {
+  const v = await mount({ readOnly: true }); expect(v.button('Publish ready files').disabled).toBe(true)
+  expect(api.planReleaseContinuation).not.toHaveBeenCalled(); expect(api.authorizeReleaseContinuation).not.toHaveBeenCalled()
+})

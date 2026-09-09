@@ -61,7 +61,7 @@ apply_remediation_autoscale() {
     --name acp-remediate --scale-rule-name remediation-queue
     --scale-rule-type postgresql
     --scale-rule-metadata
-      "query=SELECT count(*) FROM jobs WHERE status='queued' AND type IN ('remediate_file', 'deliver_corrected_copy', 'rescore_file', 'apply_approved_values', 'publish_file', 'prepare_release_package') AND run_after::timestamptz <= now() AND attempts < max_attempts"
+      "query=SELECT count(*) FROM jobs WHERE status='queued' AND type IN ('remediate_file', 'deliver_corrected_copy', 'rescore_file', 'apply_approved_values', 'publish_file', 'prepare_release_package', 'release_continue') AND run_after::timestamptz <= now() AND attempts < max_attempts"
       "targetQueryValue=4"
     --scale-rule-auth "connection=database-url")
   if $DRY_RUN; then

@@ -163,7 +163,7 @@ describe('Release clarity and execution boundaries', () => {
     await act(async () => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     expect(document.activeElement).toBe(details)
     expect(c.querySelector('aside').hidden).toBe(true)
-    await click(button(c, 'Start a release'))
+    await click(button(c, 'More delivery options'))
     await act(async () => new Promise((resolve) => setTimeout(resolve, 30)))
     expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' })
   })
@@ -229,5 +229,16 @@ describe('Exact corrected-copy changes', () => {
     await c.rerender({ run, files: [verified('a.pdf', { corrected_sha256: 'b'.repeat(64) })] })
     expect(button(c, 'Publish 1 copy').disabled).toBe(true)
     expect(publishAllFiles).not.toHaveBeenCalled()
+  })
+})
+
+
+it('ready-only action excludes recorded deliveries and binds exact corrected artifacts', async () => {
+  getReleaseStatus.mockResolvedValue({ release_id: 'receipt', documents: [{ file: 'delivered.pdf', status: 'published', artifact_digest: 'sha256:done' }] })
+  const c = await mount({ run, files: [verified('ready.pdf', { corrected_sha256: 'current' }), verified('delivered.pdf', { corrected_sha256: 'done' }), held('manual.pdf')] })
+  expect(JSON.stringify([...c.querySelectorAll('button')].map(b => b.textContent))).toContain('Publish ready files (1)')
+  await click(button(c, 'Publish ready files (1)'))
+  expect(publishAllFiles).toHaveBeenCalledWith('scan1', ['ready.pdf'], '', {
+    destination: null, expectedArtifacts: { 'ready.pdf': 'current' },
   })
 })

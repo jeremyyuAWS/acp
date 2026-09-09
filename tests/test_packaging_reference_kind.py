@@ -643,13 +643,33 @@ def test_every_expected_outcome_is_a_state_the_report_can_carry():
     assert set(expected_outcomes().values()) <= {"pass", "fail", "skip", "unknown"}
 
 
-def test_no_scenario_is_expected_to_fail():
-    """`fail` here would mean shipping a known defect with a test that asserts it stays. An
-    outcome that cannot be reached is `unknown` or `skip`; a real failure gets fixed."""
-    failing = sorted(k for k, v in expected_outcomes().items() if v == "fail")
-    assert not failing, (
-        f"{failing} are expected to FAIL on the reference cluster. Fix them, or establish that "
-        f"the question cannot be asked here and record that as `unknown` with the reason.")
+def test_only_the_measured_storage_free_target_failure_is_expected():
+    assert sorted(k for k, v in expected_outcomes().items() if v == "fail") == ["fixture-workflow"]
+    assert '--from-literal=object-storage="none"' in WORKFLOW.read_text()
+
+
+def test_storage_failure_baseline_rejects_configuration_and_outcome_drift():
+    import ast
+    import copy
+    import pytest
+    run = step_named(ACCEPTANCE_STEP)["run"]
+    source = run.split("python - <<'PY'\n")[1].split("\nPY")[0]
+    function = next(node for node in ast.parse(source).body
+                    if isinstance(node, ast.FunctionDef) and node.name == 'assert_reference_storage_limit')
+    namespace = {}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), '<reference-check>', 'exec'), namespace)
+    check = namespace['assert_reference_storage_limit']
+    measured = {'state': 'fail', 'evidence': {'objectStorage': False, 'authoritativeRecords': 4,
+                'emptyLocations': 4, 'ephemeral': ['', '', '', '']}}
+    check(measured)
+    for key, value in [('objectStorage', True), ('objectStorage', None), ('authoritativeRecords', 0),
+                       ('emptyLocations', 3), ('ephemeral', ['file:///tmp/output'])]:
+        changed = copy.deepcopy(measured)
+        changed['evidence'][key] = value
+        with pytest.raises(AssertionError):
+            check(changed)
+    with pytest.raises(AssertionError):
+        check({**measured, 'state': 'pass'})
 
 
 def test_the_scenarios_expected_to_skip_are_exactly_the_ones_without_capabilities():

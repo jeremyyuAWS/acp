@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
+import ReleaseQuickActions from './ReleaseQuickActions.jsx'
 import { documentSelection, documentScopeSentence, documentsInSelection } from './remediableScope.js'
 import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage, prepareReleasePackage, downloadPreparedReleasePackage, getQueueJob, putMyReleaseTemplates } from './api.js'
 import { releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
@@ -64,11 +65,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const confirmDialogRef = useRef(null)
   const confirmCancelRef = useRef(null)
   const releaseHadPendingRef = useRef(false)
+  const continuationReported = useRef(new Set())
   const [completionSound, setCompletionSound] = useState(() => {
     try { return window.localStorage.getItem('acp.release.completionSound') === 'on' } catch { return false }
   })
   const [sel, setSel] = useState(null)
   useEffect(() => {
+    continuationReported.current = new Set()
     setDone({}); setReleaseResults({}); setPubUrls({}); setReleaseId(null)
     setReleaseFolder(null); setReleaseFolders([]); setReleasePreview(null); setPackagePreview(null)
     setSelectedFiles(new Set()); selectionInitialized.current = false
@@ -405,14 +408,17 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       setReleaseError({ summary: 'The corrected copy could not be released.', details: error?.message || 'The release service did not complete the request.', retry: () => publish(file) })
     }
   }
-  const publishAll = async (fileNames = null, preferredFolderName = '') => {
+  const publishAll = async (fileNames = null, preferredFolderName = '', exact = false) => {
     if (publishing || readOnly) return
     setPublishing(true)
     const requested = fileNames ? new Set(fileNames) : null
     const pending = selectableReady.filter((f) => !done[f.file] && (!requested || requested.has(f.file))).map((f) => f.file)
     if (!pending.length) { setPublishing(false); return }
     try {
-      const res = await publishSelectedFiles(pending, preferredFolderName)
+      const res = exact
+        ? await publishAllFiles(run?.id, pending, preferredFolderName, { destination: releaseDestination,
+          expectedArtifacts: Object.fromEntries(selectableReady.filter(f => pending.includes(f.file)).map(f => [f.file, f.corrected_sha256])) })
+        : await publishSelectedFiles(pending, preferredFolderName)
       const successful = rememberRelease(res, pending)
       if (releaseProvider === 'sharepoint' && res?.queued) {
         const status = await followSharePointRelease(pending)
@@ -518,6 +524,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const startRelease = () => {
     setBuilderStep(1)
     window.requestAnimationFrame(() => {
+      if (builderRef.current?.closest('details')) builderRef.current.closest('details').open = true
       builderRef.current?.scrollIntoView({ behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' })
       builderRef.current?.focus({ preventScroll: true })
     })
@@ -575,6 +582,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     setDeliveryMethod('publish')
     setReleasePreview(null); setPackagePreview(null); setBuilderStep(2)
     window.requestAnimationFrame(() => {
+      if (builderRef.current?.closest('details')) builderRef.current.closest('details').open = true
       builderRef.current?.scrollIntoView({ behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' })
       builderRef.current?.focus({ preventScroll: true })
     })
@@ -612,9 +620,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
           <div className="release-overview__actions">
             <button className="ghost" onClick={() => run?.id && openReport(run.id)}>Download report</button>
-            <button className="qbtn approve" disabled={!selectableReady.length}
-                    title={!selectableReady.length ? `${pendingReview.files || 'No'} files still need review before Release` : 'Choose files and delivery'}
-                    onClick={startRelease}>Start a release</button>
+            <button className="ghost" title="Inspect individual files or choose package options"
+                    onClick={startRelease}>More delivery options</button>
           </div>
         </div>
         <p aria-label="Release status overview" className="release-clarity-counts">
@@ -657,6 +664,28 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
         </details>
       </section>
+      <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
+        folderName={releaseFolderName} readOnly={readOnly} publishing={publishing}
+        destinationLabel={releaseDestination ? `${releaseDestination.folder_name} / Remediated` : releaseProvider === 'drive' ? 'Remediated folder in Google Drive' : releaseProvider === 'sharepoint' ? 'Remediated folder in each source library' : 'ACP managed storage'}
+        destinationPicker={['drive', 'sharepoint'].includes(releaseProvider) ? <ReleaseDestinationPicker provider={releaseProvider} value={releaseDestination}
+          onChange={value => { setReleaseDestination(value); setReleasePreview(null) }}
+          onError={error => setReleaseError({ summary: 'Destination unavailable', details: error?.message })} /> : <p>Verified copies remain in ACP’s managed storage.</p>}
+        onReady={names => publishAll(names, releaseFolderName, true)}
+        onProgress={async result => {
+          if (Object.values(result.progress || {}).some(value => value?.state === 'published')) {
+            try {
+              const status = await getReleaseStatus(run.id)
+              applyReleaseStatus(status)
+              for (const row of status.documents || []) {
+                const key = `${row.file}:${row.artifact_digest || row.published_at}`
+                if (row.status === 'published' && !continuationReported.current.has(key)) {
+                  continuationReported.current.add(key); onPublish?.(row.file)
+                }
+              }
+            } catch { /* The next durable refresh retries. */ }
+          }
+        }} />
+
       {packageJob && <section className="release-notice release-package-job" role="status" aria-label="Prepared package status">
         <span><b>{packageJob.status === 'done' ? 'Download package ready' : packageJob.status === 'dead' ? 'Download package failed' : 'Download package in progress'}</b><br />
           {packageJob.status === 'done' ? 'Prepared safely and available after navigation or reload.' : packageJob.phase || 'The package continues in the background.'}</span>
@@ -729,6 +758,51 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </div>
       </details>
 
+      {/* Release policy — an HONEST description of what the platform actually does, read from the
+          real settings, not a selector for a behaviour ACP can't perform. There is one policy:
+          write a corrected COPY; the original is never overwritten. The explainer says plainly why
+          replace-in-place isn't on offer. */}
+      <details hidden className="panel" style={{ borderLeft: '3px solid var(--info-fg)' }}>
+        <summary style={{ cursor: 'pointer' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+          <b style={{ fontSize: 13.5 }}>Release policy</b>
+          <span style={{ fontSize: 13 }}>
+            <span aria-hidden="true" style={{ color: 'var(--info-fg)' }}>●</span> Remediated copy → {releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}
+          </span>
+        </div>
+        </summary>
+        <div className="muted" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6 }}>
+          The source file is <b>never overwritten</b>. ACP verifies the criteria in scope — it does not certify overall WCAG conformance.
+        </div>
+        <div className="release-notification-settings">
+          <label><input type="checkbox" checked={completionSound} onChange={(e) => {
+            setCompletionSound(e.target.checked)
+            try { window.localStorage.setItem('acp.release.completionSound', e.target.checked ? 'on' : 'off') } catch { /* preference stays in this tab */ }
+          }} /> Play a short sound when a release finishes</label>
+          {typeof Notification !== 'undefined' && Notification.permission === 'default' && (
+            <button className="ghost small" onClick={() => Notification.requestPermission()}>Enable browser notifications</button>
+          )}
+        </div>
+        <details style={{ marginTop: 8 }}>
+          <summary className="linklike" style={{ cursor: 'pointer', fontSize: 12.5 }}>Why can’t I replace the original?</summary>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6, maxWidth: 640 }}>
+            Replacing the source file in place is not part of Release. ACP writes corrected copies to a separate timestamped location in Google Drive or each source SharePoint library, which is why your originals are never modified.
+          </div>
+        </details>
+      </details>
+
+      <details hidden className="panel">
+        <summary style={{ cursor: 'pointer', fontWeight: 600, listStyle: 'revert' }}>What “release” does <span className="muted" style={{ fontWeight: 400 }}>· what happens to every verified document</span></summary>
+        <div className="pubsteps" style={{ marginTop: 12 }}>
+          <div className="pubstep"><b>✓ Marked released</b><span className="muted">the re-validated fixed copy becomes the document of record</span></div>
+          <div className="pubstep"><b>⤓ Fixed copy in Blob</b><span className="muted">{driveMirrorEnabled && anyDrive ? `the accessible copy lives in ACP Blob storage and the Drive “${driveMirrorFolder}” mirror` : 'the accessible copy lives in ACP Blob storage'}</span></div>
+          <div className="pubstep"><b>📦 Original untouched</b><span className="muted">the fixed copy is written to a separate “remediated” folder — the source file is never overwritten</span></div>
+          <div className="pubstep"><b>🏷 Audit recorded</b><span className="muted">the verified-in-scope status + timestamp are written to the audit log</span></div>
+        </div>
+      </details>
+
+      <details className="release-advanced"><summary>Choose individual files, package options, and full delivery details</summary>
+      <section className="panel release-workspace" ref={builderRef} tabIndex={-1} aria-labelledby="release-workspace-title">
       {/* W5 — conditional-release → full-certification graduation. Shown only once a release has
           started (setStatus is NONE before that, and this renders nothing). */}
       {setStatus.status === SET_STATUS.CONDITIONAL && (
@@ -774,50 +848,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </section>
       )}
 
-      {/* Release policy — an HONEST description of what the platform actually does, read from the
-          real settings, not a selector for a behaviour ACP can't perform. There is one policy:
-          write a corrected COPY; the original is never overwritten. The explainer says plainly why
-          replace-in-place isn't on offer. */}
-      <details hidden className="panel" style={{ borderLeft: '3px solid var(--info-fg)' }}>
-        <summary style={{ cursor: 'pointer' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-          <b style={{ fontSize: 13.5 }}>Release policy</b>
-          <span style={{ fontSize: 13 }}>
-            <span aria-hidden="true" style={{ color: 'var(--info-fg)' }}>●</span> Remediated copy → {releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}
-          </span>
-        </div>
-        </summary>
-        <div className="muted" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6 }}>
-          The source file is <b>never overwritten</b>. ACP verifies the criteria in scope — it does not certify overall WCAG conformance.
-        </div>
-        <div className="release-notification-settings">
-          <label><input type="checkbox" checked={completionSound} onChange={(e) => {
-            setCompletionSound(e.target.checked)
-            try { window.localStorage.setItem('acp.release.completionSound', e.target.checked ? 'on' : 'off') } catch { /* preference stays in this tab */ }
-          }} /> Play a short sound when a release finishes</label>
-          {typeof Notification !== 'undefined' && Notification.permission === 'default' && (
-            <button className="ghost small" onClick={() => Notification.requestPermission()}>Enable browser notifications</button>
-          )}
-        </div>
-        <details style={{ marginTop: 8 }}>
-          <summary className="linklike" style={{ cursor: 'pointer', fontSize: 12.5 }}>Why can’t I replace the original?</summary>
-          <div className="muted" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6, maxWidth: 640 }}>
-            Replacing the source file in place is not part of Release. ACP writes corrected copies to a separate timestamped location in Google Drive or each source SharePoint library, which is why your originals are never modified.
-          </div>
-        </details>
-      </details>
 
-      <details hidden className="panel">
-        <summary style={{ cursor: 'pointer', fontWeight: 600, listStyle: 'revert' }}>What “release” does <span className="muted" style={{ fontWeight: 400 }}>· what happens to every verified document</span></summary>
-        <div className="pubsteps" style={{ marginTop: 12 }}>
-          <div className="pubstep"><b>✓ Marked released</b><span className="muted">the re-validated fixed copy becomes the document of record</span></div>
-          <div className="pubstep"><b>⤓ Fixed copy in Blob</b><span className="muted">{driveMirrorEnabled && anyDrive ? `the accessible copy lives in ACP Blob storage and the Drive “${driveMirrorFolder}” mirror` : 'the accessible copy lives in ACP Blob storage'}</span></div>
-          <div className="pubstep"><b>📦 Original untouched</b><span className="muted">the fixed copy is written to a separate “remediated” folder — the source file is never overwritten</span></div>
-          <div className="pubstep"><b>🏷 Audit recorded</b><span className="muted">the verified-in-scope status + timestamp are written to the audit log</span></div>
-        </div>
-      </details>
-
-      <section className="panel release-workspace" ref={builderRef} tabIndex={-1} aria-labelledby="release-workspace-title">
         <div className="rubrichdr">
           <h2 id="release-workspace-title" style={{ margin: 0 }}>Choose files <span className="muted">· {selectedReady.length} selected · {releaseFiles.length} in scope</span></h2>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -836,7 +867,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         {ready.length === 0 ? (
           pendingReview.items > 0 ? (
             <div className="muted" style={{ marginTop: 10, padding: '12px 14px', borderRadius: 9, background: '#FBF1DF', border: '1px solid #EAD9BF', color: '#7A5A12' }}>
-              <b>No files are ready for release.</b> {pendingReview.items} finding{pendingReview.items !== 1 ? 's' : ''} await{pendingReview.items === 1 ? 's' : ''} human review across {pendingReview.files} document{pendingReview.files !== 1 ? 's' : ''}. Review these items in <b>Remediate → Review</b>. Approved changes must be applied and verified before their documents become ready.
+              <b>No files are ready for release.</b> {pendingReview.items} finding{pendingReview.items !== 1 ? 's' : ''} await{pendingReview.items === 1 ? 's' : ''} human review across {pendingReview.files} document{pendingReview.files !== 1 ? 's' : ''}. Eligible proposals can be authorized above. Remaining manual work is available in <b>Remediate → Review</b>. Only applied and verified changes make a document ready.
               <div style={{ marginTop: 9 }}><a className="qbtn approve" href="?tab=remediate&mode=review">Review {pendingReview.files} {pendingReview.files === 1 ? 'file' : 'files'}</a></div>
             </div>
           ) : (
@@ -1040,6 +1071,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </div>
       </section>
 
+      </details>
       <ReleaseHistory refreshKey={`${run?.id || ''}:${publishedCount}:${failedCount}`} />
 
       {/* Confirmation before a release runs. States, in checkable terms, exactly what will happen —

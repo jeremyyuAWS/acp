@@ -678,11 +678,10 @@ jobs:
               # the fan-out cannot run here the report says the target was busy rather than that
               # it is broken. The reason assertion below then decides which of the two happened.
               #
-              # UNKNOWN, AND NOT A DEFECT IN THE CLUSTER. `/scans/{sid}/artifacts` is a PRD §12
-              # requirement no build serves yet, so the question "does every authoritative output
-              # live in durable storage" cannot be asked here at all. The suite reports that as
-              # `unknown` rather than as a pass, which is the whole reason it has four states.
-              "fixture-workflow": "unknown",
+              # This target declares object-storage=none. The completed writers
+              # produce metadata without durable locations: an observed failure,
+              # not a pass or an inconclusive measurement. No support claim moves.
+              "fixture-workflow": "fail",
               # NOW SERVED. `/admin/audit-events` and `/admin/support-bundle` landed with this
               # change, and startup records `deployment.started` so even an installation that has
               # changed nothing has a trail to return — which is what makes "no events" mean
@@ -722,6 +721,19 @@ jobs:
           assert not claim["mvpEligible"] and not claim["supportedEligible"], (
               f"a kind run reported itself eligible for a support claim: {claim}")
 
+          def assert_reference_storage_limit(scenario):
+              evidence = scenario.get("evidence", {})
+              assert scenario["state"] == "fail", scenario
+              assert evidence.get("objectStorage") is False, evidence
+              assert evidence.get("authoritativeRecords") == 4, evidence
+              assert evidence.get("emptyLocations") == 4, evidence
+              assert evidence.get("ephemeral") == ["", "", "", ""], evidence
+
+          # Match only the measured storage-free reference configuration. A
+          # configured store, changed record count, or different failure must fail.
+          assert_reference_storage_limit(next(s for s in report["scenarios"]
+                                              if s["id"] == "fixture-workflow"))
+
           # AND WHY, NOT ONLY WHAT. Comparing states alone lets a scenario keep its expected
           # `unknown` while the REASON changes underneath it — which nearly happened here: the
           # second run had `fixture-workflow` unknown-adjacent for a 503 from the capacity guard
@@ -729,27 +741,9 @@ jobs:
           # gone green on a run that established something completely different. Substrings, so
           # wording can change without a false alarm; the cause cannot.
           EXPECTED_REASON = {
-              # MEASURED, NOT PREDICTED, and this is the reason assertion doing its job on its
-              # first run. The expectation here WAS "/artifacts" — the missing durable-output
-              # inventory. Run 34236164828 showed something else: `POST /scans/{sid}/assess`
-              # answers 503 `DB_CAPACITY_BUSY` and keeps answering it, so the scenario never
-              # reaches the artifact probe at all. A state-only check would have gone green on
-              # that, because `unknown` is `unknown` whatever the cause.
-              #
-              # IT IS THE CLUSTER'S SIZE, AND TWO INDEPENDENT READINGS SAY SO. `capacity.floor`
-              # FAILs in the doctor step above — "needs 5000m, cluster has 4000m allocatable" —
-              # and here the application's own admission gate refuses a mutation after its 5s
-              # timeout. Connections are not the constraint: Postgres serves the document's
-              # declared 200 and each API replica asks for ~20. A one-node runner sharing 4 CPU
-              # between the control plane, Calico, Postgres, Redis, two API replicas and three
-              # workers cannot also run a download-and-analyse fan-out.
-              #
-              # So scenario 4 is UNANSWERABLE on this target, and that is recorded rather than
-              # absorbed: the report says the target was busy, never that it passed, and no claim
-              # moves. If the cluster is ever given headroom the scenario will reach `/artifacts`
-              # and THIS ASSERTION WILL FAIL — which is the correct outcome and the signal to
-              # change this line back.
-              "fixture-workflow": "DB_CAPACITY_BUSY",
+              # The target explicitly has no configured object store. Configured
+              # storage with missing artifacts must still fail the scenario.
+              "fixture-workflow": "4 authoritative artifact(s) exist only on ephemeral storage",
               "worker-restart": "no authoritative artifacts",
               "dependency-degradation": "fault-injection",
               "scale-updown": "scale-control",
@@ -762,7 +756,7 @@ jobs:
           wrong_reason = {sid: detail_of.get(sid, "")
                           for sid, needle in EXPECTED_REASON.items()
                           if found.get(sid) == EXPECTED.get(sid)
-                          and needle not in detail_of.get(sid, "")}
+                          and needle not in detail_of.get(sid, "").lower()}
           if wrong_reason:
               print("a scenario reported its expected state for an UNEXPECTED reason:",
                     file=sys.stderr)

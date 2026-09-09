@@ -1585,7 +1585,8 @@ export const publishAllFiles = (scanId, files, releaseFolderName = '', options =
       method: 'POST',
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ files, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}),
-        ...(options.destination ? { destination: options.destination } : {}) }),
+        ...(options.destination ? { destination: options.destination } : {}),
+        ...(options.expectedArtifacts ? { expected_artifacts: options.expectedArtifacts, expected_destination: options.destination || null } : {}) }),
     }).then(j))
 export const getReleaseStatus = (scanId) => (SIM
   ? sim({ release_id: null, roots: [], documents: [], documents_total: 0, published: 0, failed: 0, remaining: 0 }, 50)
@@ -2572,3 +2573,19 @@ export const fetchScopedEligibility = (codes = null) => {
 // Only displayed result folders are resolved, after results render; this never delays a scan.
 export const getDriveFolderName = (id) => (SIM ? sim({ id, name: 'Demo folder' })
   : fetch(`${BASE}/drive/folder-name?id=${encodeURIComponent(id)}`, { headers: headers(), signal: AbortSignal.timeout(8000) }).then(j))
+
+
+export const planReleaseContinuation = (scanId, files, destination, releaseFolderName = '') => (SIM
+  ? sim({ id: 'simulation', intent: { files: {} }, status: 'draft' }, 50)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/continuation/plan`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ files, destination, release_folder_name: releaseFolderName }),
+    }).then(j))
+export const getReleaseContinuation = scanId => (SIM ? sim(null, 50)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/continuation`, { headers: headers() }).then(j))
+export const authorizeReleaseContinuation = (scanId, intentId) => fetch(
+  `${BASE}/scans/${encodeURIComponent(scanId)}/release/continuation/${encodeURIComponent(intentId)}/authorize`,
+  { method: 'POST', headers: headers() }).then(j)
+export const resumeReleaseContinuation = (scanId, intentId) => fetch(
+  `${BASE}/scans/${encodeURIComponent(scanId)}/release/continuation/${encodeURIComponent(intentId)}/resume`,
+  { method: 'POST', headers: headers() }).then(j)

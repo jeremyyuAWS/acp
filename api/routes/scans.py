@@ -868,7 +868,23 @@ def scan_job(job_id: str, request: Request):
     # request lands on, which is the whole point of removing session affinity.
     j = core.get_job_state(job_id)
     if j is None:
-        raise HTTPException(404, "job not found")
+        # Stage batches persist jobs without creating a Redis progress entry.
+        # Poll the durable identity returned by assess/remediate, including before
+        # a worker claims it. Never expose the queue payload or raw worker errors.
+        durable = core.store.get_job(job_id)
+        if durable is None:
+            raise HTTPException(404, "job not found")
+        payload = durable.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        scan_id = durable.get("scan_id") or payload.get("scan_id")
+        _require_job_owner(job_id, {"scan_id": scan_id}, request)
+        status = durable.get("status") or "queued"
+        failed = status == "dead"
+        return {"job_id": job_id, "scan_id": scan_id,
+                "status": "failed" if failed else status,
+                "phase": {"done": "complete", "dead": "error"}.get(status, status),
+                "done": status in ("done", "dead", "cancelled"),
+                "error": "The job failed. Check the scan for details." if failed else None}
     _require_job_owner(job_id, j, request)
     return j
 
@@ -1745,6 +1761,7 @@ def scan_artifacts(sid: str, request: Request):
     inventory is a fact, and 404 would make "no remediation has run" indistinguishable from "no
     such scan" to a client that can see neither.
     """
+    import blob as _blob
     owner = _owner(request)
     if core.store.get_scan_head(sid, owner=owner) is None:
         raise HTTPException(404, "scan not found")
@@ -1759,6 +1776,12 @@ def scan_artifacts(sid: str, request: Request):
         "ephemeral": ephemeral,
         "all_durable": not ephemeral,
         "durable_schemes": sorted(core.store.DURABLE_ARTIFACT_SCHEMES),
+        # WHETHER THIS INSTALLATION COULD STORE ONE AT ALL, which is the difference between two
+        # readings of an empty inventory that look identical and mean opposite things: remediation
+        # produced nothing (a defect), or nothing here is configured to keep what it produced (a
+        # deployment fact). Without this field a caller sees zero artifacts and cannot tell which,
+        # and §20.5 is exactly the criterion that must not be answered by guessing.
+        "object_storage_configured": _blob.enabled(),
     }
 
 
@@ -3532,6 +3555,10 @@ def publish_files(sid: str, request: Request, body: dict):
     if not files:
         raise HTTPException(422, "provide 'file' or 'files' in body")
     owner = _owner(request)
+    expected_artifacts = body.get("expected_artifacts") or {}
+    if any((core.store.get_file_record(sid, file) or {}).get("corrected_sha256") != digest
+           for file, digest in expected_artifacts.items() if file in files):
+        raise HTTPException(409, "The authorized corrected artifact changed; confirm again")
     # Remediate's per-document selection is durable scan intent, not merely a frontend filter.
     # Enforce it again at the external-write boundary so a stale browser, crafted request, or
     # retry cannot release a document the operator excluded. With no explicit selection this is
@@ -3573,6 +3600,8 @@ def publish_files(sid: str, request: Request, body: dict):
     release = core.store.ensure_release_execution(
         sid, owner, source, len(eligible), **execution_options)
     release_id = release["id"]
+    if "expected_destination" in body and release.get("parent_folder_id") != (body["expected_destination"] or {}).get("folder_id"):
+        raise HTTPException(409, "The authorized Release destination changed; confirm again")
     created_at = release["created_at"]
     folder_name = release["folder_name"]
     drive_token = request.headers.get("x-drive-token")
@@ -3642,6 +3671,10 @@ def publish_files(sid: str, request: Request, body: dict):
                 continue
             saved = core.store.get_release_document(release_id, f, owner)
             digest = record.get("corrected_sha256")
+            if expected_artifacts.get(f) and expected_artifacts[f] != digest:
+                results.append({"file": f, "status": "failed", "failure_category": "artifact_changed",
+                                "explanation": "The authorized corrected artifact changed; confirm again"})
+                continue
             state = reuse_state(saved, digest) if digest else "unresolved" if saved else "new"
             if state == "unresolved":
                 results.append({"file": f, "status": "failed", "failure_category": "delivery_version_unresolved",
@@ -3721,6 +3754,8 @@ def publish_files(sid: str, request: Request, body: dict):
             content_digest = _publish.remediated_content_digest(owner, sid, f)
             if not content_digest:
                 raise IOError("corrected content was unavailable")
+            if expected_artifacts.get(f) and expected_artifacts[f] != content_digest:
+                raise ReleaseArtifactError("The authorized corrected artifact changed; confirm again")
             record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner)
             require_current_source(source, record, drive_service=drive_svc, sp_token=sp_token)
             record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner)

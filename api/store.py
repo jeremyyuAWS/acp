@@ -1357,6 +1357,14 @@ _SCHEMA = [
       PRIMARY KEY(release_id,file)
     )""",
     "ALTER TABLE release_documents ADD COLUMN IF NOT EXISTS artifact_digest TEXT",
+    """CREATE TABLE IF NOT EXISTS release_continuations (
+      id TEXT PRIMARY KEY, owner_email TEXT NOT NULL, scan_id TEXT NOT NULL,
+      fingerprint TEXT NOT NULL, intent TEXT NOT NULL, progress TEXT NOT NULL,
+      artifacts TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL, revision INT NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_release_continuations_owner ON release_continuations(owner_email,scan_id,updated_at)",
     # ADR 0044 — ACP Managed Content Workspace, Phase 1. A workspace is the tenant-scoped
     # container a customer creates before uploading anything; `content_workspace_documents`/
     # `content_workspace_document_versions` (the actual upload targets) are deliberately NOT
@@ -2467,9 +2475,9 @@ class _PgAdapter:
     # v42 adds the tenant policy, exactly-once command receipt, and immutable run-policy
     # snapshot tables. All are additive and ignored by older replicas during rolling deploys.
     # v44 adds durable owner/run provider reservations and immutable spending policy.
-    # v48 adds tagged Release artifact identity after v47 baseline attribution evidence.
-    _SCHEMA_VERSION = 48
-    _SCHEMA_CHECKSUM_AT_VERSION = "35dd2ef0184f9f7280f616b293f2ee60"
+    # v49 adds explicit durable approval-to-Release intents after exact artifact identity.
+    _SCHEMA_VERSION = 49
+    _SCHEMA_CHECKSUM_AT_VERSION = "c1058ac624a0f6e64943001b2f6f70cb"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -4789,7 +4797,7 @@ class Store:
                          "remediation_policy_action", "remediation_run_policy_snapshot",
                          # Release executions and their provider destinations are customer data.
                          "release_documents", "release_roots", "release_root_claims",
-                         "release_executions",
+                         "release_executions", "release_continuations",
                          # Canonical execution history, delivery state, manifests and receipts
                          # are all records of customer work and must leave with the scan data.
                          "stage_executions", "stage_work_items", "stage_attempts", "stage_events",
@@ -4870,7 +4878,7 @@ class Store:
                                # Both are scan_id-keyed, so the standard subquery scopes them to
                                # this owner's runs exactly as it does the rest.
                                "remediation_delivery", "remediation_run_hold",
-                               "remediation_run_policy_snapshot"]
+                               "remediation_run_policy_snapshot", "release_continuations"]
     # Tables that key on doc_id (not scan_id), scoped via a documents.owner_email join.
     _RESET_USER_DOC_TABLES = ["disposition_audit", "remediation_state"]
 
@@ -11149,7 +11157,8 @@ class Store:
                                request_id: str | None = None,
                                expected_version: int | None = None,
                                expected_proposal_snapshot_ids: list[str] | None = None,
-                               expected_source_revision: str | None = None) -> tuple[dict | None, bool]:
+                               expected_source_revision: str | None = None,
+                               release_intent_id: str | None = None) -> tuple[dict | None, bool]:
         """Persist one reviewer decision atomically and make exact PUT replays a no-op.
 
         These writes collectively make the decision true.  Keeping them behind the adapter's
@@ -11168,6 +11177,8 @@ class Store:
         if expected_proposal_snapshot_ids is not None or expected_source_revision is not None:
             payload.update(expected_proposal_snapshot_ids=expected_proposal_snapshot_ids,
                            expected_source_revision=expected_source_revision)
+        if release_intent_id is not None:
+            payload["release_intent_id"] = release_intent_id
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True,
                                     separators=(",", ":")).encode()).hexdigest()
 
@@ -11303,7 +11314,8 @@ class Store:
                         current["scan_id"], current["file"])):
                 self.enqueue_job(
                     "apply_approved_values",
-                    {"scan_id": current["scan_id"], "file": current["file"]},
+                    {"scan_id": current["scan_id"], "file": current["file"],
+                     **({"release_intent_id": release_intent_id} if release_intent_id else {})},
                     scan_id=current["scan_id"])
             return self.get_hitl_item(item_id) or updated, False
 
@@ -14918,7 +14930,7 @@ class Store:
     _BATCH_JOB_STAGES = {
         "scan_assess": "assess", "assess_trace": "assess",
         "remediate_file": "remediate", "rescore_file": "remediate",
-        "apply_approved_values": "remediate", "publish_file": "release",
+        "apply_approved_values": "remediate", "publish_file": "release", "release_continue": "release",
     }
 
     def _record_stage_completed_if_ready(self, job: dict | None) -> None:
@@ -16120,7 +16132,7 @@ class Store:
             "scan_file": "assess", "scan_assess": "assess", "assess_trace": "assess",
             "remediate_file": "remediate", "rescore_file": "remediate",
             "apply_approved_values": "remediate",
-            "publish_file": "release", "publish_batch": "release",
+            "publish_file": "release", "release_continue": "release", "publish_batch": "release",
         }
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -16409,7 +16421,7 @@ class Store:
         "scan_finalize": "discover",
         "scan_assess": "assess", "assess_trace": "assess",
         "remediate_file": "remediate", "rescore_file": "remediate",
-        "apply_approved_values": "remediate", "publish_file": "release",
+        "apply_approved_values": "remediate", "publish_file": "release", "release_continue": "release",
     }
     _KIND_TYPES = {"discover": (), "assess": (), "remediate": (), "release": ()}
     for _jt, _k in _JOB_KIND.items():

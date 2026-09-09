@@ -131,7 +131,7 @@ describe('Release Center: confirmation before a release', () => {
 describe('Release builder', () => {
   it('starts with an eligible-file selection and offers real publish and download paths', () => {
     const s = pub()
-    expect(s).toMatch(/Start a release/)
+    expect(s).toMatch(/More delivery options/)
     expect(s).toMatch(/Choose files/)
     expect(s).toMatch(/Choose delivery/)
     expect(s).toMatch(/Publish to \{sourceProduct\}/)
@@ -167,7 +167,7 @@ describe('Release builder', () => {
   it('moves focus from the overview action to the real builder', () => {
     const s = pub()
     expect(s).toMatch(/const builderRef = useRef\(null\)/)
-    expect(s).toMatch(/onClick=\{startRelease\}>Start a release/)
+    expect(s).toMatch(/onClick=\{startRelease\}>More delivery options/)
     expect(s).toMatch(/builderRef\.current\?\.scrollIntoView/)
     expect(s).toMatch(/builderRef\.current\?\.focus/)
     expect(s).toMatch(/ref=\{builderRef\} tabIndex=\{-1\} aria-labelledby="release-workspace-title"/)
