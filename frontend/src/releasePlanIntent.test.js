@@ -31,3 +31,8 @@ it('keeps successful remediation distinct from an unconfirmed release', async ()
   expect(await authorizeAcceptedRelease('scan', ['a'], accepted, intent, c)).toContain('remediation does not need to be started again')
   expect(c.enable).toHaveBeenCalledOnce()
 })
+
+it('rejects an intent whose stored files disagree with its displayed scope key', async () => {
+  const c = client(); await authorizeAcceptedRelease('scan', ['a'], accepted, {...intent,files:['b']}, c)
+  expect(c.enable).not.toHaveBeenCalled(); expect(c.get).not.toHaveBeenCalled()
+})

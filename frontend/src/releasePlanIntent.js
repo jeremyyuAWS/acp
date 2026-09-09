@@ -7,13 +7,15 @@ export const releasePlanKey = (scanId, files) => JSON.stringify([scanId, [...new
 export async function authorizeAcceptedRelease(scanId, files, accepted, intent, client = { enable: enableAutomaticRelease, get: getAutomaticRelease }) {
   if (!intent) return ''
   const missing = 'Remediation started. Automatic release was not enabled because its accepted run could not be confirmed. Check Live before enabling it.'
-  if (intent.key !== releasePlanKey(scanId, files) || !accepted?.enqueued || !accepted.batch_id || accepted.scan_id !== scanId || accepted.snapshot_id !== intent.source_revision) return missing
-  const request = { run_id: accepted.batch_id, files: [...intent.files], destination: { ...intent.destination }, expected_source_revision: intent.source_revision, request_id: crypto.randomUUID() }
+  if (!Array.isArray(intent.files) || releasePlanKey(scanId, intent.files) !== releasePlanKey(scanId, files) || !intent.source_revision || !intent.destination?.folder_id || intent.key !== releasePlanKey(scanId, files) || !(accepted?.enqueued > 0) || !accepted.batch_id || accepted.scan_id !== scanId || accepted.snapshot_id !== intent.source_revision) return missing
+  let request
   try {
+    request = { run_id: accepted.batch_id, files: [...intent.files], destination: { ...intent.destination }, expected_source_revision: intent.source_revision, request_id: crypto.randomUUID() }
     await client.enable(scanId, request)
     return 'Remediation started. Automatic release is enabled for the selected files and destination. See Live for progress and Stop.'
   } catch {
     try {
+      if (!request) throw new Error('No release request was sent')
       const status = await client.get(scanId, request.files)
       const saved = status?.authorization
       if (saved?.request_id === request.request_id && saved.run_id === request.run_id && saved.source_revision === request.expected_source_revision && ['active', 'waiting', 'blocked', 'completed'].includes(saved.status)) {
