@@ -41,9 +41,12 @@ def worker_patch(template, image, grace, drain, query):
     if len(containers) != 1:
         raise ValueError('remediation worker must have exactly one container')
     rules = result.get('scale', {}).get('rules', [])
-    matches = [r for r in rules if r.get('name') == 'remediation-queue']
+    # staging_up.sh provisions through deploy.sh, which names this PostgreSQL
+    # rule jobs-queued. Preserve either deployed name and its scale/auth settings.
+    # Both names together are ambiguous: do not leave a second broad queue rule.
+    matches = [r for r in rules if r.get('name') in ('remediation-queue', 'jobs-queued')]
     if len(matches) != 1:
-        raise ValueError('exactly one existing remediation-queue rule required')
+        raise ValueError('exactly one existing remediation-queue or jobs-queued rule required')
     custom = matches[0].get('custom', {})
     metadata = custom.get('metadata', {})
     if custom.get('type') != 'postgresql' or not metadata.get('query') or not metadata.get('targetQueryValue'):
