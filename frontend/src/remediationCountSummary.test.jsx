@@ -25,12 +25,12 @@ it('counts 299 eligible approvals and 47 manual items across 177 documents, excl
   expect(container.textContent).toContain('2400 fixes applied across 177 documents')
   expect(container.textContent).not.toContain('applied automatically')
 })
-it('the actual approval category shows only eligible proposals, preserving applied inspection', async () => {
+it('the approval category counts all eligible proposals while manual work is open', async () => {
   const { root, container } = createTestRoot()
-  await act(async () => root.render(createElement(Inbox, { queue: rows, decisions: {}, scanId: 'fixture' })))
+  await act(async () => root.render(createElement(Inbox, { queue: rows, decisions: {}, scanId: 'fixture', initialTab: 'manual' })))
   const tab = [...container.querySelectorAll('[role=tab]')].find(el => el.textContent.includes('Approve AI suggestions'))
   expect(tab.textContent).toBe('Approve AI suggestions 299')
-  expect(container.textContent).toContain('Already-applied changes are available for individual review')
+  expect([...container.querySelectorAll('[role=tab]')].find(el => el.textContent.includes('Fix manually')).getAttribute('aria-selected')).toBe('true')
 })
 it('wires the actual shell and page to review-item counts, with separate eligible approvals and server totals', () => {
   const app = readFileSync('src/App.jsx', 'utf8'), page = readFileSync('src/Remediate.jsx', 'utf8')
