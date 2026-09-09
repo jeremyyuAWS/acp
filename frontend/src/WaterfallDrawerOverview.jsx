@@ -24,7 +24,7 @@ export default function WaterfallDrawerOverview({ scanId, batchId, identity, sel
   const counterIdentity = `${identity}:${JSON.stringify(scope)}:${metrics.baseline || 0}`
   return <div className="wf-detail">
     <p>{description}</p>
-    {selectedModel?.detail && <p>{selectedModel.detail}</p>}
+    {selectedModel?.detail && selectedModel.detail !== 'Recorded outcome unknown.' && <p>{selectedModel.detail}</p>}
     {scope ? <>
       <p className="wf-secondary">Selected stage and model · {metrics.data?.mode === 'recorded' ? 'saved results' : live ? 'recorded activity updates' : 'saved results'}. Completions include the attempt lifecycle, not pure model response time.</p>
       {metrics.loading && !metrics.data && <p role="status">Loading recorded stage metrics…</p>}
