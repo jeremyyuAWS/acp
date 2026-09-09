@@ -36,6 +36,7 @@ export default function RemediationRunInsights({ scanId, batchId, inlineDrilldow
       {current?.error && data && <p role="alert">Refresh failed. Showing the last saved snapshot for this run.</p>}
       {current?.loading && data && <p role="status">Refreshing saved history; showing the last saved snapshot.</p>}
       {!scanId || !batchId ? <p>Select a remediation run.</p> : current?.error && !data ? <p role="alert">Saved history could not be loaded. Try refreshing.</p> : !current || (current.loading && !data) ? <p role="status">Loading saved model history…</p> : !data ? <p>Saved model history is unavailable in this environment.</p> : <>
+        <p><strong>{data.standing_approval?.enabled ? 'Auto-approval on for this run' : 'Manual AI approval for this run'}</strong>. {data.standing_approval?.enabled ? 'The saved plan authorizes eligible suggestions, including fallbacks. Exceptions still need review; publishing stays separate.' : 'AI suggestions require your approval before application.'}</p>
         <RemediationContribution key={identity} snapshot={data.measured_contribution} inlineDrilldown={inlineDrilldown} />
         <h4>Saved suggestions by AI step</h4>
         <p>{data.contribution?.note || 'Proposal versions are not findings or verified fixes.'}</p>
@@ -63,7 +64,7 @@ export default function RemediationRunInsights({ scanId, batchId, inlineDrilldow
         <h4>AI review results</h4>
         {rows(data.review_receipts).length === 0 && <p>No retained AI reviews for this run.</p>}
         {rows(data.review_receipts).map((receipt, i) => <article key={`${receipt.operation_id}-${i}`}>
-          <p><strong>{({ accept: 'AI reviewed', revise: 'Changes requested', unable: 'AI could not judge' })[receipt.review?.verdict] || 'Review result unavailable'}</strong> · Human approval still required</p>
+          <p><strong>{({ accept: 'AI reviewed', revise: 'Changes requested', unable: 'AI could not judge' })[receipt.review?.verdict] || 'Review result unavailable'}</strong> · {data.standing_approval?.enabled ? 'Eligible suggestions use the saved run authorization; exceptions need review' : 'Human approval still required'}</p>
           <p>{receipt.review?.reason}</p>
           <ol>{rows(receipt.review?.steps).map((step, j) => <li key={j}>{purpose(step.purpose)} · {step.provider || 'Provider unavailable'} · {step.model || 'Model unavailable'}: {step.reason}</li>)}</ol>
         </article>)}
@@ -72,6 +73,7 @@ export default function RemediationRunInsights({ scanId, batchId, inlineDrilldow
         {rows(data.proposals).map(proposal => <details key={proposal.snapshot_id}>
           <summary>{proposal.file} · Rule {proposal.rule_id} · {proposal.created_at}</summary>
           <div className="run-insights-comparison"><div><h5>Original excerpt</h5><pre>{display(proposal.proposal?.before)}</pre></div><div><h5>Proposed change</h5><pre>{display(proposal.proposal?.proposed_value)}</pre></div></div>
+          {rows(proposal.system_approvals).length > 0 && <p>Approved automatically by the system under the plan authorized by {data.standing_approval?.authorized_by || 'the run owner'}. This was not an individual human review.</p>}
           <p>{proposal.verification_reason}</p>
         </details>)}
         <h4>Estimated impact</h4>

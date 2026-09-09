@@ -37,6 +37,11 @@ def normalize_policy(policy):
         if Decimal(amount) > Decimal("1000000"):
             raise ValueError("AI spending limit must not exceed 1,000,000 USD.")
         result["ai_budget_usd"] = format(Decimal(amount), ".2f")
+    if "auto_approve_ai" in policy:
+        from ai_standing_approval import normalize
+        result['auto_approve_ai'] = normalize(policy['auto_approve_ai'])
+        if result['auto_approve_ai'] and (result['ai'] != 1 or Decimal(result.get('ai_budget_usd', '0')) <= 0):
+            raise ValueError('Automatic approval requires AI enabled and a positive run spending limit.')
     if "generation_chain" in policy:
         from ai_generation_chain import normalize_chain
         result['generation_chain'] = normalize_chain(policy['generation_chain'])
@@ -109,6 +114,9 @@ def save_impact_policy(store, owner, actor, policy, expected_revision):
 def snapshot_impact_policy(store, owner, policy=None):
     saved = read_impact_policy(store, owner)
     selected = require_executable(saved if policy is None else policy)
+    if selected.get('auto_approve_ai'):
+        from ai_standing_approval import require_access
+        require_access(store, owner)
     snapshot = {**selected, "revision": saved["revision"]}
     from ai_threshold_execution import seal_policy
     # Rules-only delivery must not depend on an unused AI preference's calibration.
