@@ -4,6 +4,8 @@ import { act } from 'react'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import BatchReviewSelection from './BatchReviewSelection.jsx'
 import RemediationInbox from './RemediationInbox.jsx'
+import { dbItemToUi } from './Remediate.jsx'
+import { exclusionReason } from './batchReviewSelection.js'
 afterEach(unmountAll)
 const ready = id => ({ id, file: `z-${id}.docx`, ruleId: '1.1.1', hasProposal: true, after: `alt ${id}`,
   proposals: [{ proposed_value: `alt ${id}` }], _raw: { decision_version: 0, source_revision: 'source', proposal_snapshot_ids: [`snapshot-${id}`] } })
@@ -89,4 +91,66 @@ it('explains dynamic missing proposal information and opens focused individual r
   expect(document.activeElement.textContent).toContain('Legacy proposal')
   expect(document.activeElement.tagName).toMatch(/^H[1-6]$/)
   expect(onDecide).not.toHaveBeenCalled()
+})
+
+it('opens a frozen whole-run confirmation from a selected issue scope without inspecting items', async () => {
+  const onDecide = vi.fn().mockResolvedValue(undefined)
+  const queue = [ready('one'), ready('two'), { ...ready('other-issue'), ruleId: '2.4.2', title: 'Different issue' }, { id: 'manual', file: 'manual.docx', title: 'Manual issue' }]
+  const v = await mount(RemediationInbox, { queue, decisions: {}, scanId: 'whole-run', onDecide })
+  await click(v.button('Select matching proposals'))
+  await click(v.button('Approve all ready in this run (3)'))
+  expect(v.container.textContent).toContain('All documents in this scan')
+  expect(v.button('Confirm approval of 3 findings')).toBeTruthy()
+  expect(v.container.querySelector('.batch-review-inspection').open).toBe(false)
+  expect(onDecide).not.toHaveBeenCalled()
+  await v.render({ queue: [...queue, ready('later')] })
+  await click(v.button('Confirm approval of 3 findings'))
+  expect(onDecide.mock.calls.map(call => call[0].id)).toEqual(['one', 'two', 'other-issue'])
+})
+
+it('shows preparing only from supplied active-job state and waits without suggesting another run', async () => {
+  const onOpenPlan = vi.fn(), onDecide = vi.fn()
+  const v = await mount(RemediationInbox, { queue: [{ ...ready('one'), _raw: {} }], decisions: {}, scanId: 'processing', preparingProposals: true, onOpenPlan, onDecide })
+  await click(v.button('View run readiness'))
+  expect(v.container.querySelector('.batch-review h3').textContent).toBe('Preparing proposals')
+  expect(v.container.querySelector('.batch-review-empty').textContent).not.toContain('separately approved run')
+  expect(v.button('Open remediation plan')).toBeUndefined()
+  await v.render({ preparingProposals: false })
+  expect(v.container.querySelector('.batch-review h3').textContent).toBe('No proposals ready')
+  await click(v.button('Open remediation plan'))
+  expect(onOpenPlan).toHaveBeenCalledOnce()
+  expect(onDecide).not.toHaveBeenCalled()
+})
+
+it('consumes whole-run confirmation intent before reopening individual matching selection', async () => {
+  const v = await mount(RemediationInbox, { queue: [ready('one'), ready('two')], decisions: {}, scanId: 'reopen', onDecide: vi.fn() })
+  await click(v.button('Approve all ready in this run'))
+  expect(v.button('Confirm approval')).toBeTruthy()
+  await click(v.button('Return to individual review'))
+  await click(v.button('Select matching proposals'))
+  expect(v.button('Confirm approval')).toBeUndefined()
+})
+it.each([{ readOnly: true, onDecide: vi.fn() }, {}])('does not enable whole-run approval without write access', async extra => {
+  const v = await mount(RemediationInbox, { queue: [ready('one')], decisions: {}, ...extra })
+  expect(v.button('Approve all ready in this run').disabled).toBe(true)
+})
+
+it('includes ready HITL rows beyond the separate 2000 applied-inspection cap', async () => {
+  const inspections = Array.from({ length: 2000 }, (_, i) => ({ id: `inspection-${i}`, file: 'inspected.docx', autoApplied: true, after: 'Applied' }))
+  const v = await mount(RemediationInbox, { queue: [...inspections, ready('last')], decisions: {}, initialTab: 'manual', scanId: 'capped-inspection', onDecide: vi.fn() })
+  await click(v.button('Approve all ready in this run (1)'))
+  expect(v.button('Confirm approval of 1 findings')).toBeTruthy()
+  expect(v.container.querySelector('.batch-review').textContent).toContain('2000 review items outside this approval')
+})
+
+it('preserves server proposal lineage through the completion-refresh mapper without inventing missing evidence', () => {
+  const raw = { id: 'persisted', file: 'document.docx', rule_id: '1.1.1', proposals: [{ proposed_value: 'Actual proposal' }], decision_version: 0, source_revision: 'source', proposal_snapshot_ids: ['snapshot'] }
+  const before = JSON.stringify(raw)
+  Object.freeze(raw)
+  const mapped = dbItemToUi(raw, [])
+  expect(mapped._raw).toBe(raw)
+  expect(JSON.stringify(raw)).toBe(before)
+  expect(raw._raw).toBeUndefined()
+  expect(exclusionReason(mapped)).toBeNull()
+  expect(exclusionReason(dbItemToUi({ ...raw, proposal_snapshot_ids: [] }, []))).toContain('Version unavailable')
 })

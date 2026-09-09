@@ -13,6 +13,7 @@ import WorkspaceFooter from './WorkspaceFooter.jsx'
 import './RemediationInbox.css'
 import MatchingReviewPreview from './MatchingReviewPreview.jsx'
 import BatchReviewSelection from './BatchReviewSelection.jsx'
+import { remediationReviewCounts } from './remediationCountSummary.js'
 import { exclusionReason } from './batchReviewSelection.js'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
@@ -639,7 +640,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 }
 
 export default function RemediationInbox({
-  queue = [], decisions = {}, onDecide, onOpenWord, onRecheck,
+  queue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, preparingProposals = false, readOnly = false,
   initialSort = 'priority', initialTab = 'needs-review', initialGroup = 'document', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
@@ -676,6 +677,7 @@ export default function RemediationInbox({
   const [expandedClusters, setExpandedClusters] = useState({})  // cluster key -> true
   const toggleCluster = (key) => setExpandedClusters((e) => ({ ...e, [key]: !e[key] }))
   const [bulkPreviewOpen, setBulkPreviewOpen] = useState(false)
+  const [confirmRunRequest, setConfirmRunRequest] = useState(0)
   const [batchScopeIds, setBatchScopeIds] = useState(null)
   const batchPanelRef = useRef(null)
   useEffect(() => { if (bulkPreviewOpen) batchPanelRef.current?.focus() }, [bulkPreviewOpen, batchScopeIds])
@@ -709,6 +711,7 @@ export default function RemediationInbox({
   // measured size, so jsdom's zero-size rects leave the value untouched (keyboard drives the tests).
   const dragLeft = (x) => { const r = rowRef.current?.getBoundingClientRect(); if (r?.width) setLeftW(clamp(((x - r.left) / r.width) * 100, 28, 40)) }
 
+  const runCounts = remediationReviewCounts(queue, decisions, drafts)
   const readyAcrossScan = queue.filter(f => !exclusionReason(f, decisions, drafts))
   const counts = useMemo(() => workflowCounts(queue, decisions), [queue, decisions])
   const prog = useMemo(() => progress(queue, decisions), [queue, decisions])
@@ -955,6 +958,17 @@ export default function RemediationInbox({
           ))}
         </div>
       </div>
+      <section className="run-approval-summary" aria-label="Whole-run approval">
+        <div><strong>Approve proposals for this run</strong>
+          <p>{runCounts.ready} ready review items · {runCounts.individual} need proposal information or individual review · {runCounts.manual} manual review items</p>
+          <p>Inspection is optional. Confirm all ready proposals together; writing and verification follow approval.</p>
+          {preparingProposals && <p role="status">Preparing proposals — remediation is still processing. Readiness updates as work finishes.</p>}
+        </div>
+        <button type="button" className={readyAcrossScan.length ? 'primary' : 'ghost'} disabled={savingId != null || (readyAcrossScan.length > 0 && (readOnly || !onDecide))}
+          onClick={() => { setBatchScopeIds(null); setBulkPreviewOpen(true); if (readyAcrossScan.length) setConfirmRunRequest(n => n + 1) }}>
+          {readyAcrossScan.length ? `Approve all ready in this run (${readyAcrossScan.length})` : 'View run readiness'}
+        </button>
+      </section>
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       {!bulkPreviewOpen && <>
         <p className="remediation-category-help">{{
@@ -1128,12 +1142,13 @@ export default function RemediationInbox({
         <BatchReviewSelection
           visible={batchScopeIds ? queue.filter(f => batchScopeIds.includes(f.id)) : queue}
           decisions={decisions} drafts={drafts}
+          confirmRequest={confirmRunRequest} onConfirmRequestHandled={() => setConfirmRunRequest(0)} preparingProposals={preparingProposals} onOpenPlan={onOpenPlan}
           scopeKey={JSON.stringify([scanId, batchScopeIds, tab])}
           scopeLabel={batchScopeIds ? 'Selected matching issue in this scan' : 'All documents in this scan'}
           readyOutsideScope={batchScopeIds ? readyAcrossScan.filter(f => !batchScopeIds.includes(f.id)).length : 0}
           onShowAllReady={() => setBatchScopeIds(null)}
           onReviewExcluded={() => { setBulkPreviewOpen(false); setBatchScopeIds(null); focusReviewRef.current = true; setNarrowPane('detail') }}
-          disabled={savingId != null && savingId !== 'selected-batch'}
+          disabled={readOnly || (savingId != null && savingId !== 'selected-batch')}
           onBusy={busy => setSavingId(busy ? 'selected-batch' : null)}
           onDecide={onDecide} onResult={batchResult} />
       </div>

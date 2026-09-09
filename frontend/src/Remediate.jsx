@@ -146,13 +146,14 @@ export function remediationSubmissionFailureCopy(err) {
   return `Could not enqueue: ${err?.message || err}`
 }
 
-function dbItemToUi(it, files) {
+export function dbItemToUi(it, files) {
   const sc = (it.rule_id || '').replace(/^(WCAG_?|SC_)/, '').replace(/_/g, '.')
   const ba = ITEM_BA[sc] || { meta: 'review AI proposal', before: (d) => d || 'issue found' }
   const fileRec = (files || []).find((f) => f.file === it.file) || {}
   const issue = ((fileRec.issues || []).find((i) => (i.wcag || '').replace(/^SC_/, '').replace(/_/g, '.') === sc)) || {}
   return {
     id: it.id,
+    _raw: it, // Preserve server proposal lineage on every load, including completion refresh.
     icon: ITEM_ICON[sc] || '◈',
     title: `${((it.file || '').split('.').pop() || 'DOC').toUpperCase()} · ${it.rule_name || ITEM_NAME[sc] || sc}`,
     meta: ba.meta,
@@ -524,7 +525,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     const failed = clampFailed(total, status.failed)
     setRemProg((previous) => ({ ...previous, total, done: total,
                  latest: status.latest_file || previous?.latest || null,
-                 failed, activity: null, history: previous?.history || [] }))
+                 failed, queued: 0, running: 0, activity: null, history: previous?.history || [] }))
     setRemBusy(false); setRemUpdates('idle')
     const ok = Math.max(0, total - failed)
     setServerFixed((n) => n + ok)
@@ -1626,6 +1627,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           // A LINE comment, not {/* */}: this is an expression position, not a children position,
           // and a JSX comment here is a parse error. Second time tonight.
           <RemediationInbox
+            readOnly={readOnly}
+            onOpenPlan={readOnly ? undefined : openRemediationPlan}
+            preparingProposals={!runStream?.snapshot?.terminal && ((runStream?.status?.running ?? remProg?.running ?? 0) > 0 || (runStream?.status?.queued ?? remProg?.queued ?? 0) > 0)}
             renderDetailExtra={(sel) => (sel ? (
               <>
                 {/* R15 · only for a row ACP applied itself — a drafted-AI or manually-authored

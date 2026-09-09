@@ -3,7 +3,7 @@ import { batchDecision, exclusionReason, proposalValues, selectionProblem, snaps
 import './batch-review-selection.css'
 
 const PAGE_SIZE = 10
-export default function BatchReviewSelection({ visible = [], decisions = {}, drafts = {}, scopeKey, scopeLabel = 'Current approval scope', onDecide, onResult, onBusy, onReviewExcluded, onShowAllReady, readyOutsideScope = 0, disabled = false }) {
+export default function BatchReviewSelection({ visible = [], decisions = {}, drafts = {}, scopeKey, scopeLabel = 'Current approval scope', onDecide, onResult, onBusy, onReviewExcluded, onShowAllReady, readyOutsideScope = 0, confirmRequest = 0, onConfirmRequestHandled, preparingProposals = false, onOpenPlan, disabled = false }) {
   const [entries, setEntries] = useState([])
   const [page, setPage] = useState(0)
   const [confirming, setConfirming] = useState(false)
@@ -42,6 +42,8 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
     setEntries(eligible.map(f => entries.find(e => e.finding.id === f.id) || snapshotFinding(f)))
     setConfirming(true); setPage(0)
   }
+  // A whole-run request freezes the eligible set immediately; later live updates never expand it.
+  useEffect(() => { if (confirmRequest) { confirmAllReady(); onConfirmRequestHandled?.() } }, [confirmRequest])
   const toggle = f => {
     setConfirming(false)
     setEntries(old => old.some(e => e.finding.id === f.id) ? old.filter(e => e.finding.id !== f.id) : [...old, snapshotFinding(f)])
@@ -72,7 +74,7 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
     onResult?.(outcomes)
   }
   return <section className="batch-review" aria-label="Select findings for approval">
-    <h3 ref={heading} tabIndex={-1}>{confirming ? 'Confirm approval' : 'Ready to approve'}</h3>
+    <h3 ref={heading} tabIndex={-1}>{confirming ? 'Confirm approval' : eligible.length ? 'Ready to approve' : preparingProposals ? 'Preparing proposals' : 'No proposals ready'}</h3>
     <p><b>Scope: {scopeLabel}</b></p>
     <p>Approve the ready proposals together, or inspect them and choose a subset. Writing and verification follow approval.</p>
     {(eligible.length > 0 || entries.length > 0) && <div className="batch-review-sticky">
@@ -86,21 +88,22 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
     </div>}
     {confirming && <p>Only these selected proposals will be approved. New proposals and excluded work are not included. Inspection is optional.</p>}
     {!eligible.length && !entries.length && <div role="status" className="batch-review-empty">
-      <b>No proposals are ready for approval in this scope.</b>
-      <p>{visible.length
+      <b>{preparingProposals ? 'Remediation is still processing this run.' : 'No proposals are ready for approval in this scope.'}</b>
+      <p>{preparingProposals ? 'Readiness will update as processing finishes. You can approve ready proposals together without inspecting each item.' : visible.length
         ? Object.keys(exclusions).every(reason => reason.startsWith('Already') || reason === 'Approval recorded')
           ? 'These changes are already applied or approved. View their results and verification status; another proposal approval is not needed.'
           : Object.keys(exclusions).every(reason => reason === 'Manual work')
             ? 'These issues need your input in the source document. Open individual review for the required edits and instructions.'
             : 'Open individual review to inspect these issues and their available actions. See the status reasons below.'
         : 'There are no pending proposals in this scope. Choose another category to see completed changes, verification, or manual work.'}</p>
-      {(exclusions['Version unavailable — review individually'] || exclusions['Missing proposal']) && <p>
+      {!preparingProposals && (exclusions['Version unavailable — review individually'] || exclusions['Missing proposal']) && <p>
         {exclusions['Version unavailable — review individually'] > 0 && <span>{exclusions['Version unavailable — review individually']} review {exclusions['Version unavailable — review individually'] === 1 ? 'item has' : 'items have'} no verifiable proposal version. </span>}
         {exclusions['Missing proposal'] > 0 && <span>{exclusions['Missing proposal']} review {exclusions['Missing proposal'] === 1 ? 'item has' : 'items have'} no complete proposal. </span>}
         Bulk approval requires valid proposals with recorded versions. Generating fresh proposals requires a separately approved run.
       </p>}
       {readyOutsideScope > 0 && onShowAllReady && <button type="button" className="primary" onClick={onShowAllReady}>Show all ready in this scan ({readyOutsideScope})</button>}
-      {onReviewExcluded && <button type="button" onClick={onReviewExcluded}>Open individual review</button>}
+      {!preparingProposals && (exclusions['Version unavailable — review individually'] || exclusions['Missing proposal']) && onOpenPlan && <button type="button" onClick={onOpenPlan}>Open remediation plan</button>}
+      {!preparingProposals && onReviewExcluded && <button type="button" onClick={onReviewExcluded}>Open individual review</button>}
     </div>}
     {(eligible.length > 0 || entries.length > 0) && <details className="batch-review-accounting">
       <summary>Approval details</summary>
