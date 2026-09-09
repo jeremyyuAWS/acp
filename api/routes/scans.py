@@ -3652,6 +3652,7 @@ def publish_files(sid: str, request: Request, body: dict):
                     actual_digest = _publish.remediated_content_digest(owner, sid, f)
                     require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner)
                     require_current_source(source, record, sp_token=sp_token)
+                    require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner)
                     if not actual_digest or reuse_state(saved, actual_digest) != "reuse":
                         raise ValueError("Corrected bytes changed; verify the new copy before Release.")
                 except Exception as exc:

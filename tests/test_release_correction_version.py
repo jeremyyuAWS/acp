@@ -275,3 +275,26 @@ def test_unresolved_legacy_marker_survives_without_timestamp_or_provider_id():
     from release_artifacts import reuse_state
     saved = {'status': 'failed', 'failure_category': 'delivery_version_unresolved'}
     assert reuse_state(saved, 'a' * 64) == 'unresolved'
+
+
+def test_sharepoint_reuse_rechecks_approval_after_source_read(monkeypatch):
+    import core
+    import publish
+    import release_artifacts
+    from routes import scans
+    from test_sharepoint_release_worker import FakeStore, SID, FILE
+    store = FakeStore()
+    state = {"compliant": 1}
+    digest = hashlib.sha256(b"A").hexdigest()
+    original = store.get_file_record
+    store.get_file_record = lambda *args: {
+        **original(*args), "corrected_sha256": digest, "compliant": state["compliant"]}
+    store.documents[FILE] = {"file": FILE, "status": "published", "artifact_digest": "sha256:" + digest}
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setattr(core, "register_scan_tokens", lambda *args, **kwargs: None)
+    monkeypatch.setattr(publish._blob, "download_remediated", lambda *args: b"A")
+    monkeypatch.setattr(release_artifacts, "require_current_source",
+                        lambda *args, **kwargs: state.update(compliant=0))
+    result = scans.publish_files(SID, _request({"x-sp-token": "fixture"}), {"files": [FILE]})
+    assert result["published"][0]["status"] == "failed"
+    assert "Approval" in result["published"][0]["explanation"]
