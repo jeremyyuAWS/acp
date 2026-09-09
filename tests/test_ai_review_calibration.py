@@ -289,3 +289,17 @@ def test_existing_accepted_run_keeps_pre_threshold_canonical_policy(db):
     with db._db.cursor() as cur: persist_run_policy(db._db,cur,'owner','scan','legacy',normalized)
     from ai_threshold_execution import read_run_policy
     assert read_run_policy(db,'owner','scan','legacy') is None
+
+
+def test_shared_impact_evidence_is_normalized_in_the_same_immutable_owner_record(db):
+    record=cohort()
+    row=dict(finding_id='finding',source_revision='source',operation_id='op',evidence_id='evidence',
+             observed_at='2026-09-07T00:00:00Z',rules_unresolved=True,usable=True)
+    record['impact_evidence']=dict(schema_version='ai-impact-cohort.v1',representative=True,population_size=1,
+        expires_at='2026-09-20T00:00:00Z',charges_complete=True,samples=[row,{**row,'prompt':'discard untrusted content'}],
+        charges=[dict(charge_id='charge',operation_id='op',purpose='generation',status='settled',amount_usd='0.02')])
+    saved=ingest_evaluation(db,'owner',record)
+    assert len(saved['impact_evidence']['samples'])==1
+    assert 'discard untrusted content' not in json.dumps(saved)
+    assert read_evaluation(db,'owner','fixture-v1')==saved
+    assert read_evaluation(db,'other','fixture-v1') is None
