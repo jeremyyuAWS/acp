@@ -71,12 +71,13 @@ it('animates signed changes once, expires, and resets across runs and pause', as
   await render(25, 'b', false)
   expect(container.querySelector('.wf-delta')).toBeNull()
 })
-it('mounts in the live run and supports reduced motion without looping decoration', () => {
+it('mounts in the live run and supports reduced motion with activity-gated animation', () => {
   const source = readFileSync(join(import.meta.dirname, 'RemediationOpsPanel.jsx'), 'utf8')
   expect(source).toContain('<RemediationWaterfallCard')
   const css = readFileSync(join(import.meta.dirname, 'remediation-waterfall-card.css'), 'utf8')
   expect(css).toContain('@media(prefers-reduced-motion:reduce)')
-  expect(css).not.toContain('infinite')
+  expect(css).toContain('.wf-stage-active .wf-working i')
+  expect(css).toContain('.wf-paused .wf-connector:after{animation:none!important}')
 })
 it('shows exact small dollar changes instead of rounding them to zero', async () => {
   const { root, container } = createTestRoot()
