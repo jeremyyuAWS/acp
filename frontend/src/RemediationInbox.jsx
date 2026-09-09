@@ -319,6 +319,7 @@ function ManualSteps({ f }) {
 // remediation task rather than an engineering evidence record. Criterion- and lane-aware so a contrast
 // fix reads like a contrast decision, not a generic "review the change".
 function taskLineOf(f, lane) {
+  if (f.autoApplied) return 'This change is already applied. Inspect it if you want, or flag a problem.'
   const contrast = isContrastFinding(f)
   switch (lane.key) {
     case 'review':
@@ -452,7 +453,8 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
         )}
 
         {!isManual && <p className="muted" style={{ fontSize: 13, lineHeight: 1.45, margin: '14px 0 0' }}>
-          {onRecheck ? 'After approval, ACP will create a corrected copy and verify this criterion again.'
+          {f.autoApplied ? 'Inspecting this applied change does not approve or apply another change.'
+            : onRecheck ? 'After approval, ACP will create a corrected copy and verify this criterion again.'
                      : 'This change requires human confirmation; ACP cannot verify its meaning automatically.'}
         </p>}
         <section aria-labelledby="why-this-matters" style={{ marginTop: 18 }}>
@@ -557,7 +559,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
                see PR body), so it is labelled as a flag, not a "reject & revert". */
             <>
               <button className="primary" disabled={saving} onClick={() => onDecide?.(f, { state: 'accepted' })}>
-                {saving ? 'Saving…' : 'Save and continue →'}
+                {saving ? 'Saving…' : f.autoApplied ? 'Mark inspected →' : 'Save and continue →'}
               </button>
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
               {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}

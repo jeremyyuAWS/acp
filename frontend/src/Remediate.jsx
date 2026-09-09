@@ -408,10 +408,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // with no AI call at all stays absent (deterministic fix — no badge, nothing to claim).
   const [aiZoneByFile, setAiZoneByFile] = useState({})
   const runId = run?.id
+  const fixRequest = useRef(0)
   const fetchFixes = () => {
+    const request = ++fixRequest.current
     if (!runId) { setScanDiffs([]); setDiffTotals(null); setAppliedFixes([]); setAiZoneByFile({}); return }
     Promise.all([getScanRemediationDiffs(runId, true), getAppliedFixes(runId), getScanAiCalls(runId)])
       .then(([d, a, calls]) => {
+        if (request !== fixRequest.current) return
         const page = remediationDiffPage(d)
         setScanDiffs(page.items); setDiffTotals(page); setAppliedFixes(Array.isArray(a) ? a : [])
         const byFile = {}
@@ -1304,7 +1307,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       </RemSection>
 
       {/* ── Recent AI fixes, grouped (§6) + Accessibility improvements impact (§7) ── */}
-      <p className="muted">{fixSource.length} applied-change records loaded{diffTotals?.total != null ? ` of ${diffTotals.total} total` : ' · total unavailable'}. Detailed groups and document counts below describe these loaded records.</p>
+      <p className="muted">{fixSource.length} applied-change records loaded{fixTotal != null ? ` of ${fixTotal} total` : ' · total unavailable'}. Detailed groups and document counts below describe these loaded records.</p>
       <GroupedFixes fixGroups={fixGroups} appliedFixes={appliedFixes} impact={impact} />
 
       {/* Self-remediation — you're fixing these yourself; visible whenever active. */}

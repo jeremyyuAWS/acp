@@ -44,22 +44,18 @@ describe('the Remediate page has one navigation system, not two', () => {
     // This is the count #272/#273 deduplicated down to one dominant statement. The rail carried a
     // fourth copy of it; what must survive is the sentence and the progress track beside it.
     const r = read('Remediate.jsx')
-    expect(r).toMatch(/need review across/)
+    expect(r).toMatch(/require attention across/)
     expect(r).toMatch(/<div className="conftrack"/)
-    // The hero count is derived from the SAME population as the "Needs review" tab (workflowStatusOf
-    // over the inbox queue), so the headline and the tab can never diverge — and it must NOT be the
-    // raw human-queue length, which excludes the auto-fixes the tab now counts.
+    // Workflow inspection remains available, while the attention headline counts pending human work.
     expect(r).toMatch(/matchesWorkflow\(f, 'needs-review', inboxDecisions\)/)
-    expect(r).toMatch(/<b>\{reviewCount\}<\/b> finding/)
+    expect(r).toMatch(/<b>\{reviewCounts\.pendingItems\}<\/b> review item/)
     expect(r).not.toMatch(/<b>\{queue\.length\}<\/b> finding/)
   })
 
-  it('reports the SAME needs-review count to the nav badge (onHitlCount) as the hero + tab', () => {
-    // The top-nav bell badge (App.jsx hitlCount) is fed by onHitlCount. It must show the same "needs
-    // review" number as the hero and the tab — reviewCount — not the raw human queue.length that
-    // excluded unconfirmed auto-fixes, so all three review-count surfaces agree.
+  it('reports pending review items to the nav badge, separate from applied inspection', () => {
+    // The navigation count excludes applied-change inspection and uses the same pending-item summary as the review workspace.
     const r = read('Remediate.jsx')
-    expect(r).toMatch(/onHitlCount\?\.\(reviewCount\)/)
+    expect(r).toMatch(/onHitlCount\?\.\(reviewCounts\.pendingItems\)/)
     expect(r).not.toMatch(/onHitlCount\?\.\(queue\.length\)/)
   })
 
