@@ -65,14 +65,14 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, bud
         <div className="remediation-plan-option">
           <label className={policy.rule_based === 0 ? 'is-selected' : ''}>
             <input type="radio" name={`${id}-automation`} checked={policy.rule_based === 0} onChange={() => onChange('rule_based', 0)} />
-            <span><strong>Review every change</strong><span>Show me proposed changes. I decide what gets applied.</span></span>
+            <span><strong>Review every change</strong><span>Approve proposed changes before they are applied.</span></span>
           </label>
-          <RemediationOptionHelp label="review before applying">You decide which proposed changes to accept before they are applied. This is sometimes called human-in-the-loop (HITL). AI is a separate choice below: choose Rules only to avoid AI suggestions.</RemediationOptionHelp>
+          <RemediationOptionHelp label="review before applying">You approve every proposed fix before application. AI is a separate choice below.</RemediationOptionHelp>
         </div>
         <div className="remediation-plan-option">
           <label className={policy.rule_based === 2 ? 'is-selected' : ''}>
             <input type="radio" name={`${id}-automation`} checked={policy.rule_based === 2} onChange={() => onChange('rule_based', 2)} />
-            <span><strong>Apply rule-based fixes automatically</strong><span>Apply supported fixes using set rules, then check the results. Keep other changes for my review.</span></span>
+            <span><strong>Apply rule-based fixes automatically</strong><span>Apply supported fixes, verify the results, and review the rest.</span></span>
           </label>
           <RemediationOptionHelp label="apply and verify automatically">ACP applies supported fixes using set rules and checks the result. AI suggestions and issues that need a person’s judgment still go to review.</RemediationOptionHelp>
         </div>
@@ -84,31 +84,40 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, bud
         <div className="remediation-plan-option">
           <label className={policy.ai === 0 ? 'is-selected' : ''}>
             <input type="radio" name={`${id}-ai`} checked={policy.ai === 0} onChange={() => onChange('ai', 0)} />
-            <span><strong>Rules only</strong><span>Do not use AI. Leave issues that need more help for a person.</span></span>
+            <span><strong>Rules only</strong><span>Use rules without generating AI suggestions.</span></span>
           </label>
           <RemediationOptionHelp label="rules only">Use only fixes based on set rules. ACP will not ask AI to write new suggestions for this run. Your approval choice above still applies.</RemediationOptionHelp>
         </div>
         <div className="remediation-plan-option">
           <label className={policy.ai > 0 ? 'is-selected' : ''}>
             <input type="radio" name={`${id}-ai`} checked={policy.ai > 0} onChange={() => onChange('ai', 1)} />
-            <span><strong>Rules + AI waterfall</strong><span>Also ask AI for suggestions. Try another model if the first response is incomplete, then send suggestions to me for review.</span></span>
+            <span><strong>Rules + AI waterfall</strong><span>Draft suggestions; try a fallback if needed. You approve AI changes.</span></span>
           </label>
-          <RemediationOptionHelp label="AI waterfall">A waterfall tries AI in stages, with at most two model attempts for a supported text suggestion. A second model is tried only if the first response is empty or cut short. Spending limits and availability still apply. You review the suggestion; selecting this plan does not approve AI edits automatically.</RemediationOptionHelp>
+          <RemediationOptionHelp label="AI waterfall">A waterfall tries AI in stages, with at most two model attempts for a supported text suggestion. A second model is tried only if the first response is empty or cut short. Spending limits and availability still apply. You approve AI suggestions. Document text or images may be sent to the configured providers; choose Rules only if those destinations are unsuitable for the content.</RemediationOptionHelp>
         </div>
       </div>
       {policy.ai > 0 && <div className="simple-remediation-budget">
-        <label htmlFor={`${id}-budget`}>Maximum AI spend for this run (USD)</label>
+        <label htmlFor={`${id}-budget`}>AI spending limit for this run (USD)</label>
         <input id={`${id}-budget`} type="number" min="0" max="1000000" step="0.01"
           disabled={disabled || !budgetSupported} value={budgetSupported ? (policy.ai_budget_usd ?? '0.00') : ''}
           onChange={event => onChange('ai_budget_usd', event.target.value)}
           placeholder={budgetSupported ? '0.00' : 'Unavailable'} aria-describedby={`${id}-budget-note`} />
         <p id={`${id}-budget-note`}>{budgetSupported
-          ? 'AI pauses when the remaining budget cannot cover another request. Rule-based fixes continue. $0 permits no paid AI requests. Infrastructure costs are separate.'
+          ? 'AI pauses at this limit. Rule-based fixes continue. $0 permits no paid AI requests. Infrastructure costs are separate.'
           : 'Spending limits are not available on this server. Choose Rules only if you need a firm cap.'}</p>
       </div>}
     </fieldset>
     {policy.ai > 0 && reviewSupported && <details><summary>Optional AI review</summary><RemediationReviewPolicy value={policy.ai_review} onChange={value => onChange('ai_review', value)}
       disabled={disabled || !budgetSupported} supported={reviewSupported} /></details>}
+
+  </div>
+}
+
+// Retired by request: the sticky approval bar and choices already explain this plan.
+// Keep the previous summary available for a deliberate one-commit restoration.
+export function RetiredRemediationPlanSummary({ policy, budgetSupported = false }) {
+  const id = useId()
+  return (
     <section className="remediation-waterfall-plan" aria-labelledby={`${id}-plan`}>
       <h3 id={`${id}-plan`}>Plan you are approving</h3>
       <ol>
@@ -125,5 +134,5 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, bud
       <p className="remediation-waterfall-plan__note">Selecting options updates the preview. Choose “Approve plan and start” to begin. The preview is not a promise that every issue will be fixed.</p>
       {policy.ai > 0 && <p className="remediation-waterfall-plan__note">Additional issues AI may help resolve and expected AI spending are not estimated yet.</p>}
     </section>
-  </div>
+  )
 }
