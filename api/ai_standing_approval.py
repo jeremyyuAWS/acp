@@ -64,9 +64,11 @@ def _source(store, owner, sid, file):
     import core
     import handlers
     from release_artifacts import require_current_source
-    scan = store.get_scan(sid, owner=owner)
+    with store._db.cursor() as cur:
+        store._db.execute(cur, 'SELECT source FROM scan_runs WHERE id=%s AND owner_email=%s', (sid, owner))
+        scan = store._db.fetchone(cur)
     record = store.get_file_record(sid, file) or {}
-    source = (scan or {}).get('run', {}).get('source')
+    source = (scan or {}).get('source')
     if (not scan or source not in {'drive', 'sharepoint'} or not record.get('source_modified')
             or not record.get('drive_file_id') or not record.get('remediated_at')
             or not record.get('corrected_sha256')):
@@ -235,7 +237,10 @@ def check_file_approvals(store, sid, file):
                  if str(r.get('last_decision_request_id') or '').startswith('standing:')]
     if not automatic:
         return
-    owner = (store.get_scan(sid) or {}).get('run', {}).get('owner_email')
+    with store._db.cursor() as cur:
+        store._db.execute(cur, 'SELECT owner_email FROM scan_runs WHERE id=%s', (sid,))
+        scan = store._db.fetchone(cur)
+    owner = (scan or {}).get('owner_email')
     _source(store, owner, sid, file)
     for row in automatic:
         with store._db.cursor() as cur:
