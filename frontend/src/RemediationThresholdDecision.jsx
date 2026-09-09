@@ -15,6 +15,15 @@ const LABELS = {
   registered_controlled_writer: 'A supported controlled writer is configured',
 }
 
+const CALIBRATION_REASONS = {
+  calibration_missing: 'No independent evaluation is configured for this change type and model.',
+  calibration_production_approval_missing: 'The evaluation is not approved for production or is owned by a different reviewer.',
+  calibration_configuration_mismatch: 'The evaluation was produced with a different model or validator configuration.',
+  calibration_sample_size_insufficient: 'The evaluation does not contain enough independent cases yet.',
+  calibration_expired_or_future: 'The evaluation is expired or its timestamp is in the future.',
+  calibration_invalid: 'The evaluation evidence could not be verified.',
+}
+
 export default function RemediationThresholdDecision({ decision }) {
   if (!decision) return <p>Eligibility not yet known. No saved threshold decision is available for this finding.</p>
   const label = decision.approval_kind === 'human' ? 'Approved by you'
@@ -27,6 +36,7 @@ export default function RemediationThresholdDecision({ decision }) {
     {Number.isFinite(decision.minimum_reliability) && <p>Approved minimum validated reliability: {decision.minimum_reliability}%.</p>}
     {Number.isFinite(decision.reliability_lower_bound) && <p>Evaluated reliability lower bound: {(decision.reliability_lower_bound * 100).toFixed(2)}%. This describes evaluated results for this type of change and does not guarantee this change is correct.</p>}
     {decision.evaluation_version && <p>Evaluation version: {decision.evaluation_version}</p>}
+    {decision.calibration_reason && <p role="status"><strong>Automatic approval remains unavailable:</strong> {CALIBRATION_REASONS[decision.calibration_reason] || 'The required evaluation evidence is not currently eligible.'}</p>}
     {decision.checks?.length > 0 ? <ul>{decision.checks.map(check => <li key={check.gate}>
       <strong>{check.passed === true ? 'Passed' : 'Not passed'}:</strong> {LABELS[check.gate] || 'A required eligibility check'}
     </li>)}</ul> : <p>Detailed eligibility checks are unavailable for this decision.</p>}

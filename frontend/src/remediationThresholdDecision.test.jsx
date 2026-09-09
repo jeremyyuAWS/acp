@@ -26,3 +26,10 @@ it('human approval is explicitly distinct', async () => {
   expect(container.textContent).toContain('Approved by you')
   expect(container.textContent).not.toContain('Approved under your policy')
 })
+it('explains why an expired evaluation cannot authorize automatic approval', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(createElement(Decision, {decision:{approval_kind:'human',
+    calibration_reason:'calibration_expired_or_future', checks:[{gate:'applicable_fresh_calibration',passed:false}]}})))
+  expect(container.textContent).toContain('Automatic approval remains unavailable')
+  expect(container.textContent).toContain('The evaluation is expired or its timestamp is in the future.')
+})
