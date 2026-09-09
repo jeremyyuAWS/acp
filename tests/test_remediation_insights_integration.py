@@ -63,6 +63,9 @@ def test_real_enqueue_captures_exact_context_and_update_keeps_original_version(i
     assert first['proposals'][0]['item_id'] == item
     assert first['proposals'][0]['attempt_id'] == 'attempt'
     assert first['contribution']['draft'] == 1
+    assert first['measured_contribution']['available'] is True
+    assert first['measured_contribution']['first_model_findings'] == 1
+    assert first['measured_contribution']['fallback_additional_findings'] == 0
     assert first['review_receipts'][0]['review']['verdict'] == 'accept'
     original = first['proposals'][0]['proposal']['proposed_value']
     # The queue's replacement seam also captures an immutable version.

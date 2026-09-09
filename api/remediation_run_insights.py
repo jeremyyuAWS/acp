@@ -148,6 +148,40 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
         for row in db.fetchall(cur):
             counts[row['tier']] = row['n']
         complete = sum(counts.values()) == totals['total_proposals']
+        # Versions and retries are not additional findings. Count unique queue items with exact
+        # attempt lineage so fallback contribution can be shown without double-counting revisions.
+        db.execute(cur, '''SELECT DISTINCT p.item_id,
+                CASE WHEN h.purpose IN ('draft','fallback') AND t.trace_call_id IS NOT NULL
+                     THEN h.purpose ELSE 'unattributed' END AS purpose
+            FROM ai_proposal_snapshots p
+            LEFT JOIN ai_attempt_history h
+              ON h.owner_id=p.owner_id AND h.scan_id=p.scan_id AND h.run_id=p.run_id
+             AND h.file=p.file AND h.attempt_id=p.attempt_id
+            LEFT JOIN ai_attempt_trace_links t
+              ON t.owner_id=p.owner_id AND t.run_id=p.run_id
+             AND t.attempt_id=p.attempt_id AND t.trace_call_id=p.model_call_id
+            WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s''', scope)
+        item_purposes = {}
+        for row in db.fetchall(cur):
+            item_purposes.setdefault(str(row['item_id']), set()).add(str(row['purpose']))
+        draft_items = {item for item, purposes in item_purposes.items() if 'draft' in purposes}
+        fallback_items = {item for item, purposes in item_purposes.items() if 'fallback' in purposes}
+        db.execute(cur, '''SELECT DISTINCT p.item_id
+            FROM ai_proposal_snapshots p
+            JOIN ai_review_receipts r
+              ON r.owner_id=p.owner_id AND r.scan_id=p.scan_id AND r.run_id=p.run_id
+             AND r.proposal_sha256=p.proposal_sha256
+            WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s''', scope)
+        reviewed_items = {str(row['item_id']) for row in db.fetchall(cur)}
+        measured_contribution = {
+            'available': bool(item_purposes) and complete,
+            'first_model_findings': len(draft_items),
+            'fallback_additional_findings': len(fallback_items - draft_items),
+            'reviewed_findings': len(reviewed_items),
+            'baseline_findings': len(item_purposes),
+            'reason': 'unique_queue_items_with_exact_attempt_lineage' if item_purposes and complete
+                      else 'exact_finding_lineage_incomplete',
+        }
         events = {}
         event_details_complete = True
         if proposals:
@@ -207,6 +241,7 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
         'contribution': {'unit': 'proposal_versions', **counts, 'total': totals['total_proposals'],
                          'complete': complete,
                          'note': 'Saved proposal versions, not unique findings or verified fixes. Revisions may cover the same issue.'},
+        'measured_contribution': measured_contribution,
         'outcomes': {
             'verified_fix_count': (
                 sum(1 for proposal in proposals if proposal.get('version_verified'))
