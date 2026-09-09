@@ -10,6 +10,7 @@ def _decode(row):
         row = dict(row)
         row['intent'] = json.loads(row['intent'])
         row['progress'] = json.loads(row['progress'])
+        row['artifacts'] = json.loads(row['artifacts'])
     return row
 
 
@@ -63,3 +64,14 @@ def latest(store, scan_id, owner):
             "SELECT * FROM release_continuations WHERE scan_id=%s AND owner_email=%s AND status<>'draft' "
             'ORDER BY updated_at DESC LIMIT 1', (scan_id, owner))
         return _decode(store._db.fetchone(cur))
+
+
+def artifact(store, intent_id, owner, file, digest):
+    with store.transaction():
+        row = get(store, intent_id, owner, lock=True)
+        if not row or row['status'] not in {'waiting', 'publishing'}:
+            raise ValueError('Release authorization is no longer active')
+        artifacts = {**row['artifacts'], file: digest}
+        with store._db.cursor() as cur:
+            store._db.execute(cur, 'UPDATE release_continuations SET artifacts=%s WHERE id=%s AND owner_email=%s',
+                              (json.dumps(artifacts), intent_id, owner))

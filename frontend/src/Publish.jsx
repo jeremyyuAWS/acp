@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
+import ReleaseQuickActions from './ReleaseQuickActions.jsx'
 import { documentSelection, documentScopeSentence, documentsInSelection } from './remediableScope.js'
 import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage, prepareReleasePackage, downloadPreparedReleasePackage, getQueueJob, putMyReleaseTemplates } from './api.js'
 import { releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
@@ -64,11 +65,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const confirmDialogRef = useRef(null)
   const confirmCancelRef = useRef(null)
   const releaseHadPendingRef = useRef(false)
+  const continuationReported = useRef(new Set())
   const [completionSound, setCompletionSound] = useState(() => {
     try { return window.localStorage.getItem('acp.release.completionSound') === 'on' } catch { return false }
   })
   const [sel, setSel] = useState(null)
   useEffect(() => {
+    continuationReported.current = new Set()
     setDone({}); setReleaseResults({}); setPubUrls({}); setReleaseId(null)
     setReleaseFolder(null); setReleaseFolders([]); setReleasePreview(null); setPackagePreview(null)
     setSelectedFiles(new Set()); selectionInitialized.current = false
@@ -405,14 +408,17 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       setReleaseError({ summary: 'The corrected copy could not be released.', details: error?.message || 'The release service did not complete the request.', retry: () => publish(file) })
     }
   }
-  const publishAll = async (fileNames = null, preferredFolderName = '') => {
+  const publishAll = async (fileNames = null, preferredFolderName = '', exact = false) => {
     if (publishing || readOnly) return
     setPublishing(true)
     const requested = fileNames ? new Set(fileNames) : null
     const pending = selectableReady.filter((f) => !done[f.file] && (!requested || requested.has(f.file))).map((f) => f.file)
     if (!pending.length) { setPublishing(false); return }
     try {
-      const res = await publishSelectedFiles(pending, preferredFolderName)
+      const res = exact
+        ? await publishAllFiles(run?.id, pending, preferredFolderName, { destination: releaseDestination,
+          expectedArtifacts: Object.fromEntries(selectableReady.filter(f => pending.includes(f.file)).map(f => [f.file, f.corrected_sha256])) })
+        : await publishSelectedFiles(pending, preferredFolderName)
       const successful = rememberRelease(res, pending)
       if (releaseProvider === 'sharepoint' && res?.queued) {
         const status = await followSharePointRelease(pending)
@@ -518,6 +524,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const startRelease = () => {
     setBuilderStep(1)
     window.requestAnimationFrame(() => {
+      if (builderRef.current?.closest('details')) builderRef.current.closest('details').open = true
       builderRef.current?.scrollIntoView({ behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' })
       builderRef.current?.focus({ preventScroll: true })
     })
@@ -575,6 +582,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     setDeliveryMethod('publish')
     setReleasePreview(null); setPackagePreview(null); setBuilderStep(2)
     window.requestAnimationFrame(() => {
+      if (builderRef.current?.closest('details')) builderRef.current.closest('details').open = true
       builderRef.current?.scrollIntoView({ behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' })
       builderRef.current?.focus({ preventScroll: true })
     })
@@ -657,6 +665,28 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
         </details>
       </section>
+      <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={selectableReady} destination={releaseDestination}
+        folderName={releaseFolderName} readOnly={readOnly} publishing={publishing}
+        destinationLabel={releaseDestination?.folder_name || releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}
+        destinationPicker={['drive', 'sharepoint'].includes(releaseProvider) ? <ReleaseDestinationPicker provider={releaseProvider} value={releaseDestination}
+          onChange={value => { setReleaseDestination(value); setReleasePreview(null) }}
+          onError={error => setReleaseError({ summary: 'Destination unavailable', details: error?.message })} /> : <p>Verified copies remain in ACP’s managed storage.</p>}
+        onReady={names => publishAll(names, releaseFolderName, true)}
+        onProgress={async result => {
+          if (Object.values(result.progress || {}).some(value => value?.state === 'published')) {
+            try {
+              const status = await getReleaseStatus(run.id)
+              applyReleaseStatus(status)
+              for (const row of status.documents || []) {
+                const key = `${row.file}:${row.artifact_digest || row.published_at}`
+                if (row.status === 'published' && !continuationReported.current.has(key)) {
+                  continuationReported.current.add(key); onPublish?.(row.file)
+                }
+              }
+            } catch { /* The next durable refresh retries. */ }
+          }
+        }} />
+
       {packageJob && <section className="release-notice release-package-job" role="status" aria-label="Prepared package status">
         <span><b>{packageJob.status === 'done' ? 'Download package ready' : packageJob.status === 'dead' ? 'Download package failed' : 'Download package in progress'}</b><br />
           {packageJob.status === 'done' ? 'Prepared safely and available after navigation or reload.' : packageJob.phase || 'The package continues in the background.'}</span>
@@ -817,6 +847,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </div>
       </details>
 
+      <details className="release-advanced"><summary>Choose individual files, package options, and full delivery details</summary>
       <section className="panel release-workspace" ref={builderRef} tabIndex={-1} aria-labelledby="release-workspace-title">
         <div className="rubrichdr">
           <h2 id="release-workspace-title" style={{ margin: 0 }}>Choose files <span className="muted">· {selectedReady.length} selected · {releaseFiles.length} in scope</span></h2>
@@ -1040,6 +1071,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </div>
       </section>
 
+      </details>
       <ReleaseHistory refreshKey={`${run?.id || ''}:${publishedCount}:${failedCount}`} />
 
       {/* Confirmation before a release runs. States, in checkable terms, exactly what will happen —

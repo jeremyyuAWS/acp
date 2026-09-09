@@ -5125,6 +5125,10 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     if not (scan_id and filename):
         raise FatalJobError("apply_approved_values job missing scan_id/file")
 
+    if payload.get("release_intent_id"):
+        from release_continuation import check_application
+        check_application(core.store, payload["release_intent_id"], scan_id, filename)
+
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext not in _APPLY_VALUE_EXTS:
         # No applier for this format. Say so rather than silently succeeding: the row stays
@@ -5327,6 +5331,8 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             or image_of_text_uploaded):
         return
 
+    if payload.get("release_intent_id"):
+        check_application(core.store, payload["release_intent_id"], scan_id, filename)
     _phase(job, "storing the corrected copy")
     blob_url = _blob.upload_remediated(
         owner, scan_id, filename, working, _OFFICE_ALT_MIME.get(ext, "application/pdf"))
@@ -5342,6 +5348,10 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             corrected_bytes=len(working))
         for commit_credit in pending_credits:
             commit_credit()
+        if payload.get("release_intent_id"):
+            import release_continuation_store
+            release_continuation_store.artifact(core.store, payload["release_intent_id"], owner,
+                                                 filename, _hashlib.sha256(working).hexdigest())
 
         # Keep certification in the same transaction: a failed reconciliation must leave
         # approvals pending for retry, rather than returning early next time with no work.
@@ -5454,3 +5464,9 @@ def _audit_detail(payload: dict) -> str:
         return _json.dumps(payload, sort_keys=True)[:400]
     except (TypeError, ValueError):
         return str(payload)[:400]
+
+
+@handler("release_continue")
+def _release_continue(payload: dict, job: dict) -> None:
+    from release_continuation import advance
+    advance(core.store, payload, job)

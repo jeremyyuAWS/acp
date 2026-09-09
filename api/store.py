@@ -1360,6 +1360,7 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS release_continuations (
       id TEXT PRIMARY KEY, owner_email TEXT NOT NULL, scan_id TEXT NOT NULL,
       fingerprint TEXT NOT NULL, intent TEXT NOT NULL, progress TEXT NOT NULL,
+      artifacts TEXT NOT NULL DEFAULT '{}',
       status TEXT NOT NULL, revision INT NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )""",
@@ -2476,7 +2477,7 @@ class _PgAdapter:
     # v44 adds durable owner/run provider reservations and immutable spending policy.
     # v49 adds explicit durable approval-to-Release intents after exact artifact identity.
     _SCHEMA_VERSION = 49
-    _SCHEMA_CHECKSUM_AT_VERSION = "d0f51871ed2c57dcd16885b7c9df20e2"
+    _SCHEMA_CHECKSUM_AT_VERSION = "c1058ac624a0f6e64943001b2f6f70cb"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -11139,7 +11140,8 @@ class Store:
                                request_id: str | None = None,
                                expected_version: int | None = None,
                                expected_proposal_snapshot_ids: list[str] | None = None,
-                               expected_source_revision: str | None = None) -> tuple[dict | None, bool]:
+                               expected_source_revision: str | None = None,
+                               release_intent_id: str | None = None) -> tuple[dict | None, bool]:
         """Persist one reviewer decision atomically and make exact PUT replays a no-op.
 
         These writes collectively make the decision true.  Keeping them behind the adapter's
@@ -11158,6 +11160,8 @@ class Store:
         if expected_proposal_snapshot_ids is not None or expected_source_revision is not None:
             payload.update(expected_proposal_snapshot_ids=expected_proposal_snapshot_ids,
                            expected_source_revision=expected_source_revision)
+        if release_intent_id is not None:
+            payload["release_intent_id"] = release_intent_id
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True,
                                     separators=(",", ":")).encode()).hexdigest()
 
@@ -11293,7 +11297,8 @@ class Store:
                         current["scan_id"], current["file"])):
                 self.enqueue_job(
                     "apply_approved_values",
-                    {"scan_id": current["scan_id"], "file": current["file"]},
+                    {"scan_id": current["scan_id"], "file": current["file"],
+                     **({"release_intent_id": release_intent_id} if release_intent_id else {})},
                     scan_id=current["scan_id"])
             return self.get_hitl_item(item_id) or updated, False
 
@@ -14908,7 +14913,7 @@ class Store:
     _BATCH_JOB_STAGES = {
         "scan_assess": "assess", "assess_trace": "assess",
         "remediate_file": "remediate", "rescore_file": "remediate",
-        "apply_approved_values": "remediate", "publish_file": "release",
+        "apply_approved_values": "remediate", "publish_file": "release", "release_continue": "release",
     }
 
     def _record_stage_completed_if_ready(self, job: dict | None) -> None:
@@ -16110,7 +16115,7 @@ class Store:
             "scan_file": "assess", "scan_assess": "assess", "assess_trace": "assess",
             "remediate_file": "remediate", "rescore_file": "remediate",
             "apply_approved_values": "remediate",
-            "publish_file": "release", "publish_batch": "release",
+            "publish_file": "release", "release_continue": "release", "publish_batch": "release",
         }
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -16399,7 +16404,7 @@ class Store:
         "scan_finalize": "discover",
         "scan_assess": "assess", "assess_trace": "assess",
         "remediate_file": "remediate", "rescore_file": "remediate",
-        "apply_approved_values": "remediate", "publish_file": "release",
+        "apply_approved_values": "remediate", "publish_file": "release", "release_continue": "release",
     }
     _KIND_TYPES = {"discover": (), "assess": (), "remediate": (), "release": ()}
     for _jt, _k in _JOB_KIND.items():
