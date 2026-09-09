@@ -31,22 +31,22 @@ describe('the three-mode remediation workspace', () => {
     return { root, host }
   }
 
-  it('defaults to review when decisions exist and keeps all panels mounted', async () => {
+  it('defaults to Plan even when decisions exist and keeps all panels mounted', async () => {
     const { host } = await mount()
     const tabs = host.querySelectorAll('[role="tab"]')
     expect(tabs).toHaveLength(3)
-    expect(tabs[2].getAttribute('aria-selected')).toBe('true')
+    expect(tabs[0].getAttribute('aria-selected')).toBe('true')
     expect(Array.from(tabs, tab => tab.textContent.trim())).toEqual(['Plan', 'Live●', 'Review2'])
-    expect(host.querySelector('#rem-panel-plan').hidden).toBe(true)
+    expect(host.querySelector('#rem-panel-plan').hidden).toBe(false)
     expect(host.querySelector('[data-testid="review-state"]')).toBeTruthy()
     expect(host.querySelector('[data-testid="live-state"]')).toBeTruthy()
     expect(host.querySelector('#rem-panel-live').hidden).toBe(true)
     expect(host.querySelector('[data-testid="rem-run-card"]')).toBeNull()
   })
 
-  it('defaults to live when automated work is active and review is empty', async () => {
+  it('defaults to Plan when automated work is active and review is empty', async () => {
     const { host } = await mount({ reviewCount: 0 })
-    expect(host.querySelector('#rem-mode-live').getAttribute('aria-selected')).toBe('true')
+    expect(host.querySelector('#rem-mode-plan').getAttribute('aria-selected')).toBe('true')
     expect(host.querySelector('[data-testid="live-state"]')).toBeTruthy()
   })
 
@@ -183,9 +183,9 @@ describe('the three-mode remediation workspace', () => {
     expect(document.activeElement).toBe(host.querySelector('#rem-panel-plan'))
   })
 
-  it('restores an explicit choice for the run', async () => {
+  it('does not let a previous session choice override the default Plan tab', async () => {
     sessionStorage.setItem('acp-remediation-mode-scan-1', 'live')
     const { host } = await mount()
-    expect(host.querySelector('#rem-mode-live').getAttribute('aria-selected')).toBe('true')
+    expect(host.querySelector('#rem-mode-plan').getAttribute('aria-selected')).toBe('true')
   })
 })
