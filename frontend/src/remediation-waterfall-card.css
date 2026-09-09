@@ -15,3 +15,20 @@
 .remops .wf-card h3{font-size:21px}
 
 .wf-header-status{display:flex;flex-direction:column;align-items:flex-end;gap:10px;flex-shrink:0}.wf-header-status .wf-tag{align-self:auto}.wf-throughput-mini{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}.wf-throughput-mini svg{display:block;flex-shrink:0}@media(max-width:640px){.wf-header-status{align-items:flex-start;flex-shrink:1}.wf-throughput-mini{flex-wrap:wrap}}
+
+/* One stage at a time: low-contrast breathing and one travelling connector dot. */
+.wf-motion-status{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.wf-motion-status>span,.wf-working{display:flex;align-items:center;gap:8px}
+.wf-motion-status button{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer}
+.wf-working{font-size:12px;color:var(--wf-accent)}
+.wf-working i,.wf-processing-dot{display:inline-block;width:6px;height:6px;flex-shrink:0;border-radius:50%;background:var(--wf-accent)}
+.wf-processing-dot{animation:wf-breathe 3s ease-in-out infinite}
+.wf-stage-active .wf-stage-button{border-color:var(--wf-accent);box-shadow:inset 3px 0 var(--wf-accent)}
+.wf-stage-active .wf-working i{animation:wf-breathe 3s ease-in-out infinite}
+.wf-stage-active .wf-connector{position:relative}
+.wf-stage-active .wf-connector:after{content:'';position:absolute;left:20px;top:3px;width:4px;height:4px;border-radius:50%;background:var(--wf-accent);animation:wf-travel 3s ease-in-out infinite}
+@keyframes wf-breathe{0%,100%{opacity:.45}50%{opacity:1}}
+@keyframes wf-travel{0%{transform:translateY(0);opacity:0}25%{opacity:.7}80%,100%{transform:translateY(17px);opacity:0}}
+.wf-paused .wf-connector:after{animation:none!important}
+@media(prefers-reduced-motion:reduce){.wf-card .wf-connector:after{animation:none!important;display:none}}
+.wf-stage-button>strong,.wf-working{overflow-wrap:anywhere}

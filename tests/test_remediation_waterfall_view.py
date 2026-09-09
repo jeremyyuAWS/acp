@@ -136,3 +136,34 @@ def test_new_proposals_cannot_relabel_a_historical_run(isolated_store):
     current = read_waterfall(s, 'owner', 'scan', new['batch_id'])
     assert current['models'][0]['model'] == 'new-model'
     assert current['proposal_model_scope'] == 'current_scan_proposals'
+
+
+def test_stage_models_require_same_run_owner_scan_and_dispatched_attempt(isolated_store):
+    from ai_attempt_history import AttemptHistory
+    s = isolated_store
+    batch = seed(s)
+    ledger = BudgetLedger(s._db)
+    history = AttemptHistory(s._db)
+    operation = 'd' * 64
+    def attempt(tier, retry, provider, model, state='settled', scan='scan'):
+        aid = f'text:{operation}:{tier}:{retry}'
+        ledger.reserve('owner', batch, aid, 1000, 'private-pricing')
+        history.begin('owner', scan, batch, operation, aid, file='a.html',
+                      input_sha256='b' * 64, model=model, provider=provider,
+                      purpose='draft' if tier == 1 else 'fallback')
+        if state != 'reserved':
+            ledger.claim_dispatch('owner', batch, aid)
+            if state == 'settled':
+                ledger.settle('owner', batch, aid, 100)
+        return aid
+    attempt(1, 0, 'openai', 'gpt-recorded')
+    attempt(1, 1, 'openai', 'gpt-recorded')
+    attempt(2, 0, 'anthropic', 'claude-recorded', state='dispatched')
+    attempt(2, 1, 'private', 'never-called', state='reserved')
+    attempt(2, 2, 'private', 'wrong-scan', scan='another-scan')
+    result = read_waterfall(s, 'owner', 'scan', batch)
+    assert result['stages'][0]['models'] == [dict(provider='openai', model='gpt-recorded', recorded_attempts=2)]
+    assert result['stages'][1]['models'] == [dict(provider='anthropic', model='claude-recorded', recorded_attempts=1)]
+    assert 'never-called' not in json.dumps(result)
+    assert 'wrong-scan' not in json.dumps(result)
+    assert read_waterfall(s, 'owner', 'scan', 'different-run').get('stages', []) == []

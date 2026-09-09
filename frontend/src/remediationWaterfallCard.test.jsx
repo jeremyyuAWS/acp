@@ -22,7 +22,7 @@ it('shows durable units, costs, honest missing contribution, and accessible outc
   const { root, container } = createTestRoot()
   await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot()} activity={activity} />))
   expect(container.querySelector('.remediation-run-insights summary').textContent).toContain('Saved model history')
-  expect(container.textContent).toContain('Drafts and optional reviews')
+  expect(container.textContent).toContain('First attempt · Recorded model identity unavailable')
   expect(container.textContent).toContain('15 recorded operations')
   expect(container.textContent).not.toContain('15 suggestions')
   expect(container.textContent).toContain('$1.18')
@@ -71,12 +71,13 @@ it('animates signed changes once, expires, and resets across runs and pause', as
   await render(25, 'b', false)
   expect(container.querySelector('.wf-delta')).toBeNull()
 })
-it('mounts in the live run and supports reduced motion without looping decoration', () => {
+it('mounts in the live run and supports reduced motion with activity-gated animation', () => {
   const source = readFileSync(join(import.meta.dirname, 'RemediationOpsPanel.jsx'), 'utf8')
   expect(source).toContain('<RemediationWaterfallCard')
   const css = readFileSync(join(import.meta.dirname, 'remediation-waterfall-card.css'), 'utf8')
   expect(css).toContain('@media(prefers-reduced-motion:reduce)')
-  expect(css).not.toContain('infinite')
+  expect(css).toContain('.wf-stage-active .wf-working i')
+  expect(css).toContain('.wf-paused .wf-connector:after{animation:none!important}')
 })
 it('shows exact small dollar changes instead of rounding them to zero', async () => {
   const { root, container } = createTestRoot()
