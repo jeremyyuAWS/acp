@@ -16,12 +16,13 @@ export function releaseFileSize(file) {
 
 const humanBytes = (bytes) => bytes < 1024 ? `${bytes} B` : bytes < 1024 ** 2 ? `${Math.round(bytes / 1024)} KB` : bytes < 1024 ** 3 ? `${(bytes / 1024 ** 2).toFixed(1)} MB` : `${(bytes / 1024 ** 3).toFixed(1)} GB`
 
-export default function ReleaseFileSelection({ files, selectedFiles, setSelectedFiles, done, sourceState, sourceProduct, releaseProvider, driveMirrorEnabled, driveMirrorFolder, releaseFolder, releaseResults, selectedFile, setSelectedFile, sourcePath, pending = {}, blockers = {}, destinationLabel }) {
+export default function ReleaseFileSelection({ files, selectedFiles, setSelectedFiles, done, sourceState, sourceProduct, releaseProvider, driveMirrorEnabled, driveMirrorFolder, releaseFolder, releaseResults, selectedFile: requestedFile, setSelectedFile, sourcePath, pending = {}, blockers = {}, destinationLabel }) {
+  const selectedFile = files.find((file) => file.file === requestedFile?.file) || null
   const detailRef = useRef(null)
   const triggerRef = useRef(null)
   const openDetails = (file, event) => { triggerRef.current = event.currentTarget; setSelectedFile(file) }
   const closeDetails = () => { setSelectedFile(null); triggerRef.current?.focus() }
-  useEffect(() => { if (selectedFile) detailRef.current?.focus() }, [selectedFile])
+  useEffect(() => { if (selectedFile) detailRef.current?.focus() }, [selectedFile?.file])
   const [query, setQuery] = useState('')
   const [folder, setFolder] = useState('all')
   const [status, setStatus] = useState('all')

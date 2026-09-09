@@ -4136,7 +4136,13 @@ def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
         "destination_relative_path": row.get("destination_relative_path"),
         "released_document_id": row.get("released_document_id"),
         "released_document_url": row.get("released_document_url"),
-        "corrected_sha256": row.get("corrected_checksum"),
+        "artifact_digest": row.get("artifact_digest"),
+        "corrected_checksum": row.get("corrected_checksum"),
+        "corrected_sha256": (
+            row["artifact_digest"].removeprefix("sha256:")
+            if (row.get("artifact_digest") or "").startswith("sha256:")
+            else row.get("corrected_checksum") if row.get("verification") == "sha256" else None
+        ),
         "verification": row.get("verification"),
         "status": row.get("status"),
         "failure_category": row.get("failure_category"),
