@@ -396,3 +396,32 @@ def test_sharepoint_publish_uses_atomic_fail_on_conflict_even_for_small_files(mo
 
     assert seen["conflict_behavior"] == "fail"
     assert seen["force_session"] is True
+
+
+def test_sharepoint_name_requires_timestamp_and_authenticated_email_even_with_custom_label():
+    from datetime import datetime, timezone
+    at = datetime(2026, 9, 9, 22, 30, tzinfo=timezone.utc)
+    assert publish.sharepoint_release_name(None, 'reviewer@example.com', at=at) == '2026-09-09 22-30 UTC - reviewer@example.com'
+    assert publish.sharepoint_release_name('Board packet', 'reviewer@example.com', at=at) == '2026-09-09 22-30 UTC - reviewer@example.com - Board packet'
+    spoofed = publish.sharepoint_release_name('2026-09-09 22-30 UTC - other@example.com', 'reviewer@example.com', at=at)
+    assert spoofed.startswith('2026-09-09 22-30 UTC - reviewer@example.com - ')
+
+
+def test_sharepoint_reviewed_name_is_stable_across_minutes_and_timezone_changes():
+    from datetime import datetime, timezone, timedelta
+    at = datetime(2026, 9, 9, 22, 30, tzinfo=timezone.utc)
+    name = publish.sharepoint_release_name('Board packet', 'reviewer@example.com', at=at, timezone_name='America/Los_Angeles')
+    assert name == '2026-09-09 15-30 PDT - reviewer@example.com - Board packet'
+    assert publish.sharepoint_release_name(name, 'reviewer@example.com', at=at + timedelta(minutes=5)) == name
+
+
+def test_release_identity_is_one_safe_segment_and_obeys_length_limit():
+    from datetime import datetime, timezone
+    at = datetime(2026, 9, 9, tzinfo=timezone.utc)
+    name = publish.sharepoint_release_name(None, 'bad/path\\name:*?<>|@example.com', at=at)
+    assert publish.normalize_release_name(name, field='folder') == name
+    assert '/' not in name and '\\' not in name
+    long_owner = 'x' * 150 + '@example.com'
+    name = publish.sharepoint_release_name('Label', long_owner, at=at)
+    assert len(name) <= 100
+    assert publish.sharepoint_release_name(name, long_owner, at=at) == name

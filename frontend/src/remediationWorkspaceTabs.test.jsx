@@ -7,7 +7,7 @@ import { prepareWorkflowEntry } from './workflowEntry.js'
 import RemediationWorkspaceTabs from './RemediationWorkspaceTabs.jsx'
 
 const snapshot = {
-  run_id: 'scan-1', state: 'running', terminal: false, total_documents: 10,
+  run_id: 'scan-1', batch_id: 'batch-1', state: 'running', terminal: false, total_documents: 10,
   message: 'Remediation in progress', phases: [],
   generated_at: new Date().toISOString(), progress: { lease_healthy: true },
   documents: { completed: 2, processing: 3, waiting: 4, review: 1, failed: 0, skipped: 0 },
@@ -42,6 +42,11 @@ describe('the remediation workspace', () => {
     expect(new URLSearchParams(location.search).get('mode')).toBe('plan')
     await act(async () => host.querySelector('#rem-mode-live').click())
     expect(host.querySelector('#rem-panel-live').hidden).toBe(false)
+  })
+
+  it.each([null, { ...snapshot, batch_id: null }, { ...snapshot, run_id: 'another-scan' }])('shows no review badge before a plan has a matching run: %s', async (saved) => {
+      const { host } = await mount({ snapshot: saved, reviewCount: 119 })
+      expect(host.querySelector('#rem-mode-review').textContent).toBe('Review')
   })
 
   it('defaults to Plan even when decisions exist and keeps all panels mounted', async () => {

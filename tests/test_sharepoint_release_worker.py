@@ -129,8 +129,8 @@ def test_sharepoint_submission_saves_a_valid_custom_release_folder(monkeypatch):
     response = publish_files(
         SID, request,
         {"files": [FILE], "release_folder_name": "Q3 Accessibility Release"})
-    assert store.preferred_folder_name == "Q3 Accessibility Release"
-    assert response["release_folder_name"] == "Q3 Accessibility Release"
+    assert store.preferred_folder_name.endswith(f" - {OWNER} - Q3 Accessibility Release")
+    assert response["release_folder_name"] == store.preferred_folder_name
 
 
 def test_sharepoint_submission_freezes_the_preflighted_parent_for_worker_retries(monkeypatch):

@@ -43,13 +43,18 @@ export function completedDiscoverProgress(snapshot) {
 }
 
 export function completedAssessSnapshot(snapshot) {
-  const domain = snapshot?.domain_reconciliation || {}
+  const audit = snapshot?.assessment_summary
+  const findings = audit?.findings_recorded
+  const hasFindings = typeof findings === 'number' && Number.isFinite(findings) && findings >= 0
+  const domain = audit?.domain_reconciliation || snapshot?.domain_reconciliation || {}
   const buckets = domain.buckets || {}
   const total = value(domain.total)
   return {
     available: true, active: false, phase: 'done',
     totals: { discovered: total, eligible: total },
-    kpis: { completed: value(buckets.assessed), processing: 0 },
+    kpis: { completed: value(buckets.assessed), processing: 0,
+      ...(hasFindings ? { findings_so_far: findings } : {}) },
+    kpis_pending: [...(hasFindings ? [] : ['findings_so_far']), 'need_attention', 'unable_to_assess'],
     source: snapshot?.source || null, scope: snapshot?.scope || null,
     _live: { measuredAt: snapshot?.last_durable_update_at || snapshot?.generated_at || null,
       mode: 'complete' },

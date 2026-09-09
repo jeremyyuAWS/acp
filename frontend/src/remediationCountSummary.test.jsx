@@ -29,7 +29,7 @@ it('counts 299 eligible approvals and 47 manual items across 177 documents, excl
 it('the approval category counts all eligible proposals while manual work is open', async () => {
   const { root, container } = createTestRoot()
   await act(async () => root.render(createElement(Inbox, { queue: rows, decisions: {}, scanId: 'fixture', initialTab: 'manual' })))
-  const tab = [...container.querySelectorAll('[role=tab]')].find(el => el.textContent.includes('Approve AI suggestions'))
+  const tab = [...container.querySelectorAll('select[aria-label="Filter by status"] option:not([value=all])')].find(el => el.textContent.includes('Approve AI suggestions'))
   // 299 approvals + 2000 applied changes awaiting confirmation, which is what the tab lists. The
   // badge used to read 299 over 2299 rows — the separation this file exists to protect, made on the
   // one element that cannot express it, because a bare number beside a label carries no noun.
@@ -39,7 +39,7 @@ it('the approval category counts all eligible proposals while manual work is ope
   expect(summary).toContain('299 ready review items')
   expect(summary).toContain('2000 applied changes to confirm')
   expect(summary).toContain('47 manual review items')
-  expect([...container.querySelectorAll('[role=tab]')].find(el => el.textContent.includes('Fix manually')).getAttribute('aria-selected')).toBe('true')
+  expect([...container.querySelectorAll('select[aria-label="Filter by status"] option:not([value=all])')].find(el => el.textContent.includes('Fix manually')).selected).toBe(true)
 })
 it('wires the actual shell and page to review-item counts, with separate eligible approvals and server totals', () => {
   const app = readFileSync('src/App.jsx', 'utf8'), page = readFileSync('src/Remediate.jsx', 'utf8')

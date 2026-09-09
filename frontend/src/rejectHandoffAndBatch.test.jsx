@@ -41,8 +41,8 @@ beforeEach(() => { ;({ container, root } = createTestRoot()) })
 const render = async (props) => { await act(async () => { root.render(createElement(Fragment, null,
   createElement(RemediationInbox, { initialSort: 'document', ...props }),
   createElement(ConfirmDialog))) }) }
-const click = async (el) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
-const btnByText = (t) => [...container.querySelectorAll('button')].find((b) => b.textContent.includes(t))
+const click = async (el) => { await act(async () => { el.tagName === 'OPTION' ? (el.parentElement.value = el.value, el.parentElement.dispatchEvent(new Event('change', { bubbles: true }))) : el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
+const btnByText = (t) => [...container.querySelectorAll('button, select[aria-label="Filter by status"] option')].find((b) => b.textContent.includes(t))
 const detailHeading = () => container.querySelector('h3')?.textContent
 
 // ── W2 · the handoff item in the detail pane ───────────────────────────────────────────────────

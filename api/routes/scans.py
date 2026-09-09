@@ -3598,9 +3598,12 @@ def publish_files(sid: str, request: Request, body: dict):
             body.get("release_folder_name"), field="Release folder name")
     except _publish.UnsafeReleasePath as exc:
         raise HTTPException(422, str(exc)) from exc
-    if not preferred_folder_name:
+    if source == "sharepoint":
+        preferred_folder_name = _publish.sharepoint_release_name(
+            preferred_folder_name, owner, timezone_name=_release_timezone(owner))
+    elif not preferred_folder_name:
         release_tz = _release_timezone(owner)
-        preferred_folder_name = _publish.release_folder_name(timezone_name=release_tz)
+        preferred_folder_name = _publish.release_folder_name(timezone_name=release_tz, owner_email=owner)
     execution_options = {"preferred_folder_name": preferred_folder_name}
     if destination:
         execution_options.update(parent_folder_id=destination["folder_id"],
@@ -4043,17 +4046,20 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
         raise HTTPException(422, str(exc)) from exc
     owner = _owner(request)
     status = core.store.release_for_scan(sid, owner)
+    source = (scan.get("run") or {}).get("source") or "local"
     if status:
         folder_name = status["folder_name"]
         folder_state = "existing"
     else:
-        if requested_name:
+        if source == "sharepoint":
+            folder_name = _publish.sharepoint_release_name(
+                requested_name, owner, timezone_name=_release_timezone(owner))
+        elif requested_name:
             folder_name = requested_name
         else:
             release_tz = _release_timezone(owner)
-            folder_name = _publish.release_folder_name(timezone_name=release_tz)
+            folder_name = _publish.release_folder_name(timezone_name=release_tz, owner_email=owner)
         folder_state = "proposed"
-    source = (scan.get("run") or {}).get("source") or "local"
     destination_config = _release_destination(source, body.destination)
     destination_preflight = _preflight_release_destination(request, destination_config)
     rows = {row.get("file"): row for row in scan.get("files", [])}

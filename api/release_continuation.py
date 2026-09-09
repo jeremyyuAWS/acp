@@ -72,9 +72,12 @@ def plan(store, sid, owner, files, destination, folder_name):
                         'folder_name': existing.get('parent_folder_name') or 'Existing Release parent'}
                        if actual_parent else None)
         folder_name = existing['folder_name']
-    if not folder_name:
+    if not existing and scan['run'].get('source') == 'sharepoint':
         import publish
-        folder_name = publish.release_folder_name()
+        folder_name = publish.sharepoint_release_name(folder_name, owner)
+    elif not folder_name:
+        import publish
+        folder_name = publish.release_folder_name(owner_email=owner)
     # The previous per-file helper decoded the entire review queue again for
     # every document (177 full queue reads on the observed legacy run).
     records = store.get_file_records(sid, owner=owner)

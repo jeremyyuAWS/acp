@@ -230,6 +230,7 @@ function CompletedAssessmentResults({ m, total, completed }) {
         {findings && !findings.pending && (
           <li>{findings.value.toLocaleString()} accessibility finding{findings.value === 1 ? '' : 's'} recorded across the completed assessment.</li>
         )}
+        {findings?.pending && <li>The original findings total is unavailable in this saved summary.</li>}
         {unable && !unable.pending && unable.value > 0 && (
           <li>{unable.value.toLocaleString()} document{unable.value === 1 ? '' : 's'} could not be assessed and require{unable.value === 1 ? 's' : ''} follow-up.</li>
         )}

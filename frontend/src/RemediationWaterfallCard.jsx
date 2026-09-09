@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import Drawer from './Drawer.jsx'
+import RemediationAssessmentProgress from './RemediationAssessmentProgress.jsx'
 import WaterfallVisualDrawer from './WaterfallVisualDrawer.jsx'
 import WaterfallDrawerOverview from './WaterfallDrawerOverview.jsx'
 import RemediationRunInsights from './RemediationRunInsights.jsx'
@@ -73,7 +74,7 @@ function Stage({ title, detail, children, stamp, paused, identity, onClick, sele
   </button><span className="wf-connector" aria-hidden="true">↓</span></li>
 }
 
-export default function RemediationWaterfallCard({ snapshot, paused = false, activity = null }) {
+export default function RemediationWaterfallCard({ snapshot, paused = false, activity = null, assessmentContext = null }) {
   const scanId = snapshot.scan_id || snapshot.run_id
   const batchId = snapshot.batch_id
   const identity = `${authEpoch()}:${scanId}:${batchId}`
@@ -146,11 +147,7 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
     <header className="wf-header"><div><span className="wf-eyebrow">Selected run</span><h3>{snapshot.terminal ? 'Your run, recorded' : 'Follow your remediation'}</h3></div><div className="wf-header-status"><span className="wf-tag">Approval follows saved run authorization</span><RemediationThroughput mini data={snapshot.throughput} identity={identity} paused={visualsPaused || state.error} /></div></header>
     <div className="wf-motion-status"><span>{motion.documents > 0 ? <><i className="wf-processing-dot" aria-hidden="true" />{motion.documents} documents processing · counts update as results arrive</> : snapshot.terminal ? 'Recorded run results' : 'Motion follows confirmed activity'}</span>{!snapshot.terminal && <button type="button" aria-pressed={motionPaused} disabled={paused} onClick={() => setMotionPaused(value => !value)}>{motionPaused ? 'Resume animation' : 'Pause animation'}</button>}</div>
     {(!snapshot.terminal || state.error) && <WaterfallRunNotice snapshot={snapshot} view={data} error={state.error} paused={visualsPaused} />}
-    {!snapshot.terminal && <div className="wf-metrics">
-      <div><span>{exact ? 'Fixed and checked · findings' : 'Verified changes · all origins'}</span><strong>{displayCount(exact ? rec.resolved_verified : snapshot.fixes?.verified)}</strong></div>
-      <div><span>{exact ? 'Awaiting your review · findings' : 'Review items · not findings'}</span><strong>{displayCount(exact ? rec.awaiting_review : snapshot.review?.items)}</strong></div>
-      <div><span>Documents processing</span><strong>{displayCount(snapshot.documents?.processing)}</strong></div>
-    </div>}
+    <RemediationAssessmentProgress snapshot={snapshot} assessmentContext={assessmentContext} identity={identity} paused={visualsPaused || state.error} />
     <div className="wf-layout wf-layout-graph">
       <RemediationWaterfallGraph stages={stages} aiEnabled={data?.ai_enabled}
         selection={selectionScope === identity ? selection : 'rules'} onSelect={(stage, model) => { setSelectionScope(identity); setSelection(stage); setSelectedModel(model); setStageDrawer(true) }} motion={motion}

@@ -7869,10 +7869,24 @@ class Store:
                 "SELECT disposition,COUNT(*) AS n FROM finding_disposition "
                 "WHERE scan_id=%s AND batch_id=%s GROUP BY disposition", (scan_id, batch_id))
             grouped = self._db.fetchall(cur)
+        # Compare the ledger against its independent immutable assessment baseline, not
+        # against traces that verification may replace. Never use ledger length as its
+        # own denominator: missing rows must still fail reconciliation.
+        execution = self.get_stage_execution(batch_id)
+        manifest_id = (execution or {}).get("input_manifest_id")
+        manifest = self.get_stage_output_manifest(manifest_id) if manifest_id else None
+        original_assessment = None
+        for entry in (manifest or {}).get("entries") or []:
+            audit = entry.get("assessment_summary")
+            if isinstance(audit, dict) and isinstance(audit.get("findings_recorded"), int):
+                assessed = audit["findings_recorded"]
+                original_assessment = audit.get("finding_groups")
+                break
         counts = {row["disposition"]: int(row["n"]) for row in grouped
                   if row.get("disposition")}
         rows = sum(int(row["n"]) for row in grouped)
-        return reconcile(assessed, counts, rows=rows)
+        return {**reconcile(assessed, counts, rows=rows),
+                "original_assessment": original_assessment}
 
     def set_finding_group_disposition(
             self, scan_id: str, file: str, rule_id: str, disposition: str, *,
@@ -9396,10 +9410,11 @@ class Store:
         now = self._now()
         requested_total = max(0, int(documents_total))
         release_id = uuid.uuid4().hex[:16]
-        from datetime import datetime, timezone
-        folder_name = (preferred_folder_name or
-                       datetime.fromisoformat(now).astimezone(timezone.utc).strftime(
-                           "%Y-%m-%d %H-%M UTC"))
+        from datetime import datetime
+        from publish import release_folder_name, sharepoint_release_name
+        folder_name = (sharepoint_release_name(preferred_folder_name, owner, at=datetime.fromisoformat(now))
+                       if source == "sharepoint" else preferred_folder_name or release_folder_name(
+                           datetime.fromisoformat(now), owner_email=owner))
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO release_executions(id,scan_id,owner_email,source,folder_name,"
@@ -14020,6 +14035,52 @@ class Store:
                           "revision": int(row.get("revision") or 0)} for row in rows],
         }
 
+    def _assessment_audit_summary(self, execution: dict) -> dict:
+        """Capture the assessment once, before mutable remediation results replace traces."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT state,COUNT(*) AS n FROM stage_work_items WHERE execution_id=%s "
+                "GROUP BY state", (execution["execution_id"],))
+            partitions = {row["state"]: int(row["n"]) for row in self._db.fetchall(cur)}
+            self._db.execute(cur,
+                "SELECT input_id FROM stage_work_items WHERE execution_id=%s",
+                (execution["execution_id"],))
+            inputs = {row["input_id"] for row in self._db.fetchall(cur)}
+        domain = self._stage_domain_reconciliation(execution, partitions)
+        traces = self.get_scan_traces(execution["scan_id"])
+        if domain.get("scope") == "immutable Assess input":
+            traces = [row for row in traces if row["file"] in inputs]
+        from remediation_capability import lane
+        import re
+        groups = []
+        for row in traces:
+            if row.get("outcome") != "FAIL":
+                continue
+            fmt = str(row["file"]).rsplit(".", 1)[-1].lower()
+            if fmt == "htm":
+                fmt = "html"
+            rule_id = str(row["rule_id"])
+            match = re.fullmatch(r"(?:SC_)?(\d+)[._](\d+)[._](\d+)", rule_id)
+            sc = ".".join(match.groups()) if match else None
+            # Freeze the same format/criterion capability used by Assessment's tiles.
+            # A trace's fix_mode may represent a review policy, not capability eligibility.
+            mode = lane(fmt, sc) if sc else None
+            groups.append({"file": row["file"], "rule_id": rule_id,
+                           "finding_count": int(row.get("finding_count") or 0),
+                           "fix_mode": mode})
+        return {"findings_recorded": sum(row["finding_count"] for row in groups),
+                "finding_groups": groups,
+                "domain_reconciliation": domain, "captured_at": self._now()}
+
+    def assessment_audit_summary(self, execution: dict) -> dict | None:
+        """Read only the sealed evidence, never reconstruct history from current scan rows."""
+        manifest_id = execution.get("output_manifest_id")
+        manifest = self.get_stage_output_manifest(manifest_id) if manifest_id else None
+        for entry in (manifest or {}).get("entries") or []:
+            if isinstance(entry.get("assessment_summary"), dict):
+                return entry["assessment_summary"]
+        return None
+
     def seal_stage_output_manifest(self, execution_id: str, entries: list[dict], *,
                                    expected_revision: int, owner: str | None = None) -> dict:
         """Seal immutable outputs after every work item has a terminal, reconciled outcome."""
@@ -14032,6 +14093,10 @@ class Store:
             raise RuntimeError("stage execution revision conflict")
         if execution["state"] != "processing_complete":
             raise ValueError("output manifest requires processing_complete execution")
+        # The summary is part of the immutable manifest digest, not a mutable scan KPI.
+        if execution["stage"] == "assess" and entries:
+            entries = [dict(entry) for entry in entries]
+            entries[0]["assessment_summary"] = self._assessment_audit_summary(execution)
         ordered = sorted(entries, key=lambda row: _json.dumps(
             row, sort_keys=True, separators=(",", ":"), default=str))
         raw = _json.dumps(ordered, sort_keys=True, separators=(",", ":"), default=str)
@@ -14340,7 +14405,10 @@ class Store:
             "queued", "processing", "completed", "failed", "cancelled", "skipped"})
         if unknown_states:
             violations.append({"code": "unknown_work_item_state", "states": unknown_states})
-        domain_reconciliation = self._stage_domain_reconciliation(execution, partitions)
+        assessment_summary = (self.assessment_audit_summary(execution)
+                              if execution["stage"] == "assess" else None)
+        domain_reconciliation = ((assessment_summary or {}).get("domain_reconciliation")
+                                 or self._stage_domain_reconciliation(execution, partitions))
         if domain_reconciliation.get("exact") is False:
             violations.append({"code": f"{execution['stage']}_domain_partition",
                                "total": domain_reconciliation.get("total"),
@@ -14384,6 +14452,7 @@ class Store:
                 "exact": expected is not None and int(expected) == accounted and not unknown_states,
             },
             "domain_reconciliation": domain_reconciliation,
+            "assessment_summary": assessment_summary,
             "integrity": {"ok": not violations,
                           "affected": sorted({violation["code"] for violation in violations}),
             "violations": violations},

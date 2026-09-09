@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import ReleaseQuickActions from './ReleaseQuickActions.jsx'
+import ReleaseCopyDestination from './ReleaseCopyDestination.jsx'
 import { documentSelection, documentScopeSentence, documentsInSelection } from './remediableScope.js'
 import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage, prepareReleasePackage, downloadPreparedReleasePackage, getQueueJob, putMyReleaseTemplates } from './api.js'
 import { releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
@@ -646,6 +647,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           {failedCount > 0 && <div className="stage-live-accounting__exception"><dt>Failed</dt><dd>{failedCount.toLocaleString()}</dd></div>}
         </dl>
         </div>
+        <ReleaseCopyDestination provider={releaseProvider} destination={releaseDestination} folder={releaseFolder} folders={releaseFolders} folderName={releaseFolderName} />
         <details className="release-safeguards" style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
           <summary style={{ cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>Release safeguards, destination, and evidence</summary>
           <div style={{ marginTop: 8, fontSize: 12.5, lineHeight: 1.6 }}>
@@ -667,7 +669,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
         folderName={releaseFolderName} readOnly={readOnly} publishing={publishing}
         readyReasons={[...new Set(states.filter(state => state.status !== 'ready').map(state => state.reason))]}
-        destinationLabel={releaseDestination ? `${releaseDestination.folder_name} / Remediated` : releaseProvider === 'drive' ? 'Remediated folder in Google Drive' : releaseProvider === 'sharepoint' ? 'Remediated folder in each source library' : 'ACP managed storage'}
+        destinationLabel={releaseDestination ? `${releaseDestination.folder_name} / Remediated / ${releaseFolder?.name || releaseFolderName || 'Timestamp + user email'}` : releaseProvider === 'drive' ? 'Google Drive / Remediated / Timestamp + user email' : releaseProvider === 'sharepoint' ? 'SharePoint source library / Remediated / Timestamp + user email' : 'ACP managed storage'}
         destinationPicker={['drive', 'sharepoint'].includes(releaseProvider) ? <ReleaseDestinationPicker provider={releaseProvider} value={releaseDestination}
           onChange={value => { setReleaseDestination(value); setReleasePreview(null) }}
           onError={error => setReleaseError({ summary: 'Destination unavailable', details: error?.message })} /> : <p>Verified copies remain in ACP’s managed storage.</p>}

@@ -247,3 +247,13 @@ def test_invalid_authorization_scope_does_not_schedule(prepared,files):
     with pytest.raises(ValueError):
         flow.authorize(prepared.store,SID,OWNER,prepared.run,files,dict(provider='sharepoint',folder_id='library/root',folder_name='Source library root'),'new-request')
     assert count_jobs(prepared)==before
+
+
+def test_automatic_release_folder_includes_owner_and_matches_created_execution(prepared):
+    row = authorize(prepared)
+    name = row['intent']['release_folder_name']
+    assert name.endswith(' - ' + OWNER)
+    prepared.mode = 'receipt'
+    tick(prepared, row)
+    assert prepared.calls[0]['release_folder_name'] == name
+    assert prepared.store.release_for_scan(SID, OWNER)['folder_name'] == name

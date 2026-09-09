@@ -236,7 +236,7 @@ function Activity({ events = [], status = 'ready', terminal = false, compact = f
 // by its own endpoint, which groups the exceptions BY RESPONSE and decides on the server which of
 // them ACP may act on. See RemediationExceptions.jsx.
 
-export default function RemediationOpsPanel({ snapshot = null, connected = false, receivedAt = null, events = [], activityStatus = 'ready', updateMode = 'idle', onViewMonitor = null, compactLayout = null, exceptions = null }) {
+export default function RemediationOpsPanel({ snapshot = null, connected = false, receivedAt = null, events = [], activityStatus = 'ready', updateMode = 'idle', onViewMonitor = null, compactLayout = null, exceptions = null, assessmentContext = null }) {
   const activityConfirmed = useConfirmedRemediationActivity(snapshot)
   const [paused, setPaused] = useState(false)
   const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.hidden)
@@ -282,7 +282,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
     <RetryNotice retryAt={snapshot.retry_at} now={clock} />
     <ProgressCue snapshot={snapshot} onViewMonitor={onViewMonitor} />
     <Progress snapshot={snapshot} suspect={documentCountsSuspect} />
-    <RemediationWaterfallCard key={`${snapshot.scan_id || snapshot.run_id}:${snapshot.batch_id || "legacy"}`} snapshot={snapshot} paused={paused || hidden} />
+    <RemediationWaterfallCard key={`${snapshot.scan_id || snapshot.run_id}:${snapshot.batch_id || "legacy"}`} snapshot={snapshot} paused={paused || hidden} assessmentContext={assessmentContext} />
     <details className="wf-accounting"><summary>Detailed accounting and finding evidence</summary><FindingReconciliation snapshot={snapshot} /></details>
     {snapshot.phases?.length > 0 && <Disclosure title="Phases" compact={compact}><Pipeline phases={snapshot.phases} attempts={snapshot.active_attempts || []} moving={activityConfirmed && connected && !paused && !hidden && (snapshot.active_attempts || []).length > 0} /></Disclosure>}
     <div className="remops-two"><Workstream attempts={snapshot.active_attempts || []} generatedAt={snapshot.generated_at} compact={compact} /><Throughput snapshot={snapshot} frozen={paused || hidden} /></div>

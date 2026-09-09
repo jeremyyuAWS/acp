@@ -148,7 +148,7 @@ def test_ai_off_grants_neither_permission():
     assert context.local_drafting is False and context.enabled is False
 
 
-def test_a_funded_local_run_may_do_both():
+def test_a_funded_local_run_still_denies_cloud():
     context = RunContext(None, "owner", "scan", "run",
                          normalize_run_policy({**BASE, "ai_zone": "local"}))
-    assert context.local_drafting is True and context.enabled is True
+    assert context.local_drafting is True and context.enabled is False

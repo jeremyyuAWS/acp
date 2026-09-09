@@ -37,6 +37,16 @@ def normalize_policy(policy):
         if Decimal(amount) > Decimal("1000000"):
             raise ValueError("AI spending limit must not exceed 1,000,000 USD.")
         result["ai_budget_usd"] = format(Decimal(amount), ".2f")
+    if "ai_zone" in policy:
+        from ai_run_policy import _zone
+        result['ai_zone'] = _zone(policy['ai_zone'])
+        if 'ai_budget_usd' not in result:
+            raise ValueError('An explicit processing zone requires a run spending limit.')
+    if result.get('ai_zone') == 'local':
+        from ai_review_policy import normalize_review_policy
+        local_review = normalize_review_policy(policy.get('ai_review'))
+        if policy.get('generation_chain') or local_review['enabled'] or policy.get('auto_approve_ai'):
+            raise ValueError('Local-only Ollama drafts require human review; cloud review and fallback chains are not permitted.')
     if "auto_approve_ai" in policy:
         from ai_standing_approval import normalize
         result['auto_approve_ai'] = normalize(policy['auto_approve_ai'])

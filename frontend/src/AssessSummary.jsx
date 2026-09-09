@@ -1,3 +1,5 @@
+import { useEffect, useId, useRef, useState } from 'react'
+import AssessIncompleteChecks from './AssessIncompleteChecks.jsx'
 import { assessMetrics, reconcile, coverageSentence, SEVERITIES, SEVERITY_LABEL,
          STATUS_LABEL } from './assessMetrics.js'
 
@@ -37,10 +39,10 @@ const lab = { fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.35 }
 const val = { fontSize: 26, fontWeight: 700, fontVariantNumeric: 'tabular-nums', marginTop: 5, lineHeight: 1 }
 const sub = { fontSize: 11.5, color: 'var(--muted)', marginTop: 5, lineHeight: 1.45 }
 
-function Metric({ label, value, unit, children, tone, onClick, delta }) {
+function Metric({ label, value, unit, children, tone, onClick, delta, expanded, controls }) {
   const Tag = onClick ? 'button' : 'div'
   return (
-    <Tag type={onClick ? "button" : undefined} onClick={onClick} style={{ ...card, textAlign: 'left' }}>
+    <Tag type={onClick ? "button" : undefined} onClick={onClick} aria-expanded={expanded} aria-controls={controls} style={{ ...card, textAlign: 'left' }}>
       <div style={lab}>{label}</div>
       {value !== undefined && (
         <div style={{ ...val, color: tone }}>
@@ -122,6 +124,11 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
   // The run's own status decides two of the seven screen states the file list cannot: a run of
   // 'error' is `failed` even with a stray record, and one 'cancelled'/'interrupted' is `partial`
   // even before the not-started count is known. 'done'/absent leaves classification to the findings.
+  const [checksOpen, setChecksOpen] = useState(false)
+  const checksId = useId()
+  const checksTrigger = useRef(null)
+  useEffect(() => { setChecksOpen(false) }, [run?.id])
+  const closeChecks = () => { setChecksOpen(false); checksTrigger.current?.focus() }
   const runStatus = run?.status
   const m = assessMetrics(files, { cap, assessment, criteria, level, notStarted, runStatus })
   // Nothing, rather than zeros. A run that has not happened is not a run that found nothing.
@@ -353,10 +360,12 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           </Metric>
         )}
 
-        <Metric label="Checks not completed" value={m.unableToAssess} unit="checks">
+        <Metric label="Checks not completed" value={m.unableToAssess} unit="checks"
+                expanded={checksOpen} controls={checksId}
+                onClick={event => { checksTrigger.current = event.currentTarget; setChecksOpen(open => !open) }}>
           Checks ACP could not complete
           {m.unassessableCriteria.length > 0 && <> — {m.unassessableCriteria.length} {m.unassessableCriteria.length === 1 ? 'check type is' : 'check types are'}
-            not supported for these document formats</>}. These results are unknown, not passed or failed.
+            not supported for these document formats</>}. These results are unknown, not passed or failed. <b>View checks →</b>
         </Metric>
 
         {/* Board 4's 8th cell — the shape of the grid states what is NOT here as loudly as what is.
@@ -373,6 +382,8 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           </div>
         </div>
       </div>
+
+      {checksOpen && <AssessIncompleteChecks id={checksId} rows={m.rows} assessment={assessment} onClose={closeChecks} />}
 
       {/* ── The arithmetic, printed. Either it holds on screen or it is a visible bug. ───── */}
       <div className="muted" style={{ fontSize: 12, marginTop: 12, paddingTop: 10,

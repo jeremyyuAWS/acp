@@ -35,8 +35,8 @@ def test_custom_folder_name_is_saved_once_and_stays_stable_on_retry(isolated_sto
     retry = isolated_store.ensure_release_execution(
         "scan-named", owner, "sharepoint", 2,
         preferred_folder_name="A different name")
-    assert first["folder_name"] == "Q3 Accessibility Release"
-    assert retry["folder_name"] == "Q3 Accessibility Release"
+    assert first["folder_name"].endswith(" - owner@example.com - Q3 Accessibility Release")
+    assert retry["folder_name"] == first["folder_name"]
 
 
 def test_custom_parent_destination_is_saved_once_and_stays_stable_on_retry(isolated_store):
@@ -130,7 +130,8 @@ def test_release_history_is_owner_scoped_and_includes_durable_evidence(isolated_
     history = isolated_store.list_release_history(owner)
 
     assert [row["id"] for row in history] == [release["id"]]
-    assert history[0]["folder_name"] == "Finance Release"
+    assert history[0]["folder_name"] == release["folder_name"]
+    assert release["folder_name"].endswith(" - owner@example.com - Finance Release")
     assert history[0]["roots"][0]["folder_url"] == "https://sharepoint.example/finance"
     assert history[0]["documents"][0]["created_result"] == 0
     assert history[0]["documents"][0]["corrected_checksum"] == "a" * 64
@@ -151,3 +152,14 @@ def test_deleting_a_scan_also_removes_its_release_records(isolated_store):
     isolated_store.delete_scan("scan-delete", "owner@example.com")
 
     assert isolated_store.release_status(release["id"], "owner@example.com") is None
+
+
+def test_legacy_release_name_is_not_renamed_by_new_email_policy(isolated_store):
+    owner = 'owner@example.com'
+    _scan(isolated_store, 'legacy-folder', owner)
+    original = isolated_store.ensure_release_execution('legacy-folder', owner, 'sharepoint', 1)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, 'UPDATE release_executions SET folder_name=%s WHERE id=%s', ('2026-09-01 10-00 UTC', original['id']))
+    retry = isolated_store.ensure_release_execution('legacy-folder', owner, 'sharepoint', 2, preferred_folder_name='New label')
+    assert retry['id'] == original['id']
+    assert retry['folder_name'] == '2026-09-01 10-00 UTC'

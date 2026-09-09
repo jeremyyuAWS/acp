@@ -98,7 +98,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
   return <section className="panel release-quick" aria-label="Publish ready files and approved changes">
     <h3 className="release-quick-title">Release actions</h3>
     <div className="release-quick-summary"><strong>{ready.length} ready to publish</strong><span>{files.length} files in this scope</span></div>
-    <p><b>Destination:</b> {plan?.intent?.destination?.folder_name ? `${plan.intent.destination.folder_name} / Remediated` : destinationLabel}. Originals stay unchanged.</p>
+    <p><b>Destination:</b> {plan?.intent?.destination?.folder_name ? `${plan.intent.destination.folder_name} / Remediated / ${plan.intent.release_folder_name || folderName || 'Timestamp + user email'}` : destinationLabel}. Originals stay unchanged.</p>
     {!readOnly && <details><summary>Change destination</summary>{destinationPicker}</details>}
     <div className="release-quick-buttons">
       <div className="release-quick-action">
@@ -129,7 +129,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     {active && <div role="status" aria-label="Authorized Release progress">
       <b>{count('published')} delivered · {count('applying') + count('ready') + count('publishing')} in progress · {count('blocked') + count('failed') + count('needs_confirmation')} need attention</b>
       <p>{activeRunning ? 'Progress is saved. You can leave and return while approved changes are applied and verified.' : 'This authorized batch has finished. Files needing attention were not published.'}</p>
-      <p>Authorized destination: {active.intent.destination?.folder_name || 'Default Remediated folder for this source' }</p>
+      <p>Authorized destination: {active.intent.destination?.folder_name || 'Source location'} / Remediated / {active.intent.release_folder_name || 'Timestamp + user email'}</p>
       <details><summary>Delivery results and remaining work</summary>{outcomes.map(([file, result]) => <p key={file}><b>{file}</b>: {result.message}
         {result.receipt?.published_url && <> · <a href={result.receipt.published_url} target="_blank" rel="noopener noreferrer">Open delivered copy</a></>}</p>)}</details>
       {count('failed') > 0 && <button className="ghost" disabled={busy || readOnly || activeRunning} onClick={retry}>Retry failed delivery with the same authorization</button>}

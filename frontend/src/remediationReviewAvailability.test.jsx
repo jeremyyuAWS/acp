@@ -33,9 +33,9 @@ it('shows a generated proposal during processing, then undrafted exceptions afte
   expect(container.querySelectorAll('.rinbox-row')).toHaveLength(1)
   expect(container.textContent).toContain('A chart showing quarterly sales.')
   await render({ groups: [{ items: findings.map(row => ({ file: row.file, outcome: 'review' })) }] })
-  const manualTab = [...container.querySelectorAll('[role=tab]')].find(el => el.textContent.startsWith('Fix manually'))
+  const manualTab = [...container.querySelectorAll('select[aria-label="Filter by status"] option:not([value=all])')].find(el => el.textContent.startsWith('Fix manually'))
   expect(manualTab.textContent).toContain('79')
-  await act(async () => manualTab.click())
+  await act(async () => { manualTab.parentElement.value = manualTab.value; manualTab.parentElement.dispatchEvent(new Event('change', { bubbles: true })) })
   expect(container.textContent).not.toContain('AI-drafted fix')
 })
 

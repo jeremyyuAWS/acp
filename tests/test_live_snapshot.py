@@ -230,3 +230,15 @@ def test_second_opinion_usage_is_bounded_and_truthfully_labelled(isolated_store)
     assert block["status"] == "used" or block["status"] == "ready"
     assert block["scan"] == {"used": 1, "limit": 2, "remaining": 1}
     assert block["cost"]["estimated_remaining_usd"] == .9
+
+
+def test_completed_findings_read_sealed_assessment_not_remediation_traces():
+    store = _FakeStore({'status': 'done', 'files': 1, 'files_done': 1}, findings=0)
+    store.current_stage_output_manifest = lambda sid, stage: {
+        'entries': [{'assessment_summary': {'findings_recorded': 920}}]}
+    snap = live_snapshot.build_snapshot(store, 's1', owner='o')
+    assert snap['kpis']['findings_so_far'] == 920
+    store.current_stage_output_manifest = lambda sid, stage: {'entries': [{}]}
+    historical = live_snapshot.build_snapshot(store, 's1', owner='o')
+    assert 'findings_so_far' in historical['kpis_pending']
+    assert 'findings_so_far' not in historical['kpis']

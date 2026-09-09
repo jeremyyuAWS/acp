@@ -15,10 +15,10 @@ const { default: RemediationPreview } = await import('./RemediationPreview.jsx')
 
 let container, root
 beforeEach(() => { try { localStorage.clear() } catch {} ;({ container, root } = createTestRoot()) })
-const renderInbox = async (props) => { await act(async () => { root.render(createElement(RemediationInbox, { initialSort: 'document', onOpenWord: () => {}, ...props })) }) }
+const renderInbox = async (props) => { await act(async () => { root.render(createElement(RemediationInbox, { initialTab: 'needs-review', initialSort: 'document', onOpenWord: () => {}, ...props })) }) }
 const renderPreview = async (props) => { await act(async () => { root.render(createElement(RemediationPreview, props)) }) }
-const click = async (el) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
-const btnByText = (t) => [...container.querySelectorAll('button')].find((b) => b.textContent.includes(t))
+const click = async (el) => { await act(async () => { el.tagName === 'OPTION' ? (el.parentElement.value = el.value, el.parentElement.dispatchEvent(new Event('change', { bubbles: true }))) : el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
+const btnByText = (t) => [...container.querySelectorAll('button, select[aria-label="Filter by status"] option')].find((b) => b.textContent.includes(t))
 const tab = (label) => [...container.querySelectorAll('[role=tab]')].find((b) => b.textContent.trim() === label)
 
 // A docx contrast finding (1.4.3) with NO geometry — no page, locator or thumb. The colours match the

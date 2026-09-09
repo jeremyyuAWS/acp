@@ -155,8 +155,8 @@ class RunContext:
 
     @property
     def enabled(self):
-        """May this run spend on the CLOUD waterfall. Unchanged: AI on, and a positive cap."""
-        return self.policy["ai"] > 0 and self.policy["cap_units"] > 0
+        """Cloud spending needs AI, a positive cap, and a zone permitting cloud."""
+        return self.policy["ai"] > 0 and self.policy["cap_units"] > 0 and self.policy.get("ai_zone") != "local"
 
     @property
     def local_drafting(self):
