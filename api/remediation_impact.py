@@ -3,8 +3,16 @@ from collections import defaultdict
 import re
 
 LANES = ('automatic', 'review', 'manual', 'blocked')
+# `ai_automatic` gates AI POLICY LEVELS ABOVE 1 only. It is NOT a statement that no AI
+# proposal can be applied unattended: `auto_approve_ai` is valid precisely at level 1
+# (remediation_impact_settings.normalize), so a level-1 run with standing approval does
+# apply and release AI values with no per-change human review. The reason string used to
+# claim the opposite and was read that way; it now says what the flag actually does.
 CAPABILITIES = {'assign': True, 'execute': True, 'save_future': True, 'ai_budget': True, 'ai_automatic': False, 'supported_ai_levels': [0, 1],
-                'ai_automatic_reason': 'Automatic application of AI proposals is not supported by this execution path.'}
+                'ai_automatic_reason': ('AI policy levels above 1 are unavailable on this execution path. '
+                                        'At level 1, AI drafts still reach a person unless you turn on automatic '
+                                        'approval for the run, which applies and releases eligible AI values '
+                                        'without individual review and requires the AI reviewer.')}
 
 
 def criterion(value):
@@ -37,7 +45,17 @@ def _route(row, policy):
     if row.get('origin') == 'ai':
         if policy['ai'] == 0:
             return 'manual', 'ai_disabled'
-        # The worker can draft but has no safe unattended AI apply path yet.
+        # Standing approval (`auto_approve_ai`) applies and releases eligible AI values
+        # with no per-change human review, so forecasting them as `review` told the
+        # operator the opposite of what their own run would do. Only the rules
+        # ai_standing_approval can act on are moved; everything else still needs a
+        # person, and the lane stays a FORECAST — application-time eligibility
+        # (a writer, an exact locator, an accepted AI review) can still route a row
+        # back to the human queue, which is the safe direction to be wrong in.
+        if policy.get('auto_approve_ai') is True:
+            from ai_standing_approval import RULES
+            if (row.get('criterion') or criterion(row.get('rule_id'))) in RULES:
+                return 'automatic', 'ai_standing_approval'
         return 'review', ('proposal_approval' if row.get('has_proposal') else 'draft_required')
     if row.get('remediation_supported') is False:
         return 'manual', 'source_editing'

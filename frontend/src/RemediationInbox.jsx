@@ -540,9 +540,25 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
           {resolved ? (
             // Verification appears only AFTER a fix is saved (spec §10): the decision is recorded and a
             // fresh scan re-validates it before it can be certified — shown here, not before the work.
+            // A rejection writes nothing, so it gets its own line: saying "Written → Re-scan →
+            // Certified" under a declined fix would describe a change that was never made.
             <span className="muted" style={{ fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 600 }}>✓ Saved.</span>
-              <span>Verification: <b>Written</b> → Re-scan → Certified — a fresh scan confirms it before it’s certified.</span>
+              {String(f?.status || '').toLowerCase() === 'rejected' || decisions[f?.id]?.state === 'rejected' ? (
+                <>
+                  <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 600 }}>✓ Decision recorded.</span>
+                  <span>You rejected this suggestion — nothing was written to the document.</span>
+                </>
+              ) : f?.validated ? (
+                <>
+                  <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 600 }}>✓ Verified.</span>
+                  <span>Verification: Written → Re-scan → <b>Certified</b> — a fresh scan confirmed this fix.</span>
+                </>
+              ) : (
+                <>
+                  <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 600 }}>✓ Saved.</span>
+                  <span>Verification: <b>Written</b> → Re-scan → Certified — a fresh scan confirms it before it’s certified.</span>
+                </>
+              )}
             </span>
           ) : isManual ? (
             <>
@@ -712,7 +728,12 @@ export default function RemediationInbox({
   const dragLeft = (x) => { const r = rowRef.current?.getBoundingClientRect(); if (r?.width) setLeftW(clamp(((x - r.left) / r.width) * 100, 28, 40)) }
 
   const runCounts = remediationReviewCounts(queue, decisions, drafts)
-  const readyAcrossScan = queue.filter(f => !exclusionReason(f, decisions, drafts))
+  // Bulk approval offers exactly what the Needs-review tab holds. The queue now also carries rows
+  // that already carry a decision (approved / rejected / skipped, read back from hitl_queue), and
+  // `exclusionReason` alone would let a deferred row with a usable proposal into a run-wide
+  // "approve all ready" the reviewer opened from a tab that does not show it.
+  const readyAcrossScan = queue.filter(f => matchesWorkflow(f, 'needs-review', decisions)
+    && !exclusionReason(f, decisions, drafts))
   const counts = useMemo(() => workflowCounts(queue, decisions), [queue, decisions])
   const prog = useMemo(() => progress(queue, decisions), [queue, decisions])
 
