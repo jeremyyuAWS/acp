@@ -44,8 +44,14 @@ export default function SharePointScopePicker({ initial = [], initialExclude = [
 
   if (browseSites) return <SitePicker {...props} initial={initial} onChange={onChange} />
   return <div>
-    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.5, minWidth: 0, overflowWrap: 'anywhere' }}>{library ? `${library.site.name} → ${library.drive.name}` : 'Linked SharePoint library'}</span>
+    {/* The type lives on the ROW, not on one child. #1904 put small monospace on the breadcrumb
+        alone, which left it sitting beside two default-size links — one row, two typefaces. Set
+        once here so all three inherit and cannot drift apart again. The span keeps only its
+        layout properties: minWidth/overflowWrap stop a long site → library name blowing the
+        flex row out instead of wrapping. */}
+    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10,
+                  fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.5 }}>
+      <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{library ? `${library.site.name} → ${library.drive.name}` : 'Linked SharePoint library'}</span>
       <a href={CUSTOMER_SHAREPOINT_URL} target="_blank" rel="noopener noreferrer">Open SharePoint ↗</a>
       <button type="button" className="linklike" onClick={() => setBrowseSites(true)}>Browse other sites</button>
     </div>
