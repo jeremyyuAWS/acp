@@ -19,25 +19,27 @@ async function mount(extra = {}) {
   await render()
   return { container, changed, render }
 }
-it('starts off in a closed disclosure without changing the old plan or dispatching work', async () => {
+it('starts on in a closed disclosure without dispatching work', async () => {
   const v = await mount()
   expect(v.container.querySelector('details').open).toBe(false)
-  expect(v.container.querySelector('input').checked).toBe(false)
+  expect(v.container.querySelector('input').checked).toBe(true)
   expect(v.container.textContent).toContain('fixture-provider · primary-model')
   await click(v.container.querySelector('summary'))
   expect(v.changed).not.toHaveBeenCalled()
 })
 it('freezes all three steps and removes only the third when turned off', async () => {
   const options = catalog(), v = await mount({ options })
+  expect(v.container.querySelector('input').checked).toBe(true)
   await click(v.container.querySelector('input'))
-  const chain = v.changed.mock.calls[0][1]
+  const off = v.changed.mock.calls[0][1]
+  expect(off.steps).toEqual(options.default_steps)
+  await click(v.container.querySelector('input'))
+  const chain = v.changed.mock.calls[1][1]
   expect(chain).toEqual({ version: 1, steps: [...options.default_steps, step('third-model', 2)] })
   expect(v.container.querySelectorAll('option')).toHaveLength(1)
   expect(v.container.querySelector('[role=note]').textContent).toContain('Account access')
   options.default_steps[0].model = 'settings-changed-later'
   expect(chain.steps[0].model).toBe('primary-model')
-  await click(v.container.querySelector('input'))
-  expect(v.changed.mock.calls[1][1].steps).toEqual(chain.steps.slice(0, 2))
 })
 it.each([
   ['missing metadata', undefined, '10.00', 'not available'],

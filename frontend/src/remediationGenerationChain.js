@@ -7,7 +7,16 @@ const validStep = (step, position) => step?.step_id === IDS[position] && step.po
 const allowedModel = model => model?.allowed === true && model.available === true && model.capabilities?.includes('text')
 export function generationSteps(policy, options) {
   const steps = policy?.generation_chain?.steps ?? options?.default_steps
-  return Array.isArray(steps) ? steps : []
+  if (!Array.isArray(steps)) return []
+  // Supported scopes start with the complete verified chain. An explicit saved
+  // policy still wins, so accepted runs remain immutable.
+  if (!policy?.generation_chain && options?.supported === true && steps.length === 2) {
+    const model = (options.models || []).find(candidate => allowedModel(candidate)
+      && candidate.provider === steps[0]?.provider && !steps.some(step => sameModel(step, candidate)))
+    if (model) return [...steps, { step_id: 'fallback_2', position: 2, provider: model.provider,
+      model: model.model, enabled: true, capabilities: ['text'] }]
+  }
+  return steps
 }
 export function secondFallbackModels(policy, options) {
   const first = generationSteps(policy, options).slice(0, 2)

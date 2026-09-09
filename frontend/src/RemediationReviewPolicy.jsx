@@ -1,7 +1,7 @@
 import { useId } from 'react'
 import './remediation-run-insights.css'
 
-const DEFAULT = { enabled: false, mode: 'review_all', minimum_reliability: null, max_review_attempts: 1,
+const DEFAULT = { enabled: true, mode: 'review_all', minimum_reliability: null, max_review_attempts: 1,
   review_model: 'strong', permitted_families: [], evaluation_versions: {} }
 
 export default function RemediationReviewPolicy({ value, onChange, disabled, supported = false,
