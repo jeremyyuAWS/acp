@@ -1,3 +1,4 @@
+import RemediationAutoRelease from './RemediationAutoRelease.jsx'
 import RemediationReleaseAccess from './RemediationReleaseAccess.jsx'
 import { remediationReviewCounts, remediationDiffPage } from './remediationCountSummary.js'
 import { selectionFingerprint } from './batchReviewSelection.js'
@@ -1726,6 +1727,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         readOnly={readOnly}
         onOpenRunDetails={() => { setRunDetailsOpen((v) => !v); setWorkspaceRequest({ mode: 'live' }) }} />
       <RemediationReleaseAccess files={impactScope} readOnly={readOnly} onNavigate={onNavigate} />
+      <RemediationAutoRelease scanId={runId} files={impactScope} readOnly={readOnly} />
       <RemediationWorkspaceTabs
         runId={runId}
         workspaceRequest={workspaceRequest}
