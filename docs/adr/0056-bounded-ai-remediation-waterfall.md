@@ -183,6 +183,15 @@ things are outstanding:
    `api/remediation_impact_estimates.py` returns `calibration_unavailable` today. Reviewer
    agreement between two models is explicitly *not* calibration — two models sharing a
    provider and a prior can be wrong together.
+
+   `scripts/evals_to_calibration.py` now converts evals-kit reports into
+   `ai-review-calibration.v1` records, so the ingest seam has a producer for the first time.
+   It does **not** close this item, and the three reasons are worth naming because each is a
+   gate working rather than a gap: the corpus is generated fixtures, so the records are
+   `synthetic`; the kit runs no second-model reviewer, so their `config_id` cannot match a
+   configuration that has one; and the largest cohort any checked-in report yields is
+   **9 samples against a minimum of 30**. What it does establish is the *shape* of the
+   missing evidence and its price — see `docs/ai-review-calibration.md`.
 3. **Exact proposal-version → source-revision verification lineage**, so an approval
    provably targets the revision it was granted against.
 
