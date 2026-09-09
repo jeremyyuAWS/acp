@@ -18,11 +18,10 @@ def execution_controls(payload: dict, ai_enabled: bool) -> dict | None:
         raise ValueError("Invalid rule-based remediation setting")
     if type(ai) is not int or ai not in range(4):
         raise ValueError("Invalid AI remediation setting")
-    if ai > 2:
-        raise ValueError("Unattended AI application without independent validation is not supported")
+    if ai > 1:
+        raise ValueError("Automatic AI application is not supported; select Draft for review")
     rules = payload.get("remediation_impact_allowed_rules")
     if not isinstance(rules, list) or any(not isinstance(rule, str) for rule in rules):
         raise ValueError("Missing authoritative remediation rule scope")
     return {"allowed_rules": frozenset(rules) if rule_based else frozenset(),
-            "draft_ai": bool(ai_enabled) and ai in (1, 2),
-            "validated_ai": bool(ai_enabled) and ai == 2}
+            "draft_ai": bool(ai_enabled) and ai == 1}

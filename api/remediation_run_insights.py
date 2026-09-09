@@ -156,12 +156,27 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
                 ('hitl_events', 'e.id,e.action,e.edited,e.created_at', 'human_reviews'),
                 ('ai_validation_outcomes', 'e.id,e.outcome,e.detail,e.regressions,e.proposal_snapshot_id,e.source_revision,e.approved_value_sha256,e.created_at', 'validation_events'),
             ):
-                db.execute(cur, f'''SELECT p.snapshot_id,{fields} FROM ai_proposal_snapshots p
+                query = f'''SELECT p.snapshot_id,{fields} FROM ai_proposal_snapshots p
                     JOIN {table} e ON e.model_call_id=p.model_call_id AND e.scan_id=p.scan_id
                     AND e.file=p.file AND e.item_id=p.item_id AND e.rule_id=p.rule_id
                     WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s AND p.attempt_id IS NOT NULL
-                    AND p.snapshot_id IN ({marks}) ORDER BY e.created_at DESC,e.id,p.snapshot_id LIMIT 1001''',
-                    (*scope, *(row['snapshot_id'] for row in proposals)))
+                    AND p.snapshot_id IN ({marks}) ORDER BY e.created_at DESC,e.id,p.snapshot_id LIMIT 1001'''
+                try:
+                    db.execute(cur, query, (*scope, *(row['snapshot_id'] for row in proposals)))
+                except Exception:
+                    # Older isolated databases and pre-lineage replicas may not have the
+                    # additive verification columns yet. Preserve their historical events, but
+                    # deliberately leave exact-version verification unavailable.
+                    if table != 'ai_validation_outcomes':
+                        raise
+                    db.execute(cur, f'''SELECT p.snapshot_id,e.id,e.outcome,e.detail,e.regressions,
+                        NULL AS proposal_snapshot_id,NULL AS source_revision,
+                        NULL AS approved_value_sha256,e.created_at FROM ai_proposal_snapshots p
+                        JOIN {table} e ON e.model_call_id=p.model_call_id AND e.scan_id=p.scan_id
+                        AND e.file=p.file AND e.item_id=p.item_id AND e.rule_id=p.rule_id
+                        WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s AND p.attempt_id IS NOT NULL
+                        AND p.snapshot_id IN ({marks}) ORDER BY e.created_at DESC,e.id,p.snapshot_id LIMIT 1001''',
+                        (*scope, *(row['snapshot_id'] for row in proposals)))
                 rows = db.fetchall(cur)
                 if len(rows) > 1000:
                     event_details_complete = False
@@ -193,7 +208,12 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
                          'complete': complete,
                          'note': 'Saved proposal versions, not unique findings or verified fixes. Revisions may cover the same issue.'},
         'outcomes': {
-            'verified_fix_count': sum(1 for proposal in proposals if proposal.get('version_verified')),
+            'verified_fix_count': (
+                sum(1 for proposal in proposals if proposal.get('version_verified'))
+                if any(event.get('proposal_snapshot_id') and event.get('source_revision')
+                       and event.get('approved_value_sha256')
+                       for proposal in proposals for event in (proposal.get('validation_events') or []))
+                else None),
             'reason': 'exact_proposal_lineage_verified' if any(
                 proposal.get('version_verified') for proposal in proposals
             ) else 'proposal_version_verification_unavailable',
