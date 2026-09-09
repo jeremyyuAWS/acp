@@ -7,6 +7,7 @@ const getRemediationSnapshot = vi.fn()
 const close = vi.fn()
 const openRemediationStream = vi.fn(() => ({ close }))
 vi.mock('./api.js', () => ({
+  getRecentRemediationActivity: vi.fn(async () => ({ available: true, events: [] })),
   getRemediationSnapshot: (...args) => getRemediationSnapshot(...args),
   openRemediationStream: (...args) => openRemediationStream(...args),
 }))

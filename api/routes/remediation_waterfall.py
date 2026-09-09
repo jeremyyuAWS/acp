@@ -29,3 +29,12 @@ def run_insights(sid: str, batch_id: str, request: Request, response: Response,
         return read_insights(core.store, owner, sid, batch_id, offset=offset, limit=limit)
     except (PermissionError, LookupError) as exc:
         raise HTTPException(404, 'remediation run not found') from exc
+
+
+@router.get('/scans/{sid}/remediation/activity')
+def recent_activity(sid: str, request: Request, response: Response):
+    import core
+    from routes.scans import _owner
+    from remediation_activity_history import read_recent_activity
+    response.headers['Cache-Control'] = 'no-store'
+    return read_recent_activity(core.store, sid, _owner(request))
