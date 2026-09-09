@@ -68,11 +68,14 @@ function displayText(value) {
     .replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&apos;|&#39;/gi, "'")
 }
 
+const EXCERPT_LIMIT = 280
+const excerptOf = value => value.length > EXCERPT_LIMIT ? `${value.slice(0, EXCERPT_LIMIT).trimEnd()}…` : value
+
 function problemOf(f, issue) {
-  if (f.problemStatement) return displayText(f.problemStatement)
+  if (f.problemStatement) return excerptOf(displayText(f.problemStatement))
   const before = displayText(f.before || f.observed || '')
   const after = displayText(f.after || '')
-  if (before && after) return `ACP found ${before} where ${after} is recommended.`
+  if (before && after && before.length + after.length < 180) return `ACP found ${before} where ${after} is recommended.`
   return `ACP found an issue with ${issue.toLowerCase()} in this document.`
 }
 
@@ -414,7 +417,10 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
           </div>
           <Meta row={{ ...r, wcag: (f.rule_id || f.ruleId || '') }} />
         </div>
-        <p style={{ fontSize: 15, lineHeight: 1.55, margin: '18px 0 0' }}>{problemOf(f, r.issue)}</p>
+        <p className="remediation-review-problem" style={{ fontSize: 15, lineHeight: 1.55, margin: '18px 0 0' }}>{problemOf(f, r.issue)}</p>
+        {displayText(f.problemStatement).length > EXCERPT_LIMIT && <details className="remediation-full-text" key={`problem-${f.id}`}>
+          <summary>Show full problem description</summary><p>{displayText(f.problemStatement)}</p>
+        </details>}
 
         {/* Your task — the imperative, so the reviewer is never left guessing what to do here. Hidden
             once the finding is resolved (the verification line below then speaks instead). */}
@@ -430,10 +436,18 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
         ) : (
           <>
             <div className="remediation-comparison" aria-label="Current and proposed values">
-              <div><b>Current</b><span aria-label={`Current value: ${currentValue}`}>{currentValue}</span><button type="button" className="linklike remediation-copy-value" onClick={() => copyValue('current', currentValue)}>{copiedValue === 'current' ? 'Copied' : 'Copy current'}</button></div>
-              <div><b>Proposed</b><span aria-label={`Proposed value: ${proposedValue}`}><ChangedValue from={currentValue} to={proposedValue} /></span><button type="button" className="linklike remediation-copy-value" onClick={() => copyValue('proposed', proposedValue)}>{copiedValue === 'proposed' ? 'Copied' : 'Copy proposed'}</button></div>
+              <div><b>{currentValue.length > EXCERPT_LIMIT ? 'Current excerpt' : 'Current'}</b><span>{excerptOf(currentValue)}</span><button type="button" className="linklike remediation-copy-value" onClick={() => copyValue('current', currentValue)}>{copiedValue === 'current' ? 'Copied' : 'Copy current'}</button></div>
+              <div><b>{proposedValue.length > EXCERPT_LIMIT ? 'Proposed excerpt' : 'Proposed'}</b><span>{proposedValue.length > EXCERPT_LIMIT ? excerptOf(proposedValue) : <ChangedValue from={currentValue} to={proposedValue} />}</span><button type="button" className="linklike remediation-copy-value" onClick={() => copyValue('proposed', proposedValue)}>{copiedValue === 'proposed' ? 'Copied' : 'Copy proposed'}</button></div>
             </div>
-            {changed && <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: '10px 0 0' }}>{displayText(changed)}</p>}
+            {currentValue.length > EXCERPT_LIMIT && <details className="remediation-full-text" key={`source-${f.id}`}>
+              <summary>Show full source</summary><p>{currentValue}</p>
+            </details>}
+            {proposedValue.length > EXCERPT_LIMIT && <details className="remediation-full-text" key={`proposed-${f.id}`}>
+              <summary>Show full proposed value</summary><p>{proposedValue}</p>
+            </details>}
+            {changed && (changed.length > EXCERPT_LIMIT ? <details className="remediation-full-text" key={`change-${f.id}`}>
+              <summary>Change description</summary><p>{displayText(changed)}</p>
+            </details> : <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: '10px 0 0' }}>{displayText(changed)}</p>)}
 
             {/* Editable draft (apply lane only) — the reviewer adjusts the exact text ACP will write,
                 then applies their version. Empties reset to the AI's proposal, never a blank fix.
@@ -457,7 +471,10 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
         </p>}
         <section aria-labelledby="why-this-matters" style={{ marginTop: 18 }}>
           <h4 id="why-this-matters" style={{ margin: '0 0 5px', fontSize: 14 }}>Why this matters</h4>
-          <p className="muted" style={{ fontSize: 13, lineHeight: 1.5, margin: 0 }}>{why}</p>
+          <p className="muted" style={{ fontSize: 13, lineHeight: 1.5, margin: 0 }}>{excerptOf(why)}</p>
+          {why.length > EXCERPT_LIMIT && <details className="remediation-full-text" key={`reason-${f.id}`}>
+            <summary>Show full review reason</summary><p>{why}</p>
+          </details>}
         </section>
 
         {!isManual && hasProposedValue && (
@@ -1112,7 +1129,7 @@ export default function RemediationInbox({
                         selected={g.items[0].id === selectedId} onSelect={selectRow} showFile />
             ) : (
               <div key={g.file}>
-                <button type="button" onClick={() => setCollapsed((c) => ({ ...c, [g.file]: !c[g.file] }))}
+                <button type="button" className="rinbox-document-toggle" aria-expanded={!collapsed[g.file]} onClick={() => setCollapsed((c) => ({ ...c, [g.file]: !c[g.file] }))}
                         style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, padding: '6px 12px', cursor: 'pointer',
                                  border: 'none', borderBottom: '1px solid var(--line,#e2dce4)', background: 'var(--surface-2,#f6f5f8)', fontSize: 12, fontWeight: 700 }}>
                   <span aria-hidden="true">{collapsed[g.file] ? '▸' : '▾'}</span>

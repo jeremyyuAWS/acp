@@ -68,29 +68,34 @@ describe('the connected remediation waterfall', () => {
     expect(css).toMatch(/prefers-reduced-motion:reduce[\s\S]*animation:none/)
   })
 
-  it('offers native stage buttons and arrow/Home/End selection without moving focus to a panel', async () => {
+  it('moves keyboard focus without opening the stage drawer until a button is activated', async () => {
     const onSelect = vi.fn()
     const { container } = await mount({ selection: 'first', onSelect })
     const first = container.querySelector('[data-stage=first]')
     expect(first.getAttribute('aria-pressed')).toBe('true')
     await act(async () => first.click())
     expect(onSelect).toHaveBeenLastCalledWith('first')
+    onSelect.mockClear()
     await act(async () => first.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })))
     expect(document.activeElement).toBe(container.querySelector('[data-stage=next]'))
-    expect(onSelect).toHaveBeenLastCalledWith('next')
+    expect(onSelect).not.toHaveBeenCalled()
     await act(async () => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })))
     expect(document.activeElement).toBe(container.querySelector('[data-stage=rules]'))
     await act(async () => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })))
     expect(document.activeElement).toBe(container.querySelector('[data-stage=verify]'))
+    expect(onSelect).not.toHaveBeenCalled()
+    await act(async () => document.activeElement.click())
+    expect(onSelect).toHaveBeenLastCalledWith('verify')
   })
 
-  it.each([360, 1100])('keeps full-size nodes within a %spx canvas', width => {
+  it.each([240, 280, 360, 600, 1100])('keeps full-size nodes within a %spx canvas', width => {
     const graph = waterfallGraphModel({ stages, width })
     graph.nodes.forEach(node => {
       expect(node.position.x).toBeGreaterThanOrEqual(0)
       expect(node.position.x + node.style.width).toBeLessThanOrEqual(width)
       expect(node.position.y + node.data.height).toBeLessThanOrEqual(graph.height)
     })
-    expect(graph.height).toBeLessThan(width === 360 ? 750 : 300)
+    const columns = new Set(graph.nodes.map(node => node.position.x)).size
+    expect(columns).toBe(width < 420 ? 1 : width < 850 ? 2 : 5)
   })
 })
