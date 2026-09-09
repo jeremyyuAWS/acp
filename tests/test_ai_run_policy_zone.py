@@ -108,3 +108,47 @@ def test_threshold_policy_still_requires_a_positive_cap_on_a_local_run():
     with pytest.raises(BudgetError, match="positive run budget"):
         normalize_run_policy({**ZERO, "ai_zone": "local",
                               "threshold_policy": {"minimum_reliability": "0.9"}})
+
+
+# ── Dispatch: what `local` now actually permits ───────────────────────────────────────────────
+# Until this change `ai_zone` was a declaration nothing in the dispatch path read, so a
+# zero-cap local run was accepted and then generated nothing at all — the plan offered "keep
+# AI on our own infrastructure" and silently produced no drafts. The fix is deliberately TWO
+# permissions rather than one relaxed gate: `enabled` still means "may spend on the cloud
+# waterfall" and still demands a positive cap, and a separate `local_drafting` means "may draft
+# on the keyless floor". Making `enabled` itself true for a zero-cap local run would have opened
+# every cloud seam that reads it to a run with no budget to answer for it.
+
+def _context(**policy):
+    return RunContext(None, "owner", "scan", "run", normalize_run_policy({**ZERO, **policy}))
+
+
+def test_a_zero_cap_local_run_may_draft_locally_but_may_not_spend_on_the_cloud():
+    context = _context(ai_zone="local")
+    assert context.local_drafting is True
+    assert context.enabled is False          # the cloud gate is untouched
+
+
+def test_a_cloud_capable_run_never_gets_the_local_permission():
+    assert _context(ai_zone="any").local_drafting is False
+
+
+def test_an_absent_zone_does_not_acquire_the_local_permission():
+    """Absent is the pre-field meaning of an already-stored snapshot.
+
+    Reading it as consent to a different dispatch path would change what an accepted run
+    agreed to, retroactively, for every run stored before the field existed.
+    """
+    assert _context().local_drafting is False
+
+
+def test_ai_off_grants_neither_permission():
+    context = RunContext(None, "owner", "scan", "run",
+                         normalize_run_policy({"ai": 0, "ai_budget_usd": "0.00"}))
+    assert context.local_drafting is False and context.enabled is False
+
+
+def test_a_funded_local_run_may_do_both():
+    context = RunContext(None, "owner", "scan", "run",
+                         normalize_run_policy({**BASE, "ai_zone": "local"}))
+    assert context.local_drafting is True and context.enabled is True

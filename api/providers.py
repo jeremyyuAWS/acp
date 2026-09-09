@@ -232,6 +232,45 @@ def _text_key_for(provider: str) -> str:
     return ""
 
 
+def permitted_text_providers() -> frozenset[str]:
+    """Every text provider a waterfall in this deployment may dispatch to.
+
+    The primary is `active_text_provider()`. A chain MAY fall back to a different vendor, but
+    only one the owner NAMED — the `ai_text_fallback_providers` setting, else the
+    `ACP_TEXT_FALLBACK_PROVIDERS` deploy default — and only where that vendor's key reference
+    also resolves.
+
+    KEY PRESENCE IS NOT AUTHORISATION, and this function exists to keep it that way while the
+    chain widens. `OPENAI_API_KEY` is present in every environment that runs the evals kit and
+    `scripts/judge_drafts.py`, and an enabled `openai` row may exist for VISION only — the exact
+    reasoning `active_text_provider` gives for refusing to auto-activate OpenAI text. Widening
+    which vendors a chain may SPAN must not quietly widen how one becomes permitted, so a
+    fallback vendor needs its own naming here, exactly as the primary needs its own selection
+    there. Cloud egress stays opt-in per vendor (ADR 0019 constraint 2).
+
+    Returns the empty set when there is no active provider: the keyless local floor has no
+    waterfall to extend, and a fallback list without a primary must not conjure one.
+    """
+    active = active_text_provider()
+    if not active:
+        return frozenset()
+    named = ""
+    try:
+        import core
+        named = (core.store.get_setting("ai_text_fallback_providers") or "").strip().lower()
+    except Exception:
+        swallowed("providers.permitted_text_providers: reading the fallback setting failed")
+    if not named:
+        named = os.environ.get("ACP_TEXT_FALLBACK_PROVIDERS", "").strip().lower()
+    permitted = {active}
+    for candidate in (part.strip() for part in named.replace(";", ",").split(",")):
+        # An unknown name is "no preference", not an error — the same reading
+        # active_text_provider gives a vision-only provider or a typo.
+        if candidate in TEXT_PROVIDERS and _text_key_for(candidate):
+            permitted.add(candidate)
+    return frozenset(permitted)
+
+
 def active_text_provider() -> str | None:
     """Which cloud text provider serves this deployment, or None for the keyless local floor.
 

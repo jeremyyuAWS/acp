@@ -1495,7 +1495,14 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     _cr = _prov.text_generate(prompt, temperature=0.4, max_tokens=800,
                               model=_pilot_model, provider=_pilot_provider)
     if _cr is not None and _cr.get("deferred"):
-        return None
+        # A LOCAL-ZONE run reaches here on every draft: the managed cloud seam refuses on
+        # `not ctx.enabled` (no cap, by design) and hands back a deferred result. Returning
+        # None here would make the local permission below unreachable for the one kind of run
+        # it exists for — the cloud path's refusal IS the normal case for a local run, not an
+        # error. Every other managed run still stops, so a cloud run that defers can never
+        # degrade quietly to off-budget local drafting.
+        if not (_managed_run is not None and getattr(_managed_run, 'local_drafting', False)):
+            return None
     if _cr is not None:
         text = _cr["text"].strip().strip('"').strip()
         if text:
@@ -1525,10 +1532,18 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                     "filename. Pick the image above and draft again, or write the value yourself."
                 )
             return out
-    if _managed_run is not None:
+    if _managed_run is not None and not getattr(_managed_run, 'local_drafting', False):
         defer_managed('bounded_text_draft_unavailable')
         return None
     # Cloud provider unavailable or not configured — fall back to Ollama.
+    #
+    # A LOCAL-ZONE managed run reaches this deliberately. It has no cloud budget and needs
+    # none: the floor below is keyless and providers.py records its cost as a measured 0, so
+    # there is nothing for the budget ledger to reserve or settle. Before this, such a run
+    # deferred here and generated nothing at all — the plan offered "keep AI on our own
+    # infrastructure" and then silently produced no drafts, which is the failure mode this
+    # codebase keeps writing down: a true state reported as a working one. Every OTHER managed
+    # run still defers above, so the legacy-path exclusion stands where budget applies.
     try:
         import httpx
         r = httpx.post(
@@ -1563,6 +1578,12 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
         kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
         out = {"suggestion": text, "kind": kind,
                "is_template": rule_id == "1.1.1", "model": OLLAMA_MODEL}
+        if _managed_run is not None:
+            # Same shape the cloud branch returns, so nothing downstream has to know which
+            # path drew the draft: it still needs approval, it cost a measured zero, and the
+            # zone it was processed in is the one provenance actually reports.
+            out.update(approval_required=True, attempts=[], provider="ollama",
+                       processing_zone=provenance().get("zone"), cost_usd=0.0)
         if call_id:
             out["ai_call_id"] = call_id
         if out["is_template"]:
