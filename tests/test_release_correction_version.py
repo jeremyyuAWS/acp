@@ -220,8 +220,11 @@ def test_worker_rejects_release_from_another_scan_before_mutation(monkeypatch):
     status = store.release_status
     store.release_status = lambda *args: {**status(*args), 'scan_id': 'foreign-scan'}
     monkeypatch.setattr(core, 'store', store)
-    with pytest.raises(FatalJobError, match='does not belong'):
-        handlers._publish_file({'scan_id': SID, 'file': FILE, 'release_id': 'foreign-release', 'owner': OWNER}, {})
+    original_record = store.get_file_record
+    for compliant in (1, 0):
+        store.get_file_record = lambda *args: {**original_record(*args), 'compliant': compliant}
+        with pytest.raises(FatalJobError, match='does not belong'):
+            handlers._publish_file({'scan_id': SID, 'file': FILE, 'release_id': 'foreign-release', 'owner': OWNER}, {})
     assert store.documents == {}
     assert store.published is None
 

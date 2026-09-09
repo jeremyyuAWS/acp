@@ -859,14 +859,14 @@ def _publish_file(payload: dict, job: dict) -> None:
     scan = core.store.get_scan(scan_id, owner=owner)
     if not scan or (scan.get("run") or {}).get("source") != "sharepoint":
         raise FatalJobError("publish_file job is not an owned SharePoint scan")
+    release = core.store.release_status(release_id, owner)
+    if not release or release.get("scan_id") != scan_id:
+        raise FatalJobError("release execution does not belong to this scan")
     record = core.store.get_file_record(scan_id, filename)
     if not record or not record.get("compliant") or not record.get("remediated_at"):
         _release_failure(release_id, owner, filename, record or {}, "not_approved",
                          "Only approved corrected copies can be released.")
         return
-    release = core.store.release_status(release_id, owner)
-    if not release or release.get("scan_id") != scan_id:
-        raise FatalJobError("release execution does not belong to this scan")
     saved = core.store.get_release_document(release_id, filename, owner)
     token = core.get_scan_tokens(scan_id).get("sp")
     if not token:
