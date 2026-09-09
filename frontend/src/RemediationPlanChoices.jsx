@@ -103,7 +103,7 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, bud
           onChange={event => onChange('ai_budget_usd', event.target.value)}
           placeholder={budgetSupported ? '0.00' : 'Unavailable'} aria-describedby={`${id}-budget-note`} />
         <p id={`${id}-budget-note`}>{budgetSupported
-          ? 'AI pauses at this limit. Rule-based fixes continue. $0 permits no paid AI requests. Infrastructure costs are separate.'
+          ? 'AI pauses when the remaining budget cannot cover a request. Rule-based fixes continue. $0 permits no paid AI requests. Infrastructure costs are separate.'
           : 'Spending limits are not available on this server. Choose Rules only if you need a firm cap.'}</p>
       </div>}
     </fieldset>
