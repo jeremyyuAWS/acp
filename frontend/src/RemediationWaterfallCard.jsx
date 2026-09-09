@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import Drawer from './Drawer.jsx'
+import WaterfallVisualDrawer from './WaterfallVisualDrawer.jsx'
+import WaterfallDrawerOverview from './WaterfallDrawerOverview.jsx'
 import RemediationRunInsights from './RemediationRunInsights.jsx'
 import { getFindingDispositions } from './api.js'
 import { authEpoch } from './apiIdentity.js'
@@ -127,8 +129,8 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
     first: 'The first configured model handles drafting and, if requested, review work. Counts describe recorded operations and charge states, not usable suggestions or fixed findings.',
     next: 'The next configured model can draft after an unusable response or review a draft when your plan permits. These counts include both purposes. Open saved history below to see which work it performed.',
     unknown: 'The purpose or position of this recorded AI work is unavailable. Open its saved evidence for known facts.',
-    review: 'This recorded reviewer checks a suggestion. Its verdict is not a verified correction, and your approval is still required.',
-    approval: 'You approve AI suggestions before they are applied. Optional AI reviews follow your accepted plan. Saved review results are available below; AI suggestions still require your approval.',
+    review: 'This recorded reviewer checks a suggestion. Its verdict is not a verified correction, and approval follows the authorization saved for this run.',
+    approval: 'Approval follows the authorization saved for this run. Saved approval and review evidence remains distinct from verification.',
     verify: 'Approved changes must be applied and pass the existing verification checks. Document processing and provider responses do not count as fixed findings.',
   }
   const selectedDescription = selectedModel?.purpose === 'generation'
@@ -141,7 +143,7 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
       <section><h4>Models behind current proposals</h4>{data?.models?.length ? <><ul className="wf-models">{data.models.map(model => <li key={`${model.provider}:${model.model}`}><strong>{model.provider} · {model.model}</strong><span>{model.linked_calls} recorded call{model.linked_calls === 1 ? '' : 's'} linked to current proposals</span><span>Recorded call cost: {typeof model.recorded_cost_usd === 'number' ? money(Math.round(model.recorded_cost_usd * 1000000)) : 'Unavailable'}</span></li>)}</ul><p className="wf-secondary">These models produced the current proposals for this scan. Proposals and their recorded call costs may come from other runs. This is not a model breakdown for the selected run; do not add these costs to its charges below.</p></> : <p>No provider/model identity is linked to current proposals for this view. Historical run attribution is unavailable.</p>}</section>
       <section><h4>Spending for this run</h4><dl className="wf-spending">{[['spent_units', 'Settled provider charges'], ['held_units', 'Reserved · may still be charged'], ['available_units', 'Remaining allowance'], ['cap_units', 'Approved spending limit']].map(([key, label]) => <div key={key}><dt>{label}</dt><dd><WaterfallCount value={spending?.[key]} identity={identity} paused={visualsPaused || state.error} format={money} /></dd></div>)}</dl>{spending?.unknown_charges > 0 && <p className="wf-note">{spending.unknown_charges} charge(s) unknown. Their reservations remain held.</p>}{spending?.blocked && <p className="wf-note">Further AI spending is blocked pending reconciliation.</p>}<p className="wf-secondary">Provider charges only. Infrastructure costs are separate.</p></section></>
   return <section className={`wf-card${visualsPaused ? ' wf-paused' : ''}`} aria-label="Live remediation waterfall">
-    <header className="wf-header"><div><span className="wf-eyebrow">Selected run</span><h3>{snapshot.terminal ? 'Your run, recorded' : 'Follow your remediation'}</h3></div><div className="wf-header-status"><span className="wf-tag">AI suggestions require your approval</span><RemediationThroughput mini data={snapshot.throughput} identity={identity} paused={visualsPaused || state.error} /></div></header>
+    <header className="wf-header"><div><span className="wf-eyebrow">Selected run</span><h3>{snapshot.terminal ? 'Your run, recorded' : 'Follow your remediation'}</h3></div><div className="wf-header-status"><span className="wf-tag">Approval follows saved run authorization</span><RemediationThroughput mini data={snapshot.throughput} identity={identity} paused={visualsPaused || state.error} /></div></header>
     <div className="wf-motion-status"><span>{motion.documents > 0 ? <><i className="wf-processing-dot" aria-hidden="true" />{motion.documents} documents processing · counts update as results arrive</> : snapshot.terminal ? 'Recorded run results' : 'Motion follows confirmed activity'}</span>{!snapshot.terminal && <button type="button" aria-pressed={motionPaused} disabled={paused} onClick={() => setMotionPaused(value => !value)}>{motionPaused ? 'Resume animation' : 'Pause animation'}</button>}</div>
     {(!snapshot.terminal || state.error) && <WaterfallRunNotice snapshot={snapshot} view={data} error={state.error} paused={visualsPaused} />}
     {!snapshot.terminal && <div className="wf-metrics">
@@ -159,14 +161,22 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
     </div>
     <RemediationCompletionSummary snapshot={snapshot} view={data} exact={exact} reviewHref={`${reviewUrl.pathname}${reviewUrl.search}`} releaseHref={`${releaseUrl.pathname}${releaseUrl.search}`} />
     <footer className="wf-footer"><span>{state.error ? data ? 'Refresh delayed · showing the last recorded AI activity' : 'AI activity unavailable · retrying' : visualsPaused ? 'Animation paused · recorded totals remain available' : 'Updates follow recorded activity'}</span><span>{data?.generated_at ? `AI snapshot ${new Date(data.generated_at).toLocaleTimeString()}` : data?.available === false ? 'No managed waterfall records for this run' : 'Waiting for AI activity records'}</span></footer>
-    {stageDrawer && selectionScope === identity && createPortal(<Drawer title="Stage evidence and costs" onClose={closeStageDrawer}><div className="wf-detail">{selectedModel?.identityKind === 'configured' && <p className="wf-secondary">Configured model for this saved run · dispatch is shown only when recorded.</p>}{selectedModel?.detail && <p>{selectedModel.detail}</p>}{selectedModel?.model && <h3>{selectedModel.provider} · {selectedModel.model}</h3>}<p>{selectedDescription}</p>{selectedModel?.model && selectedStage?.models?.length > 1 && <p>Selected recorded model. Counts and history below cover its tier and the whole run; model sequence is unavailable.</p>}{selectedStage?.models?.map(model => <p key={`${model.provider}:${model.model}`}><strong>{model.provider} · {model.model}</strong></p>)}</div><RemediationAttemptStory scanId={scanId} batchId={batchId} modelFilter={selectedModel?.model || selectedModel?.attemptIds ? selectedModel : null} defaultOpen={true} live={storyLive} paused={paused || motion.hidden} reviewHref={`${reviewUrl.pathname}${reviewUrl.search}${reviewUrl.hash}`} /><details className="wf-detail"><summary>Stage evidence and costs</summary>{stageEvidence}</details><RemediationRunInsights scanId={scanId} batchId={batchId} inlineDrilldown /></Drawer>, document.body)}
+    {stageDrawer && selectionScope === identity && createPortal(<WaterfallVisualDrawer identity={identity}
+      stageTitle={selectedModel?.stepId === 'fallback_1' ? 'First fallback' : selectedModel?.stepId === 'fallback_2' ? 'Second fallback' : ({ rules: 'Rule-based changes', first: 'Primary model', next: 'Recorded fallback', review: 'AI review', approval: 'Approval', verify: 'Verification', unknown: 'Recorded AI work' })[selectedRole]}
+      provider={selectedModel?.provider} model={selectedModel?.model} status={snapshot.terminal ? 'Recorded run' : 'Run in progress'}
+      stageKind={selectedModel?.stepId === 'fallback_1' ? 'fallback1' : selectedModel?.stepId === 'fallback_2' ? 'fallback2' : ({rules:'rules',approval:'approval',verify:'verification'})[selectedRole] || 'model'}
+      breadcrumb={`Run ${batchId} › ${selectedModel?.stepId || selectedRole}${selectedModel?.model ? ` › ${selectedModel.model}` : ''}`} onClose={closeStageDrawer}
+      overview={({selectTab}) => <WaterfallDrawerOverview scanId={scanId} batchId={batchId} identity={identity} selectedModel={selectedModel} role={selectedRole} description={selectedDescription} snapshot={snapshot} live={storyLive} paused={visualsPaused || state.error} selectTab={selectTab} />}
+      attempts={<RemediationAttemptStory scanId={scanId} batchId={batchId} modelFilter={selectedModel?.model || selectedModel?.attemptIds ? selectedModel : null} defaultOpen={true} live={storyLive} paused={paused || motion.hidden} reviewHref={`${reviewUrl.pathname}${reviewUrl.search}${reviewUrl.hash}`} />}
+      evidence={<><div className="wf-detail">{stageEvidence}</div><RemediationRunInsights scanId={scanId} batchId={batchId} inlineDrilldown /></>}
+    />, document.body)}
     {drawer?.identity === identity && createPortal(<Drawer title={drawer.label} subtitle={drawer.detail} onClose={close}><div className="wf-drawer-content">{drawer.loading && <p role="status">Loading findings…</p>}{drawer.error && <p role="alert">{drawer.error}</p>}{drawer.items && <><p>{drawer.items.length} findings in this outcome.</p>{drawer.items.length === 0 && <p>No findings in this outcome.</p>}<ul>{drawer.items.map(item => <li key={item.finding_id}><strong>{item.file}</strong><span>WCAG {item.rule_id} · {item.instance_key}</span>{item.verified_at && <span>Verified {new Date(item.verified_at).toLocaleString()}</span>}</li>)}</ul></>}</div></Drawer>, document.body)}
   </section>
 }
 
 
 // Retired 2026-09-09 at the user's request. Kept for reuse; deliberately not rendered.
-export function RetiredFindingOutcomes({ outcomesRef, rec, exact, openOutcome }) {
+export function RetiredFindingOutcomes({ outcomesRef, rec, exact, openOutcome, displayCount = value => value }) {
   return (
     <section ref={outcomesRef} tabIndex={-1} className="wf-outcomes" aria-label="Finding outcomes">
       <div className="wf-section-head"><h4>Where your findings stand</h4><span>{count(rec.assessed) ? `${rec.assessed.toLocaleString()} assessed findings` : 'Finding baseline unavailable'}</span></div>

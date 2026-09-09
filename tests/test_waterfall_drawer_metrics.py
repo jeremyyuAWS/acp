@@ -84,3 +84,50 @@ def test_database_read_is_bounded_and_identity_preserved():
     assert result['spend']['complete'] is False and result['pace']['value'] is None
     assert result['mode'] == 'recorded'
     assert 'attempt_id' not in json.dumps(result)
+
+
+def test_real_schema_and_http_route_are_owner_scoped(tmp_path, monkeypatch):
+    from store import _SQLiteAdapter
+    from ai_spending_budget import BudgetLedger
+    from ai_attempt_history import AttemptHistory
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routes.remediation_waterfall import router
+    import core
+    db = _SQLiteAdapter(str(tmp_path / 'metrics.db'))
+    ledger = BudgetLedger(db)
+    ledger.init_schema()
+    ledger.create_budget('owner@example.test', 'r', 10000)
+    history = AttemptHistory(db)
+    history.init_schema()
+    history.begin('owner@example.test', 's', 'r', 'op', 'a', file='PRIVATE.pdf', input_sha256='a' * 64,
+                  provider='openai', model='model', purpose='draft')
+    with db.cursor() as cur:
+        db.execute(cur, 'UPDATE ai_attempt_history SET status=%s,result_json=%s,created_at=%s,updated_at=%s',
+                   ('drafted', record()['result_json'], record()['created_at'], record()['updated_at']))
+        db.execute(cur, 'INSERT INTO ai_spending_attempts VALUES(%s,%s,%s,%s,%s,%s,%s)',
+                   ('owner@example.test', 'r', 'a', 3000, 'fixture', 'settled', 2500))
+    class Store:
+        _db = db
+        def get_stage_execution(self, run_id, owner=None):
+            return {'owner_email': 'owner@example.test', 'scan_id': 's', 'stage': 'remediate', 'state': 'completed'} if run_id == 'r' else None
+        def get_scan(self, scan_id, owner=None):
+            return {'id': 's'} if scan_id == 's' and owner == 'owner@example.test' else None
+    monkeypatch.setattr(core, 'store', Store())
+    app = FastAPI()
+    @app.middleware('http')
+    async def owner(request, call_next):
+        request.state.user_email = request.headers.get('x-test-owner', 'owner@example.test')
+        return await call_next(request)
+    app.include_router(router)
+    client = TestClient(app)
+    response = client.get('/scans/s/remediation/waterfall/r/metrics?stage=primary&provider=openai&model=model')
+    assert response.status_code == 200
+    assert response.headers['cache-control'] == 'no-store'
+    payload = response.json()
+    assert payload['spend']['total'] == .0025
+    assert payload['contribution']['rows'][0]['value'] == 1
+    assert payload['scope'] == {'stage': 'primary', 'provider': 'openai', 'model': 'model'}
+    assert 'PRIVATE' not in response.text
+    assert client.get('/scans/s/remediation/waterfall/r/metrics', headers={'x-test-owner': 'other'}).status_code == 404
+    assert client.get('/scans/other/remediation/waterfall/r/metrics').status_code == 404

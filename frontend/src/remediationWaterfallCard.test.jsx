@@ -13,6 +13,7 @@ vi.mock('./useWaterfallActivity.js', () => ({ default: () => ({ view: null, erro
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 beforeEach(() => vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }))
 afterEach(async () => { await unmountAll(); vi.unstubAllGlobals(); vi.useRealTimers(); vi.clearAllMocks() })
+const tab = async name => act(async () => [...document.querySelectorAll('[role=tab]')].find(el => el.textContent === name).click())
 const snapshot = (extra = {}) => ({ run_id: 'scan', scan_id: 'scan', batch_id: 'batch', fixes: { verified: 30 }, review: { items: 8 }, documents: { processing: 3 },
   finding_reconciliation: { exact: true, assessed: 100, resolved_verified: 30, awaiting_review: 20,
     approved_pending_verification: 5, unchanged_no_fix: 35, failed: 8, excluded: 2, superseded: 0 }, ...extra })
@@ -34,7 +35,10 @@ it('shows durable units, costs, honest missing contribution, and accessible outc
   expect(container.querySelector('.attempt-story')).toBeNull()
   expect(container.querySelector('.wf-stage-evidence')).toBeNull()
   await act(async () => container.querySelector('.wf-activity-action button').click())
+  expect(document.querySelector('[role=dialog] .attempt-story')).toBeNull()
+  await tab('Attempts')
   expect(document.querySelector('[role=dialog] .attempt-story').open).toBe(true)
+  await tab('Evidence')
   expect(document.querySelector('[role=dialog] .remediation-run-insights summary').textContent).toContain('Saved model history')
   expect(container.querySelector('[data-stage=first]').textContent).toContain('Recorded identity unavailable')
   expect(container.textContent).toContain('15 recorded operations')
@@ -106,6 +110,7 @@ it('shows the recorded provider and exact model and preserves unknown costs', as
   ] }
   await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot()} activity={{ view }} />))
   await act(async () => container.querySelector('.wf-activity-action button').click())
+  await tab('Evidence')
   expect(document.querySelector('[role=dialog] .wf-models').textContent).toContain('anthropic · recorded-model-20260908')
   expect(document.querySelector('[role=dialog] .wf-models').textContent).toContain('$0.000042')
   expect(document.querySelector('[role=dialog] .wf-models').textContent).toContain('Recorded call cost: Unavailable')
@@ -120,7 +125,7 @@ it('places a subtle measured processing chart beside the waterfall approval stat
   expect(chart.getAttribute('width')).toBe('92')
   expect(chart.getAttribute('height')).toBe('20')
   expect(chart.getAttribute('aria-label')).toContain('Document processing · last 5 minutes')
-  expect(container.querySelector('.wf-tag').textContent).toContain('require your approval')
+  expect(container.querySelector('.wf-tag').textContent).toContain('saved run authorization')
 })
 
 it('uses the connected graph and deliberately leaves the old vertical Stage unmounted', async () => {
@@ -132,6 +137,7 @@ it('uses the connected graph and deliberately leaves the old vertical Stage unmo
   expect(source).toContain('function Stage(')
   expect(source).not.toContain('<Stage ')
   await act(async () => container.querySelector('[data-stage=next]').click())
+  await tab('Evidence')
   expect(document.querySelector('[role=dialog] .wf-detail h4').textContent).toBe('What the next AI did')
 })
 it('keeps stage accounting collapsed and explains cancelled runs without claiming completion', async () => {
@@ -148,7 +154,8 @@ it('opens a stage drawer and keeps history polling when animation is paused', as
   const { root, container } = createTestRoot()
   await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot({ state: 'running' })} activity={activity} />))
   await act(async () => container.querySelector('[data-stage=first]').click())
-  expect(document.querySelector('[role=dialog]').textContent).toContain('What the first AI did')
+  expect(document.querySelector('[role=dialog]').textContent).toContain('Primary model')
+  await tab('Attempts')
   const storySummary = document.querySelector('[role=dialog] .attempt-story > summary')
   storySummary.focus()
   await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot({ state: 'running', fixes: { verified: 31 } })} activity={activity} />))
@@ -158,6 +165,7 @@ it('opens a stage drawer and keeps history polling when animation is paused', as
   const pause = [...container.querySelectorAll('button')].find(button => button.textContent === 'Pause animation')
   await act(async () => pause.click())
   await act(async () => container.querySelector('[data-stage=first]').click())
+  await tab('Attempts')
   const reads = getRunInsights.mock.calls.length
   await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
   expect(getRunInsights.mock.calls.length).toBeGreaterThan(reads)
