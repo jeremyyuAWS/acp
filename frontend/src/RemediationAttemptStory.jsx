@@ -54,17 +54,21 @@ function Proposal({ proposal }) {
   </details>
 }
 
-export default function RemediationAttemptStory({ scanId, batchId, live = false, paused = false, defaultOpen = false, reviewHref }) {
+export default function RemediationAttemptStory({ scanId, batchId, live = false, paused = false, defaultOpen = false, reviewHref, modelFilter }) {
   const id = useId()
   const [open, setOpen] = useState(defaultOpen)
   const [choice, setChoice] = useState(null)
-  const identity = `${authEpoch()}:${scanId}:${batchId}`
+  const filtering = typeof modelFilter?.provider === 'string' && typeof modelFilter?.model === 'string' && !!modelFilter.model
+  const identity = JSON.stringify([authEpoch(), scanId, batchId, filtering ? modelFilter.provider : null, filtering ? modelFilter.model : null])
   const current = choice?.identity === identity ? choice : { offset: 0 }
   const offset = current.offset || 0
   const { data, loading, error, receivedAt, refresh } = useRemediationAttemptStory({ scanId, batchId, live, paused, open, offset })
-  const availableFiles = attemptStory(data).files
+  // Filter whole, explicitly linked sequences rather than removing their predecessor evidence.
+  const matches = group => !filtering || [...group.attempts, ...group.reviewAttempts].some(attempt => attempt.provider === modelFilter.provider && attempt.model === modelFilter.model)
+  const availableFiles = attemptStory(data).files.filter(name => !filtering || attemptStory(data, name, { live }).groups.some(matches))
   const file = availableFiles.includes(current.file) ? current.file : availableFiles[0] || ''
-  const story = attemptStory(data, file, { live })
+  const unfilteredStory = attemptStory(data, file, { live })
+  const story = { ...unfilteredStory, groups: unfilteredStory.groups.filter(matches), unlinkedProposals: filtering ? [] : unfilteredStory.unlinkedProposals }
   const group = story.groups.find(item => item.key === current.operation) || story.groups[0]
   const proposal = group?.proposals.find(item => item.snapshot_id === current.proposal) || group?.proposals[0]
   const choose = changes => setChoice({ ...current, identity, ...changes })
@@ -72,12 +76,13 @@ export default function RemediationAttemptStory({ scanId, batchId, live = false,
   return <details className="attempt-story" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
     <summary>Follow an attempt <span>See what happened to a file, step by step</span></summary>
     {open && <div className="attempt-story-body">
+      {filtering && <p className="attempt-story-model-context">Sequences containing {modelFilter.provider} · {modelFilter.model}. Linked steps from other models remain visible for context. This filter covers the current record page.</p>}
       <div className="attempt-story-toolbar"><p>Saved evidence only. Reading this story makes no AI calls.</p><button type="button" disabled={loading || !scanId || !batchId} onClick={refresh}>Refresh story</button></div>
       {error && <p role="status" className="attempt-story-notice">Refresh delayed.{data ? ' Showing the last saved page.' : ' The story could not be loaded.'}</p>}
       {!scanId || !batchId ? <p>Select a remediation run.</p> : !data && loading ? <p role="status">Loading saved attempts…</p> : !data ? <p>Saved attempts are unavailable for this run.</p> : <>
         <div className="attempt-story-selectors">
           <label htmlFor={`${id}-file`}>File in this record page<select id={`${id}-file`} value={file} disabled={!availableFiles.length} onChange={event => choose({ file: event.target.value, operation: null })}>
-            {!availableFiles.length && <option value="">No files in this page</option>}{availableFiles.map(name => <option key={name} value={name}>{name}</option>)}
+            {!availableFiles.length && <option value="">{filtering ? 'No matching files in this page' : 'No files in this page'}</option>}{availableFiles.map(name => <option key={name} value={name}>{name}</option>)}
           </select></label>
           {story.groups.length > 1 && <label htmlFor={`${id}-operation`}>Attempt sequence<select id={`${id}-operation`} value={group?.key || ''} onChange={event => choose({ operation: event.target.value })}>
             {story.groups.map((item, index) => <option key={item.key} value={item.key}>Sequence {index + 1} · {attemptPurpose(item.attempts[0].purpose)} · {date(item.attempts[0].created_at)}</option>)}
@@ -100,7 +105,7 @@ export default function RemediationAttemptStory({ scanId, batchId, live = false,
             <ul>{rows(receipt.review?.steps).map((step, i) => <li key={step.attempt_id || i}>{attemptPurpose(step.purpose)} · {step.provider || 'Provider not recorded'} · {step.model || 'Model not recorded'}: {attemptReason(step.reason)}</li>)}</ul>
           </section>)}
           <div className="attempt-story-next"><strong>Next action</strong><p>{group.next}</p>{reviewHref && <a href={reviewHref}>Open Review</a>}</div>
-        </> : <p>No linked model attempts for this file in the current page.</p>}
+        </> : <p>{filtering ? 'No matching recorded attempts for this model on the current page. Other record pages may contain matching attempts.' : 'No linked model attempts for this file in the current page.'}</p>}
         {story.unlinkedProposals.length > 0 && <section><h4>Other saved proposals for this file</h4><p>Their model attempt is not linked in this page. No model attribution is inferred.</p>{story.unlinkedProposals.map(proposal => <Proposal key={proposal.snapshot_id} proposal={proposal} />)}</section>}
         <nav className="attempt-story-pages" aria-label="Attempt story record pages"><button type="button" disabled={offset === 0 || loading} onClick={() => choose({ offset: Math.max(0, offset - limit), operation: null })}>Previous records</button><span>Record page {Math.floor(offset / limit) + 1}</span><button type="button" disabled={!data.pagination?.has_more || loading} onClick={() => choose({ offset: offset + limit, operation: null })}>Next records</button></nav>
       </>}

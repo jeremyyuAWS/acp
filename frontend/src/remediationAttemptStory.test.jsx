@@ -161,3 +161,38 @@ it('explains recorded stopping reasons without claiming the next model ran', () 
   expect(attemptReason('provider_refused')).toContain('no further model was tried')
   expect(attemptReason('unrecognized_reason')).toBe('unrecognized reason')
 })
+
+it('filters exact model sequences while retaining their linked predecessor and proposal evidence', async () => {
+  getRunInsights.mockResolvedValue({ ...record, attempts: [...record.attempts,
+    { ...record.attempts[0], attempt_id: 'unrelated', operation_id: 'unrelated', model: 'unrelated-model' },
+    { ...record.attempts[1], attempt_id: 'wrong-provider', operation_id: 'wrong-provider', provider: 'different-provider' },
+  ] })
+  const { container } = await mount({ modelFilter: { provider: 'provider-two', model: 'recorded-fallback' } })
+  expect([...container.querySelector('select').options].map(option => option.value)).toEqual(['Report.docx'])
+  expect(container.querySelector('.attempt-story-timeline').textContent).toContain('recorded-first')
+  expect(container.querySelector('.attempt-story-timeline').textContent).toContain('recorded-fallback')
+  expect(container.textContent).not.toContain('unrelated-model')
+  expect(container.textContent).not.toContain('different-provider')
+  expect(container.querySelector('.attempt-story-preview').textContent).toContain('Suggested')
+  expect(container.textContent).toContain('This filter covers the current record page')
+  expect(getRunInsights).toHaveBeenCalledWith('scan', 'batch', expect.any(AbortSignal), 0)
+})
+
+it('keeps paging available when a selected model has no matching records on this page', async () => {
+  const { container } = await mount({ modelFilter: { provider: 'absent', model: 'absent' } })
+  expect(container.textContent).toContain('No matching recorded attempts for this model on the current page')
+  expect(container.textContent).toContain('Other record pages may contain matching attempts')
+  expect(container.querySelector('.attempt-story-timeline')).toBeNull()
+  expect(buttons(container, 'Next records').disabled).toBe(false)
+  await act(async () => buttons(container, 'Next records').click())
+  expect(getRunInsights).toHaveBeenLastCalledWith('scan', 'batch', expect.any(AbortSignal), 100)
+})
+
+it('includes complete draft sequences matched through an explicitly linked review attempt', async () => {
+  const reviewer = { file: 'Report.docx', operation_id: 'review-op', attempt_id: 'review-a', purpose: 'review', provider: 'review-provider', model: 'review-model' }
+  getRunInsights.mockResolvedValue({ ...record, attempts: [...record.attempts, reviewer], review_receipts: [{ ...record.review_receipts[0], review: { steps: [{ attempt_id: 'review-a' }] } }] })
+  const { container } = await mount({ modelFilter: { provider: 'review-provider', model: 'review-model' } })
+  expect(container.querySelector('.attempt-story-timeline').textContent).toContain('recorded-first')
+  expect(container.querySelector('.attempt-story-timeline').textContent).toContain('review-model')
+  expect(container.querySelector('.attempt-story-preview')).not.toBeNull()
+})
