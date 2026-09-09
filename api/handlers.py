@@ -896,7 +896,7 @@ def _publish_file(payload: dict, job: dict) -> None:
         record = require_current_record(core.store, scan_id, filename, content_digest, record.get("remediated_at"), owner=owner)
         identity = reuse_state(saved, content_digest)
         if identity == "unresolved":
-            raise ReleaseArtifactError("Prior delivery has no exact artifact digest. Reconcile that delivery before retrying.")
+            raise ReleaseArtifactError("Prior delivery has no exact artifact digest. Reconcile that delivery before retrying.", category="delivery_version_unresolved")
         if identity == "reuse":
             return
         chosen_parent = release.get("parent_folder_id")
@@ -1007,7 +1007,7 @@ def _publish_file(payload: dict, job: dict) -> None:
     except ReleaseArtifactError as exc:
         # A stale job must never replace a newer correction's confirmed delivery with failure.
         if reuse_state(saved, content_digest) != "reuse":
-            _release_failure(release_id, owner, filename, record, "release_evidence_changed", str(exc))
+            _release_failure(release_id, owner, filename, record, exc.category, str(exc))
         raise FatalJobError(str(exc)) from exc
     except _scanner.SharePointSessionExpired:
         if int((job or {}).get("attempts") or 1) < int((job or {}).get("max_attempts") or 5):

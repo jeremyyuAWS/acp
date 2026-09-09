@@ -7,7 +7,9 @@ from __future__ import annotations
 
 
 class ReleaseArtifactError(ValueError):
-    pass
+    def __init__(self, message, *, category="release_evidence_changed"):
+        super().__init__(message)
+        self.category = category
 
 
 def artifact_tag(digest: str) -> str:
@@ -19,7 +21,8 @@ def reuse_state(saved: dict | None, digest: str) -> str:
         return "new"
     previous = saved.get("artifact_digest")
     if not previous and (saved.get("status") == "published" or saved.get("published_at")
-                         or saved.get("released_document_id")):
+                         or saved.get("released_document_id")
+                         or saved.get("failure_category") == "delivery_version_unresolved"):
         return "unresolved"
     if saved.get("status") == "published" and previous == artifact_tag(digest):
         return "reuse"

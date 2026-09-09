@@ -3725,7 +3725,7 @@ def publish_files(sid: str, request: Request, body: dict):
             record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner)
             state = reuse_state(saved, content_digest)
             if state == "unresolved":
-                raise ReleaseArtifactError("Prior delivery has no exact artifact digest. Reconcile that delivery before retrying.")
+                raise ReleaseArtifactError("Prior delivery has no exact artifact digest. Reconcile that delivery before retrying.", category="delivery_version_unresolved")
             if state == "reuse":
                 results.append({"file": f, "source_document_id": saved.get("source_document_id"),
                                 "original_relative_path": saved.get("source_relative_path"),
@@ -3848,7 +3848,7 @@ def publish_files(sid: str, request: Request, body: dict):
             finish_synchronous(f, "completed", result)
         except ReleaseArtifactError as exc:
             result = {"file": f, "status": "failed", "original_relative_path": source_path,
-                      "failure_category": "release_evidence_changed", "explanation": str(exc), "created": False}
+                      "failure_category": exc.category, "explanation": str(exc), "created": False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
             finish_synchronous(f, "failed", result)

@@ -6083,7 +6083,7 @@ class Store:
             run = self._fill_run_aggregate(cur, run)
             self._db.execute(cur,
                 "SELECT fr.file,fr.engine,fr.status,fr.score,fr.compliant,fr.skipped_rules,"
-                "fr.remediated_at,fr.drive_write_url,fr.acp_stamped,fr.published_at,"
+                "fr.remediated_at,fr.drive_write_url,fr.acp_stamped,fr.published_at,fr.corrected_sha256,"
                 "fr.size_kb,fr.pages,fr.sheets,fr.drive_file_id,fr.source_modified,"
                 "si.owner,si.parent_folder,si.path AS source_relative_path "
                 "FROM file_records fr "
@@ -9456,7 +9456,7 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT f.file,f.engine,f.status,f.score,f.compliant,f.drive_file_id,"
-                "f.remediated_at,f.published_at,f.published_url,f.checksum,"
+                "f.remediated_at,f.published_at,f.published_url,f.checksum,f.corrected_sha256,f.source_modified,"
                 "i.source_name,i.path AS source_relative_path,i.parent_folder,i.drive_id,i.site_id,"
                 "i.library_name,i.site_name "
                 "FROM file_records f LEFT JOIN scan_inventory i "

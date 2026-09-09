@@ -266,3 +266,9 @@ def test_partial_release_retries_only_requested_failed_file(monkeypatch):
     assert [r['file'] for r in result['published']] == ['two.pdf']
     assert result['published'][0]['status'] == 'published'
     assert documents['one.pdf'] == first
+
+
+def test_unresolved_legacy_marker_survives_without_timestamp_or_provider_id():
+    from release_artifacts import reuse_state
+    saved = {'status': 'failed', 'failure_category': 'delivery_version_unresolved'}
+    assert reuse_state(saved, 'a' * 64) == 'unresolved'
