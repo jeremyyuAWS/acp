@@ -8,7 +8,7 @@ APPLIES = dict(format='html', change_family='link-label', config_id='exact-confi
 
 def cohort(n=40):
     return dict(**APPLIES, evaluation_version='v1', evaluated_at='2026-09-07T00:00:00Z',
-                provenance=dict(kind='evaluated', representative=True, production_approved=True, approval_ref='fixture-only-not-production', dataset_sha256='a'*64, evaluation_report_sha256='b'*64),
+                provenance=dict(kind='evaluated', qualification_owner='owner', representative=True, production_approved=True, approval_ref='fixture-only-not-production', dataset_sha256='a'*64, evaluation_report_sha256='b'*64),
                 impact_evidence=dict(schema_version='ai-impact-cohort.v1', representative=True,
                     population_size=n, expires_at='2026-09-20T00:00:00Z', charges_complete=True,
                     samples=[dict(finding_id=str(i), source_revision='s1', operation_id=str(i), evidence_id='label-'+str(i),
@@ -206,3 +206,29 @@ def test_reader_rejects_missing_current_config_and_changed_manifest():
 def test_hashes_alone_do_not_qualify_production_evidence(field):
     r = cohort(); r['provenance'].pop(field)
     assert not estimate(r)['available']
+
+
+
+def test_foreign_qualification_record_cannot_supply_owner_estimate(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    import remediation_cohort_estimates as module
+    record = cohort()
+    record['provenance']['qualification_owner'] = 'another-owner'
+    monkeypatch.setitem(sys.modules, 'ai_review_calibration', SimpleNamespace(load_calibration_records=lambda *args: [record]))
+    original = module.estimate_plan
+    seen = []
+    def observe(records, population, **kwargs):
+        seen.extend(records)
+        return original(records, population, now=NOW)
+    monkeypatch.setattr(module, 'estimate_plan', observe)
+    result = module.read_plan_estimate(ContextStore(), 'owner', bound_preview())
+    assert seen == []
+    assert not result['available']
+
+
+def test_current_manifest_with_different_configuration_is_unavailable():
+    from remediation_cohort_estimates import read_plan_estimate
+    preview = bound_preview()
+    preview['estimate_context']['configuration_revision'] = 'new-current-model'
+    assert read_plan_estimate(ContextStore(), 'owner', preview)['reason'] == 'current_estimate_context_unavailable'

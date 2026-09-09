@@ -214,7 +214,9 @@ def read_plan_estimate(store, owner, preview):
                 or estimate_scope_revision(context['assessment_revision'], files) != context['scope_revision']):
             return {**estimate_plan([], None), 'reason': 'stale_assessment_or_scope'}
         from ai_review_calibration import load_calibration_records
-        return estimate_plan(load_calibration_records(store, owner), population)
+        records = [record for record in load_calibration_records(store, owner)
+                   if (record.get('provenance') or {}).get('qualification_owner') == owner]
+        return estimate_plan(records, population)
     except Exception:
         # Optional estimate failures must not break the rules-only routing preview.
         # Do not log record content, source text or exception payloads.
