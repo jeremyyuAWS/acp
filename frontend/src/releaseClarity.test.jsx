@@ -255,3 +255,13 @@ it('mounts both top-level Release actions for a run with no ready copies', async
   }
   expect(publishAllFiles).not.toHaveBeenCalled()
 })
+
+it('publishes only the ready subset while the same run still has processing and review files', async () => {
+  listHitlQueue.mockResolvedValue([{ file: 'review.pdf', status: 'pending' }])
+  const c = await mount({ run: { ...run, status: 'running' }, files: [verified('ready.pdf', { corrected_sha256: 'exact-ready' }), held('processing.pdf', { status: 'running' }), held('review.pdf')] })
+  expect(button(c, 'Publish ready files (1)').disabled).toBe(false)
+  await click(button(c, 'Publish ready files (1)'))
+  expect(publishAllFiles).toHaveBeenCalledWith('scan1', ['ready.pdf'], '', {
+    destination: null, expectedArtifacts: { 'ready.pdf': 'exact-ready' },
+  })
+})
