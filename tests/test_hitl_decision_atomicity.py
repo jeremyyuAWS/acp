@@ -128,6 +128,7 @@ def test_postgres_replay_check_locks_the_review_row():
     sql = []
 
     class Db:
+        supports_for_update = True
         supports_skip_locked = True
 
         @contextlib.contextmanager
@@ -144,3 +145,30 @@ def test_postgres_replay_check_locks_the_review_row():
     st._db = Db()
     assert st._get_hitl_item_for_decision("item-1") is None
     assert sql == ["SELECT * FROM hitl_queue WHERE id=%s FOR UPDATE"]
+
+
+def test_hitl_lock_does_not_infer_for_update_from_skip_locked():
+    """Queue claiming and review-row locking are separate adapter capabilities."""
+    import contextlib
+    import store as store_mod
+
+    sql = []
+
+    class Db:
+        supports_for_update = False
+        supports_skip_locked = True
+
+        @contextlib.contextmanager
+        def cursor(self):
+            yield object()
+
+        def execute(self, cur, statement, params=()):
+            sql.append(statement)
+
+        def fetchone(self, cur):
+            return None
+
+    st = store_mod.Store.__new__(store_mod.Store)
+    st._db = Db()
+    assert st._get_hitl_item_for_decision("item-1") is None
+    assert sql == ["SELECT * FROM hitl_queue WHERE id=%s"]

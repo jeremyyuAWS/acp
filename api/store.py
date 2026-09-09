@@ -2109,6 +2109,10 @@ class _SQLiteAdapter:
         row = cur.fetchone()
         return dict(zip([d[0] for d in cur.description], row)) if row else None
 
+    # SQLite does not implement SELECT ... FOR UPDATE.  Keep this capability
+    # separate from `supports_skip_locked`: the latter is a queue-claim
+    # optimization and is not a general row-locking contract.
+    supports_for_update: bool = False
     supports_skip_locked: bool = False
 
 
@@ -2762,6 +2766,7 @@ class _PgAdapter:
         row = cur.fetchone()
         return dict(row) if row else None
 
+    supports_for_update: bool = True
     supports_skip_locked: bool = True
 
 
@@ -11119,7 +11124,7 @@ class Store:
 
     def _get_hitl_item_for_decision(self, item_id: str) -> dict | None:
         """Lock one review row until the surrounding decision transaction commits."""
-        suffix = " FOR UPDATE" if self._db.supports_skip_locked else ""
+        suffix = " FOR UPDATE" if getattr(self._db, "supports_for_update", False) else ""
         with self._db.cursor() as cur:
             self._db.execute(cur, f"SELECT * FROM hitl_queue WHERE id=%s{suffix}", (item_id,))
             return self._decode_proposals(self._db.fetchone(cur))
