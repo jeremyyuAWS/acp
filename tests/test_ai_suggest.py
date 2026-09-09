@@ -23,6 +23,35 @@ def test_suggest_prompt_is_rule_specific():
     assert "destination or purpose" in link
 
 
+def test_suggest_prompt_uses_bounded_full_document_context():
+    context = {
+        "version": 1,
+        "source_sha256": "a" * 64,
+        "document_summary": "Employee benefits guide.",
+        "entities": ["employees", "enrollment"],
+        "style_rules": {"tone": "formal", "terminology": ["employee"]},
+        "do_not_change": ["legal wording"],
+        "sections": [{"id": "intro", "title": "Overview", "purpose": "Plan overview"}],
+        "accessibility_context": [{
+            "finding_id": "2.4.4", "location": "link-3", "meaning": "Link lacks purpose",
+            "safe_fix": "Name the destination", "risk": "medium",
+        }],
+    }
+    prompt = ai._suggest_prompt("2.4.4", "Link Purpose", "guide.docx", "click here",
+                                document_context=context)
+    assert "Document context" in prompt
+    assert "Employee benefits guide." in prompt
+    assert "Name the destination" in prompt
+    assert "do_not_change" in prompt
+
+
+def test_malformed_context_does_not_block_normal_prompt():
+    prompt = ai._suggest_prompt("2.4.4", "Link Purpose", "guide.docx", "click here",
+                                document_context={"version": 1})
+    assert "Document context" not in prompt
+    assert "click here" in prompt
+
+
 def test_suggest_fix_degrades_to_none_without_ollama(monkeypatch):
     # Force the HTTP call to fail; suggest_fix must swallow it and return None.
     import httpx

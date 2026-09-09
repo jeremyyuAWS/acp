@@ -1392,10 +1392,20 @@ _SUGGEST_KIND: dict[str, tuple[str, str]] = {
 }
 
 
-def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str, guidance: str = "") -> str:
+def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str,
+                    guidance: str = "", document_context: dict | None = None) -> str:
     kind, want = _SUGGEST_KIND.get(rule_id, ("fix", "a concrete corrected value"))
     ctx = f"\nFinding detail: {detail}" if detail else ""
     house = f"\n{guidance}" if guidance else ""    # ADR 0021 org house style (memory active)
+    compiled = ""
+    if document_context:
+        # Context is optional enrichment. A malformed or stale model-produced package must
+        # never block a deterministic/cheap suggestion, so omit it and retain the normal prompt.
+        try:
+            from document_context import ContextValidationError, context_prompt
+            compiled = "\n" + context_prompt(document_context, rule_id)
+        except (ContextValidationError, TypeError, ValueError):
+            compiled = ""
     vision_note = ""
     if rule_id == "1.1.1":
         vision_note = ("\nYou cannot see the image. Produce a SHORT fill-in-the-blank template the author "
@@ -1408,7 +1418,7 @@ def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str, gu
     return (
         f"You are an accessibility remediation assistant. A WCAG {rule_id} ({rule_name}) issue was found "
         f"in the document '{filename}'.{ctx}\n"
-        f"Draft {want}.{vision_note}{house}\n"
+        f"Draft {want}.{vision_note}{house}{compiled}\n"
         f"Reply with ONLY the suggested {kind} — no preamble, no quotes, under 30 words."
     )
 
@@ -1416,7 +1426,8 @@ def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str, gu
 def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                 detail: str = "", image_bytes: bytes | None = None, style: str = "",
                 guidance: str = "", scan_id: str | None = None,
-                file: str | None = None, file_format: str | None = None) -> dict | None:
+                file: str | None = None, file_format: str | None = None,
+                document_context: dict | None = None) -> dict | None:
     """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
     semantic finding via the local model. Returns None when Ollama is unavailable.
 
@@ -1452,7 +1463,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                     out[k] = res[k]
             return out
         # vision unavailable / unusable → fall through to the text template below.
-    prompt = _suggest_prompt(rule_id, rule_name, filename, detail, guidance)
+    prompt = _suggest_prompt(rule_id, rule_name, filename, detail, guidance, document_context)
     import time as _t
     _t0 = _t.monotonic()
     # Only the two evidence-approved 2.4.4 lanes may override the default cloud model. The
