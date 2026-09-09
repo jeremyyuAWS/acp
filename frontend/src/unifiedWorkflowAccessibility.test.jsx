@@ -80,9 +80,9 @@ describe('unified canonical workflow experience', () => {
       activeStage: 'discover',
     }))
     const toggle = history.querySelector('.workflow-stage-stack__summary')
-    expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    act(() => { toggle.click() })
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    act(() => { toggle.click() })
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
     expect(history.querySelector('.discover-run-progress')).not.toBeNull()
     expect(history.textContent).toContain('Discovery complete')
     expect(history.textContent).not.toContain('Workflow revision')
