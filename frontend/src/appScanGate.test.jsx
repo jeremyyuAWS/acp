@@ -36,6 +36,10 @@ import { gotoStep } from './wizardNav.testkit.js'
 globalThis.__BUILD_TIME__ = '2026-08-01T00:00:00.000Z'
 globalThis.__BUILD_VERSION__ = '2026.8.1'
 
+const mode = vi.hoisted(() => ({ sim: true }))
+vi.mock('./sim.js', async (actual) => ({ ...(await actual()), get SIM() { return mode.sim } }))
+const checkDiscoveryPreflight = vi.fn()
+
 const startScanQueued = vi.fn(async () => { throw new Error('test stub — do not run the poll loop') })
 const startScan = vi.fn(async () => { throw new Error('test stub — do not run the poll loop') })
 const getScanLocations = vi.fn(async () => ({
@@ -57,6 +61,7 @@ vi.mock('./api.js', async (importActual) => ({
   getScan: vi.fn(async () => ({ run: { id: 's1', status: 'done' }, files: [] })),
   getDecisions: vi.fn(async () => ({})),
   getScanLocations,
+  checkDiscoveryPreflight,
   startScanQueued,
   // The Durable toggle is no longer on the modal, so a default confirm takes the NON-queued path
   // and THIS is the call that has to be observable. Throws for the same reason startScanQueued
@@ -67,7 +72,7 @@ vi.mock('./api.js', async (importActual) => ({
 const { default: App } = await import('./App.jsx')
 
 afterEach(unmountAll)
-beforeEach(() => { startScanQueued.mockClear(); startScan.mockClear(); getScanLocations.mockClear() })
+beforeEach(() => { mode.sim = true; checkDiscoveryPreflight.mockReset(); startScanQueued.mockClear(); startScan.mockClear(); getScanLocations.mockClear() })
 
 const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
 const click = async (el) => { await act(async () => { el.click() }); await flush() }
@@ -256,5 +261,37 @@ describe('Discover carries no scan entry point of its own', () => {
       .filter((f) => f.endsWith('.jsx') && !f.includes('.test.'))
       .filter((f) => /folderFirst: true/.test(readFileSync(join(dirname(fileURLToPath(import.meta.url)), f), 'utf8')))
     expect(callers).toEqual([])
+  })
+})
+
+
+describe('scan submission failures stay visible', () => {
+  async function submit(c) {
+    await click(newScan(c))
+    await gotoStep(dialog(c), act, 3)
+    mode.sim = false
+    await click(dialog(c).querySelector('button[data-wizard-forward]'))
+  }
+
+  it('shows a blocked preflight reason without submitting a scan', async () => {
+    const c = await mountSignedInOnSources()
+    checkDiscoveryPreflight.mockResolvedValue({
+      verdict: 'blocked', blocked_reasons: ['Selected folder is unreachable'],
+    })
+    await submit(c)
+    expect(checkDiscoveryPreflight).toHaveBeenCalled()
+    expect(startScanQueued).not.toHaveBeenCalled()
+    expect(c.querySelector('.err[role="alert"]')?.textContent).toContain('Selected folder is unreachable')
+    expect(c.textContent).not.toContain('This scan completed and found no files')
+  })
+
+  it('keeps a lost submission response uncertain rather than reporting failure', async () => {
+    const c = await mountSignedInOnSources()
+    checkDiscoveryPreflight.mockResolvedValue({ verdict: 'ready' })
+    startScanQueued.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    await submit(c)
+    expect(startScanQueued).toHaveBeenCalled()
+    expect(c.textContent).toContain('The server did not confirm your scan')
+    expect(c.querySelector('.err[role="alert"]')).toBeNull()
   })
 })

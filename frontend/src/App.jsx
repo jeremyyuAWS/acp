@@ -1377,6 +1377,7 @@ export default function App() {
     }
 
     let streamHandle = null
+    let submissionUncertain = false
     try {
       let fresh
       if (queuedScan) {
@@ -1418,7 +1419,10 @@ export default function App() {
           // A bounded request that timed out is reported as unconfirmed, with the retry that
           // reconciles it, rather than as a failure the user might respond to by starting a
           // second scan by hand.
-          else setSubmitUncertain({ source, folder, runScope, timedOut: err?.name === 'TimeoutError' })
+          else {
+            submissionUncertain = true
+            setSubmitUncertain({ source, folder, runScope, timedOut: err?.name === 'TimeoutError' })
+          }
           throw err
         }
         completeIntent('scan')
@@ -1565,7 +1569,8 @@ export default function App() {
       // An unconfirmed submit already has its own, more accurate surface; a red "scan failed"
       // beside it would contradict it, which is exactly the two-banners-disagreeing bug the
       // comment above was written about.
-      if (!outcomeIsUncertain(e?.status)) setErr(`scan failed: ${scanFailureDetail(e?.message ?? e)}`)
+      // A plain Error from preflight is a known rejection, not a lost submit response.
+      if (!submissionUncertain) setErr(`scan failed: ${scanFailureDetail(e?.message ?? e)}`)
       // Same "notify me" arming as the completion path below — a user who opted to walk away
       // wants to know the scan failed just as much as that it finished (see scanNotify.js).
       // A second scanFailureDetail() call, not a shared variable, deliberately keeps the line
