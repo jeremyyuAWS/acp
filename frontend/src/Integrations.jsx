@@ -1,3 +1,4 @@
+import { CUSTOMER_SHAREPOINT_URL } from './sharepointDestination.js'
 import sharePointLogo from './assets/sharepoint-logo.svg'
 import { useState, useEffect, useRef } from 'react'
 import { getConfig, listFolders, listSpFolders, getScanLocations, setScanLocations } from './api.js'
@@ -90,7 +91,7 @@ const CONNECTABLE = [
   { id: 'sp-root', type: 'onedrive',     name: 'SharePoint'   },
 ]
 
-const CUSTOMER_SHAREPOINT_URL = 'https://fgxlxj.sharepoint.com/Shared%20Documents/Forms/AllItems.aspx?viewid=394d7651%2D488f%2D43e3%2D86b6%2D626214684979&FolderCTID=0x012000B50522C7BE203F4BAA10F38DCC812F75'
+
 
 // A provider link is navigation, not an ACP management action. Prefer the exact HTTPS URL a
 // connector supplies; otherwise use the provider's signed-in landing page. Never interpolate an

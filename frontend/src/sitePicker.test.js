@@ -76,7 +76,7 @@ describe('SitePicker', () => {
     expect(s).toMatch(/layout = 'modal'/)
     expect(s).toMatch(/inline \? content/)
     const wizard = read('ScanScopeWizard.jsx')
-    expect(wizard).toContain('<SitePicker')
+    expect(wizard).toContain('<SharePointScopePicker')
     expect(wizard).toContain('layout="inline"')
   })
 })

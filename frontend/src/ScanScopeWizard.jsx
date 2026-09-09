@@ -5,7 +5,7 @@ import { scopeFooterPart, blockedReason } from './wizardScopeReady.js'
 import { METADATA_ONLY_TITLE, METADATA_ONLY_BODY, lifecycleRuleSummary,
          WHAT_HAPPENS_NEXT, RULE_SET_PROVENANCE } from './discoveryPromise.js'
 import FolderPicker from './FolderPicker.jsx'
-import SitePicker from './SitePicker.jsx'
+import SharePointScopePicker from './SharePointScopePicker.jsx'
 import DispositionRules from './DispositionRules.jsx'
 import { WIZARD_STEPS, FIRST_STEP, LAST_STEP, stepInfo, stepBlockedReason,
          nextStep, prevStep, forwardLabel, railState } from './discoveryWizardSteps.js'
@@ -748,10 +748,11 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
           ) : (
             <div style={{ marginBottom: 8 }}>
               {locKey === 'sharepoint' ? (
-                <SitePicker
+                <SharePointScopePicker
                   layout="inline"
                   initial={folders}
-                  onChange={(sites) => { setFolders(sites); setExcluded([]) }} />
+                  initialExclude={excluded}
+                  onChange={(sites, exclusions = []) => { setFolders(sites); setExcluded(exclusions) }} />
               ) : <FolderPicker
                 layout="inline"
                 key={`${locKey}:${pickerSeed}`}
