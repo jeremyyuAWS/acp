@@ -80,6 +80,7 @@ describe('explicit batch selection', () => {
     await act(async () => release())
     expect(onDecide).toHaveBeenCalledTimes(1)
     expect(v.container.textContent).toContain('Review scope changed')
+    expect(v.container.querySelector('.batch-sr-only[role=status]').textContent).toBe('')
   })
   it('freezes all values and detects locator and source replacement', () => {
     const f = finding(1), entry = snapshotFinding(f)
@@ -119,5 +120,7 @@ it('keeps confirmation compact and shows only acknowledged success deltas with q
   await v.render({})
   expect(counter()).toBe('1')
   expect(onDecide).toHaveBeenCalledTimes(3)
+  await v.render({ scopeKey: 'different-run' })
+  expect(v.container.querySelector('.batch-sr-only[role=status]').textContent).toBe('')
   vi.unstubAllGlobals()
 })

@@ -21,7 +21,7 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
   const heading = useRef(null)
   const latest = useRef({ visible, decisions, drafts, scopeKey })
   latest.current = { visible, decisions, drafts, scopeKey }
-  useEffect(() => { setEntries([]); setConfirming(false); setPage(0) }, [scopeKey])
+  useEffect(() => { setEntries([]); setConfirming(false); setPage(0); setAnnouncement('') }, [scopeKey])
   useEffect(() => { if (confirming) heading.current?.focus() }, [confirming])
   const findingCount = entries.reduce((n, e) => n + (e.finding._raw?.finding_count || 1), 0)
   const problems = entries.map(e => selectionProblem(e, visible, decisions, drafts))
@@ -82,7 +82,7 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
     setResults(old => [...old.filter(r => !outcomes.some(o => o.id === r.id)), ...outcomes])
     setEntries(old => old.filter(e => !outcomes.some(r => r.id === e.finding.id && r.state !== 'failed')))
     setConfirming(false); setBusy(false); lock.current = false; onBusy?.(false)
-    setAnnouncement(`Approval finished: ${outcomes.filter(r => r.state === 'recorded').length} approved, ${outcomes.filter(r => r.state === 'failed').length} failed, ${outcomes.filter(r => r.state === 'uncertain').length} uncertain. Writing and verification remain separate.`)
+    setAnnouncement(latest.current.scopeKey === initialScope ? `Approval finished: ${outcomes.filter(r => r.state === 'recorded').length} approved, ${outcomes.filter(r => r.state === 'failed').length} failed, ${outcomes.filter(r => r.state === 'uncertain').length} uncertain. Writing and verification remain separate.` : '')
     onResult?.(outcomes)
   }
   const activeAttempt = attempt?.scopeKey === scopeKey ? attempt : null
