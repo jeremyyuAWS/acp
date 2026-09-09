@@ -1859,7 +1859,11 @@ if _LEGACY_OWNER and "@" in _LEGACY_OWNER and all(c.isalnum() or c in ".+-_@" fo
 # dispatch never performs DDL. Kept with the bounded ledger's contract definitions.
 from ai_spending_budget import SCHEMA as _AI_SPENDING_SCHEMA
 from ai_run_policy import RUN_POLICY_SCHEMA as _AI_RUN_POLICY_SCHEMA
-_SCHEMA.extend([*_AI_SPENDING_SCHEMA, _AI_RUN_POLICY_SCHEMA])
+from ai_attempt_history import SCHEMA as _AI_ATTEMPT_HISTORY_SCHEMA
+from ai_review_chain import SCHEMA as _AI_REVIEW_SCHEMA
+from remediation_run_insights import SCHEMA as _AI_PROPOSAL_SNAPSHOT_SCHEMA
+_SCHEMA.extend([*_AI_SPENDING_SCHEMA, _AI_RUN_POLICY_SCHEMA,
+                *_AI_ATTEMPT_HISTORY_SCHEMA, *_AI_REVIEW_SCHEMA, *_AI_PROPOSAL_SNAPSHOT_SCHEMA])
 
 # ── Power BI read-only views (Postgres only) ────────────────────────────────
 # Three views that expose ACP scan data for Power BI DirectQuery. They are
@@ -2448,8 +2452,8 @@ class _PgAdapter:
     # v42 adds the tenant policy, exactly-once command receipt, and immutable run-policy
     # snapshot tables. All are additive and ignored by older replicas during rolling deploys.
     # v44 adds durable owner/run provider reservations and immutable spending policy.
-    _SCHEMA_VERSION = 44
-    _SCHEMA_CHECKSUM_AT_VERSION = "04b7282c1d8a00a0eebebe865f5a3a55"
+    _SCHEMA_VERSION = 45
+    _SCHEMA_CHECKSUM_AT_VERSION = "6dc56556323ed8aa8221b9a314ba6c16"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -4748,6 +4752,7 @@ class Store:
                          "org_memory", "remediation_state", "finding_disposition",
                          "finding_disposition_event", "remediation_diff", "applied_fixes",
                          "ai_calls", "ai_validation_outcomes", "second_opinion_reservations",
+                         "ai_proposal_snapshots", "ai_attempt_trace_links", "ai_review_receipts", "ai_attempt_history",
                          "ai_spending_attempts", "ai_spending_run_policies", "ai_spending_budgets",
                          "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
@@ -4934,7 +4939,8 @@ class Store:
                 cleared.append(t)
             # Policy actions are idempotency/audit receipts for customer changes, not the live
             # policy itself. The policy remains configuration; its historical receipts do not.
-            for t in ("ai_spending_attempts", "ai_spending_run_policies", "ai_spending_budgets"):
+            for t in ("ai_proposal_snapshots", "ai_attempt_trace_links", "ai_review_receipts", "ai_attempt_history",
+                      "ai_spending_attempts", "ai_spending_run_policies", "ai_spending_budgets"):
                 self._db.execute(cur, f"DELETE FROM {t} WHERE owner_id=%s", (owner_email,))
                 cleared.append(t)
             self._db.execute(cur, "DELETE FROM remediation_policy_action WHERE owner_email=%s",
@@ -5020,6 +5026,11 @@ class Store:
             self._db.execute(cur,
                 "DELETE FROM release_executions WHERE scan_id=%s AND owner_email=%s",
                 (scan_id, owner_email))
+            self._db.execute(cur, 'DELETE FROM ai_attempt_trace_links WHERE owner_id=%s AND run_id IN '
+                             '(SELECT run_id FROM ai_attempt_history WHERE owner_id=%s AND scan_id=%s)',
+                             (owner_email, owner_email, scan_id))
+            for table in ('ai_proposal_snapshots', 'ai_review_receipts', 'ai_attempt_history'):
+                self._db.execute(cur, f'DELETE FROM {table} WHERE owner_id=%s AND scan_id=%s', (owner_email, scan_id))
             for t in self._RESET_USER_SCAN_TABLES:
                 self._db.execute(cur, f"DELETE FROM {t} WHERE scan_id=%s", (scan_id,))
             self._db.execute(cur, "DELETE FROM scan_runs WHERE id=%s", (scan_id,))
@@ -7152,7 +7163,7 @@ class Store:
                        latency_ms: int, ok: bool, scan_id: str | None = None,
                        file: str | None = None, cost_usd: float = 0.0,
                        reason: str | None = None, temperature: float | None = None,
-                       prompt_version: str | None = None) -> str:
+                       prompt_version: str | None = None, call_identity: str | None = None) -> str:
         """Append one AI-call provenance row (ADR 0019): which provider/model ran, WHERE
         (local/cloud zone), how long, at what cost, and — for a call that did not succeed —
         `reason`, WHICH way it failed (providers.REASON_*). Best-effort — a telemetry write
@@ -7160,15 +7171,20 @@ class Store:
         import uuid
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
-        call_id = uuid.uuid4().hex
+        call_id = call_identity or uuid.uuid4().hex
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO ai_calls(id,ts,scan_id,file,surface,provider,model,zone,"
                 "latency_ms,ok,cost_usd,reason,temperature,prompt_version) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
                 (call_id, now, scan_id, file, surface, provider, model, zone,
                  int(latency_ms), 1 if ok else 0, float(cost_usd), reason,
                  temperature, prompt_version))
+            if call_identity:
+                self._db.execute(cur, 'SELECT scan_id,file,provider,model,cost_usd FROM ai_calls WHERE id=%s', (call_id,))
+                existing = self._db.fetchone(cur)
+                if existing != {'scan_id':scan_id,'file':file,'provider':provider,'model':model,'cost_usd':float(cost_usd)}:
+                    raise ValueError('Model call identity was reused for different evidence')
         return call_id
 
     def reserve_second_opinion(self, *, scan_id: str, file: str, policy: dict) -> tuple[bool, str]:
@@ -10220,6 +10236,10 @@ class Store:
                     "UPDATE hitl_queue SET proposals=%s, validated=%s, finding_count=%s "
                     "WHERE id=%s",
                     (blob, vflag, merged, row["id"]))
+                from ai_run_policy import optional_current_run_context
+                from remediation_run_insights import capture_proposals
+                capture_proposals(self._db, cur, optional_current_run_context(), scan_id=scan_id,
+                                  file=file, rule_id=sc, item_id=row['id'], proposals=proposals)
                 self.sync_hitl_finding_dispositions(row["id"], "pending")
                 return row["id"]
             item_id = uuid.uuid4().hex[:12]
@@ -10228,6 +10248,10 @@ class Store:
                 "finding_count,status,proposals,validated) "
                 "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
                 (item_id, now, scan_id, file, sc, rule_name or sc, count, blob, vflag))
+            from ai_run_policy import optional_current_run_context
+            from remediation_run_insights import capture_proposals
+            capture_proposals(self._db, cur, optional_current_run_context(), scan_id=scan_id,
+                              file=file, rule_id=sc, item_id=item_id, proposals=proposals)
         self.sync_hitl_finding_dispositions(item_id, "pending")
         return item_id
 

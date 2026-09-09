@@ -29,6 +29,7 @@ import os
 import re
 import threading
 import time
+import hashlib
 from swallowed import swallowed
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
@@ -309,7 +310,7 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
               provider: str = "ollama", zone: str | None = None, cost_usd: float = 0.0,
               reason: str | None = None, prompt_tokens: int | None = None,
               completion_tokens: int | None = None, temperature: float | None = None,
-              prompt_version: str | None = None) -> str | None:
+              prompt_version: str | None = None, managed_output_sha256: str | None = None) -> str | None:
     """Emit a Langfuse span + persist an ai_calls provenance row for one model call — model,
     latency, prompt size, completion, ok, and (ADR 0019 §1) which provider/zone/cost it ran on.
     model defaults to the text model; vision calls pass the vision model. `provider`/`zone`/`cost_usd`
@@ -323,6 +324,24 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
     latency_ms = int((_t.monotonic() - t0) * 1000)
     mdl = model or OLLAMA_MODEL
     zn = zone or provenance()["zone"]
+    managed_identity = None
+    try:
+        from ai_run_policy import optional_current_run_context
+        from ai_attempt_history import AttemptHistory
+        import hashlib
+        ctx = optional_current_run_context()
+        if ctx is not None and ok and completion and scan_id == ctx.scan_id and file == ctx.file:
+            operation = hashlib.sha256(prompt.encode()).hexdigest()
+            digest = managed_output_sha256 or hashlib.sha256(completion.encode()).hexdigest()
+            matches = [row for row in AttemptHistory(ctx.ledger.db).list_operation(ctx.owner_id,ctx.scan_id,ctx.run_id,operation,file=file)
+                       if row['status'] == 'drafted' and row.get('spending_state') == 'settled'
+                       and row.get('output_sha256') == digest and row['model'] == mdl and row['provider'] == provider]
+            if len(matches) == 1:
+                if matches[0].get('trace_call_id'):
+                    return matches[0]['trace_call_id']
+                managed_identity = hashlib.sha256(f'{ctx.owner_id}:{ctx.run_id}:{matches[0]["attempt_id"]}'.encode()).hexdigest()
+    except Exception:
+        swallowed('ai._trace_ai: retained call identity unavailable', scan_id)
     try:
         import lf as _lf
         # Forward provider/zone/cost (G3) and token usage (G1) so the Langfuse GENERATION carries
@@ -338,10 +357,23 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
     # by …" line and the governance rollup. Best-effort + lazy import so it never fails the AI call.
     try:
         import core
-        return core.store.record_ai_call(surface=surface, provider=provider, model=mdl,
+        call_id = core.store.record_ai_call(surface=surface, provider=provider, model=mdl,
                                          zone=zn, latency_ms=latency_ms, ok=ok, cost_usd=cost_usd,
                                          scan_id=scan_id, file=file, reason=reason,
-                                         temperature=temperature, prompt_version=prompt_version)
+                                         temperature=temperature, prompt_version=prompt_version,
+                                         **({'call_identity':managed_identity} if managed_identity else {}))
+        try:
+            from ai_run_policy import optional_current_run_context
+            from ai_attempt_history import AttemptHistory
+            import hashlib
+            ctx = optional_current_run_context()
+            if managed_identity and ctx is not None and ok and completion and scan_id == ctx.scan_id and file == ctx.file:
+                AttemptHistory(ctx.ledger.db).bind_trace(ctx.owner_id, ctx.scan_id, ctx.run_id,
+                    hashlib.sha256(prompt.encode()).hexdigest(), call_id, file=file,
+                    output_sha256=managed_output_sha256 or hashlib.sha256(completion.encode()).hexdigest())
+        except Exception:
+            swallowed('ai._trace_ai: exact attempt linkage unavailable', scan_id)
+        return call_id
     except Exception:
         swallowed("ai._trace_ai: recording the AI call failed", scan_id)
         return None
@@ -1447,7 +1479,8 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                       prompt_tokens=_cr["prompt_tokens"],
                       completion_tokens=_cr["completion_tokens"],
                       cost_usd=_cr["cost_usd"], temperature=0.4,
-                      prompt_version="suggest-v1", scan_id=scan_id, file=file)
+                      prompt_version="suggest-v1", scan_id=scan_id, file=file,
+                      managed_output_sha256=hashlib.sha256(_cr['text'].encode()).hexdigest() if _managed_run is not None else None)
             kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
             out = {"suggestion": text, "kind": kind,
                    "is_template": rule_id == "1.1.1", "model": _cr["model"],

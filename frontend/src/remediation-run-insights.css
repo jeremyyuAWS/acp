@@ -1,0 +1,12 @@
+.remediation-run-insights { margin-block: 16px; padding: 14px; border: 1px solid #ded6e5; border-radius: 10px; line-height: 1.5; }
+.remediation-run-insights details { padding: 10px; margin-block: 8px; border: 1px solid #ded6e5; border-radius: 6px; }
+.remediation-run-insights summary { cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
+.remediation-run-insights summary:focus-visible { outline: 3px solid #76518c; outline-offset: 3px; }
+.remediation-run-insights pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 300px; overflow: auto; }
+.remediation-run-insights table { width: 100%; border-collapse: collapse; text-align: left; }
+.remediation-run-insights th, .remediation-run-insights td { padding: 8px; border-bottom: 1px solid #ded6e5; }
+.run-insights-comparison { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.remediation-review-policy { margin-block: 16px; padding: 12px; border: 1px solid #ded6e5; border-radius: 8px; }
+.remediation-review-policy p { font-size: 13px; line-height: 1.5; }
+.remediation-review-policy label { display: block; margin-block: 8px; }
+@media(max-width:600px) { .run-insights-comparison { grid-template-columns: 1fr; } }

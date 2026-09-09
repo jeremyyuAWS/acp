@@ -37,6 +37,11 @@ def normalize_policy(policy):
         if Decimal(amount) > Decimal("1000000"):
             raise ValueError("AI spending limit must not exceed 1,000,000 USD.")
         result["ai_budget_usd"] = format(Decimal(amount), ".2f")
+    if "ai_review" in policy:
+        from ai_review_policy import normalize_review_policy
+        result["ai_review"] = normalize_review_policy(policy["ai_review"])
+        if result['ai_review']['enabled'] and 'ai_budget_usd' not in result:
+            raise ValueError('AI review requires an explicit run spending limit.')
     return result
 
 

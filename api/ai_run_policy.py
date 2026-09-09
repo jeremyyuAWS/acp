@@ -33,7 +33,11 @@ def normalize_run_policy(snapshot):
     ai = snapshot.get("ai")
     if type(ai) is not int or not 0 <= ai <= 3:
         raise BudgetError("AI policy level must be between zero and three")
-    return {"ai": ai, "ai_budget_usd": amount, "cap_units": cap, "currency": "USD"}
+    result = {"ai": ai, "ai_budget_usd": amount, "cap_units": cap, "currency": "USD"}
+    if 'ai_review' in snapshot:
+        from ai_review_policy import normalize_review_policy
+        result['ai_review'] = normalize_review_policy(snapshot['ai_review'])
+    return result
 
 
 def persist_run_policy(db, cur, owner_id, scan_id, run_id, policy):
@@ -85,6 +89,7 @@ class RunContext:
     run_id: str
     policy: MappingProxyType
     deferred: list[dict] = field(default_factory=list)
+    file: str = ""
 
     @property
     def enabled(self):
@@ -176,7 +181,7 @@ def run_context(store, payload, job):
                 # source is their durable snapshot, never the current user default.
                 persist_run_policy(db, cur, row["owner_email"], row["scan_id"], row["batch_id"], policy)
                 context = RunContext(ledger, row["owner_email"], row["scan_id"], row["batch_id"],
-                                     MappingProxyType(policy))
+                                     MappingProxyType(policy), file=durable.get("file", ""))
     token = _CURRENT.set(context)
     try:
         yield context

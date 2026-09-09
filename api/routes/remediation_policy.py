@@ -22,6 +22,7 @@ class ImpactPreviewRequest(BaseModel):
     rule_based: StrictInt | None = Field(default=None, ge=0, le=2)
     ai: StrictInt | None = Field(default=None, ge=0, le=3)
     ai_budget_usd: StrictStr | None = Field(default=None, pattern=r'^\d{1,7}(?:\.\d{1,2})?$', max_length=10)
+    ai_review: dict | None = None
 
 
 class ImpactSaveRequest(ImpactPreviewRequest):
@@ -54,6 +55,8 @@ def remediation_impact_preview(sid: str, body: ImpactPreviewRequest, request: Re
     try:
         result = build_run_impact(core.store, sid, _impact_owner(request), selected or None, scope=body.scope)
         result['providers'] = provider_summary(result['capabilities']['ai_enabled'])
+        from ai_review_policy import capabilities
+        result['capabilities']['ai_review'] = capabilities()
         return result
     except LookupError as exc:
         raise HTTPException(404, 'scan not found') from exc
