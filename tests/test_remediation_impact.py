@@ -260,3 +260,36 @@ def test_provider_summary_allowlists_fields_without_probing(monkeypatch):
     assert result['global_ai_enabled']
     assert 'secret' not in json.dumps(result)
     assert 'key' not in json.dumps(result)
+
+
+def test_standing_approval_moves_eligible_ai_rows_out_of_the_review_lane():
+    """The Review count must not contain findings the run will publish unreviewed.
+
+    `auto_approve_ai` applies and releases eligible AI values with no per-change human
+    review, so forecasting them as `review` told the operator the opposite of what
+    their own run would do. Only the rules `ai_standing_approval` can act on move.
+    """
+    rows = [rule('a.pptx', 3, rule_id='WCAG_2_4_6', origin='ai', has_proposal=True),
+            rule('b.pdf', 2, rule_id='WCAG_1_4_3', origin='ai', has_proposal=True)]
+    coverage = [{'file': f, 'complete': True} for f in ('a.pptx', 'b.pdf')]
+    plain = build_impact_preview(rows, {'rule_based': 2, 'ai': 1}, files=coverage)
+    assert plain['lanes']['review']['findings'] == 5
+    assert plain['lanes']['automatic']['findings'] == 0
+
+    auto = build_impact_preview(rows, {'rule_based': 2, 'ai': 1, 'auto_approve_ai': True},
+                                files=coverage)
+    # 2.4.6 is in ai_standing_approval.RULES; 1.4.3 is not and still needs a person.
+    assert auto['lanes']['automatic']['findings'] == 3
+    assert auto['lanes']['review']['findings'] == 2
+    assert sum(v['findings'] for v in auto['lanes'].values()) == 5
+
+
+def test_standing_approval_forecast_never_claims_an_ineligible_rule():
+    """Every rule outside the standing-approval set stays in review, opt-in or not."""
+    from ai_standing_approval import RULES
+    rows = [rule('x.docx', 1, rule_id='WCAG_1_4_5', origin='ai', has_proposal=True)]
+    result = build_impact_preview(rows, {'rule_based': 2, 'ai': 1, 'auto_approve_ai': True},
+                                  files=[{'file': 'x.docx', 'complete': True}])
+    assert '1.4.5' not in RULES
+    assert result['lanes']['review']['findings'] == 1
+    assert result['lanes']['automatic']['findings'] == 0
