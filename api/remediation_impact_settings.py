@@ -106,7 +106,8 @@ def snapshot_impact_policy(store, owner, policy=None):
     selected = require_executable(saved if policy is None else policy)
     snapshot = {**selected, "revision": saved["revision"]}
     from ai_threshold_execution import seal_policy
-    sealed = seal_policy(store, owner, selected.get('ai_review', {}))
+    # Rules-only delivery must not depend on an unused AI preference's calibration.
+    sealed = seal_policy(store, owner, selected.get('ai_review', {})) if selected['ai'] > 0 else None
     if sealed is not None:
         if selected['ai'] != 1 or Decimal(selected.get('ai_budget_usd', '0')) <= 0:
             raise ValueError('Automatic AI review requires AI enabled and an explicit positive run spending limit.')

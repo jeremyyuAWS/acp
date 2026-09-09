@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { authEpoch } from './apiIdentity.js'
 import { getRunInsights } from './remediationRunInsightsClient.js'
 import './remediation-run-insights.css'
+import RemediationContribution from './RemediationContribution.jsx'
 
 const rows = value => Array.isArray(value) ? value : []
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : 'Unavailable'
@@ -19,10 +20,10 @@ export default function RemediationRunInsights({ scanId, batchId }) {
     if (!open || !scanId || !batchId) return
     const controller = new AbortController()
     let active = true
-    setState({ identity, loading: true })
+    setState(previous => ({ identity, loading: true, data: previous?.identity === identity ? previous.data : null }))
     getRunInsights(scanId, batchId, controller.signal, offset).then(data => {
       if (active) setState({ identity, data })
-    }).catch(() => { if (active) setState({ identity, error: true }) })
+    }).catch(() => { if (active) setState(previous => ({ identity, error: true, data: previous?.identity === identity ? previous.data : null })) })
     return () => { active = false; controller.abort() }
   }, [open, identity, scanId, batchId, reload, offset])
   const current = state?.identity === identity ? state : null
@@ -32,7 +33,10 @@ export default function RemediationRunInsights({ scanId, batchId }) {
     {open && <>
       <p>Actual saved records for this remediation run. Viewing them makes no AI requests and approves no changes.</p>
       <button type="button" disabled={!scanId || !batchId || current?.loading} onClick={() => setReload(n => n + 1)}>Refresh saved history</button>
-      {!scanId || !batchId ? <p>Select a remediation run.</p> : current?.error ? <p role="alert">Saved history could not be loaded. Try refreshing.</p> : !current || current.loading ? <p role="status">Loading saved model history…</p> : !data ? <p>Saved model history is unavailable in this environment.</p> : <>
+      {current?.error && data && <p role="alert">Refresh failed. Showing the last saved snapshot for this run.</p>}
+      {current?.loading && data && <p role="status">Refreshing saved history; showing the last saved snapshot.</p>}
+      {!scanId || !batchId ? <p>Select a remediation run.</p> : current?.error && !data ? <p role="alert">Saved history could not be loaded. Try refreshing.</p> : !current || (current.loading && !data) ? <p role="status">Loading saved model history…</p> : !data ? <p>Saved model history is unavailable in this environment.</p> : <>
+        <RemediationContribution key={identity} snapshot={data.measured_contribution} />
         <h4>Saved suggestions by AI step</h4>
         <p>{data.contribution?.note || 'Proposal versions are not findings or verified fixes.'}</p>
         {data.coverage !== 'complete' && <p>History is partial. Counts include only retained records.</p>}

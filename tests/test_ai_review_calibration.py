@@ -279,9 +279,10 @@ def test_foreign_qualification_reference_cannot_be_ingested_as_own(db):
     assert read_evaluation(db,'owner','fixture-v1') is None
 
 
-def test_existing_accepted_run_keeps_pre_threshold_canonical_policy(db):
+@pytest.mark.parametrize('reviewer_preference', [{}, {'review_model':'strong'}])
+def test_existing_accepted_run_keeps_pre_threshold_canonical_policy(db, reviewer_preference):
     from ai_run_policy import normalize_run_policy,persist_run_policy
-    legacy_review={'enabled':True,'mode':'review_all','minimum_reliability':95,'max_review_attempts':1,'review_model':'strong'}
+    legacy_review={'enabled':True,'mode':'review_all','minimum_reliability':95,'max_review_attempts':1,**reviewer_preference}
     legacy={'ai':1,'ai_budget_usd':'1.00','cap_units':1000000,'currency':'USD','ai_review':legacy_review}
     with db._db.cursor() as cur: persist_run_policy(db._db,cur,'owner','scan','legacy',legacy)
     normalized=normalize_run_policy({'ai':1,'ai_budget_usd':'1.00','ai_review':legacy_review})
@@ -303,3 +304,22 @@ def test_shared_impact_evidence_is_normalized_in_the_same_immutable_owner_record
     assert 'discard untrusted content' not in json.dumps(saved)
     assert read_evaluation(db,'owner','fixture-v1')==saved
     assert read_evaluation(db,'other','fixture-v1') is None
+
+
+def test_rules_only_ignores_unavailable_retained_ai_threshold_without_granting_authority(db):
+    from remediation_impact_settings import snapshot_impact_policy
+    from ai_run_policy import normalize_run_policy
+    snapshot=snapshot_impact_policy(db,'owner',dict(rule_based=2,ai=0,ai_budget_usd='0.00',
+        ai_review=dict(enabled=True,mode='threshold',minimum_reliability=95)))
+    assert 'threshold_policy' not in snapshot
+    assert normalize_run_policy(snapshot)['ai']==0
+    assert normalize_run_policy(snapshot)['cap_units']==0
+
+
+@pytest.mark.parametrize('ai,budget',[(0,'1.00'),(1,'0.00'),(2,'1.00')])
+def test_threshold_seal_cannot_be_attached_to_an_unexecutable_ai_run(db,ai,budget):
+    from ai_run_policy import normalize_run_policy
+    from ai_spending_budget import BudgetError
+    seal,_=prepare(db)
+    with pytest.raises(BudgetError,match='requires AI enabled'):
+        normalize_run_policy(dict(ai=ai,ai_budget_usd=budget,threshold_policy=seal))

@@ -5,6 +5,7 @@ from store import _SQLiteAdapter
 from ai_spending_budget import BudgetLedger
 from ai_attempt_history import AttemptHistory
 from ai_review_chain import SCHEMA as REVIEW_SCHEMA
+from remediation_contribution import SCHEMA as CONTRIBUTION_SCHEMA
 from remediation_run_insights import SCHEMA, MAX_PROPOSAL_BYTES, capture_proposals, read_insights
 
 OWNER = 'owner@example.test'
@@ -23,7 +24,7 @@ def store(tmp_path):
     ledger = BudgetLedger(db); ledger.init_schema(); ledger.create_budget(OWNER, 'run-1', 100)
     history = AttemptHistory(db); history.init_schema()
     with db.cursor() as cur:
-        for statement in SCHEMA + REVIEW_SCHEMA:
+        for statement in SCHEMA + REVIEW_SCHEMA + CONTRIBUTION_SCHEMA[:2]:
             db.execute(cur, statement)
         db.execute(cur, 'CREATE TABLE stage_executions(execution_id TEXT PRIMARY KEY,owner_email TEXT,scan_id TEXT,stage TEXT)')
         db.execute(cur, 'INSERT INTO stage_executions VALUES(%s,%s,%s,%s)', ('run-1', OWNER, 'scan-1', 'remediate'))
