@@ -53,7 +53,7 @@ describe('W2 — rejected fix appears in the inbox as manual-handling work', () 
   it('shows the needs-manual-handling treatment, not an approve button', async () => {
     await render({ queue: QUEUE, decisions: {} })
     // A rejected AI fix needs hand-editing, so it lives in the Manual fixes tab (not Needs review).
-    await click(btnByText('Complete manual work'))
+    await click(btnByText('Fix manually'))
     expect(detailHeading()).toBe('Image needs alt text')
     expect(container.textContent).toContain('Needs manual handling')   // eyebrow + lane label
     expect(container.textContent).toContain('Fix this in Word')          // guided manual steps (docx → Word)
@@ -63,7 +63,7 @@ describe('W2 — rejected fix appears in the inbox as manual-handling work', () 
   it('acting on it clears it via onDecide(assigned)', async () => {
     const calls = []
     await render({ queue: QUEUE.map(f => ({ ...f, _raw: { decision_version: 0, proposal_snapshot_ids: [String(f.id)], source_revision: 'source' } })), decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
-    await click(btnByText('Complete manual work'))
+    await click(btnByText('Fix manually'))
     await click(btnByText('Defer'))
     expect(calls).toEqual([[9, 'assigned']])
   })
@@ -107,7 +107,7 @@ describe('W8 — apply a decision to every matching finding in the same cluster'
     await render({ queue: QUEUE.map(f => ({ ...f, _raw: { decision_version: 0, proposal_snapshot_ids: [String(f.id)], source_revision: 'source' } })), decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
     await click(btnByText('Select matching proposals (3)'))
     expect(calls).toEqual([])
-    await click(btnByText('Select eligible'))
+    await click(btnByText('Select all ready'))
     await click(btnByText('Approve selected'))
     await click(btnByText('Confirm approval'))
     // ids 1,2,3 (every 1.1.1 in the actionable lane, both formats) approved. id4 is a different
@@ -133,12 +133,12 @@ describe('W8 — apply a decision to every matching finding in the same cluster'
     await render({ queue: queue.map(f => ({ ...f, _raw: { decision_version: 0, proposal_snapshot_ids: [String(f.id)], source_revision: 'source' } })), decisions: {}, onDecide: (f) => calls.push(f.id) })
     await click(btnByText('Select matching proposals (12)'))
     expect(calls).toEqual([])
-    expect(btnByText('Approve selected').disabled).toBe(true)
-    await click(btnByText('Select eligible'))
+    expect(btnByText('Approve selected')).toBeUndefined()
+    await click(btnByText('Select all ready'))
     await click(btnByText('Approve selected'))
     expect(container.textContent).toContain('12 findings selected (12 review items) · 12 proposals · 12 files')
     expect(calls).toEqual([])
-    await click(btnByText('Back to selection'))
+    await click(btnByText('Back'))
     expect(calls).toEqual([])
     await click(btnByText('Approve selected'))
     await click(btnByText('Confirm approval'))

@@ -216,10 +216,10 @@ describe('RemediationInbox — workflow-status queue', () => {
     ]
     const calls = []
     await render({ queue: q.map(f => ({ ...f, _raw: { decision_version: 0, proposal_snapshot_ids: [String(f.id)], source_revision: 'source' } })), decisions: {}, onDecide: (f, d) => calls.push([f.id, d.value]) })
-    await click(btnByText('Select findings for batch approval'))
+    await click(btnByText('Bulk approve ready proposals'))
     const panel = container.querySelector('[aria-label="Select findings for approval"]')
-    expect(panel.textContent).toContain('0 findings selected')
-    await click(btnByText('Select eligible'))
+    expect(panel.textContent).toContain('2 findings ready')
+    await click(btnByText('Select all ready'))
     expect(panel.textContent).toContain('2 findings selected (2 review items) · 2 proposals · 2 files')
     await click(btnByText('Approve selected'))
     expect(calls).toEqual([])
@@ -253,7 +253,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     await render({ queue: q.map(f => ({ ...f, _raw: { decision_version: 0, proposal_snapshot_ids: [String(f.id)], source_revision: 'source' } })), decisions: {},
       onDecide: (f) => (f.id === 21 ? Promise.reject(Object.assign(new Error('conflict'), { status: 409 })) : Promise.resolve()) })
     await click(btnByText('Select matching proposals (2)'))
-    await click(btnByText('Select eligible'))
+    await click(btnByText('Select all ready'))
     await click(btnByText('Approve selected'))
     await click(btnByText('Confirm approval'))
     expect(container.textContent).toContain('1 recorded · 1 not recorded · 0 uncertain')
@@ -301,15 +301,15 @@ describe('RemediationInbox — workflow-status queue', () => {
     // Needs review holds the unconfirmed auto-fix (id1) and the AI draft (id2); the manual finding
     // (id3) is in Manual fixes. Document sort → id1 first.
     expect(detailHeading()).toBe('Heading contrast is too low')
-    expect(container.textContent).toContain('Review AI suggestions 2')
-    expect(container.textContent).toContain('Complete manual work 1')
+    expect(container.textContent).toContain('Approve AI suggestions 2')
+    expect(container.textContent).toContain('Fix manually 1')
     expect(container.textContent).toContain('0 of 3 reviewed')        // progress is a separate lens
   })
 
   it('partitions findings across the workflow tabs by pipeline stage', async () => {
     await render({ queue: QUEUE, decisions: {} })
     // Manual fixes holds only the manual-from-start finding; the needs-review items are not there.
-    await click(btnByText('Complete manual work'))
+    await click(btnByText('Fix manually'))
     expect(detailHeading()).toBe('Scanned page, no text')
   })
 
@@ -341,7 +341,7 @@ describe('RemediationInbox — workflow-status queue', () => {
 
   it('a manual finding shows guided steps and native-app actions, not an approve button', async () => {
     await render({ queue: QUEUE, decisions: {} })
-    await click(btnByText('Complete manual work'))
+    await click(btnByText('Fix manually'))
     await click(btnByText('Scanned page, no text'))
     expect(detailHeading()).toBe('Scanned page, no text')
     expect(container.textContent).toContain('Fix this in Acrobat Pro')  // pdf → Acrobat
