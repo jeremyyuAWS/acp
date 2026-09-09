@@ -137,12 +137,12 @@ def hitl_list(request: Request, status: str | None = None, scan_id: str | None =
     owner = getattr(request.state, "user_email", None)
     rows = core.store.list_hitl_queue(status=status, scan_id=scan_id, owner=owner,
                                       include_superseded=include_superseded)
-    # Read-only identity of the assessed input, including inventory checksums and accepted inputs.
+    # Match the sealed assessment input used by remediation; legacy runs use the scan hash.
     revisions = {}
     for row in rows:
         sid = row.get("scan_id")
         if sid and sid not in revisions:
-            revisions[sid] = core.store.stage_snapshot_id(sid)
+            revisions[sid] = core.store.remediation_source_revision(sid)
         row["source_revision"] = revisions.get(sid)
     return rows
 

@@ -174,7 +174,7 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
     </details>}
     {results.some(r => r.state !== 'recorded') && <details className="batch-approval-errors">
       <summary>{results.filter(r => r.state !== 'recorded').length} review items need attention</summary>
-      {results.filter(r => r.state !== 'recorded').map(r => <p key={r.id}>Finding {r.id}: {r.message}{r.state === 'uncertain' ? ' — refresh and check the recorded decision before retrying.' : ''}</p>)}
+      {results.filter(r => r.state !== 'recorded').map(r => <p key={r.id}>Finding {r.id}: {r.message}{r.state === 'failed' && r.message?.includes('stale source revision') ? ' — refresh this page, then select the current proposals and confirm again.' : ''}{r.state === 'uncertain' ? ' — refresh and check the recorded decision before retrying.' : ''}</p>)}
     </details>}
   </section>
 }

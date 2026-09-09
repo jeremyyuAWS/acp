@@ -111,3 +111,66 @@ def test_refreshed_source_cannot_relabel_an_old_proposal_as_current(decision):
         update(item_id, Body(**expectations(st, item_id)), request)
     assert getattr(exc.value, "status_code", None) == 409
     assert st.list_decisions("s1") == []
+
+
+def seal_assessment(st, fingerprint='sealed-assessment'):
+    batch = st.enqueue_stage_batch('s1', 'assess', 'scan_file', [
+        {'owner': 'reviewer@example.com', 'scan_id': 's1', 'file': 'deck.pptx'}],
+        snapshot_id=st.stage_snapshot_id('s1'), request_fingerprint=fingerprint)
+    with st._db.cursor() as cur:
+        st._db.execute(cur, 'SELECT work_item_id,revision FROM stage_work_items WHERE execution_id=%s', (batch['batch_id'],))
+        item = st._db.fetchone(cur)
+    st.apply_stage_event(event_id=fingerprint, execution_id=batch['batch_id'],
+        work_item_id=item['work_item_id'], event_type='work_item.completed',
+        expected_revision=item['revision'], payload={'result_digest': fingerprint})
+    manifest = st.seal_stage_if_ready(batch['batch_id'])['manifest_id']
+    with st._db.cursor() as cur:
+        st._db.execute(cur, "UPDATE jobs SET status='done' WHERE batch_id=%s", (batch['batch_id'],))
+    return manifest
+
+
+@pytest.fixture()
+def canonical_decision(base_decision):
+    from ai_run_policy import run_context
+    st, item_id, *_ = base_decision
+    with st._db.cursor() as cur:
+        st._db.execute(cur, "UPDATE scan_runs SET owner_email=%s WHERE id=%s", ("reviewer@example.com", "s1"))
+    manifest = seal_assessment(st)
+    batch = st.enqueue_stage_batch('s1', 'remediate', 'remediate_file', [{
+        'owner': 'reviewer@example.com', 'scan_id': 's1', 'file': 'deck.pptx',
+        'remediation_impact_policy': {'ai': 1, 'rule_based': 2, 'ai_budget_usd': '0.10', 'snapshot_id': manifest},
+    }], snapshot_id=manifest, input_manifest_id=manifest, request_fingerprint='canonical-remediation')
+    job = st.get_job(batch['job_ids'][0])
+    with run_context(st, job['payload'], job):
+        st.enqueue_proposals('s1', 'deck.pptx', '1.1.1', st.get_hitl_item(item_id)['proposals'])
+    return base_decision, manifest
+
+
+def test_canonical_queue_identity_can_approve_exact_proposal_and_replay(canonical_decision):
+    from test_hitl_owner_isolation import _client
+    (st, item_id, update, Body, request), manifest = canonical_decision
+    row = next(row for row in _client('reviewer@example.com').get('/hitl/queue').json() if row['id'] == item_id)
+    assert manifest != st.stage_snapshot_id('s1')
+    assert row['source_revision'] == manifest
+    expected = expectations(st, item_id)
+    expected['expected_source_revision'] = row['source_revision']
+    first = update(item_id, Body(**expected), request)
+    assert update(item_id, Body(**expected), request) == first
+    assert st.get_hitl_item(item_id)['approved_source_revision'] == manifest
+    assert len(st.list_decisions('s1')) == 1
+    assert len([j for j in st.list_jobs() if j['type'] == 'apply_approved_values']) == 1
+
+
+@pytest.mark.parametrize('refresh', [False, True])
+def test_replaced_assessment_manifest_rejects_both_old_and_relabelled_proposals(canonical_decision, refresh):
+    (st, item_id, update, Body, request), old_manifest = canonical_decision
+    new_manifest = seal_assessment(st, 'new-assessment')
+    assert new_manifest != old_manifest
+    expected = expectations(st, item_id)
+    expected['expected_source_revision'] = new_manifest if refresh else old_manifest
+    with pytest.raises(Exception) as exc:
+        update(item_id, Body(**expected), request)
+    assert getattr(exc.value, 'status_code', None) == 409
+    assert st.get_hitl_item(item_id)['status'] == 'pending'
+    assert st.list_decisions('s1') == []
+    assert not any(j['type'] == 'apply_approved_values' for j in st.list_jobs())

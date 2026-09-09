@@ -11264,7 +11264,7 @@ class Store:
                         if snapshot.get("producing_source_revision") != expected_source_revision:
                             raise ValueError("stale source revision")
                 if (not expected_source_revision or not current.get("scan_id")
-                        or expected_source_revision != self.stage_snapshot_id(current["scan_id"])):
+                        or expected_source_revision != self.remediation_source_revision(current["scan_id"])):
                     raise ValueError("stale source revision")
             replay = (current.get("status") == status
                       and (current.get("reviewer_note") or None) == (reviewer_note or None)
@@ -11309,7 +11309,8 @@ class Store:
                 digest = hashlib.sha256(json.dumps(
                     approved_values_for_digest, separators=(",", ":"), ensure_ascii=False).encode()
                 ).hexdigest() if approved_values_for_digest else None
-                source_revision = self.stage_snapshot_id(current["scan_id"]) if current.get("scan_id") else None
+                source_revision = expected_source_revision or (
+                    self.remediation_source_revision(current["scan_id"]) if current.get("scan_id") else None)
                 with self._db.cursor() as cur:
                     self._db.execute(cur,
                         "UPDATE hitl_queue SET approved_proposal_snapshot_ids=%s,"
@@ -13095,6 +13096,16 @@ class Store:
                 (normalized,))
             row = self._db.fetchone(cur)
         return dict(row) if row else None
+
+    def remediation_source_revision(self, scan_id: str) -> str:
+        """Identity of the assessment input selected when remediation is enqueued.
+
+        Canonical runs consume the current sealed assessment manifest, not the legacy
+        inventory/configuration hash. Use the same identity for review reads and writes;
+        the decision still independently checks each proposal's producing execution.
+        """
+        manifest = self.current_stage_output_manifest(scan_id, "assess")
+        return (manifest or {}).get("manifest_id") or self.stage_snapshot_id(scan_id)
 
     def stage_snapshot_id(self, scan_id: str) -> str:
         """Stable identity of the immutable Discover/Assess input consumed downstream.
