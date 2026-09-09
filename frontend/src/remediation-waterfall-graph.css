@@ -25,3 +25,23 @@
 
 .wf-card .wf-layout-graph { display:block; }
 .wf-layout-graph > .wf-graph { margin-top:0; }
+
+.wf-graph-run-status { display:inline-block; margin-left:8px; padding:4px 9px; border-radius:20px; font-size:11px; font-weight:600; background:#f1eaf7; color:#67457e; }
+.wf-graph-fallback { padding:16px; border:1px solid var(--line); border-radius:14px; }
+.wf-graph-fallback ol { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:14px; padding:0; list-style:none; }
+.wf-graph-fallback li { min-width:0; }
+.wf-graph .wf-graph-node-active .wf-graph-node-working i { animation:wf-breathe 3s ease-in-out infinite; }
+.wf-graph-stopped .wf-graph-node-working i { animation:none !important; }
+.wf-activity-action { display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--muted); font-size:12px; }
+.wf-card .wf-outcomes { padding-top:4px; padding-bottom:12px; }
+.wf-card .wf-outcome-unavailable { margin:0; color:var(--muted); }
+.wf-card .wf-metrics { padding-block:12px; }
+.wf-card .wf-header { padding-block:14px; }
+.wf-card .wf-header h3 { font-size:18px; }
+@media(prefers-reduced-motion:reduce) { .wf-graph .wf-graph-node-working i { animation:none !important; } }
+
+/* LiveOps service-card treatment: white surface, colored border and restrained shadow. */
+.wf-graph .wf-graph-node { border:2px solid var(--stage-color,#7B4D91); border-radius:10px; background:var(--surface,#fff); box-shadow:0 3px 8px color-mix(in srgb,var(--stage-color) 16%,transparent); }
+.wf-graph .wf-graph-node-role { color:var(--stage-color); letter-spacing:.035em; }
+.wf-graph .wf-graph-node-state { padding:5px 7px; border-radius:5px; background:color-mix(in srgb,var(--stage-color) 8%,var(--surface,#fff)); color:var(--ink,#332b3a); }
+.wf-graph .wf-graph-node-active { background:color-mix(in srgb,var(--stage-color) 6%,var(--surface,#fff)); box-shadow:0 0 0 3px color-mix(in srgb,var(--stage-color) 14%,transparent); }

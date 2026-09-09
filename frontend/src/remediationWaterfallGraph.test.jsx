@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 vi.mock('@xyflow/react', () => ({
   Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' }, MarkerType: { ArrowClosed: 'arrowclosed' },
-  Handle: () => null, Background: () => null,
+  Controls: () => null, Handle: () => null, Background: () => null,
   ReactFlow: ({ nodes, edges, nodeTypes, children }) => createElement('div', { 'data-testid': 'flow' },
     ...nodes.map(node => createElement(nodeTypes[node.type], { key: node.id, data: node.data })),
     createElement('span', { 'data-testid': 'moving-edges' }, edges.filter(edge => edge.animated).map(edge => edge.target).join(',')), children),
@@ -47,9 +47,9 @@ describe('the connected remediation waterfall', () => {
 
   it('moves only the connection into the confirmed active stage', () => {
     const graph = waterfallGraphModel({ stages, motion: { documents: 22, stage: 'next' } })
-    expect(graph.edges.map(edge => `${edge.source}->${edge.target}`)).toEqual(['rules->first', 'first->next', 'next->approval', 'approval->verify'])
-    expect(graph.edges.filter(edge => edge.animated).map(edge => edge.target)).toEqual(['next'])
-    expect(graph.nodes.filter(node => node.data.active).map(node => node.id)).toEqual(['next'])
+    expect(graph.edges.map(edge => `${edge.source}->${edge.target}`)).toEqual(['rules->first:provider-one:recorded-first-v2', 'first:provider-one:recorded-first-v2->next:provider-two:recorded-fallback-version-20250514', 'next:provider-two:recorded-fallback-version-20250514->approval', 'approval->verify'])
+    expect(graph.edges.filter(edge => edge.animated).map(edge => edge.target)).toEqual(['next:provider-two:recorded-fallback-version-20250514'])
+    expect(graph.nodes.filter(node => node.data.active).map(node => node.id)).toEqual(['next:provider-two:recorded-fallback-version-20250514'])
     expect(waterfallGraphModel({ stages, motion: { documents: 22, stage: null } }).edges.some(edge => edge.animated)).toBe(false)
   })
 
@@ -70,11 +70,11 @@ describe('the connected remediation waterfall', () => {
 
   it('moves keyboard focus without opening the stage drawer until a button is activated', async () => {
     const onSelect = vi.fn()
-    const { container } = await mount({ selection: 'first', onSelect })
+    const { container } = await mount({ selection: 'first:provider-one:recorded-first-v2', onSelect })
     const first = container.querySelector('[data-stage=first]')
     expect(first.getAttribute('aria-pressed')).toBe('true')
     await act(async () => first.click())
-    expect(onSelect).toHaveBeenLastCalledWith('first')
+    expect(onSelect).toHaveBeenLastCalledWith('first:provider-one:recorded-first-v2', expect.objectContaining({ model: 'recorded-first-v2', tier: 1 }))
     onSelect.mockClear()
     await act(async () => first.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })))
     expect(document.activeElement).toBe(container.querySelector('[data-stage=next]'))
@@ -85,7 +85,7 @@ describe('the connected remediation waterfall', () => {
     expect(document.activeElement).toBe(container.querySelector('[data-stage=verify]'))
     expect(onSelect).not.toHaveBeenCalled()
     await act(async () => document.activeElement.click())
-    expect(onSelect).toHaveBeenLastCalledWith('verify')
+    expect(onSelect).toHaveBeenLastCalledWith('verify', expect.objectContaining({ stage: 'verify' }))
   })
 
   it.each([240, 280, 360, 600, 1100])('keeps full-size nodes within a %spx canvas', width => {
@@ -99,3 +99,27 @@ describe('the connected remediation waterfall', () => {
     expect(columns).toBe(width < 420 ? 1 : width < 850 ? 2 : 5)
   })
 })
+
+ it('separates recorded models within one tier without inventing a sequential fallback chain', async () => {
+   const models = [{ provider: 'a', model: 'fallback-one', recorded_attempts: 2 }, { provider: 'b', model: 'fallback-two', recorded_attempts: 3 }]
+   const input = { stages: [{ tier: 2, operations: 5, active: 1, models }], motion: { stage: 'next' } }
+   const graph = waterfallGraphModel(input)
+   const alternatives = graph.nodes.filter(node => node.data.tier === 2)
+   expect(alternatives.map(node => node.data.title)).toEqual(['fallback-one', 'fallback-two'])
+   expect(new Set(graph.nodes.map(node => node.id)).size).toBe(6)
+   expect(alternatives.every(node => !node.data.active)).toBe(true)
+   expect(graph.edges.some(edge => alternatives.some(node => node.id === edge.source) && alternatives.some(node => node.id === edge.target))).toBe(false)
+   expect(alternatives.map(node => node.data.value)).toEqual([2, 3])
+   const { container } = await mount(input)
+   const buttons = container.querySelectorAll('[data-stage]')
+   await act(async () => buttons[2].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })))
+   expect(document.activeElement).toBe(buttons[3])
+   await act(async () => buttons[3].dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })))
+   expect(document.activeElement).toBe(buttons[5])
+ })
+ it.each(['processing_complete', 'failed', 'cancelled', 'paused', 'stalled'])('retains calm nodes after %s even with stale active motion', async state => {
+   const { container } = await mount({ snapshot: { state, terminal: true }, motion: { stage: 'first' } })
+   expect(container.querySelectorAll('[data-stage]')).toHaveLength(5)
+   expect(container.querySelector('.wf-graph-node-active')).toBeNull()
+   expect(container.querySelector('[data-testid=moving-edges]').textContent).toBe('')
+ })
