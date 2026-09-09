@@ -2575,10 +2575,10 @@ export const getDriveFolderName = (id) => (SIM ? sim({ id, name: 'Demo folder' }
   : fetch(`${BASE}/drive/folder-name?id=${encodeURIComponent(id)}`, { headers: headers(), signal: AbortSignal.timeout(8000) }).then(j))
 
 
-export const planReleaseContinuation = (scanId, files, destination, releaseFolderName = '') => (SIM
+export const planReleaseContinuation = (scanId, files, destination, releaseFolderName = '', options = {}) => (SIM
   ? sim({ id: 'simulation', intent: { files: {} }, status: 'draft' }, 50)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/continuation/plan`, {
-      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), signal: options.signal,
       body: JSON.stringify({ files, destination, release_folder_name: releaseFolderName }),
     }).then(j))
 export const getReleaseContinuation = scanId => (SIM ? sim(null, 50)

@@ -9483,6 +9483,20 @@ class Store:
 
     def get_file_record(self, scan_id: str, file: str) -> dict | None:
         """Return one file plus its immutable discovery path for release decisions."""
+        return self.get_file_records(scan_id, files=[file]).get(file)
+
+    def get_file_records(self, scan_id: str, *, files: list[str] | None = None,
+                         owner: str | None = None) -> dict[str, dict]:
+        """Read Release identities together; a large plan must not query each file."""
+        if files is not None and not files:
+            return {}
+        conditions, params = ["f.scan_id=%s"], [scan_id]
+        if files is not None:
+            conditions.append("f.file IN (" + ",".join(["%s"] * len(files)) + ")")
+            params.extend(files)
+        if owner is not None:
+            conditions.append("f.scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)")
+            params.append(owner)
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT f.file,f.engine,f.status,f.score,f.compliant,f.drive_file_id,"
@@ -9491,9 +9505,8 @@ class Store:
                 "i.library_name,i.site_name "
                 "FROM file_records f LEFT JOIN scan_inventory i "
                 "ON i.scan_id=f.scan_id AND i.file=f.file "
-                "WHERE f.scan_id=%s AND f.file=%s",
-                (scan_id, file))
-            return self._db.fetchone(cur)
+                "WHERE " + " AND ".join(conditions), tuple(params))
+            return {row["file"]: row for row in self._db.fetchall(cur)}
 
     def get_source_link_data(self, scan_id: str, file: str, owner: str | None = None) -> dict | None:
         """Return the scan source system and inventory identifiers needed to construct a deep link

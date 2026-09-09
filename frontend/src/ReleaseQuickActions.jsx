@@ -8,6 +8,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
   const [active, setActive] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [checking, setChecking] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const lock = useRef(false)
   const progressRef = useRef(onProgress)
@@ -16,18 +17,29 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
   const currentKey = useRef(key)
   currentKey.current = key
   useEffect(() => {
-    let live = true
+    let live = true, settled = false
+    const controller = new AbortController()
     setPlan(null); setError('')
+    setChecking(Boolean(runId && files.length && !readOnly))
     if (!runId || !files.length || readOnly) return
+    const deadline = setTimeout(() => {
+      if (!live || settled) return
+      settled = true; controller.abort(); setChecking(false)
+      setError('Eligibility could not be confirmed in time. Refresh to try again. Ready files can still be published.')
+    }, 20000)
     const load = async () => {
       try {
-        const result = await planReleaseContinuation(runId, files.map(f => f.file), destination, folderName)
+        const result = await planReleaseContinuation(runId, files.map(f => f.file), destination, folderName, { signal: controller.signal })
         if (!result?.id || !result?.intent) throw new Error('Eligibility could not be confirmed. Refresh before authorizing changes.')
-        if (live) setPlan({ ...result, key })
-      } catch (e) { if (live) setError(e?.message || 'Eligible changes could not be checked. Ready files can still be published.') }
+        if (live && !settled) setPlan({ ...result, key })
+      } catch (e) { if (live && !settled) setError(e?.message || 'Eligible changes could not be checked. Ready files can still be published.') }
+      finally {
+        clearTimeout(deadline)
+        if (live && !settled) { settled = true; setChecking(false) }
+      }
     }
     load()
-    return () => { live = false }
+    return () => { live = false; clearTimeout(deadline); controller.abort() }
   }, [key, refresh, readOnly])
   useEffect(() => {
     let live = true, timer
@@ -84,6 +96,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
         {busy ? 'Authorizing…' : 'Approve eligible changes and publish when ready'}
       </button>}
     </div>
+    {checking && <p role="status">Checking which proposals can be approved and published… Ready files can still be published while this check runs.</p>}
     {eligible > 0 && <p>{eligible} proposed {eligible === 1 ? 'change' : 'changes'} across {eligibleFiles} {eligibleFiles === 1 ? 'file' : 'files'}. This action authorizes the current proposals, applies them, verifies the result, and publishes qualifying files to the destination above. Individual inspection is optional.</p>}
     {!eligible && plan && !activeRunning && <p>{ready.length ? 'Other files do not hold eligible proposals for this action.' : 'No eligible proposals can be applied automatically yet.'} Manual work and verification blockers remain separate.</p>}
     {entries.length > 0 && <details><summary>Inspect proposed changes and remaining blockers</summary>

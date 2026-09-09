@@ -9,6 +9,20 @@ from routes.scans import _release_destination, _preflight_release_destination
 router = APIRouter()
 
 
+def public_state(row):
+    """Inspection needs eligible proposals and blockers, not old applied content.
+
+    Full frozen inputs remain server-side for every authorization check. The
+    client only submits the immutable intent ID, never this display projection.
+    """
+    if row is None:
+        return None
+    intent = row['intent']
+    return {**row, 'intent': {**intent, 'files': {
+        file: {**entry, 'rows': [item for item in entry['rows'] if item['authorize']]}
+        for file, entry in intent['files'].items()}}}
+
+
 class PlanRequest(BaseModel):
     files: list[str]
     destination: dict | None = None
@@ -37,7 +51,7 @@ def plan(sid: str, body: PlanRequest, request: Request):
     destination = _release_destination(scan['run'].get('source') or 'local', body.destination)
     try:
         folder_name = publish.normalize_release_name(body.release_folder_name, field='Release folder name')
-        return service.plan(core.store, sid, owner, body.files, destination, folder_name)
+        return public_state(service.plan(core.store, sid, owner, body.files, destination, folder_name))
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
@@ -45,7 +59,7 @@ def plan(sid: str, body: PlanRequest, request: Request):
 @router.get('/scans/{sid}/release/continuation')
 def status(sid: str, request: Request):
     owner, _ = owner_scan(sid, request)
-    return persistence.latest(core.store, sid, owner)
+    return public_state(persistence.latest(core.store, sid, owner))
 
 
 @router.post('/scans/{sid}/release/continuation/{intent_id}/authorize')
@@ -58,7 +72,7 @@ def authorize(sid: str, intent_id: str, request: Request):
     if not _preflight_release_destination(request, row['intent']['destination'])['ready']:
         raise HTTPException(409, 'Destination is unavailable. Check access before authorizing.')
     try:
-        return service.authorize(core.store, intent_id, owner)
+        return public_state(service.authorize(core.store, intent_id, owner))
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
@@ -71,6 +85,6 @@ def resume(sid: str, intent_id: str, request: Request):
         raise HTTPException(404, 'Release plan not found')
     credentials(sid, request)
     try:
-        return service.resume(core.store, intent_id, owner)
+        return public_state(service.resume(core.store, intent_id, owner))
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
