@@ -22,6 +22,8 @@ def normalize_impact_evidence(value):
     expiry = _timestamp(value.get('expires_at'))
     if not expiry:
         raise ValueError('Impact evidence expiry must include timezone')
+    if not isinstance(value.get('samples'), list) or not isinstance(value.get('charges'), list):
+        raise ValueError('Samples and charges must be explicit lists')
     rows = {}
     for sample in value.get('samples', []):
         keys = ('finding_id', 'source_revision', 'operation_id', 'evidence_id', 'observed_at')
@@ -32,7 +34,7 @@ def normalize_impact_evidence(value):
         row = {k: sample[k] for k in keys}
         row.update(rules_unresolved=True, usable=sample['usable'])
         # One immutable source finding, regardless of retries, revisions or operations.
-        identity = (row['finding_id'], row['source_revision'])
+        identity = row['finding_id']
         if identity in rows and rows[identity] != row:
             raise ValueError('Conflicting finding outcome; ingest a canonical adjudicated label')
         rows[identity] = row
@@ -80,6 +82,8 @@ def estimate_cohort(record, *, applicability, eligible_findings, now=None):
         return result
     if any(not applicability.get(k) or record.get(k) != applicability[k] for k in DIMENSIONS):
         return fail('out_of_population')
+    if not isinstance(record.get('evaluation_version'), str) or not record['evaluation_version']:
+        return fail('evaluation_version_missing')
     provenance = record.get('provenance') or {}
     if provenance.get('kind') != 'evaluated' or not all(provenance.get(k) for k in ('dataset_sha256', 'evaluation_report_sha256')):
         return result
@@ -106,6 +110,7 @@ def estimate_cohort(record, *, applicability, eligible_findings, now=None):
         return fail('eligible_population_unknown')
     usable = sum(r['usable'] for r in rows)
     interval = wilson_interval(usable, len(rows))
+    result['models'] = {k: record.get(k) for k in ('generator_provider', 'generator_model', 'reviewer_provider', 'reviewer_model')}
     result.update(available=True, reason=None, eligible_findings=eligible_findings,
                   additional_usable_suggestions_range=[floor(interval[0] * eligible_findings), ceil(interval[1] * eligible_findings)],
                   uncertainty='95% Wilson interval for the expected count; individual runs can fall outside it.',
@@ -132,3 +137,51 @@ def estimate_cohort(record, *, applicability, eligible_findings, now=None):
                   observed_cost_per_usable_outcome_usd=str(total / usable) if usable else None,
                   cost_uncertainty='Observed evaluated finding cost range, including unsuccessful attempts; not a price guarantee.')
     return result
+
+
+def estimate_plan(records, population, *, now=None):
+    """Consume a server-produced exact eligible population, never browser findings.
+
+    A producer must bind format/family/config to the current scope and approved
+    routing, with one row per immutable finding. Mixed populations stay unavailable
+    until stratified representative evaluations are supported.
+    """
+    unavailable = {'schema_version': SCHEMA, 'available': False,
+                   'reason': 'eligible_population_unknown', 'sample_size': None,
+                   'additional_usable_suggestions_range': None,
+                   'expected_provider_cost_range_usd': None}
+    if not isinstance(population, dict) or population.get('complete') is not True or not population.get('scope_revision'):
+        return unavailable
+    findings = population.get('findings')
+    if not isinstance(findings, list) or not findings:
+        return unavailable
+    identities = set()
+    dimensions = set()
+    for row in findings:
+        if not isinstance(row, dict) or row.get('eligible') is not True or not all(isinstance(row.get(k), str) and row[k] for k in (*DIMENSIONS, 'finding_id', 'source_revision')):
+            return unavailable
+        identities.add((row['finding_id'], row['source_revision']))
+        dimensions.add(tuple(row[k] for k in DIMENSIONS))
+    if len(dimensions) != 1:
+        return {**unavailable, 'reason': 'out_of_population'}
+    applies = dict(zip(DIMENSIONS, next(iter(dimensions))))
+    matching = [r for r in records if all(r.get(k) == applies[k] for k in DIMENSIONS)]
+    # Deterministic newest evaluation; never fall back to an older, better-looking rate.
+    matching.sort(key=lambda r: str(r.get('evaluated_at', '')), reverse=True)
+    result = estimate_cohort(matching[0] if matching else None, applicability=applies,
+                             eligible_findings=len(identities), now=now)
+    result['scope_revision'] = population['scope_revision']
+    return result
+
+
+def read_plan_estimate(store, owner, preview):
+    """Read shared calibration storage; absent trusted targeting fails closed.
+
+    Existing routing groups lack exact model/family lineage. They intentionally do
+    not manufacture estimate_population. This adapter is ready for that producer.
+    """
+    population = preview.get('estimate_population')
+    if not population:
+        return estimate_plan([], None)
+    from ai_review_calibration import load_calibration_records
+    return estimate_plan(load_calibration_records(store, owner), population)

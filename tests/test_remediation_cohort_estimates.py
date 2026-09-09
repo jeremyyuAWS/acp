@@ -88,3 +88,32 @@ def test_content_is_not_ingested_or_returned():
     assert 'secret document content' not in str(normalize_impact_evidence(r['impact_evidence']))
     assert 'finding_id' not in str(estimate(r))
     assert 'secret document content' not in str(estimate(r))
+
+
+def test_plan_scope_is_deduplicated_and_mixed_config_is_unavailable():
+    from remediation_cohort_estimates import estimate_plan
+    row = dict(**APPLIES, finding_id='f', source_revision='s', eligible=True)
+    population = dict(complete=True, scope_revision='scope-2', findings=[row, deepcopy(row)])
+    result = estimate_plan([cohort()], population, now=NOW)
+    assert result['eligible_findings'] == 1 and result['scope_revision'] == 'scope-2'
+    population['findings'][1]['config_id'] = 'other'
+    assert estimate_plan([cohort()], population, now=NOW)['reason'] == 'out_of_population'
+    population['complete'] = False
+    assert not estimate_plan([cohort()], population, now=NOW)['available']
+
+
+def test_current_routing_groups_do_not_invent_a_population():
+    from remediation_cohort_estimates import read_plan_estimate
+    class NoCalls:
+        def __getattr__(self, name):
+            raise AssertionError('No provider or storage call needed without targeting')
+    assert not read_plan_estimate(NoCalls(), 'owner', {'findings': [{'finding_count': 100}]})['available']
+
+
+def test_source_revisions_are_not_independent_finding_samples():
+    r = cohort()
+    duplicate = deepcopy(r['impact_evidence']['samples'][0])
+    duplicate['source_revision'] = 's2'
+    r['impact_evidence']['samples'].append(duplicate)
+    r['impact_evidence']['population_size'] += 1
+    assert estimate(r)['reason'] == 'missing_or_conflicting_lineage'
