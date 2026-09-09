@@ -87,7 +87,13 @@ const RESOLVED_STATUSES = new Set(['approved', 'applied', 'accepted', 'rejected'
 /** The lane for a finding, from its status first (blocked/recheck win) then its remediation shape. */
 export function laneOf(f) {
   const st = String(f?.status || '').toLowerCase()
-  if (st === 'blocked' || st === 'rejected') return LANES.blocked
+  if (st === 'blocked') return LANES.blocked
+  // A rejection recorded on the row itself (hitl_queue.status), read back on a later load. It is
+  // the same outcome as the in-session `rejectedFix` handoff below and gets the same lane — the
+  // AI's fix was declined and a person owns it now. NOT `blocked`, which claims the finding
+  // cannot be remediated at all; the reviewer declined one attempt, they did not condemn the
+  // finding, and the row would have read "Blocked — cannot be remediated as-is" on every reload.
+  if (st === 'rejected') return LANES.handoff
   if (st === 'recheck' || st === 'rechecking' || st === 'scanning') return LANES.recheck
   // A rejected AI fix routed back for human handling (the handoff lane). Wins over the
   // remediation-shape checks below — the AI's proposal was declined, so it is no longer offered.
@@ -224,6 +230,23 @@ export function workflowStatusOf(f, decisions = {}) {
   const d = decisions[f?.id] ?? decisions[f?.file]
   const lane = laneOf(f)
 
+  // ── The decision recorded ON THE ROW (hitl_queue.status), which outlives this browser session.
+  // `decisions` only holds what THIS session did, so without these branches a row the reviewer
+  // approved yesterday came back from the server classified as outstanding work — or, once the
+  // page stopped asking only for `pending` rows, did not come back at all. A decided row is
+  // placed by its own durable state first; the session's `decisions` below still speak for the
+  // rows this session acted on before the server has been re-read.
+  if (st === 'approved' || st === 'applied' || st === 'accepted') {
+    // Approval is not completion: the fix is written and the confirming re-scan has not
+    // certified it yet (ADR 0016). `validated` is that re-scan's verdict.
+    return f?.validated ? 'completed' : 'awaiting-validation'
+  }
+  // A recorded rejection ends this finding's AI work — the decision is the outcome, and there is
+  // no re-scan to await. The in-session handoff row (rejectedFix, no durable status) keeps its
+  // place in Manual fixes, which is where the person who bounced it back picks it up.
+  if (st === 'rejected') return 'completed'
+  // A skip is a deferral, not a resolution: the item is still owed a decision, by hand.
+  if (st === 'skipped') return 'manual'
   if (lane.key === 'blocked') return 'blocked'
   // Completed: fully re-validated, a rejection that ended the work, or an out-of-scope (not
   // applicable) judgement — the last two are settled with no re-scan to await. not_applicable also
