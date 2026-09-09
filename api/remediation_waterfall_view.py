@@ -10,6 +10,8 @@ import json
 import math
 import re
 
+from remediation_run_graph import read_run_graph
+
 _TEXT_ATTEMPT = re.compile(r'^text:([0-9a-f]{64}):([12]):([0-9]+)$')
 
 
@@ -86,6 +88,9 @@ def read_waterfall(store, owner, scan_id, batch_id):
                                 'spent_units': spent, 'held_units': held,
                                 'available_units': max(0, rows[0]['cap_units'] - spent - held),
                                 'unknown_charges': unknown, 'blocked': blocked})
+    execution = store.get_stage_execution(batch_id, owner=owner)
+    if execution and execution.get('scan_id') == scan_id and execution.get('stage') == 'remediate':
+        result['run_graph'] = read_run_graph(store, owner, scan_id, batch_id)
     result['revision'] = hashlib.sha256(json.dumps(
         {k: v for k, v in result.items() if k != 'generated_at'}, sort_keys=True).encode()).hexdigest()[:20]
     return result

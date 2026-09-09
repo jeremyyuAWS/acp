@@ -77,6 +77,47 @@ def freeze_baseline(db, cur, owner, scan_id, run_id, snapshot_id, findings, file
         raise ValueError('contribution baseline is immutable')
 
 
+def chain_contribution(attempt, rows, *, source_sha256, assessment_revision, finding_ids, locator):
+    """Qualify every edge of the explicit generation chain, including settled parents."""
+    from ai_generation_chain import normalize_execution, ELIGIBLE
+    by_id = {row['attempt_id']: row for row in rows}
+    current = attempt
+    expected_position = None
+    origin = None
+    child_execution = None
+    try:
+        while current:
+            result = json.loads(current.get('result_json') or '{}')
+            execution = normalize_execution(result.get('execution'))
+            position = execution['generation_position']
+            if expected_position is None:
+                origin = ('first_ai', 'fallback_ai', 'fallback_2_ai')[position]
+                if current['status'] != 'drafted' or result.get('validation_outcome') != 'usable':
+                    return None
+            elif position != expected_position or result.get('validation_outcome') not in ELIGIBLE:
+                return None
+            if (current.get('spending_state') != 'settled'
+                    or execution['request_id'] != current['attempt_id']
+                    or execution['source_sha256'] != source_sha256
+                    or execution['assessment_revision'] != assessment_revision
+                    or sorted(execution['finding_ids']) != sorted(finding_ids)
+                    or execution['locator'] != locator
+                    or execution['adapter_id'] != 'pptx-slide-title.v1'
+                    or any(current.get(k) != attempt.get(k) for k in
+                           ('owner_id', 'scan_id', 'run_id', 'file', 'operation_id', 'input_sha256'))):
+                return None
+            if child_execution and child_execution['escalation_reason'] != result.get('validation_outcome'):
+                return None
+            if position == 0:
+                return origin
+            child_execution = execution
+            expected_position = position - 1
+            current = by_id.get(execution['parent_attempt_id'])
+        return None
+    except (ValueError, TypeError, KeyError, IndexError):
+        return None
+
+
 def capture(db, cur, ctx, *, snapshot_id, proposal, scan_id, file, rule_id, item_id, attempt_id):
     """Capture only usable structured values with exact source and baseline links."""
     from remediation_run_insights import _ctx
@@ -104,13 +145,25 @@ def capture(db, cur, ctx, *, snapshot_id, proposal, scan_id, file, rule_id, item
         raise ValueError('proposal finding membership outside immutable baseline')
     origin, operation = None, None
     if attempt_id:
-        db.execute(cur, '''SELECT purpose,operation_id,status,input_sha256,created_at FROM ai_attempt_history
+        db.execute(cur, '''SELECT * FROM ai_attempt_history
             WHERE owner_id=%s AND scan_id=%s AND run_id=%s AND file=%s AND attempt_id=%s''',
             (owner, scan_id, run, file, attempt_id))
         attempt = db.fetchone(cur)
         if attempt and attempt['status'] == 'drafted':
             operation = attempt['operation_id']
-            if attempt['purpose'] == 'draft':
+            result = json.loads(attempt.get('result_json') or '{}')
+            if result.get('execution'):
+                db.execute(cur, '''SELECT h.*,s.state AS spending_state FROM ai_attempt_history h
+                    JOIN ai_spending_attempts s ON s.owner_id=h.owner_id AND s.run_id=h.run_id AND s.attempt_id=h.attempt_id
+                    WHERE h.owner_id=%s AND h.scan_id=%s AND h.run_id=%s AND h.file=%s AND h.operation_id=%s''',
+                    (owner, scan_id, run, file, operation))
+                chain_rows = db.fetchall(cur)
+                settled_attempt = next((r for r in chain_rows if r['attempt_id'] == attempt_id), attempt)
+                origin = chain_contribution(settled_attempt, chain_rows, source_sha256=source[2],
+                    assessment_revision=baseline['snapshot_id'], finding_ids=ids, locator=locator)
+                if result.get('text') != value:
+                    origin = None
+            elif attempt['purpose'] == 'draft':
                 origin = 'first_ai'
             elif attempt['purpose'] == 'fallback':
                 db.execute(cur, '''SELECT purpose,status FROM ai_attempt_history WHERE owner_id=%s
@@ -146,7 +199,7 @@ def read_contribution(store, owner, scan_id, run_id):
         baseline = db.fetchone(cur)
         if not baseline:
             return {'contract_version': 'remediation-contribution.v1', 'coverage': 'unavailable',
-                    'baseline_total': None, 'available':False, 'first_model_findings':None, 'fallback_additional_findings':None, 'reviewed_findings':None, 'baseline_findings':None, 'contributions': {key: None for key in ('rules','first_ai','fallback_ai')},
+                    'baseline_total': None, 'available':False, 'first_model_findings':None, 'fallback_additional_findings':None, 'fallback_2_additional_findings':None, 'reviewed_findings':None, 'baseline_findings':None, 'contributions': {key: None for key in ('rules','first_ai','fallback_ai','fallback_2_ai')},
                     'findings': [], 'note': 'AI step breakdown unavailable for this run. No immutable contribution baseline was retained.'}
         db.execute(cur, 'SELECT * FROM remediation_contribution_proposals WHERE owner_id=%s AND scan_id=%s AND run_id=%s ORDER BY created_at,proposal_id', scope)
         proposals = db.fetchall(cur)
@@ -192,7 +245,7 @@ def aggregate(baseline, proposals, events, *, dispositions=None, active_files=()
         event_map[p['proposal_id']] = [e for e in events if all(e.get(k) == p.get(k) for k in
             ('owner_id','scan_id','run_id','proposal_id','proposal_sha256','source_sha256'))]
     counts = dict.fromkeys(OUTCOMES, 0)
-    contributions = dict.fromkeys(('rules','first_ai','fallback_ai'), 0)
+    contributions = dict.fromkeys(('rules','first_ai','fallback_ai','fallback_2_ai'), 0)
     for f in findings:
         options = membership.get(f['finding_id'], [])
         # The first usable source owns contribution; fallback revisions cannot add
@@ -233,7 +286,7 @@ def aggregate(baseline, proposals, events, *, dispositions=None, active_files=()
         counts[state] += 1
     complete = counts['unavailable'] == 0 and all(f['origin'] for f in findings)
     return {'contract_version':'remediation-contribution.v1', 'coverage':'complete' if complete else 'partial',
-            'available':complete, 'first_model_findings':contributions['first_ai'] if complete else None, 'fallback_additional_findings':contributions['fallback_ai'] if complete else None, 'reviewed_findings':None, 'baseline_findings':len(findings),
+            'available':complete, 'first_model_findings':contributions['first_ai'] if complete else None, 'fallback_additional_findings':contributions['fallback_ai'] if complete else None, 'fallback_2_additional_findings':contributions['fallback_2_ai'] if complete else None, 'reviewed_findings':None, 'baseline_findings':len(findings),
             'baseline_total':len(findings), 'snapshot_id':baseline['snapshot_id'], 'generated_at':now(),
             'revision':digest([revision,findings,counts,contributions,review_count]), 'selected_file_count':len(json.loads(baseline['files_json'])),
             'outcomes':counts, 'contributions':contributions, 'reviewer':{'checked_proposals':review_count},

@@ -204,10 +204,22 @@ def build_run_impact(store, scan_id, owner, policy=None, scope=None):
     result = build_impact_preview(rows, selected, files=files, active_policy=active,
                                   scan_id=scan_id, population_complete=assessed)
     result['capabilities']['ai_enabled'] = store.get_ai_enabled()
+    from ai_generation_chain import chain_options
+    result['capabilities']['generation_chain'] = chain_options(rows)
+    if (selected['ai'] > 0 and len(selected.get('generation_chain', {}).get('steps', [])) == 3
+            and not result['capabilities']['generation_chain']['supported']):
+        result['capabilities'].update(execute=False, reason=result['capabilities']['generation_chain']['reason'])
     if not assessed:
         result['capabilities'].update(execute=False, reason='Assessment results are not yet available.')
     elif not result['capabilities']['ai_enabled'] and selected['ai'] > 0:
         result['capabilities'].update(execute=False, reason='AI is disabled in application settings. Choose Off to run rule-based fixes.')
+    if selected['ai'] > 0 and selected.get('generation_chain'):
+        options = result['capabilities']['generation_chain']
+        catalog = options['models']
+        if any(i >= len(catalog) or step['model'] != catalog[i]['model']
+               or step['provider'] != catalog[i]['provider']
+               for i, step in enumerate(selected['generation_chain']['steps'])):
+            result['capabilities'].update(execute=False, reason='The approved generation models are unavailable in current settings.')
     if selected['ai'] > 1:
         result['capabilities'].update(execute=False, reason=CAPABILITIES['ai_automatic_reason'])
     result['scope'] = {'type': 'selected_files' if scope is not None else 'assessment', 'files': len(files)}
