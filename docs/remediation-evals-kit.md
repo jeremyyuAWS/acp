@@ -233,11 +233,19 @@ reason `ENVELOPE_SCHEMA` keeps the destructive actions in its enum. A line pairi
 value and *no* separator still copies whole, and the test says so out loud, so the limit cannot
 quietly outlive the code.
 
-**Not fixed, and still measured.** The tier still proposes `headerRow=true` on `adv-ss-02`, an
-export whose header line was dropped so row 1 is an invoice. The root cause is right and the
-recipe is right; no rule can tell that row 1 is data, which is why that case expects a refusal.
-It also takes the template's `en-US` over a French body on `adv-dl-02`. Those are the
-deterministic lane's real limits, not mis-keys, and the reviewer catches both.
+**Not fixed, and still measured.** Three cases on the adversarial set, and every one is a
+judgement the evidence does not settle rather than a mis-key. `adv-ss-02`: `headerRow=true` on an
+export whose header line was dropped, so row 1 is an invoice — the root cause is right and the
+recipe is right, and no rule can tell that row 1 is data, which is why that case expects a
+refusal. `adv-ss-04`: a pptx *layout* table, where `headerRow=true` clears 1.3.1 and makes an
+image cell a column header; `table.role=layout` is in scope and correct, and choosing it needs a
+reading of the slide. `adv-dl-02`: the template's `en-US` over a French body. The reviewer catches
+all three, and `adv-ss-02` is the only one that still counts as a violation.
+
+**Last re-measured** on `origin/main` at `bc260bc3`, with both fixes (#1760, #1779) in the
+ancestry and the re-scan on the product's own predicates: `rules-only` clears every gate on the
+143-case corpus with zero critical violations, and scores 28% accepted / 28% applied / 28%
+cleared / 53% as-expected over 96 case-runs on the adversarial set.
 
 Because one automation-eligible case in `docx:1.3.1` is unsolved by every candidate — `rem-n01`,
 the cascade case, where the tier now escalates rather than write out of scope — that whole

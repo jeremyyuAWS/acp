@@ -152,7 +152,9 @@ every other candidate.
 
 ## 5. Offline baseline — what the scripted candidates show
 
-Default run, 32 cases × 3 repeats, no network:
+Default run, 32 cases × 3 repeats, no network. Every figure below was last re-measured on
+`origin/main` at `bc260bc3` — after both rule-tier fixes landed (#1760, #1779) — with the re-scan
+running the **product's** own predicates rather than the fallbacks:
 
 | candidate | accepted unchanged | accepted after edit | rejected / refused | applied | cleared after re-scan | regressions (proposed) | as expected |
 |---|---|---|---|---|---|---|---|
@@ -182,9 +184,16 @@ What the floor and the fixtures establish:
   label and value with no separator between them would still copy whole.
 - Between the two fixes, `rules-only` goes from 16% acceptance and 41% as-expected to **28%** and
   **53%**, with critical violations on the raw plans down from 5 per pass to 1. What remains is
-  not a defect: it still declares the invoice row a header on `adv-ss-02` and takes the template's
-  `en-US` over the French body on `adv-dl-02` — both rejected by the oracle, both named as proposed
-  regressions. 28% acceptance is the deterministic ceiling on this set.
+  three cases, none of them a defect — each is a judgement no rule has the evidence to make, and
+  the oracle rejects all three:
+  - `adv-ss-02` — declares row 1 a header on an export whose header line was dropped, so the row
+    is an invoice (`1.3.1:header-row-is-data`). The only violation left.
+  - `adv-ss-04` — a pptx *layout* table: `headerRow=true` clears 1.3.1 and makes an image cell a
+    column header (`1.3.1:empty-header-cell`). Marking it `table.role=layout` is the right move
+    and needs a reading of the slide the tier does not have.
+  - `adv-dl-02` — takes the template's `en-US` over a French body (`3.1.1:mismatch`).
+
+  28% acceptance is the deterministic ceiling on this set.
 - **`stub:good` accepts nowhere it should not** and refuses exactly the two must-refuse cases; its
   two after-edit outcomes are the two cases whose canonical value sits in the after-edit band by
   design (`adv-lp-03`'s in-context link, `adv-lp-05`).
