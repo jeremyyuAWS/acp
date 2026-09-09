@@ -5,7 +5,7 @@ const DEFAULT = { enabled: false, mode: 'review_all', minimum_reliability: null,
   review_model: 'strong', permitted_families: [], evaluation_versions: {} }
 
 export default function RemediationReviewPolicy({ value, onChange, disabled, supported = false,
-  automaticSupported = false, automaticReason = '', administratorFloor = null, eligibleFamilies = [] }) {
+  automaticSupported = false, automaticReason = '', administratorFloor = null, eligibleFamilies = [], standingApprovalEnabled = false }) {
   const id = useId()
   const policy = { ...DEFAULT, ...value }
   const available = automaticSupported && eligibleFamilies.length > 0
@@ -38,15 +38,15 @@ export default function RemediationReviewPolicy({ value, onChange, disabled, sup
       <select id={`${id}-reviewer`} value={policy.review_model} onChange={event => change({ review_model: event.target.value })}>
         <option value="strong">Different configured model</option><option value="low_cost">Lowest-cost configured model</option>
       </select>
-      <p>Automatic application always requires an independent reviewer accepting the exact version. Refusals, uncertain charges and spending limits stop further AI review. Unresolved disagreement goes to you.</p>
+      <p>Calibration-based automatic application requires an independent reviewer accepting the exact version. Refusals, uncertain charges and spending limits stop further AI review. Unresolved disagreement goes to you.</p>
       <fieldset className="remediation-review-policy__mode">
         <legend>When should a person review AI changes?</legend>
         <label><input type="radio" name={`${id}-mode`} value="review_all" checked={policy.mode === 'review_all'}
-          onChange={() => change({ mode: 'review_all' })} /> Review all AI changes — default</label>
+          onChange={() => change({ mode: 'review_all' })} /> {standingApprovalEnabled ? 'Use the advance approval choice above' : 'Review all AI changes — default'}</label>
         <label><input type="radio" name={`${id}-mode`} value="threshold" checked={policy.mode === 'threshold'} disabled={!available}
           onChange={() => change({ mode: 'threshold' })} /> Automatically apply eligible, checked changes</label>
       </fieldset>
-      {!available && <p className="remediation-review-policy__calibration-note">Automatic application is not available for this run. {automaticReason || 'No change family has a supported objective writer, exact-version independent review and current evaluated reliability configured.'} AI suggestions will remain drafts for your approval.</p>}
+      {!available && <p className="remediation-review-policy__calibration-note">Calibration-based automatic application is not available for this run. Calibration path: {automaticReason || 'No change family has a supported objective writer, exact-version independent review and current evaluated reliability configured.'} {standingApprovalEnabled ? 'This does not change the advance approval choice above.' : 'AI suggestions will remain drafts for your approval.'}</p>}
       <details open={policy.mode === 'threshold'}><summary>Minimum validated reliability</summary>
         <p>This is based on evaluated results for this type of change. It is not the AI's own confidence and does not guarantee each change is correct.</p>
         <p>Choose eligible change types and an explicit threshold. Approve plan and start authorizes this bounded run policy; later settings changes cannot broaden an approved run.</p>
@@ -61,7 +61,7 @@ export default function RemediationReviewPolicy({ value, onChange, disabled, sup
           placeholder="Not configured" disabled={!available}
           onChange={event => { const raw = event.target.value; const n = Number(raw); if (!raw) change({ minimum_reliability: null }); else if (Number.isFinite(n) && n >= minimum && n <= 100) change({ minimum_reliability: n }) }} />
         {floors.length > 0 && <p>The administrator minimum for your selected change types is {minimum}%.</p>}
-        <p>Previewing settings makes no paid calls. Eligibility not yet known stays unknown until exact source, proposal, review and validation evidence is available. Subjective changes, stale evidence, failed checks and missing calibration still need your approval.</p>
+        <p>Previewing settings makes no paid calls. Eligibility not yet known stays unknown until exact source, proposal, review and validation evidence is available. {standingApprovalEnabled ? 'These calibration requirements apply only to the threshold option. The advance approval choice above still uses the supported writer and verification checks.' : 'Subjective changes, stale evidence, failed checks and missing calibration still need your approval.'}</p>
       </details>
     </>}
   </fieldset>

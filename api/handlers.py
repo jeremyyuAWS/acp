@@ -1181,7 +1181,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 except Exception as exc:
                     core.store.log_decision('system', 'ai.standing_approval.deferred',
                         scan_id=context.scan_id, file=context.file,
-                        detail=f'Automatic approval did not complete; suggestions remain reviewable: {type(exc).__name__}: {str(exc)[:200]}')
+                        detail=f'Automatic approval did not complete; suggestions remain reviewable: {type(exc).__name__}')
             return result
         finally:
             SOURCE.reset(source_token)

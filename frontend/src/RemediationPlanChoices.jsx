@@ -113,7 +113,7 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, gen
       supported={standingApprovalSupported && budgetSupported} reason={standingApprovalReason} />
     {policy.ai > 0 && <RemediationGenerationChain policy={policy} options={generationChainOptions} disabled={disabled} budgetSupported={budgetSupported} onChange={onChange} />}
     {policy.ai > 0 && reviewSupported && <details><summary>Optional AI review and approval threshold</summary><RemediationReviewPolicy value={policy.ai_review} onChange={value => onChange('ai_review', value)}
-      disabled={disabled || !budgetSupported} supported={reviewSupported} automaticSupported={automaticReviewSupported}
+      disabled={disabled || !budgetSupported} supported={reviewSupported} automaticSupported={automaticReviewSupported} standingApprovalEnabled={policy.auto_approve_ai === true}
       automaticReason={automaticReviewReason} administratorFloor={reviewAdministratorFloor} eligibleFamilies={reviewEligibleFamilies} /></details>}
 
   </div>
