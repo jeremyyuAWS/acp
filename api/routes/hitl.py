@@ -41,6 +41,8 @@ class HitlUpdate(BaseModel):
     resolution: str | None = None       # decorative | essential_exception | described_not_replaced | out_of_scope
     request_id: str | None = None       # stable across transport retries of one decision
     expected_version: int | None = None # row version the reviewer actually saw
+    expected_proposal_snapshot_ids: list[str] | None = None
+    expected_source_revision: str | None = None
 
 
 REJECT_REASONS = {"incorrect_object", "too_vague", "hallucinated", "missed_text", "org_preference", "other", "unspecified"}
@@ -133,8 +135,16 @@ def hitl_list(request: Request, status: str | None = None, scan_id: str | None =
     queued. include_superseded=true returns them as well, each flagged `superseded`; that is
     the audit view of everything this scan ever asked a human to look at."""
     owner = getattr(request.state, "user_email", None)
-    return core.store.list_hitl_queue(status=status, scan_id=scan_id, owner=owner,
+    rows = core.store.list_hitl_queue(status=status, scan_id=scan_id, owner=owner,
                                       include_superseded=include_superseded)
+    # Read-only identity of the assessed input, including inventory checksums and accepted inputs.
+    revisions = {}
+    for row in rows:
+        sid = row.get("scan_id")
+        if sid and sid not in revisions:
+            revisions[sid] = core.store.stage_snapshot_id(sid)
+        row["source_revision"] = revisions.get(sid)
+    return rows
 
 
 @router.get("/hitl/analytics")
@@ -268,9 +278,11 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
             item_id, body.status, body.reviewer_note, body.approved_value,
             resolution=body.resolution, approved_values=body.approved_values,
             actor=actor, detail=_detail, request_id=body.request_id,
-            expected_version=body.expected_version)
+            expected_version=body.expected_version,
+            expected_proposal_snapshot_ids=body.expected_proposal_snapshot_ids,
+            expected_source_revision=body.expected_source_revision)
     except ValueError as exc:
-        if str(exc) in {"stale decision version",
+        if str(exc) in {"stale decision version", "stale proposal selection", "stale source revision",
                         "decision request id was reused with a different payload"}:
             raise HTTPException(409, str(exc))
         if str(exc) != "described decision produced no alt-text obligation":

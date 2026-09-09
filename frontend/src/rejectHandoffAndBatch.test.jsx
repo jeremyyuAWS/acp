@@ -62,7 +62,7 @@ describe('W2 — rejected fix appears in the inbox as manual-handling work', () 
   })
   it('acting on it clears it via onDecide(assigned)', async () => {
     const calls = []
-    await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
+    await render({ queue: QUEUE.map(f => ({ ...f, _raw: { decision_version: 0, proposal_snapshot_ids: [String(f.id)], source_revision: 'source' } })), decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
     await click(btnByText('Complete manual work'))
     await click(btnByText('Defer'))
     expect(calls).toEqual([[9, 'assigned']])
@@ -95,7 +95,7 @@ describe('W8 — apply a decision to every matching finding in the same cluster'
     expect(container.textContent).toContain('You are looking at one of 3 findings that share this issue')
     expect(container.textContent).toContain('WCAG 1.1.1 in DOCX and PDF files')
     expect(container.textContent).toContain('covers more than one document format')
-    const bulk = btnByText('Approve & apply to all 3')
+    const bulk = btnByText('Select matching proposals (3)')
     expect(bulk).toBeTruthy()
     expect(bulk.disabled).toBe(false)
     expect(bulk.parentElement.textContent).toContain('this item and 2 similar findings')
@@ -104,8 +104,12 @@ describe('W8 — apply a decision to every matching finding in the same cluster'
 
   it('applies the decision to its cluster only — every format of that rule, and no other rule', async () => {
     const calls = []
-    await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
-    await click(btnByText('Approve & apply to all 3'))
+    await render({ queue: QUEUE.map(f => ({ ...f, _raw: { decision_version: 0, proposal_snapshot_ids: [String(f.id)], source_revision: 'source' } })), decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
+    await click(btnByText('Select matching proposals (3)'))
+    expect(calls).toEqual([])
+    await click(btnByText('Select eligible'))
+    await click(btnByText('Approve selected'))
+    await click(btnByText('Confirm approval'))
     // ids 1,2,3 (every 1.1.1 in the actionable lane, both formats) approved. id4 is a different
     // criterion, so it is not in the cluster and is not touched.
     expect(calls.map((c) => c[0]).sort()).toEqual([1, 2, 3])
@@ -120,28 +124,24 @@ describe('W8 — apply a decision to every matching finding in the same cluster'
     expect(container.textContent).not.toContain('share this issue')
   })
 
-  it('uses an upper-right toast confirmation before a decision reaches a large group', async () => {
+  it('requires explicit selection and value confirmation before a large group decision', async () => {
     const queue = Array.from({ length: 12 }, (_, i) => ({
       id: i + 20, file: `doc-${i + 1}.docx`, title: 'DOCX · Image needs alt text',
       rule_id: '1.1.1', hasProposal: true, after: `alt ${i + 1}`,
     }))
     const calls = []
-    await render({ queue, decisions: {}, onDecide: (f) => calls.push(f.id) })
-    await click(btnByText('Approve & apply to all 12'))
-    const toast = container.querySelector('[role="alertdialog"]')
-    expect(toast).toBeTruthy()
-    expect(toast.getAttribute('aria-modal')).toBe('false')
-    expect(toast.getAttribute('style')).toContain('top: 18px')
-    expect(toast.getAttribute('style')).toContain('right: 18px')
-    expect(toast.textContent).toContain('Apply decision to matching findings?')
-    expect(toast.textContent).toContain('12 findings across 12 documents')
+    await render({ queue: queue.map(f => ({ ...f, _raw: { decision_version: 0, proposal_snapshot_ids: [String(f.id)], source_revision: 'source' } })), decisions: {}, onDecide: (f) => calls.push(f.id) })
+    await click(btnByText('Select matching proposals (12)'))
     expect(calls).toEqual([])
-    await click(btnByText('Cancel'))
-    expect(container.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(btnByText('Approve selected').disabled).toBe(true)
+    await click(btnByText('Select eligible'))
+    await click(btnByText('Approve selected'))
+    expect(container.textContent).toContain('12 findings selected (12 review items) · 12 proposals · 12 files')
     expect(calls).toEqual([])
-
-    await click(btnByText('Approve & apply to all 12'))
-    await click(btnByText('Apply to all'))
+    await click(btnByText('Back to selection'))
+    expect(calls).toEqual([])
+    await click(btnByText('Approve selected'))
+    await click(btnByText('Confirm approval'))
     expect(calls.sort((a, b) => a - b)).toEqual(Array.from({ length: 12 }, (_, i) => i + 20))
   })
 })

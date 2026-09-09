@@ -73,8 +73,8 @@ def test_disabled_review_makes_no_call():
     assert result is DRAFT
 
 
-@pytest.mark.parametrize('lower,requires', [(.94999, True), (.95, False), (.96, False)])
-def test_threshold_boundary_requires_all_independent_evidence(lower, requires):
+@pytest.mark.parametrize('lower,requires', [(.94999, True), (.95, True), (.96, True)])
+def test_generic_scalar_estimates_never_authorize_structured_proposals(lower, requires):
     digest = hashlib.sha256(b'proposal').hexdigest()
     args = dict(review={'verdict':'accept','proposal_sha256':digest}, estimate={'available':True,'reliability_lower_bound':lower},
                 validation={'passed':True,'proposal_sha256':digest,'source_revision':'r1'}, proposal_sha256=digest, source_revision='r1', supported=True)
@@ -91,8 +91,15 @@ def test_review_preferences_are_preserved_in_the_immutable_run_snapshot():
     assert normalize_run_policy({'ai':1,'ai_budget_usd':'5.00'}).get('ai_review') is None
 
 
-@pytest.mark.parametrize('policy', [{'minimum_reliability':89}, {'minimum_reliability':True},
+@pytest.mark.parametrize('policy', [{'minimum_reliability':-1}, {'minimum_reliability':True},
     {'minimum_reliability':101}, {'max_review_attempts':3}, {'enabled':'true'}, {'mode':'threshold'}, {'model_confidence':100}])
 def test_invalid_or_unbounded_review_preferences_rejected(policy):
     with pytest.raises(ValueError):
         normalize_review_policy(policy)
+
+
+def test_missing_reviewer_model_never_claims_independent_review():
+    result = review_managed_draft('Task', DRAFT, context(), GENERATOR,
+        generate=lambda *a, **k: {'text':'{"verdict":"accept","reason":"Accepted."}'})
+    assert result['review']['independent'] is False
+    assert result['approval_required'] is True

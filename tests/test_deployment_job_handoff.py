@@ -9,6 +9,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_handler_registry(monkeypatch):
+    import handlers  # noqa: F401 — retain production registrations before isolating test additions
+    import worker
+    monkeypatch.setattr(worker, "HANDLERS", dict(worker.HANDLERS))
+
+
 def _threaded_turn(worker):
     thread = threading.Thread(target=worker.run_once, daemon=True)
     thread.start()
