@@ -15,6 +15,7 @@ class AuthorizationRequest(BaseModel):
     files: list[StrictStr] = Field(min_length=1, max_length=500)
     destination: dict
     request_id: StrictStr = Field(min_length=1, max_length=128)
+    expected_source_revision: StrictStr | None = Field(default=None, min_length=1, max_length=256)
 
 
 @router.get('/scans/{sid}/release/automatic')
@@ -37,7 +38,7 @@ def authorize(sid: str, body: AuthorizationRequest, request: Request, response: 
             raise HTTPException(409, 'Destination is unavailable. Restore access before enabling automatic release.')
     try:
         return service.public(service.authorize(core.store, sid, owner, body.run_id, body.files,
-                                               destination, body.request_id), core.store)
+                                               destination, body.request_id, body.expected_source_revision), core.store)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 

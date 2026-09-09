@@ -229,3 +229,12 @@ describe('R15 (board 10) — undo an applied fix, mounted only for an auto-appli
     expect(s).toMatch(/<UndoFix[\s\S]{0,200}?onUndone=\{onRefresh\}/)
   })
 })
+
+it('keeps release planning beside Plan choices and durable release controls in Live', () => {
+  const source = code('Remediate.jsx')
+  expect(source.slice(source.indexOf('plan={<>'), source.indexOf('reviewCount={reviewCounts'))).toContain('releaseOption={<RemediationReleasePlan')
+  expect(source.slice(source.indexOf('live={<>'))).toContain('<RemediationAutoRelease')
+  expect(code('RemediationImpactCard.jsx')).toContain('{releaseOption}')
+  expect(source).toContain('runServerRemediation(impactScope, policy, intent)')
+  expect(source).toContain('authorizeAcceptedRelease(runId, scope, r, releaseIntent)')
+})

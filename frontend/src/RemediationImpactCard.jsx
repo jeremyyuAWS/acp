@@ -52,7 +52,7 @@ function PolicySlider({ title, question, stops, value, onChange, disabled, maxLe
   </div>
 }
 
-export default function RemediationImpactCard({ runId, onRun, runBusy = false, myEmail = '', readOnly = false, refreshKey = 0, scopeFiles, renderAssessment }) {
+export default function RemediationImpactCard({ runId, onRun, runBusy = false, myEmail = '', readOnly = false, refreshKey = 0, scopeFiles, renderAssessment, releaseOption }) {
   const titleId = useId()
   const assigneeId = useId()
   const [assignmentOpen, setAssignmentOpen] = useState(false)
@@ -199,6 +199,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       reviewEligibleFamilies={data?.capabilities?.ai_review?.eligible_families || []}
       automaticReviewReason={data?.capabilities?.ai_review?.reason || data?.capabilities?.ai_automatic_reason || ''}
       reviewAdministratorFloor={data?.capabilities?.ai_review?.administrator_floor ?? null} />
+    {releaseOption}
     <RemediationEstimateDisclosure estimate={estimateResponse?.key === estimateKey ? estimateResponse.value : null}
       aiEnabled={selected.ai > 0 && Number(selected.ai_budget_usd ?? 1) > 0}
       loading={loading || !!error || estimateResponse?.key !== estimateKey} />

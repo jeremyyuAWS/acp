@@ -23,6 +23,35 @@ def test_suggest_prompt_is_rule_specific():
     assert "destination or purpose" in link
 
 
+def test_suggest_prompt_uses_bounded_full_document_context():
+    context = {
+        "version": 1,
+        "source_sha256": "a" * 64,
+        "document_summary": "Employee benefits guide.",
+        "entities": ["employees", "enrollment"],
+        "style_rules": {"tone": "formal", "terminology": ["employee"]},
+        "do_not_change": ["legal wording"],
+        "sections": [{"id": "intro", "title": "Overview", "purpose": "Plan overview"}],
+        "accessibility_context": [{
+            "finding_id": "2.4.4", "location": "link-3", "meaning": "Link lacks purpose",
+            "safe_fix": "Name the destination", "risk": "medium",
+        }],
+    }
+    prompt = ai._suggest_prompt("2.4.4", "Link Purpose", "guide.docx", "click here",
+                                document_context=context)
+    assert "Document context" in prompt
+    assert "Employee benefits guide." in prompt
+    assert "Name the destination" in prompt
+    assert "do_not_change" in prompt
+
+
+def test_malformed_context_does_not_block_normal_prompt():
+    prompt = ai._suggest_prompt("2.4.4", "Link Purpose", "guide.docx", "click here",
+                                document_context={"version": 1})
+    assert "Document context" not in prompt
+    assert "click here" in prompt
+
+
 def test_suggest_fix_degrades_to_none_without_ollama(monkeypatch):
     # Force the HTTP call to fail; suggest_fix must swallow it and return None.
     import httpx
@@ -172,3 +201,46 @@ def test_describe_image_captures_chart_content(monkeypatch):
     out = ai.describe_image(b"\x89PNGfake", filename="sales.pptx", context="Revenue")
     assert out and out["alt"] == "Bar chart comparing quarterly 2026 sales; Q4 highest at $2.1M."
     assert "$2.1M" in out["alt"]                     # the key figure survives cleaning
+
+
+def _two_findings_one_rule():
+    """Twelve alt-text findings share one rule id; the package keys by finding id."""
+    return {
+        "version": 1,
+        "source_sha256": "b" * 64,
+        "document_summary": "Benefits guide.",
+        "entities": [],
+        "style_rules": {},
+        "do_not_change": [],
+        "sections": [],
+        "accessibility_context": [
+            {"finding_id": "f-img-1", "location": "image-1", "meaning": "Enrollment timeline",
+             "safe_fix": "Describe the timeline", "risk": "medium"},
+            {"finding_id": "f-img-2", "location": "image-2", "meaning": "Org chart",
+             "safe_fix": "Describe the reporting lines", "risk": "low"},
+        ],
+    }
+
+
+def test_context_is_selected_by_finding_id_not_rule_id():
+    context = _two_findings_one_rule()
+    first = ai._suggest_prompt("1.1.1", "Non-text Content", "guide.docx", "no alt",
+                               document_context=context, finding_id="f-img-1")
+    second = ai._suggest_prompt("1.1.1", "Non-text Content", "guide.docx", "no alt",
+                                document_context=context, finding_id="f-img-2")
+    # Each finding gets its own context, and neither leaks the other's.
+    assert "Enrollment timeline" in first and "Org chart" not in first
+    assert "Org chart" in second and "Enrollment timeline" not in second
+
+
+def test_rule_id_lookup_finds_nothing_when_findings_are_keyed_properly():
+    """The pre-fix behaviour: keying by rule id silently drops the context.
+
+    This is the bite check. If the lookup key regressed to rule_id, the two
+    assertions above would still pass for a package that keys by criterion, but
+    this one fails -- a real package keyed by finding id has no '1.1.1' entry.
+    """
+    prompt = ai._suggest_prompt("1.1.1", "Non-text Content", "guide.docx", "no alt",
+                                document_context=_two_findings_one_rule())
+    assert "Document context" not in prompt
+    assert "no alt" in prompt

@@ -1,11 +1,33 @@
 # Second fallback execution contract
 
-A third generation position is opt-in through the approved immutable
+A third generation position is carried by the approved immutable
 `remediation_impact_policy.generation_chain` (version 1). The ordered enabled text
 steps are `primary`, `fallback_1`, `fallback_2`, with positions 0, 1, 2 and exact
-provider/model IDs. Two-position selections are also supported. Omission keeps
-legacy two-position behavior even when the server catalog contains three models.
+provider/model IDs. Two-position selections are also supported.
 Review and final review remain separately bounded purposes, outside this ordinal.
+
+**The third position is default-ON at the plan layer and absent-means-two at the
+execution layer.** These are different defaults in different places, and the
+distinction is the whole of this paragraph:
+
+* **Plan (what a user is offered).** Since #1907 `chain_options` appends `fallback_2`
+  to `default_steps` and only then sets `supported: True`
+  (`api/ai_generation_chain.py:94-97`), so a qualifying scope — a verified
+  three-model catalog plus a supported PPTX slide-title finding — is offered the
+  complete chain already selected. `generationSteps` falls back to `default_steps`
+  when no policy is saved, so the plan a user approves normally carries three
+  positions unless they clear the checkbox. This is opt-**out**, not opt-in.
+* **Execution (what runs without a policy).** `managed_generate_attempts` reads
+  `ctx.policy['generation_chain']` and uses `(1, 2)` when it is absent
+  (`api/llm_waterfall_provider.py:265`). A legacy or unmanaged run with no chain
+  still gets two positions and can never reach a third.
+
+This document previously said the third position was opt-in and that "omission keeps
+legacy two-position behavior even when the server catalog contains three models."
+The second half is still true of execution; both halves were false of the plan layer
+from #1907 onward. The correction matters because the position is billable: a
+qualifying scope's default run dispatches up to three paid models, not two, under
+the same run cap.
 
 All selected positions must match the current verified server catalog and the
 owner-selected provider. A third model is never activated by credential presence,

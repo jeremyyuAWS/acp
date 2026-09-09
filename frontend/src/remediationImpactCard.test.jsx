@@ -411,7 +411,10 @@ it('blocks stale third-model permission and never enables it on a different lega
 })
 
 it('passes the visible advance authorization into start and saved future defaults',async()=>{
-  const initial={rule_based:2,ai:1,ai_budget_usd:'1.00'}
+  // The AI reviewer is a precondition for advance authorization: nothing shows an
+  // auto-approved suggestion to a person before it is applied, so the control is gated
+  // on it and the server refuses to save a policy without it.
+  const initial={rule_based:2,ai:1,ai_budget_usd:'1.00',ai_review:{enabled:true}}
   getRemediationImpact.mockImplementation(async(_id,policy)=>({...result(policy || initial),capabilities:{...result().capabilities,ai_budget:true,ai_standing_approval:{supported:true}}}))
   const onRun=vi.fn();const {container}=await mount({onRun})
   const toggle=container.querySelector('.remediation-auto-approval input')
