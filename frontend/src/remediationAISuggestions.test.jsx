@@ -110,3 +110,30 @@ it('drops stale responses after switching selection and never loads without an a
   expect(getRemediationAIDetails).not.toHaveBeenCalled()
   expect(container.textContent).toContain('Choose an assessment')
 })
+
+it('shows an exact finding timeline with proposal version, model, review and validation details', async () => {
+  const detailed = {
+    ...item,
+    status: 'approved',
+    review_events: [{ id: 'review-1', action: 'approve', created_at: '2026-09-08T12:01:00Z' }],
+    validation_events: [{ id: 'check-1', outcome: 'verified_cleared', detail: 'Re-scan passed', created_at: '2026-09-08T12:02:00Z' }],
+    proposals: [{ ...item.proposals[0], snapshot_id: 'snapshot-1', version_verified: true, created_at: '2026-09-08T12:00:00Z', human_reviews: [{ id: 'review-1', action: 'approve' }], validation_events: [{ id: 'check-1', outcome: 'verified_cleared' }] }],
+  }
+  getRemediationAIDetails.mockResolvedValue({ items: [detailed], calls: [call], callsAvailable: true })
+  const { container } = await render()
+  expect(container.textContent).toContain('Current decision: Approved')
+  expect(container.textContent).toContain('Proposal version 1')
+  expect(container.textContent).toContain('Exact proposal version verified')
+  expect(container.textContent).toContain('anthropic · recorded-model-v2')
+  expect(container.textContent).toContain('Saved version: snapshot-1')
+  expect(container.textContent).toContain('Review: approve')
+  expect(container.textContent).toContain('Check: verified cleared')
+})
+
+it('states when exact finding steps are unavailable instead of inferring model history', async () => {
+  getRemediationAIDetails.mockResolvedValue({ items: [{ ...item, proposals: [] }], calls: [], callsAvailable: false })
+  const { container } = await render()
+  expect(container.textContent).toContain('Exact AI steps are unavailable for this finding')
+  expect(container.textContent).toContain('Generated content unavailable for this review item')
+  expect(container.textContent).not.toContain('recorded-model-v2')
+})

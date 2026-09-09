@@ -5,6 +5,12 @@
 .remediation-ai-suggestions__item { border-top: 1px solid var(--border, #ded6e5); margin-top: 20px; padding-top: 12px; }
 .remediation-ai-suggestions__item h4 { margin: 6px 0; }
 .remediation-ai-suggestions__proposal { margin-top: 12px; }
+.remediation-ai-suggestions__timeline { margin: 12px 0; background: var(--surface-subtle, #fbf9fc); }
+.remediation-ai-suggestions__timeline > p { margin: 8px 0; font-size: 12px; color: var(--muted, #74657e); }
+.remediation-ai-suggestions__timeline ol { margin: 10px 0 0; padding-left: 24px; }
+.remediation-ai-suggestions__timeline li { padding: 6px 0; }
+.remediation-ai-suggestions__timeline li p { margin: 3px 0; }
+.remediation-ai-suggestions__timeline-time { color: var(--muted, #74657e); font-size: 12px; font-weight: 400; }
 .remediation-ai-suggestions__comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .remediation-ai-suggestions__comparison > div { background: var(--surface-subtle, #f8f5fa); border: 1px solid var(--border, #ded6e5); padding: 12px; border-radius: 8px; min-width: 0; }
 .remediation-ai-suggestions__comparison h5 { font-size: 14px; margin: 0 0 8px; }
