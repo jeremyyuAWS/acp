@@ -1102,7 +1102,7 @@ def _remediation_source_bytes(scan_id: str, filename: str, payload: dict,
             if assessed is None and checksum:
                 assessed = read_cached_source(scan_id, filename, payload.get("owner"))
         except Exception:
-            pass  # This read-only attribution guard must not block existing delivery.
+            swallowed("_remediation_source_bytes: assessed source proof unavailable", scan_id)
         bind_assessed_input(scan_id, filename, data, assessed)
         return data, svc
     raise FatalJobError(f"unsupported remediation source {source!r} — expected one of "
