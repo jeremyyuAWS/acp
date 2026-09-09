@@ -45,7 +45,7 @@ function Metric({ label, value, unit, children, tone, onClick, delta, expanded, 
     <Tag type={onClick ? "button" : undefined} onClick={onClick} aria-expanded={expanded} aria-controls={controls} style={{ ...card, textAlign: 'left' }}>
       <div style={lab}>{label}</div>
       {value !== undefined && (
-        <div style={{ ...val, color: tone }}>
+        <div style={{ ...val, color: tone || 'var(--ink, #2b2330)' }}>
           {value}
           {Number.isFinite(delta) && delta !== 0 && <span key={delta} className={`remediation-forecast-delta remediation-forecast-delta--${delta > 0 ? 'increase' : 'decrease'}`}
             aria-label={`${delta > 0 ? 'Increase' : 'Decrease'} of ${Math.abs(delta).toLocaleString()} findings from previous selection`}>
@@ -386,13 +386,13 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           </Metric>
         )}
 
-        <Metric label="Checks not completed" value={m.unableToAssess} unit="checks"
+        {m.unableToAssess > 0 && <Metric label="Checks not completed" value={m.unableToAssess} unit="checks"
                 expanded={checksOpen} controls={checksId}
                 onClick={event => { checksTrigger.current = event.currentTarget; setChecksOpen(open => !open) }}>
           Checks ACP could not complete
           {m.unassessableCriteria.length > 0 && <> — {m.unassessableCriteria.length} {m.unassessableCriteria.length === 1 ? 'check type is' : 'check types are'}
             not supported for these document formats</>}. These results are unknown, not passed or failed. <b>View checks →</b>
-        </Metric>
+        </Metric>}
 
         {/* Board 4's 8th cell — the shape of the grid states what is NOT here as loudly as what is.
             A reader who has seen a compliance dashboard expects a score; its absence is a decision,
@@ -411,7 +411,7 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
 
       </div>
 
-      {checksOpen && <AssessIncompleteChecks id={checksId} rows={m.rows} assessment={assessment} onClose={closeChecks} />}
+      {checksOpen && m.unableToAssess > 0 && <AssessIncompleteChecks id={checksId} rows={m.rows} assessment={assessment} onClose={closeChecks} />}
 
       {/* ── The arithmetic, printed. Either it holds on screen or it is a visible bug. ───── */}
       <div className="muted" style={{ fontSize: 12, marginTop: 12, paddingTop: 10,
