@@ -57,9 +57,10 @@ it.each([
 ])('exits bulk selection when switching to %s and clears stale approval intent', async (category, title, other) => {
   const onDecide = vi.fn()
   const v = await mount(RemediationInbox, { queue: [ready('pending'), other], decisions: {}, scanId: 'scan', onDecide })
+  expect(v.container.querySelector('.rem-wsfoot')).not.toBeNull()
   await click(v.button('Bulk approve ready proposals'))
   await click(v.button('Approve all ready (1)'))
-  const progress = v.container.querySelector('.workspace-footer')
+  const progress = v.container.querySelector('.rem-wsfoot')
   expect(progress).toBeNull()
   await click(v.button(category))
   const panel = v.container.querySelector('[aria-label="Select findings for approval"]')
