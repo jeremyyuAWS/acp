@@ -56,7 +56,7 @@ def remediation_impact_preview(sid: str, body: ImpactPreviewRequest, request: Re
         result = build_run_impact(core.store, sid, _impact_owner(request), selected or None, scope=body.scope)
         result['providers'] = provider_summary(result['capabilities']['ai_enabled'])
         from ai_review_policy import capabilities
-        result['capabilities']['ai_review'] = capabilities()
+        result['capabilities']['ai_review'] = capabilities(core.store, _impact_owner(request))
         from remediation_cohort_estimates import read_plan_estimate
         result['estimated_impact'] = read_plan_estimate(core.store, _impact_owner(request), result)
         return result

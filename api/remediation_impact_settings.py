@@ -105,5 +105,11 @@ def snapshot_impact_policy(store, owner, policy=None):
     saved = read_impact_policy(store, owner)
     selected = require_executable(saved if policy is None else policy)
     snapshot = {**selected, "revision": saved["revision"]}
+    from ai_threshold_execution import seal_policy
+    sealed = seal_policy(store, owner, selected.get('ai_review', {}))
+    if sealed is not None:
+        if selected['ai'] != 1 or Decimal(selected.get('ai_budget_usd', '0')) <= 0:
+            raise ValueError('Automatic AI review requires AI enabled and an explicit positive run spending limit.')
+        snapshot['threshold_policy'] = sealed
     canonical = json.dumps({"owner": owner, **snapshot}, sort_keys=True)
     return {**snapshot, "snapshot_id": "rip-" + hashlib.sha256(canonical.encode()).hexdigest()[:24]}
