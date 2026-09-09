@@ -77,7 +77,6 @@ it('displays the authoritative account-access caveat for the selected third mode
   const options = catalog()
   options.models[2] = { ...options.models[2], access_verified: false, reason: 'Configuration verified; account model access has not been tested.' }
   const v = await mount({ options })
-  await click(v.container.querySelector('input'))
   expect(v.container.querySelector('[role=note]').textContent).toBe(options.models[2].reason)
-  expect(v.changed).toHaveBeenCalledTimes(1)
+  expect(v.changed).not.toHaveBeenCalled()
 })

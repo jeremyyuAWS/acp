@@ -385,6 +385,7 @@ it('previews the exact selected chain and only submits it after explicit plan ap
   expect(onRun).not.toHaveBeenCalled()
   expect(getRemediationImpact.mock.calls[0][1]).toBeNull()
   await act(async () => container.querySelector('.remediation-generation-chain input').click())
+  await act(async () => container.querySelector('.remediation-generation-chain input').click())
   const selected = getRemediationImpact.mock.calls.at(-1)[1]
   expect(selected.generation_chain.steps).toEqual([...options.default_steps, { step_id: 'fallback_2', position: 2, provider: 'fixture', model: 'model-2', enabled: true, capabilities: ['text'] }])
   expect(onRun).not.toHaveBeenCalled()

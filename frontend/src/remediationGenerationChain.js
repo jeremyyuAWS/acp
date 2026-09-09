@@ -10,7 +10,8 @@ export function generationSteps(policy, options) {
   if (!Array.isArray(steps)) return []
   // Supported scopes start with the complete verified chain. An explicit saved
   // policy still wins, so accepted runs remain immutable.
-  if (!policy?.generation_chain && options?.supported === true && steps.length === 2) {
+  if (!policy?.generation_chain && options?.supported === true && steps.length === 2
+    && Number(policy?.ai_budget_usd) > 0) {
     const model = (options.models || []).find(candidate => allowedModel(candidate)
       && candidate.provider === steps[0]?.provider && !steps.some(step => sameModel(step, candidate)))
     if (model) return [...steps, { step_id: 'fallback_2', position: 2, provider: model.provider,
