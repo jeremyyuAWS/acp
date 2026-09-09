@@ -183,3 +183,30 @@ def test_source_change_between_gate_and_writer_stops_application(db,monkeypatch)
         prepare=lambda *args:next(inputs),apply=lambda *args:pytest.fail('stale source was written')))
     result=execution.apply_under_run_policy(db,'owner','scan','run','snapshot','fixture_objective',now=NOW)
     assert result['approval_required'] and result['reason']=='evidence_changed_before_application'
+
+
+def test_selection_has_no_invented_default_and_cannot_supply_approval_seal():
+    from ai_threshold_execution import normalize_selection
+    assert normalize_selection(None)['minimum_reliability'] is None
+    assert normalize_selection(None)['mode']=='review_all'
+    with pytest.raises(ValueError):normalize_selection({'threshold_policy':{'mode':'threshold'}})
+    for value in (True,float('nan'),float('inf'),-1,101):
+        with pytest.raises(ValueError):normalize_selection({'minimum_reliability':value})
+
+
+def test_no_paid_preview_and_no_availability_without_registered_writer(db,monkeypatch):
+    from ai_threshold_execution import capability_summary,SUPPORTED_WRITERS
+    prepare(db)
+    monkeypatch.delitem(SUPPORTED_WRITERS,'fixture_objective')
+    result=capability_summary(db,'owner',now=NOW)
+    assert result['automatic_application_supported'] is False
+    assert result['administrator_floor'] is None
+    assert result['eligible_families']==[]
+
+
+def test_seal_changed_threshold_or_families_rejected(db):
+    from ai_threshold_execution import normalize_sealed_policy
+    policy,_=prepare(db)
+    assert normalize_sealed_policy(policy)==policy
+    with pytest.raises(ValueError):normalize_sealed_policy({**policy,'minimum_reliability':0})
+    with pytest.raises(ValueError):normalize_sealed_policy({**policy,'families':{}})

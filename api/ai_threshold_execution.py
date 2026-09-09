@@ -187,3 +187,73 @@ def apply_under_run_policy(store, owner, scan_id, run_id, snapshot_id, change_fa
             receipt = {**receipt,'status':'still_needs_work','reason':'application_requires_recovery'}
     store.set_setting(key,json.dumps(receipt,sort_keys=True))
     return receipt
+
+
+def normalize_selection(value):
+    """Public preferences contain selections only, never a server approval seal."""
+    defaults = {'enabled':False,'mode':'review_all','minimum_reliability':None,
+                'max_review_attempts':1,'review_model':'strong',
+                'permitted_families':[],'evaluation_versions':{}}
+    if value is None:
+        return defaults
+    if not isinstance(value,dict) or set(value)-set(defaults):
+        raise ValueError('Invalid AI review policy')
+    result = {**defaults,**value}
+    if type(result['enabled']) is not bool or result['mode'] not in ('review_all','threshold'):
+        raise ValueError('Choose review all or a validated review threshold')
+    lower=result['minimum_reliability']
+    if lower is not None and (type(lower) not in (int,float) or not math.isfinite(lower) or not 0 <= lower <= 100):
+        raise ValueError('Minimum validated reliability must be from 0 to 100')
+    if type(result['max_review_attempts']) is not int or result['max_review_attempts'] not in (1,2):
+        raise ValueError('Allow one review, or one review and one final review')
+    if result['review_model'] not in ('strong','low_cost'):
+        raise ValueError('Choose the strongest reviewer or the low-cost reviewer')
+    if result['mode']=='threshold' and not result['enabled']:
+        raise ValueError('An AI reviewer is required for a threshold policy')
+    families,versions=result['permitted_families'],result['evaluation_versions']
+    if not isinstance(families,list) or any(not isinstance(f,str) or not f for f in families) or len(set(families))!=len(families):
+        raise ValueError('Invalid permitted change families')
+    if not isinstance(versions,dict) or any(not isinstance(k,str) or not isinstance(v,str) or not v for k,v in versions.items()):
+        raise ValueError('Invalid evaluation version selection')
+    return json.loads(json.dumps(result,allow_nan=False))
+
+
+def normalize_sealed_policy(value):
+    """Validate queued server seal and copy its nested immutable contents."""
+    if not isinstance(value,dict) or value.get('schema_version')!='ai-threshold-run-policy.v1' or value.get('mode')!='threshold':
+        raise ValueError('Invalid approved threshold policy snapshot')
+    result=json.loads(json.dumps(value,allow_nan=False))
+    identity=result.pop('policy_id',None)
+    canonical=json.dumps(result,sort_keys=True,separators=(',', ':'),allow_nan=False)
+    if identity != hashlib.sha256(canonical.encode()).hexdigest():
+        raise ValueError('Approved threshold policy snapshot changed')
+    if not result.get('families'):
+        raise ValueError('An approved threshold policy must name permitted families')
+    result['policy_id']=identity
+    return result
+
+
+def capability_summary(store=None, owner=None, *, now=None):
+    result={'review_supported':True,'automatic_application_supported':False,
+            'review_models':['strong','low_cost'],'threshold_minimum':None,
+            'administrator_floor':None,'eligible_families':[],
+            'reason':'Available after validation is configured. A supported objective writer, exact-version independent review and current evaluated reliability are required.'}
+    if store is None or not owner or not SUPPORTED_WRITERS:
+        return result
+    from ai_review_calibration import load_calibration_records
+    admin=read_admin(store)
+    for record in load_calibration_records(store,owner):
+        family=record.get('change_family');rule=admin['families'].get(family)
+        if not rule or family not in SUPPORTED_WRITERS:
+            continue
+        check=applicable_evaluation(store,owner,record['evaluation_version'],record,rule,now=now)
+        if not check['available'] or check['evaluation']['reliability_lower_bound']*100 < rule['minimum_reliability']:
+            continue
+        result['eligible_families'].append({'change_family':family,'format':record['format'],
+            'evaluation_version':record['evaluation_version'],'config_id':record['config_id'],
+            'minimum_reliability':rule['minimum_reliability'],
+            'reliability_lower_bound':check['evaluation']['reliability_lower_bound'],
+            'reviewer_model':record['reviewer_model'],'reviewer_provider':record['reviewer_provider']})
+    if result['eligible_families']:
+        result.update(automatic_application_supported=True,reason='Choose explicit change families and a reliability threshold. Every finding must still pass all policy gates.')
+    return result
