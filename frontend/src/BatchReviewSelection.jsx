@@ -92,10 +92,15 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
           ? 'These changes are already applied or approved. View their results and verification status; another proposal approval is not needed.'
           : Object.keys(exclusions).every(reason => reason === 'Manual work')
             ? 'These issues need your input in the source document. Open individual review for the required edits and instructions.'
-            : 'This work needs an individual check before approval. See the status reasons below, then open the relevant issue or refresh outdated proposals.'
+            : 'Open individual review to inspect these issues and their available actions. See the status reasons below.'
         : 'There are no pending proposals in this scope. Choose another category to see completed changes, verification, or manual work.'}</p>
+      {(exclusions['Version unavailable — review individually'] || exclusions['Missing proposal']) && <p>
+        {exclusions['Version unavailable — review individually'] > 0 && <span>{exclusions['Version unavailable — review individually']} review {exclusions['Version unavailable — review individually'] === 1 ? 'item has' : 'items have'} no verifiable proposal version. </span>}
+        {exclusions['Missing proposal'] > 0 && <span>{exclusions['Missing proposal']} review {exclusions['Missing proposal'] === 1 ? 'item has' : 'items have'} no complete proposal. </span>}
+        Bulk approval requires valid proposals with recorded versions. Generating fresh proposals requires a separately approved run.
+      </p>}
       {readyOutsideScope > 0 && onShowAllReady && <button type="button" className="primary" onClick={onShowAllReady}>Show all ready in this scan ({readyOutsideScope})</button>}
-      {onReviewExcluded && <button type="button" onClick={onReviewExcluded}>View changes and next steps</button>}
+      {onReviewExcluded && <button type="button" onClick={onReviewExcluded}>Open individual review</button>}
     </div>}
     {(eligible.length > 0 || entries.length > 0) && <details className="batch-review-accounting">
       <summary>Approval details</summary>
