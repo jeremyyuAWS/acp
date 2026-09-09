@@ -640,3 +640,17 @@ describe('confirmed activity is separate from outstanding review and final run s
     expect(html).not.toContain('remops-pipeline-moving')
   })
 })
+
+
+it('uses compact honest activity states rather than an empty stretched column', () => {
+  for (const [activityStatus, message] of [['loading', 'Loading saved activity'], ['unavailable', 'Saved activity could not be loaded'], ['ready', 'No recent remediation activity is recorded for this run']]) {
+    const html = renderToStaticMarkup(<RemediationOpsPanel snapshot={{ ...SNAP, terminal: true }} events={[]} activityStatus={activityStatus} />)
+    expect(html).toContain('remops-bottom-empty')
+    expect(html).toContain(message)
+    expect(html).not.toContain('New durable remediation events will appear here')
+  }
+  const html = renderToStaticMarkup(<RemediationOpsPanel snapshot={SNAP} events={[{ key: '1', line: 'Saved correction', occurredAt: null }]} />)
+  expect(html).not.toContain('remops-bottom-empty')
+  expect(html).toContain('Time unavailable')
+  expect(html).toContain('Saved correction')
+})

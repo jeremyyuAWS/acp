@@ -97,6 +97,10 @@ export function addRemediationEvent(previous, event, id, limit = MAX_VISIBLE_REM
             attempt: event.attempt == null ? null : Number(event.attempt),
             phase: event.phase || null,
             correlationId: event.correlation_id || null }, ...previous]
+    .sort((a, b) => {
+      const left = Number(a.id), right = Number(b.id)
+      return a.id != null && b.id != null && Number.isFinite(left) && Number.isFinite(right) ? right - left : 0
+    })
     .slice(0, limit)
 }
 
