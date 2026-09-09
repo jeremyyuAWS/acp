@@ -25,6 +25,26 @@ class ProviderAccessDenied(ValueError):
     """Provider rejected model access; never try another provider/model."""
 
 
+def dispatch_endpoint(spec, provider_module) -> str | None:
+    """The exact URL `generate_text` would send this spec to, read from the provider
+    module's configured endpoints.
+
+    One source for the transport and for the reported zone, so the catalog can never
+    name a processing location the dispatch would not actually use. Returns None when
+    the configuration reports no endpoint for the provider — the caller must render
+    that as unknown rather than substituting one.
+    """
+    if spec.provider == 'openai':
+        base = getattr(provider_module, '_OPENAI_TEXT_BASE_URL', None)
+        if isinstance(base, str) and base.strip():
+            return base.rstrip('/') + '/chat/completions'
+        return None
+    if spec.provider == 'anthropic':
+        url = getattr(provider_module, '_ANTHROPIC_MESSAGES_URL', None)
+        return url if isinstance(url, str) and url.strip() else None
+    return None
+
+
 @dataclass(frozen=True)
 class TextModelSpec:
     provider: str
@@ -55,6 +75,26 @@ class TextModelSpec:
         if now >= self.verified_until:
             raise ValueError('pricing/model-limit snapshot expired')
 
+    def zone(self, provider_module) -> str | None:
+        """Governance zone of the endpoint this spec dispatches to, or None when the
+        configuration reports no endpoint for it.
+
+        Derived from the configured URL by `providers.zone_for_url` — the single source
+        of truth (`/config` and the per-call trace read the same function) — and never
+        from the provider's NAME, which cannot distinguish a self-hosted
+        OpenAI-compatible endpoint from api.openai.com.
+
+        None means NOT REPORTED and must be rendered that way. It is deliberately not
+        defaulted: `zone_for_url('')` answers 'local', so falling through to it would
+        assert that no document left the network — the one wrong answer that matters.
+        """
+        url = dispatch_endpoint(self, provider_module)
+        derive = getattr(provider_module, 'zone_for_url', None)
+        if url is None or not callable(derive):
+            return None
+        zone = derive(url)
+        return zone if isinstance(zone, str) and zone.strip() else None
+
     def maximum_cost(self) -> str:
         # Reserving the full verified context ceiling avoids an estimated tokenizer
         # count being mistaken for a verified spending bound.
@@ -84,6 +124,9 @@ class StrictTextGenerator:
         self.specs = {spec.model: spec for spec in specs}
         self.models = tuple(Model(spec.model, spec.maximum_cost()) for spec in specs)
         self.pricing_refs = {spec.model: spec.pricing_ref for spec in specs}
+        # Derived from the configured dispatch endpoint, not from the provider name.
+        # A model whose endpoint the configuration does not report stays None here.
+        self.zones = {spec.model: spec.zone(self.providers) for spec in specs}
         if post is None:
             import httpx
             post = httpx.post
@@ -123,12 +166,15 @@ class StrictTextGenerator:
             if not key:
                 raise ValueError('selected provider credential unavailable')
             payload = {'model': spec.model, 'messages': [{'role': 'user', 'content': prompt}]}
+            # Same resolution the reported zone is derived from, so a catalog entry can
+            # never name a destination other than the one this request is sent to.
+            endpoint = dispatch_endpoint(spec, self.providers)
+            if endpoint is None:
+                raise ValueError('configured provider endpoint unavailable')
             if spec.provider == 'openai':
-                endpoint = self.providers._OPENAI_TEXT_BASE_URL.rstrip('/') + '/chat/completions'
                 payload['max_completion_tokens'] = spec.output_token_limit
                 headers = {'Authorization': f'Bearer {key}'}
             else:
-                endpoint = self.providers._ANTHROPIC_MESSAGES_URL
                 payload['max_tokens'] = spec.output_token_limit
                 if spec.plain_text_only:
                     # This adapter accepts text only. Opus 5 defaults to thinking

@@ -172,7 +172,14 @@ describe('RemediationImpactCard', () => {
     getRemediationImpact.mockResolvedValue({ ...result(), integrity: { complete: false } })
     const { container } = await mount({ onRun: vi.fn() })
     expect(container.textContent).toContain('could not be reconciled')
-    expect(container.querySelector('table')).toBeNull()
+    // The COUNTS table, specifically. A bare `table` selector stood in for it while this card
+    // rendered exactly one table; the mode diagram below the plan choices is also a table (it is
+    // genuinely tabular — modes down, stages across) and carries no counts, so the proxy started
+    // reporting it as a reconciliation failure. Assert the thing the test is actually about, and
+    // then assert the stronger claim the proxy was reaching for: no digit is rendered anywhere.
+    expect(container.querySelector('.remediation-impact__table-wrap')).toBeNull()
+    expect(container.querySelector('.rmd__table')).not.toBeNull()
+    expect(container.querySelector('.rmd__count')).toBeNull()
     expect(button(container, 'Approve plan and start').disabled).toBe(true)
   })
   it('shows unavailable instead of zero for missing projections', async () => {
@@ -196,8 +203,12 @@ describe('RemediationImpactCard', () => {
   it('handles an absent preview without inventing counts', async () => {
     getRemediationImpact.mockResolvedValue(null)
     const { container } = await mount()
-    expect(container.querySelector('table')).toBeNull()
+    expect(container.querySelector('.remediation-impact__table-wrap')).toBeNull()
     expect(container.textContent).toContain('Counts are unavailable')
+    // Same narrowing as above. The diagram numbers its pipeline stages 1..7 — ordinals, not
+    // counts — so the claim to assert is that no COUNT cell rendered; those appear only where the
+    // caller supplies a figure, and this mount supplies none.
+    expect(container.querySelector('.rmd__count')).toBeNull()
   })
   it('keeps selected file scope stable and traces findings within a file', async () => {
     const { container, root } = await mount({ scopeFiles: ['C.docx', 'A.docx'] })
