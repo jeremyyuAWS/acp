@@ -1357,6 +1357,13 @@ _SCHEMA = [
       PRIMARY KEY(release_id,file)
     )""",
     "ALTER TABLE release_documents ADD COLUMN IF NOT EXISTS artifact_digest TEXT",
+    """CREATE TABLE IF NOT EXISTS release_continuations (
+      id TEXT PRIMARY KEY, owner_email TEXT NOT NULL, scan_id TEXT NOT NULL,
+      fingerprint TEXT NOT NULL, intent TEXT NOT NULL, progress TEXT NOT NULL,
+      status TEXT NOT NULL, revision INT NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_release_continuations_owner ON release_continuations(owner_email,scan_id,updated_at)",
     # ADR 0044 — ACP Managed Content Workspace, Phase 1. A workspace is the tenant-scoped
     # container a customer creates before uploading anything; `content_workspace_documents`/
     # `content_workspace_document_versions` (the actual upload targets) are deliberately NOT
@@ -2467,9 +2474,9 @@ class _PgAdapter:
     # v42 adds the tenant policy, exactly-once command receipt, and immutable run-policy
     # snapshot tables. All are additive and ignored by older replicas during rolling deploys.
     # v44 adds durable owner/run provider reservations and immutable spending policy.
-    # v48 adds tagged Release artifact identity after v47 baseline attribution evidence.
-    _SCHEMA_VERSION = 48
-    _SCHEMA_CHECKSUM_AT_VERSION = "35dd2ef0184f9f7280f616b293f2ee60"
+    # v49 adds explicit durable approval-to-Release intents after exact artifact identity.
+    _SCHEMA_VERSION = 49
+    _SCHEMA_CHECKSUM_AT_VERSION = "d0f51871ed2c57dcd16885b7c9df20e2"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
