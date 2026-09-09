@@ -1750,6 +1750,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                                connected={!!runStream?.connected}
                                receivedAt={runStream?.receivedAt || null}
                                events={runStream?.events || []}
+                               activityStatus={runStream?.activityStatus || 'loading'}
                                updateMode={remUpdates} />
           <RemediationRunDetails sections={runDetailSections}
                                  open={runDetailsOpen} onToggle={setRunDetailsOpen} />

@@ -92,9 +92,10 @@ export function useRemediationRun(runId) {
       .then((next) => { if (live) accept(next) })
       .catch(() => { /* transient: the last confirmed snapshot and its age stay on screen */ })
 
-    let historyPending = false
+    let historyPending = false, historyAgain = false
     const loadHistory = async () => {
-      if (!live || historyPending) return
+      if (!live) return
+      if (historyPending) { historyAgain = true; return }
       historyPending = true
       try {
         const result = await getRecentRemediationActivity(runId)
@@ -103,7 +104,10 @@ export function useRemediationRun(runId) {
         setEvents(previous => result.events.reduce((rows, event) => addRemediationEvent(rows, event, event.seq), previous))
         setActivityStatus('ready')
       } catch { if (live) setActivityStatus('unavailable') }
-      finally { historyPending = false }
+      finally {
+        historyPending = false
+        if (live && historyAgain) { historyAgain = false; loadHistory() }
+      }
     }
 
     const startPoll = () => {

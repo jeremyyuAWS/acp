@@ -48,3 +48,14 @@ it('keeps unknown distinct from empty and fetches activity during polling fallba
   expect(current.events[0].id).toBe('4')
   expect(current.activityStatus).toBe('ready')
 })
+
+it('refreshes once after completion races an initial history request', async () => {
+  let resolve
+  api.getRecentRemediationActivity.mockImplementationOnce(() => new Promise(r => { resolve = r }))
+  await mount()
+  api.getRecentRemediationActivity.mockResolvedValue({ available: true, events: [event(2)] })
+  await act(async () => api.openRemediationStream.mock.calls[0][1].onDone())
+  await act(async () => resolve({ available: true, events: [event(1)] }))
+  expect(api.getRecentRemediationActivity).toHaveBeenCalledTimes(2)
+  expect(current.events.map(e => e.id)).toEqual(['2', '1'])
+})
