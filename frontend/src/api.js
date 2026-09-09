@@ -1586,7 +1586,10 @@ export const publishAllFiles = (scanId, files, releaseFolderName = '', options =
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ files, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}),
         ...(options.destination ? { destination: options.destination } : {}),
-        ...(options.expectedArtifacts ? { expected_artifacts: options.expectedArtifacts, expected_destination: options.destination || null } : {}) }),
+        ...(options.expectedArtifacts ? { expected_artifacts: options.expectedArtifacts, expected_destination: options.destination || null } : {}),
+        ...(options.allowUnverified ? { allow_unverified: true,
+          release_acknowledgment: options.releaseAcknowledgment,
+          exception_manifest: options.exceptionManifest } : {}) }),
     }).then(j))
 export const getReleaseStatus = (scanId) => (SIM
   ? sim({ release_id: null, roots: [], documents: [], documents_total: 0, published: 0, failed: 0, remaining: 0 }, 50)
@@ -1594,14 +1597,17 @@ export const getReleaseStatus = (scanId) => (SIM
 export const listReleaseHistory = (limit = 50) => (SIM
   ? sim({ releases: [] }, 50)
   : fetch(`${BASE}/releases?limit=${encodeURIComponent(limit)}`, { headers: headers() }).then(j))
-export const previewReleaseDestination = (scanId, files, releaseFolderName = '', preserveHierarchy = true, destination = null) => (SIM
+export const previewReleaseDestination = (scanId, files, releaseFolderName = '', preserveHierarchy = true, destination = null, options = {}) => (SIM
   ? sim({ folder_name: releaseFolderName || '2026-09-06 12-00 UTC', folder_state: 'proposed', provider: 'drive',
       documents: files.map((file) => ({ file, provider_location: 'google:me', destination_path: `Remediated/${releaseFolderName || '2026-09-06 12-00 UTC'}/${file}`, action: 'create' })),
       blockers: [], can_release: true, collision_policy: 'Existing files are not overwritten.', original_files_unchanged: true }, 80)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/preview`, {
       method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ files, preserve_hierarchy: preserveHierarchy, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}),
-        ...(destination ? { destination } : {}) }),
+        ...(destination ? { destination } : {}),
+        ...(options.allowUnverified ? { allow_unverified: true,
+          release_acknowledgment: options.releaseAcknowledgment,
+          exception_manifest: options.exceptionManifest } : {}) }),
     }).then(j))
 export const getReleaseManifest = (scanId) => (SIM
   ? sim({ manifest: { schema_version: 1, scan_id: scanId, documents: [] },

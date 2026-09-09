@@ -30,13 +30,14 @@ def reuse_state(saved: dict | None, digest: str) -> str:
 
 
 def require_current_record(store, scan_id: str, filename: str, digest: str,
-                           remediated_at: str | None, *, owner: str) -> dict:
+                           remediated_at: str | None, *, owner: str,
+                           allow_unverified: bool = False) -> dict:
     from assessment_policy import selected_documents
     selected = selected_documents(store.get_decisions(scan_id, owner=owner))
     if selected is not None and filename not in selected:
         raise ReleaseArtifactError("Document is no longer in the Remediate selection.")
     record = store.get_file_record(scan_id, filename)
-    if not record or not record.get("compliant") or not record.get("remediated_at"):
+    if not record or (not record.get("compliant") and not allow_unverified) or not record.get("remediated_at"):
         raise ReleaseArtifactError("Approval or corrected-copy readiness changed. Review and verify again.")
     if record.get("remediated_at") != remediated_at:
         raise ReleaseArtifactError("The corrected copy changed while preparing Release. Review the new copy.")

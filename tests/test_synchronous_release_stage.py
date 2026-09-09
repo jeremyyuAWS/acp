@@ -1,5 +1,6 @@
 """Drive and local Release use canonical job-less work and durable effect receipts."""
 from types import SimpleNamespace
+import pytest
 
 
 OWNER = "owner@example.com"
@@ -167,6 +168,29 @@ def test_local_release_does_not_publish_a_missing_blob(monkeypatch):
     labels = [event if isinstance(event, str) else event[0] for event in store.events]
     assert "receipt" not in labels and "publish" not in labels
     assert labels[-2:] == ["document", "finish"]
+
+
+def test_local_release_with_exceptions_requires_acknowledgement_and_manifest(monkeypatch):
+    import core
+    import publish
+    from fastapi import HTTPException
+    from routes import scans
+
+    store = _RouteStore("local")
+    original = store.get_file_record
+    store.get_file_record = lambda sid, name: {**original(sid, name), "compliant": 0}
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setattr(publish, "remediated_content_digest", lambda *args: "sha256-content")
+    with pytest.raises(HTTPException) as missing:
+        scans.publish_files("scan-1", _request(), {"files": ["one.pdf"], "allow_unverified": True})
+    assert missing.value.status_code == 422
+    result = scans.publish_files("scan-1", _request(), {
+        "files": ["one.pdf"], "allow_unverified": True,
+        "release_acknowledgment": "I understand this file has open findings.",
+        "exception_manifest": {"files": [{"file": "one.pdf", "remaining_findings": ["1.1.1"]}]},
+    })
+    assert result["published"][0]["status"] == "published"
+    assert result["published"][0]["release_disposition"] == "with_exceptions"
 
 
 def test_drive_release_reserves_before_provider_and_finalizes_before_document(monkeypatch):

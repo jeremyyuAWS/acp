@@ -3555,6 +3555,34 @@ def publish_files(sid: str, request: Request, body: dict):
     if not files:
         raise HTTPException(422, "provide 'file' or 'files' in body")
     owner = _owner(request)
+    # An exception release is an explicit, per-file acknowledgement. It never changes the
+    # assessment result or the original; it only permits delivery of a current corrected copy
+    # together with the unresolved finding account that travels in the release manifest.
+    allow_unverified = bool(body.get("allow_unverified"))
+    release_acknowledgment = str(body.get("release_acknowledgment") or "").strip()
+    exception_manifest = body.get("exception_manifest")
+    exception_files = {}
+    if allow_unverified:
+        if len(release_acknowledgment) < 12:
+            raise HTTPException(422, "A release acknowledgement is required when releasing with exceptions.")
+        if not isinstance(exception_manifest, dict):
+            raise HTTPException(422, "A conformance exception manifest is required when releasing with exceptions.")
+        entries = exception_manifest.get("files")
+        if not isinstance(entries, list):
+            raise HTTPException(422, "The exception manifest must list files and their remaining findings.")
+        for entry in entries:
+            if not isinstance(entry, dict) or not str(entry.get("file") or "").strip():
+                raise HTTPException(422, "Each exception manifest entry needs a file.")
+            name = str(entry["file"])
+            findings = entry.get("remaining_findings")
+            if not isinstance(findings, list) or not findings:
+                raise HTTPException(422, f"The exception manifest needs remaining findings for {name}.")
+            exception_files[name] = {"file": name, "remaining_findings": findings,
+                                     **({"report_reference": entry["report_reference"]}
+                                        if entry.get("report_reference") else {})}
+        missing = sorted(set(files) - set(exception_files))
+        if missing:
+            raise HTTPException(422, detail={"code": "exception_manifest_incomplete", "files": missing})
     automatic_release_id = body.get("automatic_release_id")
     if automatic_release_id:
         from automatic_release import validate_publish_request
@@ -3590,7 +3618,8 @@ def publish_files(sid: str, request: Request, body: dict):
             raise HTTPException(409, detail={"code": "release_destination_not_ready",
                                             "preflight": destination_check})
     eligible = [row for row in scan.get("files", [])
-                if row.get("compliant") and row.get("remediated_at")
+                if row.get("remediated_at") and
+                (row.get("compliant") or (allow_unverified and row.get("file") in exception_files))
                 and (document_selection is None or row.get("file") in document_selection)]
     try:
         preferred_folder_name = _publish.normalize_release_name(
@@ -3667,11 +3696,13 @@ def publish_files(sid: str, request: Request, body: dict):
         payloads = []
         for f in files:
             record = core.store.get_file_record(sid, f)
-            if not record or not record.get("compliant") or not record.get("remediated_at"):
+            if not record or (not record.get("compliant") and not (allow_unverified and f in exception_files)) or not record.get("remediated_at"):
                 result = {"file": f, "original_relative_path": None,
                           "released_relative_path": None, "status": "failed",
                           "failure_category": "not_approved",
-                          "explanation": "Only approved corrected copies can be released.",
+                          "explanation": "Only approved corrected copies or acknowledged exception releases can be released.",
+                          "release_disposition": "with_exceptions" if f in exception_files else "verified",
+                          "exception_manifest": exception_files.get(f),
                           "created": False}
                 core.store.record_release_document(release_id, owner, result)
                 results.append(result)
@@ -3690,9 +3721,11 @@ def publish_files(sid: str, request: Request, body: dict):
             if state == "reuse":
                 try:
                     actual_digest = _publish.remediated_content_digest(owner, sid, f)
-                    require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner)
+                    require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner,
+                                           allow_unverified=allow_unverified and f in exception_files)
                     require_current_source(source, record, sp_token=sp_token)
-                    require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner)
+                    require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner,
+                                           allow_unverified=allow_unverified and f in exception_files)
                     if not actual_digest or reuse_state(saved, actual_digest) != "reuse":
                         raise ValueError("Corrected bytes changed; verify the new copy before Release.")
                 except Exception as exc:
@@ -3716,6 +3749,9 @@ def publish_files(sid: str, request: Request, body: dict):
                              "file": f, "owner": owner,
                              "artifact_digest": artifact_tag(digest) if digest else None,
                              "remediated_at": record.get("remediated_at"),
+                             "allow_unverified": allow_unverified,
+                             "release_disposition": "with_exceptions" if f in exception_files else "verified",
+                             "exception_manifest": exception_files.get(f),
                              **({"automatic_release_id": automatic_release_id} if automatic_release_id else {})})
         execution = None
         if payloads:
@@ -3743,11 +3779,13 @@ def publish_files(sid: str, request: Request, body: dict):
                 "batch_id": execution.get("batch_id") if execution else None}
     for f in files:
         record = core.store.get_file_record(sid, f)
-        if not record or not record.get("compliant") or not record.get("remediated_at"):
+        if not record or (not record.get("compliant") and not (allow_unverified and f in exception_files)) or not record.get("remediated_at"):
             result = {"file": f, "original_relative_path": None,
                             "released_relative_path": None, "status": "failed",
                             "failure_category": "not_approved",
-                            "explanation": "Only approved corrected copies can be released.",
+                            "explanation": "Only approved corrected copies or acknowledged exception releases can be released.",
+                            "release_disposition": "with_exceptions" if f in exception_files else "verified",
+                            "exception_manifest": exception_files.get(f),
                             "created": False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
@@ -3767,9 +3805,9 @@ def publish_files(sid: str, request: Request, body: dict):
                 raise IOError("corrected content was unavailable")
             if expected_artifacts.get(f) and expected_artifacts[f] != content_digest:
                 raise ReleaseArtifactError("The authorized corrected artifact changed; confirm again")
-            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner)
+            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner, allow_unverified=allow_unverified and f in exception_files)
             require_current_source(source, record, drive_service=drive_svc, sp_token=sp_token)
-            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner)
+            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner, allow_unverified=allow_unverified and f in exception_files)
             state = reuse_state(saved, content_digest)
             if state == "unresolved":
                 raise ReleaseArtifactError("Prior delivery has no exact artifact digest. Reconcile that delivery before retrying.", category="delivery_version_unresolved")
@@ -3890,6 +3928,8 @@ def publish_files(sid: str, request: Request, body: dict):
                             "released_document_id": publication.get("id") if publication else None,
                             "corrected_checksum": publication.get("checksum") if publication else None,
                             "created": publication.get("created", False) if publication else False}
+            result["release_disposition"] = "with_exceptions" if f in exception_files else "verified"
+            result["exception_manifest"] = exception_files.get(f)
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
             finish_synchronous(f, "completed", result)
@@ -4023,6 +4063,9 @@ class ReleasePreviewRequest(BaseModel):
     release_folder_name: str | None = None
     preserve_hierarchy: bool = True
     destination: dict | None = None
+    allow_unverified: bool = False
+    release_acknowledgment: str | None = None
+    exception_manifest: dict | None = None
 
 
 @router.post("/scans/{sid}/release/preview")
@@ -4041,6 +4084,20 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
     except _publish.UnsafeReleasePath as exc:
         raise HTTPException(422, str(exc)) from exc
     owner = _owner(request)
+    exception_files = {}
+    if body.allow_unverified:
+        if len((body.release_acknowledgment or '').strip()) < 12:
+            raise HTTPException(422, "A release acknowledgement is required when releasing with exceptions.")
+        entries = (body.exception_manifest or {}).get("files")
+        if not isinstance(entries, list):
+            raise HTTPException(422, "A conformance exception manifest is required when releasing with exceptions.")
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("file") or not isinstance(entry.get("remaining_findings"), list) or not entry["remaining_findings"]:
+                raise HTTPException(422, "Each exception manifest entry needs a file and remaining findings.")
+            exception_files[str(entry["file"])] = entry
+        missing = sorted(set(selected) - set(exception_files))
+        if missing:
+            raise HTTPException(422, detail={"code": "exception_manifest_incomplete", "files": missing})
     status = core.store.release_for_scan(sid, owner)
     if status:
         folder_name = status["folder_name"]
@@ -4061,7 +4118,8 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
     documents, blockers = [], []
     for name in selected:
         record = rows.get(name)
-        if not record or not record.get("compliant") or not record.get("remediated_at"):
+        exception = body.allow_unverified and name in exception_files
+        if not record or (not record.get("compliant") and not exception) or not record.get("remediated_at"):
             blockers.append({"file": name, "reason": "Only approved corrected copies can be released."})
             continue
         source_path = record.get("source_relative_path") or record.get("parent_folder") or name
@@ -4093,7 +4151,9 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
             continue
         action = "reuse" if identity == "reuse" else "create"
         documents.append({"file": name, "provider_location": location,
-                          "destination_path": destination, "action": action})
+                          "destination_path": destination, "action": action,
+                          "release_disposition": "with_exceptions" if exception else "verified",
+                          "remaining_findings": len(exception_files[name]["remaining_findings"]) if exception else 0})
     return {
         "scan_id": sid,
         "folder_name": folder_name,
@@ -4102,6 +4162,7 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
         "documents": documents,
         "blockers": blockers,
         "can_release": not blockers and destination_preflight["ready"],
+        "exception_release": bool(body.allow_unverified),
         "destination": destination_config,
         "preflight": destination_preflight,
         "collision_policy": ("Existing ACP copies are reused. Unrelated provider files are not "
@@ -4194,6 +4255,9 @@ def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
         "status": row.get("status"),
         "failure_category": row.get("failure_category"),
         "explanation": row.get("explanation"),
+        "release_disposition": row.get("release_disposition") or "verified",
+        "exception_manifest": (_json.loads(row["exception_manifest"])
+                               if isinstance(row.get("exception_manifest"), str) and row.get("exception_manifest") else row.get("exception_manifest")),
         "created": bool(row.get("created_result")),
         "published_at": row.get("published_at"),
     } for row in status.get("documents", [])]

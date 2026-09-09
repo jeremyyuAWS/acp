@@ -1357,6 +1357,8 @@ _SCHEMA = [
       PRIMARY KEY(release_id,file)
     )""",
     "ALTER TABLE release_documents ADD COLUMN IF NOT EXISTS artifact_digest TEXT",
+    "ALTER TABLE release_documents ADD COLUMN IF NOT EXISTS release_disposition TEXT",
+    "ALTER TABLE release_documents ADD COLUMN IF NOT EXISTS exception_manifest TEXT",
     """CREATE TABLE IF NOT EXISTS release_continuations (
       id TEXT PRIMARY KEY, owner_email TEXT NOT NULL, scan_id TEXT NOT NULL,
       fingerprint TEXT NOT NULL, intent TEXT NOT NULL, progress TEXT NOT NULL,
@@ -9383,8 +9385,8 @@ class Store:
                 "INSERT INTO release_documents(release_id,file,source_document_id,"
                 "source_relative_path,destination_relative_path,released_document_id,"
                 "released_document_url,corrected_checksum,verification,status,failure_category,"
-                "explanation,created_result,published_at,artifact_digest) "
-                "SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s WHERE EXISTS "
+                "explanation,created_result,published_at,artifact_digest,release_disposition,exception_manifest) "
+                "SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s WHERE EXISTS "
                 "(SELECT 1 FROM release_executions WHERE id=%s AND owner_email=%s) "
                 "ON CONFLICT(release_id,file) DO UPDATE SET "
                 "destination_relative_path=EXCLUDED.destination_relative_path,"
@@ -9395,7 +9397,9 @@ class Store:
                 "verification=EXCLUDED.verification,status=EXCLUDED.status,"
                 "failure_category=EXCLUDED.failure_category,explanation=EXCLUDED.explanation,"
                 "created_result=EXCLUDED.created_result,"
-                "published_at=COALESCE(EXCLUDED.published_at,release_documents.published_at)",
+                "published_at=COALESCE(EXCLUDED.published_at,release_documents.published_at),"
+                "release_disposition=COALESCE(EXCLUDED.release_disposition,release_documents.release_disposition),"
+                "exception_manifest=COALESCE(EXCLUDED.exception_manifest,release_documents.exception_manifest)",
                 (release_id, result["file"], result.get("source_document_id"),
                  result.get("original_relative_path") or result["file"],
                  result.get("released_relative_path"), result.get("released_document_id"),
@@ -9403,6 +9407,9 @@ class Store:
                  result.get("verification"), result["status"],
                  result.get("failure_category"), result.get("explanation"),
                  int(bool(result.get("created"))), result.get("published_at"), result.get("artifact_digest"),
+                 result.get("release_disposition"),
+                 json.dumps(result.get("exception_manifest"), sort_keys=True, ensure_ascii=False)
+                 if result.get("exception_manifest") is not None else None,
                  release_id, owner))
 
     def release_status(self, release_id: str, owner: str) -> dict | None:
