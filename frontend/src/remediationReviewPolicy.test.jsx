@@ -49,3 +49,13 @@ it('keeps the validated automatic option unavailable until calibration and indep
   expect(container.textContent).toContain('current calibration data')
   expect(container.textContent).toContain('Suggestions will continue to come to you for approval')
 })
+
+it('shows the server readiness reason when automatic approval is unavailable', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(createElement(Policy, {
+    onChange: vi.fn(), supported: true, automaticSupported: false,
+    automaticReason: 'Automatic application is disabled until a supported writer is configured.',
+    value: { enabled: true },
+  })))
+  expect(container.textContent).toContain('Automatic application is disabled until a supported writer is configured.')
+})

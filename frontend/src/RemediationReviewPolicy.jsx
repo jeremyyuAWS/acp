@@ -4,7 +4,7 @@ import './remediation-run-insights.css'
 const DEFAULT = { enabled: false, mode: 'review_all', minimum_reliability: 95, max_review_attempts: 1 }
 
 export default function RemediationReviewPolicy({ value, onChange, disabled, supported = false,
-  automaticSupported = false, administratorFloor = 95 }) {
+  automaticSupported = false, automaticReason = '', administratorFloor = 95 }) {
   const id = useId()
   const policy = { ...DEFAULT, ...value }
   const change = delta => onChange({ ...policy, ...delta })
@@ -28,7 +28,7 @@ export default function RemediationReviewPolicy({ value, onChange, disabled, sup
         <label><input type="radio" name={`${id}-mode`} value="threshold" checked={policy.mode === 'threshold'}
           onChange={() => change({ mode: 'threshold' })} /> Automatically apply only validated suggestions</label>
       </fieldset>
-      {!automaticSupported && <p className="remediation-review-policy__calibration-note">Automatic approval is unavailable until this change type has current calibration data, an independent check, and a supported writer. Suggestions will continue to come to you for approval.</p>}
+      {!automaticSupported && <p className="remediation-review-policy__calibration-note">{automaticReason || 'Automatic approval is unavailable until this change type has current calibration data, an independent check, and a supported writer.'} Suggestions will continue to come to you for approval.</p>}
       <details open={policy.mode === 'threshold'}><summary>Reliability threshold</summary>
         <p>{policy.mode === 'threshold'
           ? `ACP will require validated reliability of at least ${Math.max(administratorFloor, policy.minimum_reliability)}% before it can apply a suggestion. The administrator floor is ${administratorFloor}%.`
