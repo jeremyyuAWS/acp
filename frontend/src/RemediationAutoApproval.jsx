@@ -13,7 +13,7 @@ export default function RemediationAutoApproval({ policy, onChange, disabled, su
     {!available && <p>{!supported ? (reason || 'Automatic approval is unavailable on this server.') : 'Choose Rules + AI and a positive run spending limit to enable this option.'}</p>}
     <details><summary>Which suggestions can proceed?</summary>
       <p>Complete, current AI suggestions with a supported writer and a tracked Google Drive or SharePoint source are approved and applied to the working copy. This includes supported alternative text, link text, labels, slide titles, sensory-text changes and language tags in supported Office and PDF formats.</p>
-      <p>Missing drafts, partial coverage, changed sources, unsupported changes and manual judgments still need you. Approval is not proof of correctness: the normal writer and verification checks remain. Publishing is a separate action.</p>
+      <p>Missing drafts, partial coverage, changed sources, unresolved optional AI reviews, unsupported changes and manual judgments still need you. Approval is not proof of correctness: the normal writer and verification checks remain. Publishing is a separate action.</p>
       <p>This applies only to the new run you start. Saving it as a default offers the same choice for future plans; it does not authorize existing runs.</p>
     </details>
   </fieldset>

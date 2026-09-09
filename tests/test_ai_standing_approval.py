@@ -15,7 +15,7 @@ BYTES = b'synthetic verified working artifact'
 DIGEST = sha256(BYTES).hexdigest()
 
 
-def seed(store, monkeypatch, enabled=True):
+def seed(store, monkeypatch, enabled=True, review=False):
     monkeypatch.setattr(core, 'store', store)
     monkeypatch.setattr(core, 'get_scan_tokens', lambda sid: {'sp': 'synthetic-token'})
     import release_artifacts
@@ -24,6 +24,7 @@ def seed(store, monkeypatch, enabled=True):
         store._db.execute(cur, "INSERT INTO scan_runs(id,owner_email,status,source) VALUES(%s,%s,'done','sharepoint')", (SID, OWNER))
         store._db.execute(cur, "INSERT INTO file_records(scan_id,file,drive_file_id,source_modified,corrected_sha256,remediated_at) VALUES(%s,%s,'source-id','2026-09-01',%s,'2026-09-02')", (SID, FILE, DIGEST))
     policy = {'rule_based': 2, 'ai': 1, 'ai_budget_usd': '1.00', 'auto_approve_ai': enabled}
+    if review: policy['ai_review'] = {'enabled':True}
     batch = store.enqueue_stage_batch(SID, 'remediate', 'remediate_file', [{
         'scan_id': SID, 'file': FILE, 'owner': OWNER, 'source': 'sharepoint',
         'remediation_impact_policy': policy}], snapshot_id=store.remediation_source_revision(SID), request_fingerprint='standing')
@@ -255,4 +256,72 @@ def test_future_defaults_roundtrip_but_do_not_reauthorize_existing_run(isolated_
 @pytest.mark.parametrize('policy',[{'ai':1},{'ai':0,'ai_budget_usd':'1.00'},{'ai':1,'ai_budget_usd':'0.00'}])
 def test_optin_without_ai_and_budget_never_snapshots(policy):
     with pytest.raises(ValueError):normalize_policy({'rule_based':2,**policy,'auto_approve_ai':True})
-    with pytest.raises(ValueError):normalize_run_policy({**policy,'auto_approve_ai':True})
+    from ai_spending_budget import BudgetError
+    with pytest.raises(BudgetError):normalize_run_policy({**policy,'auto_approve_ai':True})
+
+
+def test_failed_job_enqueue_rolls_back_decision_and_audit_together(isolated_store,monkeypatch):
+    s=isolated_store;job=seed(s,monkeypatch)
+    def fail(*a,**k):raise RuntimeError('Synthetic queue failure')
+    with run_context(s,job['payload'],job) as ctx:
+        item=s.enqueue_proposals(SID,FILE,'2.4.6',[proposal(s)])
+        monkeypatch.setattr(s,'enqueue_job',fail)
+        with pytest.raises(RuntimeError):approve_file(s,ctx)
+    assert s.get_hitl_item(item)['status']=='pending'
+    assert not [e for e in rows(s,'hitl_events') if e['action']=='standing_approve']
+    assert not [e for e in rows(s,'decision_log') if e['action']=='hitl.approved_under_run_policy']
+
+
+def test_system_authorization_contribution_still_requires_exact_writer_evidence():
+    from test_remediation_contribution import baseline, proposal, event
+    from remediation_contribution import aggregate
+    p=proposal()
+    approval=dict(authorization_event_id='system-event',authorization_action='standing_approve',
+        approval_snapshot_ids='["p"]',status='approved',approved_proposal_snapshot_ids='["p"]',
+        approved_value_sha256='v',approved_source_revision='assessment')
+    approved=aggregate(baseline(),[p],[],approvals={'p':approval})
+    assert approved['outcomes']['fixed']==0
+    assert approved['outcomes']['approved']==5
+    assert all(f['approval_kind']=='run_authorization' for f in approved['findings'])
+    verified=aggregate(baseline(),[p],[event(p,approval_action='standing_approve')])
+    assert verified['outcomes']['fixed']==5
+    assert all(f['approval_kind']=='run_authorization' for f in verified['findings'])
+    stale=aggregate(baseline(),[p],[event(p,approval_action='standing_approve',actual_source_sha256='stale')])
+    assert stale['outcomes']['fixed']==0
+
+
+@pytest.mark.parametrize('verdict',['accept','revise','unable','missing','wrong_digest'])
+def test_optional_review_must_resolve_for_exact_draft(isolated_store,monkeypatch,verdict):
+    from ai_attempt_history import AttemptHistory
+    from ai_review_chain import _save_review
+    s=isolated_store;job=seed(s,monkeypatch,review=True)
+    with run_context(s,job['payload'],job) as ctx:
+        p=proposal(s)
+        h=AttemptHistory(s._db)
+        h.begin(OWNER,SID,ctx.run_id,'operation','attempt',file=FILE,input_sha256=DIGEST,
+            model=p['model'],provider='synthetic',purpose='draft')
+        with s._db.cursor() as cur:
+            s._db.execute(cur,'UPDATE ai_attempt_history SET result_json=%s WHERE attempt_id=%s',
+                (json.dumps({'text':p['proposed_value']}),'attempt'))
+            s._db.execute(cur,'INSERT INTO ai_attempt_trace_links VALUES(%s,%s,%s,%s)',
+                (OWNER,ctx.run_id,'attempt',p['model_call_id']))
+        item=s.enqueue_proposals(SID,FILE,'2.4.6',[p])
+        if verdict!='missing':
+            digest=sha256(p['proposed_value'].encode()).hexdigest() if verdict!='wrong_digest' else DIGEST
+            _save_review(ctx,'operation',digest,{'verdict':'accept' if verdict=='wrong_digest' else verdict})
+        approve_file(s,ctx)
+    assert (s.get_hitl_item(item)['status']=='approved') is (verdict=='accept')
+    assert bool(apply_jobs(s)) is (verdict=='accept')
+
+
+def test_partial_first_attempt_then_complete_fallback_needs_no_new_authorization(isolated_store,monkeypatch):
+    s=isolated_store;job=seed(s,monkeypatch)
+    with run_context(s,job['payload'],job) as ctx:
+        item=s.enqueue_proposals(SID,FILE,'2.4.6',[proposal(s)],finding_count=2)
+        approve_file(s,ctx)
+        assert s.get_hitl_item(item)['status']=='pending'
+        same=s.enqueue_proposals(SID,FILE,'2.4.6',[proposal(s,locator='slide:1'),proposal(s,locator='slide:2')],finding_count=2)
+        assert same==item
+        approve_file(s,ctx)
+    assert s.get_hitl_item(item)['status']=='approved'
+    assert len(apply_jobs(s))==1
