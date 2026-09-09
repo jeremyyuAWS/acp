@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { hasCorrectedCopy, deliveryIsCurrent, releaseReadiness, canSelectRelease } from './releaseClarityModel.js'
+import { hasCorrectedCopy, deliveryIsCurrent, releaseReadiness, canSelectRelease, releaseSourceState } from './releaseClarityModel.js'
 const corrected = { file: 'a.pdf', compliant: 1, remediated_at: '2026-09-01' }
 describe('Release corrected-copy contract', () => {
   it('matches the existing backend eligibility boundary without inferring from score', () => {
@@ -27,4 +27,11 @@ describe('Release corrected-copy contract', () => {
     expect(deliveryIsCurrent(corrected, { status: 'failed' }, { 'a.pdf': true })).toBe(false)
     expect(deliveryIsCurrent({ ...corrected, published_at: 'unknown' })).toBe(false)
   })
+})
+
+it('preserves source errors and drift under lifecycle overlays', () => {
+  expect(releaseSourceState({ state: 'conflict' })).toBe('stale')
+  expect(releaseSourceState({ state: 'publish_pending', error: 'forbidden' })).toBe('unavailable')
+  expect(releaseSourceState({ state: 'acp_newer', baseline: '2026-09-01', current: '2026-09-02' })).toBe('stale')
+  expect(releaseSourceState({ state: 'publish_pending', baseline: '2026-09-01', current: '2026-09-01' })).toBe('publish_pending')
 })

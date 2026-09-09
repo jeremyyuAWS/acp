@@ -15,7 +15,7 @@ import ReleaseDestinationPicker from './ReleaseDestinationPicker.jsx'
 import ReleaseTemplates from './ReleaseTemplates.jsx'
 import './release-plan-summary.css'
 import './release-clarity.css'
-import { hasCorrectedCopy, deliveryIsCurrent, releaseReadiness, canSelectRelease } from './releaseClarityModel.js'
+import { hasCorrectedCopy, deliveryIsCurrent, releaseReadiness, canSelectRelease, releaseSourceState } from './releaseClarityModel.js'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
 // is recorded in the audit trail and the fixed copy (already in Blob + the Drive
@@ -222,7 +222,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     loadSourceStatus()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run?.id, ready.length])
-  const srcOf = (f) => srcStatus.byFile[f.file]?.state
+  const srcOf = (f) => releaseSourceState(srcStatus.byFile[f.file])
   const previewBlockers = Object.fromEntries([...(releasePreview?.blockers || []), ...(packagePreview?.blockers || [])].map((item) => [item.file, item.reason]))
   const stateOf = (file) => releaseReadiness(file, { done, results: releaseResults, sourceState: srcOf, pending: pendingReview.byFile })
   const states = releaseFiles.map(stateOf)

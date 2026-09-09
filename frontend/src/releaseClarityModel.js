@@ -28,3 +28,13 @@ export function releaseReadiness(file, { done = {}, results = {}, sourceState = 
 }
 
 export const canSelectRelease = (state) => ['ready', 'released', 'failed'].includes(state.status)
+
+// The source-status endpoint overlays lifecycle states on freshness. Preserve its
+// underlying timestamp/error evidence when the overlay says publish_pending or acp_newer.
+export function releaseSourceState(row) {
+  if (!row) return undefined
+  if (row.error) return 'unavailable'
+  const baseline = Date.parse(row.baseline), current = Date.parse(row.current)
+  if (row.state === 'conflict' || (Number.isFinite(baseline) && Number.isFinite(current) && current > baseline)) return 'stale'
+  return row.state
+}

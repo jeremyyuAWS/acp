@@ -127,7 +127,7 @@ describe('Release clarity and execution boundaries', () => {
   })
 
   it('keeps hidden selections explicit and preserves clear selection after freshness refresh', async () => {
-    getSourceStatus.mockResolvedValue({ files: [{ file: 'b.pdf', state: 'stale' }], stale_count: 1 })
+    getSourceStatus.mockResolvedValue({ files: [{ file: 'b.pdf', state: 'conflict' }], stale_count: 1 })
     const c = await mount({ run, files: [verified('a.pdf'), verified('b.pdf')] })
     const status = c.querySelectorAll('.release-selection__toolbar select')[1]
     await act(async () => { status.value = 'attention'; status.dispatchEvent(new Event('change', { bubbles: true })) })

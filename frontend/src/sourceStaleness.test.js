@@ -25,7 +25,7 @@ describe('Release Center: source-staleness UI', () => {
     const s = pub()
     expect(s).toMatch(/import \{[^}]*getSourceStatus[^}]*rescoreFile[^}]*\} from '\.\/api\.js'/)
     expect(s).toMatch(/getSourceStatus\(run\.id\)/)
-    expect(s).toMatch(/const srcOf = \(f\) => srcStatus\.byFile\[f\.file\]\?\.state/)
+    expect(s).toMatch(/const srcOf = \(f\) => releaseSourceState\(srcStatus\.byFile\[f\.file\]\)/)
     expect(s).toMatch(/const staleReady = ready\.filter\(\(f\) => !done\[f\.file\] && srcOf\(f\) === 'stale'\)/)
   })
 
