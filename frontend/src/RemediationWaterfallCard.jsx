@@ -23,6 +23,30 @@ const OUTCOMES = [
   ['excluded', 'Excluded by policy', 'excluded_by_policy', 'Excluded from correction under the accepted run policy.'],
   ['superseded', 'Superseded by reassessment', 'superseded_by_reassessment', 'A newer assessment replaced these findings.'],
 ]
+// Mutually exclusive result buckets for the fixed assessment baseline. The detailed
+// disposition rows below remain available for drilldown; this summary deliberately
+// keeps “still needs work” together so a person can read the result at a glance.
+export const RESULT_BUCKETS = [
+  ['fixed', 'Fixed and checked', 'Applied changes with qualifying verification evidence.'],
+  ['awaiting_review', 'Suggestions awaiting review', 'Usable suggestions that still need a person’s decision.'],
+  ['approved_pending', 'Approved, awaiting completion', 'Approved work that is still being applied or checked.'],
+  ['needs_work', 'Still needs work', 'Rejected, failed, unsupported, or otherwise unresolved findings.'],
+  ['processing', 'Still processing', 'Findings with active work in progress.'],
+  ['unavailable', 'Outcome unavailable', 'Records that cannot yet be reconciled to the fixed baseline.'],
+]
+export function resultBuckets(reconciliation) {
+  const rec = reconciliation || {}
+  const unresolved = ['unchanged_no_fix', 'failed', 'excluded', 'superseded']
+    .reduce((sum, key) => sum + (count(rec[key]) ? rec[key] : 0), 0)
+  return RESULT_BUCKETS.map(([key, label, detail]) => [key, label, detail, {
+    fixed: rec.resolved_verified,
+    awaiting_review: rec.awaiting_review,
+    approved_pending: rec.approved_pending_verification,
+    needs_work: unresolved,
+    processing: rec.processing,
+    unavailable: rec.unavailable,
+  }[key]])
+}
 const money = value => Number.isSafeInteger(value) ? new Intl.NumberFormat('en-US', {
   style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 6,
 }).format(value / 1000000) : 'Unavailable'
@@ -118,7 +142,7 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
     </div>}
     <section ref={outcomesRef} tabIndex={-1} className="wf-outcomes" aria-label="Finding outcomes">
       <div className="wf-section-head"><h4>Where your findings stand</h4><span>{count(rec.assessed) ? `${rec.assessed.toLocaleString()} assessed findings` : 'Finding baseline unavailable'}</span></div>
-      {exact ? <><div className="wf-outcome-bar" aria-hidden="true">{OUTCOMES.map(([key], index) => <span key={key} className={`wf-tone-${index}`} style={{ width: `${rec.assessed ? rec[key] / rec.assessed * 100 : 0}%` }} />)}</div>
+      {exact ? <><div className="wf-results-summary"><div className="wf-section-head"><h4>Results against the assessed baseline</h4><span>{rec.assessed.toLocaleString()} findings · fixed baseline</span></div><div className="wf-outcome-bar" aria-hidden="true">{resultBuckets(rec).map(([key,,, value], index) => <span key={key} className={`wf-tone-${index}`} style={{ width: `${rec.assessed ? (count(value) ? value : 0) / rec.assessed * 100 : 0}%` }} />)}</div><div className="wf-results-legend">{resultBuckets(rec).map(([key, label, detail, value], index) => <div key={key}><i className={`wf-tone-${index}`} aria-hidden="true" /><span><strong>{label}</strong><small>{count(value) ? value.toLocaleString() : 'Unavailable'}</small><em>{detail}</em></span></div>)}</div><details><summary>View result counts as a table</summary><table><caption className="sr-only">Results against the assessed baseline</caption><thead><tr><th scope="col">Result</th><th scope="col">Findings</th><th scope="col">Meaning</th></tr></thead><tbody>{resultBuckets(rec).map(([key, label, detail, value]) => <tr key={key}><th scope="row">{label}</th><td>{count(value) ? value.toLocaleString() : 'Unavailable'}</td><td>{detail}</td></tr>)}</tbody></table></details></div><div className="wf-outcome-bar" aria-hidden="true">{OUTCOMES.map(([key], index) => <span key={key} className={`wf-tone-${index}`} style={{ width: `${rec.assessed ? rec[key] / rec.assessed * 100 : 0}%` }} />)}</div>
         <div className="wf-legend">{OUTCOMES.map((row, index) => <button key={row[0]} type="button" onClick={() => openOutcome(row)}><i className={`wf-tone-${index}`} aria-hidden="true" />{row[1]} {displayCount(rec[row[0]])}<span className="sr-only">. View finding details.</span></button>)}</div>
         <details><summary>View outcomes as a table</summary><table><thead><tr><th>Outcome</th><th>Findings</th></tr></thead><tbody>{OUTCOMES.map(row => <tr key={row[0]}><th><button type="button" className="linklike" onClick={() => openOutcome(row)}>{row[1]}</button></th><td>{rec[row[0]].toLocaleString()}</td></tr>)}</tbody></table></details>
       </> : <p className="wf-note">Finding outcomes are not fully reconciled yet. Verified changes and review items above use separate units; a complete finding bar is unavailable.</p>}
