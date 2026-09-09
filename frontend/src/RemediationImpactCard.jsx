@@ -250,9 +250,12 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     </div><div className="remediation-impact__results">
     {renderAssessment?.({
       automaticDelta: countDeltas?.automatic, humanDelta: countDeltas?.human,
-      automatic: ready ? number(data.lanes?.automatic?.findings) : 'Not yet available',
+      automatic: ready ? data.lanes?.automatic?.findings : 'Not yet available',
+      blocked: ready ? data.lanes?.blocked?.findings : null,
+      total: ready ? data.open?.findings : null,
+      onBlocked: ready ? () => setFilter({ type: 'lane', key: 'blocked', label: 'Blocked findings' }) : undefined,
       human: ready && Number.isFinite(data.lanes?.review?.findings) && Number.isFinite(data.lanes?.manual?.findings)
-        ? number(data.lanes.review.findings + data.lanes.manual.findings) : 'Not yet available',
+        ? data.lanes.review.findings + data.lanes.manual.findings : 'Not yet available',
       onAutomatic: ready ? () => setFilter({ type: 'lane', key: 'automatic', label: 'Auto-fix available' }) : undefined,
       onHuman: ready ? () => setFilter({ type: 'human', label: 'Human review required' }) : undefined,
     })}

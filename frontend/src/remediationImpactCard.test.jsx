@@ -20,6 +20,22 @@ const button = (container, label) => [...container.querySelectorAll('button')].f
 beforeEach(() => { vi.clearAllMocks(); getRemediationImpact.mockImplementation(async (_id, policy) => result(policy || undefined)); saveRemediationImpactPolicy.mockResolvedValue({}) })
 afterEach(unmountAll)
 describe('RemediationImpactCard', () => {
+  it('passes every findings lane to the assessment and opens blocked details', async () => {
+    const data = result()
+    data.open.findings = 11
+    data.lanes.automatic.findings = 6
+    data.lanes.review.findings = 2
+    data.lanes.manual.findings = 0
+    data.lanes.blocked.findings = 3
+    data.files = [{ file: 'Blocked.pdf', findings: 3, blocked: 3, automatic: 0, review: 0, manual: 0 }]
+    getRemediationImpact.mockResolvedValue(data)
+    const renderAssessment = vi.fn(forecast => createElement('button', { onClick: forecast.onBlocked }, 'Blocked tile'))
+    const { container } = await mount({ renderAssessment })
+    expect(renderAssessment.mock.calls.at(-1)[0]).toMatchObject({ automatic: 6, human: 2, blocked: 3, total: 11 })
+    await act(async () => button(container, 'Blocked tile').click())
+    expect(container.querySelector('[role="dialog"]').textContent).toContain('Blocked.pdf')
+  })
+
   it('keeps the start action and key counts visible while secondary plan details begin collapsed', async () => {
     const onRun = vi.fn()
     const { container } = await mount({ onRun, renderAssessment: forecast => createElement('div', { 'data-testid': 'assessment-forecast' }, `${forecast.automatic} automatic; ${forecast.human} human`) })

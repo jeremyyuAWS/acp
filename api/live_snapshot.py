@@ -201,7 +201,10 @@ def build_snapshot(store, scan_id: str, owner: str | None = None, now_iso: str |
         if sealed:
             audit = next((entry["assessment_summary"] for entry in sealed.get("entries") or []
                           if isinstance(entry.get("assessment_summary"), dict)), None)
-            findings_so_far = audit.get("findings_recorded") if audit else None
+            from store import Store
+            audit = Store._validated_assessment_audit(audit) if audit else None
+            findings_so_far = (audit.get("findings_recorded")
+                               if audit and audit.get("valid") else None)
 
     # Named, not faked — each needs live job-queue state this module does not do. The queue layer
     # (below) supplies queued / throughput / workers when present.

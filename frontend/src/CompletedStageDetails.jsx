@@ -45,7 +45,7 @@ export function completedDiscoverProgress(snapshot) {
 export function completedAssessSnapshot(snapshot) {
   const audit = snapshot?.assessment_summary
   const findings = audit?.findings_recorded
-  const hasFindings = typeof findings === 'number' && Number.isFinite(findings) && findings >= 0
+  const hasFindings = audit?.valid !== false && typeof findings === 'number' && Number.isFinite(findings) && findings >= 0
   const domain = audit?.domain_reconciliation || snapshot?.domain_reconciliation || {}
   const buckets = domain.buckets || {}
   const total = value(domain.total)

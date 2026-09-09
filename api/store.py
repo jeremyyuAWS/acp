@@ -5219,6 +5219,15 @@ class Store:
                              (when, scan_id))
             if cur.rowcount > 0:
                 self._bump_scan_revision(cur, scan_id)
+            self._db.execute(cur,
+                "SELECT execution_id FROM stage_executions WHERE scan_id=%s "
+                "AND stage='assess' AND is_current=1 AND state='processing_complete'",
+                (scan_id,))
+            awaiting_results = self._db.fetchall(cur)
+        # Deferred Assess's coordinator finishes before its file workers. Finalization is
+        # the first point at which their complete results may become the immutable audit.
+        for execution in awaiting_results:
+            self.seal_stage_if_ready(execution["execution_id"])
 
     # ── Overview snapshot cache (workspace-bootstrap redesign, Phase 1) ──
     #
@@ -7876,16 +7885,23 @@ class Store:
         manifest_id = (execution or {}).get("input_manifest_id")
         manifest = self.get_stage_output_manifest(manifest_id) if manifest_id else None
         original_assessment = None
+        baseline_valid = None
         for entry in (manifest or {}).get("entries") or []:
             audit = entry.get("assessment_summary")
             if isinstance(audit, dict) and isinstance(audit.get("findings_recorded"), int):
+                audit = self._validated_assessment_audit(audit)
                 assessed = audit["findings_recorded"]
-                original_assessment = audit.get("finding_groups")
+                baseline_valid = audit["valid"]
+                original_assessment = audit.get("finding_groups") if baseline_valid else None
                 break
         counts = {row["disposition"]: int(row["n"]) for row in grouped
                   if row.get("disposition")}
         rows = sum(int(row["n"]) for row in grouped)
-        return {**reconcile(assessed, counts, rows=rows),
+        result = reconcile(assessed, counts, rows=rows)
+        if baseline_valid is False:
+            result["exact"] = False
+            result["violations"].append({"code": "assessment_incomplete_at_capture"})
+        return {**result, "baseline_valid": baseline_valid,
                 "original_assessment": original_assessment}
 
     def set_finding_group_disposition(
@@ -14072,13 +14088,35 @@ class Store:
                 "finding_groups": groups,
                 "domain_reconciliation": domain, "captured_at": self._now()}
 
+    def _assessment_ready_to_seal(self, execution: dict, summary: dict) -> bool:
+        domain = summary.get("domain_reconciliation") or {}
+        if domain.get("scope") != "current Assess scan population":
+            return True
+        buckets = domain.get("buckets") or {}
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT assessed_at FROM scan_runs WHERE id=%s",
+                             (execution["scan_id"],))
+            assessed_at = (self._db.fetchone(cur) or {}).get("assessed_at")
+        return bool(assessed_at and domain.get("exact") is True
+                    and not buckets.get("waiting") and not buckets.get("processing"))
+
+    @staticmethod
+    def _validated_assessment_audit(audit: dict) -> dict:
+        """Flag prematurely sealed historical evidence without changing its stored digest."""
+        domain = audit.get("domain_reconciliation") or {}
+        buckets = domain.get("buckets") or {}
+        premature = domain.get("scope") == "current Assess scan population" and (
+            domain.get("exact") is not True or buckets.get("waiting") or buckets.get("processing"))
+        return {**audit, "valid": not bool(premature),
+                **({"invalid_reason": "assessment_incomplete_at_capture"} if premature else {})}
+
     def assessment_audit_summary(self, execution: dict) -> dict | None:
         """Read only the sealed evidence, never reconstruct history from current scan rows."""
         manifest_id = execution.get("output_manifest_id")
         manifest = self.get_stage_output_manifest(manifest_id) if manifest_id else None
         for entry in (manifest or {}).get("entries") or []:
             if isinstance(entry.get("assessment_summary"), dict):
-                return entry["assessment_summary"]
+                return self._validated_assessment_audit(entry["assessment_summary"])
         return None
 
     def seal_stage_output_manifest(self, execution_id: str, entries: list[dict], *,
@@ -14096,7 +14134,10 @@ class Store:
         # The summary is part of the immutable manifest digest, not a mutable scan KPI.
         if execution["stage"] == "assess" and entries:
             entries = [dict(entry) for entry in entries]
-            entries[0]["assessment_summary"] = self._assessment_audit_summary(execution)
+            summary = self._assessment_audit_summary(execution)
+            if not self._assessment_ready_to_seal(execution, summary):
+                raise ValueError("assessment document results are not finalized")
+            entries[0]["assessment_summary"] = summary
         ordered = sorted(entries, key=lambda row: _json.dumps(
             row, sort_keys=True, separators=(",", ":"), default=str))
         raw = _json.dumps(ordered, sort_keys=True, separators=(",", ":"), default=str)
@@ -14159,6 +14200,9 @@ class Store:
         if execution.get("output_manifest_id"):
             return self.get_stage_output_manifest(execution["output_manifest_id"])
         if execution.get("state") != "processing_complete":
+            return None
+        if execution.get("stage") == "assess" and not self._assessment_ready_to_seal(
+                execution, self._assessment_audit_summary(execution)):
             return None
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -14408,6 +14452,8 @@ class Store:
         assessment_summary = (self.assessment_audit_summary(execution)
                               if execution["stage"] == "assess" else None)
         domain_reconciliation = ((assessment_summary or {}).get("domain_reconciliation")
+                                 if (assessment_summary or {}).get("valid") is not False else None)
+        domain_reconciliation = (domain_reconciliation
                                  or self._stage_domain_reconciliation(execution, partitions))
         if domain_reconciliation.get("exact") is False:
             violations.append({"code": f"{execution['stage']}_domain_partition",

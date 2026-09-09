@@ -22,6 +22,12 @@ describe('immutable completed assessment audit', () => {
     expect(html).toContain('original findings total is unavailable')
     expect(html).not.toContain('0 accessibility findings recorded')
   })
+  it('rejects a premature audit even when it contains a numeric zero', () => {
+    const snap = completedAssessSnapshot({ ...saved, assessment_summary: {
+      ...saved.assessment_summary, findings_recorded: 0, valid: false } })
+    expect(snap.kpis.findings_so_far).toBeUndefined()
+    expect(snap.kpis_pending).toContain('findings_so_far')
+  })
   it('retains a measured zero as a real assessment result', () => {
     expect(completedAssessSnapshot({ ...saved, assessment_summary: {
       ...saved.assessment_summary, findings_recorded: 0 } }).kpis.findings_so_far).toBe(0)

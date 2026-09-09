@@ -242,3 +242,15 @@ def test_completed_findings_read_sealed_assessment_not_remediation_traces():
     historical = live_snapshot.build_snapshot(store, 's1', owner='o')
     assert 'findings_so_far' in historical['kpis_pending']
     assert 'findings_so_far' not in historical['kpis']
+
+
+def test_premature_sealed_assessment_does_not_report_zero_or_current_findings():
+    store = _FakeStore({'status': 'done', 'files': 2, 'files_done': 2}, findings=4)
+    store.current_stage_output_manifest = lambda sid, stage: {
+        'entries': [{'assessment_summary': {
+            'findings_recorded': 0,
+            'domain_reconciliation': {'scope': 'current Assess scan population',
+                                      'exact': True, 'buckets': {'waiting': 2}}}}]}
+    snap = live_snapshot.build_snapshot(store, 's1', owner='o')
+    assert 'findings_so_far' not in snap['kpis']
+    assert 'findings_so_far' in snap['kpis_pending']
