@@ -1,5 +1,14 @@
 """SharePoint Release is durable, token-safe, and settles verified provider results."""
 from types import SimpleNamespace
+import hashlib
+import pytest
+DIGEST = hashlib.sha256(b"corrected fixture").hexdigest()
+
+@pytest.fixture(autouse=True)
+def corrected_blob(monkeypatch):
+    import publish
+    monkeypatch.setattr(publish._blob, "download_remediated", lambda *args: b"corrected fixture")
+
 
 
 OWNER = "owner@example.com"
@@ -29,7 +38,7 @@ class FakeStore:
     def get_file_record(self, scan_id, filename):
         return {"file": filename, "compliant": 1, "remediated_at": "now",
                 "drive_file_id": "source-item", "drive_id": "library-1",
-                "corrected_sha256": "sha256:corrected",
+                "corrected_sha256": DIGEST,
                 "source_relative_path": "/drives/library-1/root:/HR/Policies"}
 
     def ensure_release_execution(self, scan_id, owner, source, documents_total,
@@ -55,7 +64,7 @@ class FakeStore:
 
     def release_status(self, release_id, owner):
         docs = list(self.documents.values())
-        return {"id": release_id, "folder_name": "2026-09-05 10-00 UTC",
+        return {"id": release_id, "scan_id": SID, "folder_name": "2026-09-05 10-00 UTC",
                 "documents_total": 1, "published": sum(d["status"] == "published" for d in docs),
                 "failed": sum(d["status"] == "failed" for d in docs), "remaining": 1,
                 "roots": []}
@@ -102,7 +111,7 @@ def test_sharepoint_submission_queues_token_free_per_document_work(monkeypatch):
     assert response["queued"] == 1
     assert store.jobs[0:2] == ("release", "publish_file")
     assert store.jobs[2] == [{"scan_id": SID, "release_id": "release-1",
-                              "file": FILE, "owner": OWNER}]
+                              "file": FILE, "owner": OWNER, "artifact_digest": f"sha256:{DIGEST}", "remediated_at": "now"}]
     assert "delegated-secret" not in repr(store.jobs)
     assert registered == {"scan_id": SID, "sp": "delegated-secret",
                           "require_shared": True}
@@ -199,7 +208,7 @@ def test_sharepoint_worker_records_canonical_provider_receipt(monkeypatch):
         "execution_id": "execution-1", "work_item_id": "work-item-1",
         "effect_type": "sharepoint.publish",
         "destination": "graph:library-1:root-1:HR/Policies/Leave.docx",
-        "content_digest": "sha256:corrected",
+        "content_digest": DIGEST,
         "receipt": {
             "provider_id": "copy-1", "url": "https://sp/copy", "created": True,
             "checksum": "sha256:copy", "filename": FILE, "verified": True,
@@ -272,7 +281,7 @@ def test_sharepoint_worker_reserves_before_provider_and_finalizes_before_documen
                         lambda *args: {"id": "root-1", "name": "release", "url": "https://sp/root"})
     monkeypatch.setattr(publish, "archive_copy_publish_sharepoint",
                         lambda *args, **kwargs: events.append(("provider",)) or {
-                            "id": "copy-1", "url": "https://sp/copy", "checksum": "sha256:corrected",
+                            "id": "copy-1", "url": "https://sp/copy", "checksum": DIGEST,
                             "created": True, "verified": True, "filename": FILE})
 
     handlers._publish_file(
@@ -281,7 +290,7 @@ def test_sharepoint_worker_reserves_before_provider_and_finalizes_before_documen
          "attempts": 1, "max_attempts": 5})
 
     assert [event[0] for event in events] == ["reserve", "provider", "finalize", "document"]
-    assert events[0][1]["content_digest"] == "sha256:corrected"
+    assert events[0][1]["content_digest"] == DIGEST
     assert events[2][1:3] == ("effect-1", "token-1")
 
 
@@ -294,7 +303,7 @@ def test_completed_sharepoint_reservation_reuses_verified_receipt_without_provid
     store.reserve_side_effect = lambda **kwargs: {
         "effect_id": "effect-1", "status": "completed", "acquired": False,
         "reused": True, "receipt": {"provider_id": "copy-1", "url": "https://sp/copy",
-                                    "checksum": "sha256:corrected", "filename": FILE,
+                                    "checksum": DIGEST, "filename": FILE,
                                     "created": False, "verified": True}}
     monkeypatch.setattr(core, "store", store)
     monkeypatch.setattr(core, "get_scan_tokens", lambda scan_id: {"sp": "token"})
@@ -390,7 +399,7 @@ def test_sharepoint_worker_restores_original_name_after_internal_dedupe(monkeypa
     monkeypatch.setattr(store, "get_file_record", lambda scan_id, filename: {
         "file": filename, "source_name": "Report.docx", "compliant": 1,
         "remediated_at": "now", "drive_file_id": "source-2", "drive_id": "library-1",
-        "corrected_sha256": "sha256:corrected",
+        "corrected_sha256": DIGEST,
         "source_relative_path": "/drives/library-1/root:/Legal"})
     monkeypatch.setattr(publish, "ensure_sharepoint_release_folder",
                         lambda *args: {"id": "root-1", "name": "release", "url": "https://sp/root"})

@@ -267,12 +267,15 @@ def archive_copy_publish_sharepoint(token: str, drive_id: str | None, folder_id:
                                     owner: str, release_id: str, scan_id: str,
                                     filename: str, relative_path: str | None,
                                     source_id: str, folder_cache: dict | None = None,
-                                    source_filename: str | None = None) -> dict | None:
+                                    source_filename: str | None = None,
+                                    expected_digest: str | None = None) -> dict | None:
     """Publish one Blob-backed corrected copy into a Graph drive without overwriting a source."""
     import scanner
     data = _blob.download_remediated(owner, scan_id, filename)
     if not data:
         return None
+    if expected_digest and hashlib.sha256(data).hexdigest() != expected_digest:
+        raise ValueError("Corrected content changed before delivery; review the new copy.")
     folders, safe_name = sharepoint_relative_path(relative_path, source_filename or filename)
     cache = folder_cache if folder_cache is not None else {}
     parent = folder_id
@@ -376,12 +379,14 @@ def upload_published(svc, folder_id: str, filename: str, data: bytes, *,
 def archive_copy_publish(svc, folder_id: str | None, owner: str | None,
                          scan_id: str, filename: str, *, relative_path: str | None = None,
                          source_id: str | None = None, folder_cache: dict | None = None,
-                         return_details: bool = False):
+                         return_details: bool = False, expected_digest: str | None = None):
     if svc is None or folder_id is None:
         return None
     data = _blob.download_remediated(owner, scan_id, filename)
     if not data:
         return None
+    if expected_digest and hashlib.sha256(data).hexdigest() != expected_digest:
+        raise ValueError("Corrected content changed before delivery; review the new copy.")
     destination, safe_name = ensure_relative_folders(
         svc, folder_id, relative_path, filename, folder_cache)
     key = publication_key(scan_id, source_id or filename, hashlib.sha256(data).hexdigest())

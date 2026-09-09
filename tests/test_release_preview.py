@@ -16,9 +16,9 @@ class _Store:
             return None
         return {"run": {"source": "sharepoint"}, "files": [
             {"file": "Report.pdf", "compliant": 1, "remediated_at": "now",
-             "source_relative_path": "/drives/lib/root:/Clinical", "drive_id": "lib"},
+             "corrected_sha256": "a" * 64, "source_relative_path": "/drives/lib/root:/Clinical", "drive_id": "lib"},
             {"file": "report.pdf", "compliant": 1, "remediated_at": "now",
-             "source_relative_path": "/drives/lib/root:/Clinical", "drive_id": "lib"},
+             "corrected_sha256": "a" * 64, "source_relative_path": "/drives/lib/root:/Clinical", "drive_id": "lib"},
         ]}
 
     def release_for_scan(self, sid, owner):
@@ -50,7 +50,7 @@ def test_preview_resolves_exact_path_without_writing(monkeypatch):
 
 def test_preview_reuses_persisted_folder_and_published_copy(monkeypatch):
     store = _Store({"folder_name": "Existing Release", "documents": [
-        {"file": "Report.pdf", "status": "published"}]})
+        {"file": "Report.pdf", "status": "published", "artifact_digest": "sha256:" + "a" * 64}]})
     monkeypatch.setattr(scans.core, "store", store)
     result = scans.preview_release_destination(
         "scan-1", _request(), scans.ReleasePreviewRequest(

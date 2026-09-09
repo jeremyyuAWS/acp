@@ -865,8 +865,6 @@ def _publish_file(payload: dict, job: dict) -> None:
                          "Only approved corrected copies can be released.")
         return
     saved = core.store.get_release_document(release_id, filename, owner)
-    if saved and saved.get("status") == "published":
-        return
     token = core.get_scan_tokens(scan_id).get("sp")
     if not token:
         _release_failure(release_id, owner, filename, record,
@@ -876,6 +874,7 @@ def _publish_file(payload: dict, job: dict) -> None:
         # user retries with a fresh token. Marking this successful would make Retry a no-op.
         raise FatalJobError("SharePoint session expired — reconnect and retry")
     import publish as _publish
+    from release_artifacts import ReleaseArtifactError, artifact_tag, reuse_state, require_current_record, require_current_source
     import scanner as _scanner
     source_path = record.get("source_relative_path") or record.get("parent_folder") or filename
     source_name = record.get("source_name") or filename
@@ -883,9 +882,23 @@ def _publish_file(payload: dict, job: dict) -> None:
     drive_id = record.get("drive_id")
     location = f"graph:{drive_id or 'me'}"
     try:
+        content_digest = _publish.remediated_content_digest(owner, scan_id, filename)
+        if not content_digest:
+            raise IOError("corrected content was unavailable")
+        if payload.get("artifact_digest") and payload["artifact_digest"] != artifact_tag(content_digest):
+            raise ReleaseArtifactError("The corrected artifact changed after this release was requested.")
+        record = require_current_record(core.store, scan_id, filename, content_digest,
+                                        payload.get("remediated_at") or record.get("remediated_at"))
+        require_current_source("sharepoint", record, sp_token=token)
+        record = require_current_record(core.store, scan_id, filename, content_digest, record.get("remediated_at"))
+        identity = reuse_state(saved, content_digest)
+        if identity == "unresolved":
+            raise ReleaseArtifactError("Prior delivery has no exact artifact digest. Reconcile that delivery before retrying.")
+        if identity == "reuse":
+            return
         release = core.store.release_status(release_id, owner)
-        if not release:
-            raise FatalJobError("release execution not found")
+        if not release or release.get("scan_id") != scan_id:
+            raise FatalJobError("release execution does not belong to this scan")
         chosen_parent = release.get("parent_folder_id")
         if chosen_parent:
             chosen_drive, _, chosen_item = chosen_parent.partition("/")
@@ -912,10 +925,6 @@ def _publish_file(payload: dict, job: dict) -> None:
         execution_id = (job or {}).get("batch_id")
         work_item = core.store.stage_work_item_for_job((job or {}).get("id")) \
             if execution_id else None
-        content_digest = record.get("corrected_sha256") or _publish.remediated_content_digest(
-            owner, scan_id, filename)
-        if not content_digest:
-            raise IOError("corrected content was unavailable")
         reservation = None
         if callable(reserve) and execution_id:
             reservation = reserve(
@@ -939,11 +948,11 @@ def _publish_file(payload: dict, job: dict) -> None:
                 # whether a write is needed, so takeover never blindly repeats the side effect.
                 publication = _publish.archive_copy_publish_sharepoint(
                     token, drive_id, root["folder_id"], owner, release_id, scan_id,
-                    filename, source_path, source_id, source_filename=source_name)
+                    filename, source_path, source_id, source_filename=source_name, expected_digest=content_digest)
         else:
             publication = _publish.archive_copy_publish_sharepoint(
                 token, drive_id, root["folder_id"], owner, release_id, scan_id,
-                filename, source_path, source_id, source_filename=source_name)
+                filename, source_path, source_id, source_filename=source_name, expected_digest=content_digest)
         if publication is None:
             raise IOError("corrected content was unavailable")
         released_name = publication.get("filename") or planned_name
@@ -992,8 +1001,12 @@ def _publish_file(payload: dict, job: dict) -> None:
             "verification": "content verified",
             "released_document_id": publication.get("id"),
             "corrected_checksum": publication.get("checksum"),
+            "artifact_digest": artifact_tag(content_digest),
             "created": publication.get("created", False),
         })
+    except ReleaseArtifactError as exc:
+        _release_failure(release_id, owner, filename, record, "release_evidence_changed", str(exc))
+        raise FatalJobError(str(exc)) from exc
     except _scanner.SharePointSessionExpired:
         if int((job or {}).get("attempts") or 1) < int((job or {}).get("max_attempts") or 5):
             raise

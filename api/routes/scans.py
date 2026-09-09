@@ -3547,6 +3547,7 @@ def publish_files(sid: str, request: Request, body: dict):
         })
     owner_email = scan.get("run", {}).get("owner_email") or owner
     import publish as _publish
+    from release_artifacts import artifact_tag, reuse_state, require_current_record, require_current_source
     source = scan.get("run", {}).get("source") or "local"
     destination = _release_destination(source, body.get("destination"))
     if destination:
@@ -3598,6 +3599,9 @@ def publish_files(sid: str, request: Request, body: dict):
             snapshot_id, input_manifest_id = _sealed_stage_input(sid, "remediate", release_id)
             fingerprint = hashlib.sha256(json.dumps({
                 "files": requested, "source": source, "release_id": release_id,
+                "artifacts": [(name, (core.store.get_file_record(sid, name) or {}).get("corrected_sha256"),
+                               (core.store.get_file_record(sid, name) or {}).get("remediated_at"))
+                              for name in requested],
             }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             try:
                 synchronous_execution = ensure_sync(
@@ -3637,12 +3641,27 @@ def publish_files(sid: str, request: Request, body: dict):
                 results.append(result)
                 continue
             saved = core.store.get_release_document(release_id, f, owner)
-            if saved and saved.get("status") == "published":
-                results.append({"file": f, "status": "published",
-                                "original_relative_path": saved.get("source_relative_path"),
-                                "released_relative_path": saved.get("destination_relative_path"),
+            digest = record.get("corrected_sha256")
+            state = reuse_state(saved, digest) if digest else "unresolved" if saved else "new"
+            if state == "unresolved":
+                results.append({"file": f, "status": "failed", "failure_category": "delivery_version_unresolved",
+                                "explanation": "Prior delivery has no exact artifact digest. Reconcile that delivery before retrying."})
+                continue
+            if state == "reuse":
+                try:
+                    actual_digest = _publish.remediated_content_digest(owner, sid, f)
+                    require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"))
+                    require_current_source(source, record, sp_token=sp_token)
+                    if not actual_digest or reuse_state(saved, actual_digest) != "reuse":
+                        raise ValueError("Corrected bytes changed; verify the new copy before Release.")
+                except Exception as exc:
+                    results.append({"file": f, "status": "failed", "failure_category": "artifact_changed",
+                                    "explanation": str(exc)})
+                    continue
+                results.append({"file": f, "status": "published", "artifact_digest": saved.get("artifact_digest"),
                                 "published_at": saved.get("published_at"),
                                 "published_url": saved.get("released_document_url"),
+                                "released_relative_path": saved.get("destination_relative_path"),
                                 "verification": saved.get("verification"), "created": False})
                 continue
             queued = {"file": f,
@@ -3653,12 +3672,14 @@ def publish_files(sid: str, request: Request, body: dict):
             core.store.record_release_document(release_id, owner, queued)
             results.append(queued)
             payloads.append({"scan_id": sid, "release_id": release_id,
-                             "file": f, "owner": owner})
+                             "file": f, "owner": owner,
+                             "artifact_digest": artifact_tag(digest) if digest else None,
+                             "remediated_at": record.get("remediated_at")})
         execution = None
         if payloads:
             import hashlib, json
             requested = sorted(p["file"] for p in payloads)
-            fingerprint = hashlib.sha256(json.dumps(requested).encode()).hexdigest()
+            fingerprint = hashlib.sha256(json.dumps([(p["file"], p.get("artifact_digest"), p.get("remediated_at")) for p in payloads], sort_keys=True).encode()).hexdigest()
             snapshot_id, input_manifest_id = _sealed_stage_input(sid, "remediate", release_id)
             execution = _enqueue_stage_batch(
                 sid, "release", "publish_file", payloads,
@@ -3689,18 +3710,6 @@ def publish_files(sid: str, request: Request, body: dict):
             continue
         source_path = record.get("source_relative_path") or record.get("parent_folder") or f
         saved = core.store.get_release_document(release_id, f, owner)
-        if saved and saved.get("status") == "published":
-            results.append({"file": f, "source_document_id": saved.get("source_document_id"),
-                            "original_relative_path": saved.get("source_relative_path"),
-                            "released_relative_path": saved.get("destination_relative_path"),
-                            "status": "published", "published_at": saved.get("published_at"),
-                            "published_url": saved.get("released_document_url"),
-                            "verification": saved.get("verification"),
-                            "released_document_id": saved.get("released_document_id"),
-                            "corrected_checksum": saved.get("corrected_checksum"),
-                            "created": False})
-            finish_synchronous(f, "completed", results[-1])
-            continue
         try:
             source_id = record.get("drive_file_id") or f
             root = None
@@ -3711,6 +3720,25 @@ def publish_files(sid: str, request: Request, body: dict):
             content_digest = _publish.remediated_content_digest(owner, sid, f)
             if not content_digest:
                 raise IOError("corrected content was unavailable")
+            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"))
+            require_current_source(source, record, drive_service=drive_svc, sp_token=sp_token)
+            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"))
+            state = reuse_state(saved, content_digest)
+            if state == "unresolved":
+                raise ValueError("Prior delivery has no exact artifact digest. Reconcile that delivery before retrying.")
+            if state == "reuse":
+                results.append({"file": f, "source_document_id": saved.get("source_document_id"),
+                                "original_relative_path": saved.get("source_relative_path"),
+                                "released_relative_path": saved.get("destination_relative_path"),
+                                "status": "published", "published_at": saved.get("published_at"),
+                                "published_url": saved.get("released_document_url"),
+                                "verification": saved.get("verification"),
+                                "released_document_id": saved.get("released_document_id"),
+                                "corrected_checksum": saved.get("corrected_checksum"),
+                                "artifact_digest": saved.get("artifact_digest"),
+                                "created": False})
+                finish_synchronous(f, "completed", results[-1])
+                continue
             execution_id = (synchronous_execution or {}).get("execution_id")
             work_item_id = ((synchronous_execution or {}).get("items") or {}).get(f)
             publication = None
@@ -3757,7 +3785,7 @@ def publish_files(sid: str, request: Request, body: dict):
                     publication = _publish.archive_copy_publish(
                         drive_svc, root["folder_id"], owner_email, sid, f,
                         relative_path=source_path, source_id=source_id,
-                        folder_cache=folder_cache, return_details=True)
+                        folder_cache=folder_cache, return_details=True, expected_digest=content_digest)
             elif source == "sharepoint":
                 if not sp_token:
                     raise PermissionError("SharePoint publishing requires a current write grant.")
@@ -3809,6 +3837,7 @@ def publish_files(sid: str, request: Request, body: dict):
                             "original_relative_path": source_path,
                             "released_relative_path": "/".join([*folders, released_name]),
                             "status": "published", "published_at": ts,
+                            "artifact_digest": artifact_tag(content_digest),
                             "published_url": url,
                             "verification": "content verified" if publication else "durable Blob copy",
                             "released_document_id": publication.get("id") if publication else None,
@@ -4003,7 +4032,12 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
             continue
         planned_paths.add(key)
         saved = existing.get(name)
-        action = "reuse" if saved and saved.get("status") == "published" else "create"
+        from release_artifacts import reuse_state
+        identity = reuse_state(saved, record.get("corrected_sha256"))
+        if identity == "unresolved":
+            blockers.append({"file": name, "reason": "Prior delivery has no exact artifact digest. Reconcile that delivery before retrying."})
+            continue
+        action = "reuse" if identity == "reuse" else "create"
         documents.append({"file": name, "provider_location": location,
                           "destination_path": destination, "action": action})
     return {
