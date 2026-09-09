@@ -805,7 +805,10 @@ def fixture_workflow(ctx: ScenarioContext) -> Outcome:
         return Outcome.failed(
             f"{len(ephemeral)} authoritative artifact(s) exist only on ephemeral storage "
             f"({', '.join(sorted(ephemeral)[:3])}). PRD §12: they are lost on the next pod "
-            f"reschedule, silently.", ephemeral=sorted(ephemeral)
+            f"reschedule, silently.", ephemeral=sorted(ephemeral),
+            objectStorage=_LAST_ARTIFACT_BODY.get(id(ctx), {}).get("object_storage_configured"),
+            authoritativeRecords=len(authoritative),
+            emptyLocations=sum(not a.get("location") for a in authoritative)
         ).with_artifacts([manifest])
     return Outcome.passed(
         f"{len(authoritative)} documents discovered, assessed, remediated, and persisted to "

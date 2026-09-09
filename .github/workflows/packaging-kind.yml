@@ -678,9 +678,10 @@ jobs:
               # the fan-out cannot run here the report says the target was busy rather than that
               # it is broken. The reason assertion below then decides which of the two happened.
               #
-              # This target declares object-storage=none. No authoritative-output
-              # durability claim can be established without configured storage.
-              "fixture-workflow": "unknown",
+              # This target declares object-storage=none. The completed writers
+              # produce metadata without durable locations: an observed failure,
+              # not a pass or an inconclusive measurement. No support claim moves.
+              "fixture-workflow": "fail",
               # NOW SERVED. `/admin/audit-events` and `/admin/support-bundle` landed with this
               # change, and startup records `deployment.started` so even an installation that has
               # changed nothing has a trail to return — which is what makes "no events" mean
@@ -720,6 +721,19 @@ jobs:
           assert not claim["mvpEligible"] and not claim["supportedEligible"], (
               f"a kind run reported itself eligible for a support claim: {claim}")
 
+          def assert_reference_storage_limit(scenario):
+              evidence = scenario.get("evidence", {})
+              assert scenario["state"] == "fail", scenario
+              assert evidence.get("objectStorage") is False, evidence
+              assert evidence.get("authoritativeRecords") == 4, evidence
+              assert evidence.get("emptyLocations") == 4, evidence
+              assert evidence.get("ephemeral") == ["", "", "", ""], evidence
+
+          # Match only the measured storage-free reference configuration. A
+          # configured store, changed record count, or different failure must fail.
+          assert_reference_storage_limit(next(s for s in report["scenarios"]
+                                              if s["id"] == "fixture-workflow"))
+
           # AND WHY, NOT ONLY WHAT. Comparing states alone lets a scenario keep its expected
           # `unknown` while the REASON changes underneath it — which nearly happened here: the
           # second run had `fixture-workflow` unknown-adjacent for a 503 from the capacity guard
@@ -729,7 +743,7 @@ jobs:
           EXPECTED_REASON = {
               # The target explicitly has no configured object store. Configured
               # storage with missing artifacts must still fail the scenario.
-              "fixture-workflow": "no object storage",
+              "fixture-workflow": "4 authoritative artifact(s) exist only on ephemeral storage",
               "worker-restart": "no authoritative artifacts",
               "dependency-degradation": "fault-injection",
               "scale-updown": "scale-control",

@@ -917,3 +917,6 @@ Everything else above is an observed command with its exit code, or a cited line
   the symptom is the documented Kubernetes behaviour, not something observed on a cluster.
 - Anything about `acpctl install`, `uninstall`, `support-bundle`, `packaging/acceptance/**` or
   `packaging/docs/lifecycle.md`: in flight in #1796, deliberately not read and not assessed.
+
+
+Reference measurement update (2026-09-09, run `34313159814`, Release head `6e577ec1`): after waiting for every remediation job, four authoritative artifact records exist, but all four locations are empty. The scenario reports **FAIL**: `4 authoritative artifact(s) exist only on ephemeral storage`. The kind target explicitly supplies `object-storage=none` and has no configured Blob account; it created metadata, not stored bytes. This supersedes the earlier empty-inventory observation above. The reference baseline matches only four empty locations with object storage explicitly unconfigured; configured storage, missing records, or another failure cause fails the baseline. Kubernetes remains planned, and both support eligibility flags remain false. Release's configured-storage behavior is separately verified through its real Blob adapter, Release endpoint, and exact SQLite receipt using an isolated storage SDK fixture.

@@ -1042,6 +1042,20 @@ def test_an_empty_inventory_WITH_object_storage_is_still_a_failure():
     assert state_of(run.report, "fixture-workflow") == FAIL
 
 
+def test_authoritative_records_without_locations_fail_even_when_storage_is_unconfigured():
+    # Measured kind result: four completed writers recorded output metadata, but
+    # no durable location exists. Keep that failure visible, never promote it.
+    world = fake.world(faults={'GET /scans/{sid}/artifacts': {'status': 200, 'json': {
+        'object_storage_configured': False,
+        'artifacts': [{'file': name, 'authoritative': True, 'location': ''}
+                      for name in ('one.docx', 'two.pptx', 'three.xlsx', 'four.pdf')],
+    }}})
+    run, _ = run_fake(world=world, scenario_ids=['fixture-workflow'])
+    entry = entry_for(run.report, 'fixture-workflow')
+    assert entry['state'] == FAIL
+    assert '4 authoritative artifact(s) exist only on ephemeral storage' in entry['detail']
+
+
 def test_every_remediation_job_is_polled_before_artifact_inventory():
     run, backend = run_fake(scenario_ids=["fixture-workflow"])
     assert state_of(run.report, "fixture-workflow") == PASS
