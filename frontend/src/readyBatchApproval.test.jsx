@@ -45,7 +45,7 @@ it('shows a truthful no-ready explanation and useful action instead of disabled 
   const v = await mount(BatchReviewSelection, { visible: applied, onReviewExcluded, onDecide: vi.fn(), scopeKey: 'scan' })
   expect(v.container.querySelectorAll('input[type=checkbox]')).toHaveLength(0)
   expect(v.container.textContent).toContain('No proposals are ready for approval')
-  await click(v.button('View changes and next steps'))
+  await click(v.button('Open individual review'))
   expect(onReviewExcluded).toHaveBeenCalledOnce()
 })
 
@@ -70,5 +70,23 @@ it.each([
   await click(v.button('Approve AI suggestions'))
   await click(v.button('Bulk approve ready proposals'))
   expect(v.button('Confirm approval')).toBeUndefined()
+  expect(onDecide).not.toHaveBeenCalled()
+})
+
+it('explains dynamic missing proposal information and opens focused individual review without a decision', async () => {
+  const onDecide = vi.fn()
+  const unversioned = ['one', 'two'].map(id => ({ ...ready(id), title: 'Legacy proposal', _raw: {} }))
+  const missing = { ...ready('missing'), proposals: [{ proposed_value: '' }] }
+  const v = await mount(RemediationInbox, { queue: [...unversioned, missing], decisions: {}, initialTab: 'needs-review', scanId: 'scan', onDecide })
+  await click(v.button('Bulk approve ready proposals'))
+  const empty = v.container.querySelector('.batch-review-empty')
+  expect(empty.textContent).toContain('2 review items have no verifiable proposal version.')
+  expect(empty.textContent).toContain('1 review item has no complete proposal.')
+  expect(empty.textContent).toContain('Generating fresh proposals requires a separately approved run.')
+  expect(empty.textContent).not.toContain('refresh outdated proposals')
+  await click(v.button('Open individual review'))
+  expect(v.container.querySelector('[aria-label="Select findings for approval"]').closest('[hidden]')).toBeTruthy()
+  expect(document.activeElement.textContent).toContain('Legacy proposal')
+  expect(document.activeElement.tagName).toMatch(/^H[1-6]$/)
   expect(onDecide).not.toHaveBeenCalled()
 })
