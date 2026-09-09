@@ -21,6 +21,12 @@ export default function RemediationContribution({ snapshot }) {
       <p><strong>{number(total)} original findings</strong> across {number(snapshot.selected_file_count)} selected files. Each finding is counted once in each view, across retries and proposal revisions.</p>
       {snapshot.coverage === 'partial' && <p role="note">Partial coverage: only linked evidence is attributed. Historical records may be unavailable.</p>}
       <p>{snapshot.note || 'Usable proposals are not verified fixes. Approval and successful verification are recorded separately.'}</p>
+      <div className="contribution-bars" aria-label="Reconciled outcomes of original findings">
+        {outcomes.map(([key, label]) => <div className="contribution-bar-row" key={key}>
+          <button type="button" onClick={() => select('state', key, label)}>{label}: {number(snapshot.outcomes?.[key])}</button>
+          <div className="contribution-track" aria-hidden="true"><span style={{ width: `${validCount(snapshot.outcomes?.[key]) && total > 0 ? Math.min(100, 100 * snapshot.outcomes[key] / total) : 0}%` }} /></div>
+        </div>)}
+      </div>
       <div className="contribution-bars" aria-label="Contribution by source, scaled to original findings">
         {origins.map(([key, label]) => <div className="contribution-bar-row" key={key}>
           <button type="button" onClick={() => select('origin', key, label)}>{label}: {number(snapshot.contributions?.[key])}</button>

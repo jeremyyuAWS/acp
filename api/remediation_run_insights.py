@@ -84,6 +84,9 @@ def capture_proposals(db, cur, ctx, *, scan_id, file, rule_id, item_id, proposal
              sha256(before.encode()).hexdigest() if before is not None else None,
              attempt_id, call_id, encoded if retention == 'full' else None, retention,
              datetime.now(timezone.utc).isoformat()))
+        from remediation_contribution import capture
+        capture(db, cur, ctx, snapshot_id=snapshot_id, proposal=proposal, scan_id=scan_id,
+                file=file, rule_id=rule_id, item_id=item_id, attempt_id=attempt_id)
         captured.append(snapshot_id)
     return captured
 
@@ -148,41 +151,6 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
         for row in db.fetchall(cur):
             counts[row['tier']] = row['n']
         complete = sum(counts.values()) == totals['total_proposals']
-        # Versions and retries are not additional findings. Count unique queue items with exact
-        # attempt lineage so fallback contribution can be shown without double-counting revisions.
-        db.execute(cur, '''SELECT DISTINCT p.item_id,
-                CASE WHEN h.purpose IN ('draft','fallback') AND t.trace_call_id IS NOT NULL
-                     THEN h.purpose ELSE 'unattributed' END AS purpose
-            FROM ai_proposal_snapshots p
-            LEFT JOIN ai_attempt_history h
-              ON h.owner_id=p.owner_id AND h.scan_id=p.scan_id AND h.run_id=p.run_id
-             AND h.file=p.file AND h.attempt_id=p.attempt_id
-            LEFT JOIN ai_attempt_trace_links t
-              ON t.owner_id=p.owner_id AND t.run_id=p.run_id
-             AND t.attempt_id=p.attempt_id AND t.trace_call_id=p.model_call_id
-            WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s''', scope)
-        item_purposes = {}
-        for row in db.fetchall(cur):
-            item_purposes.setdefault(str(row['item_id']), set()).add(str(row['purpose']))
-        draft_items = {item for item, purposes in item_purposes.items() if 'draft' in purposes}
-        fallback_items = {item for item, purposes in item_purposes.items() if 'fallback' in purposes}
-        db.execute(cur, '''SELECT DISTINCT p.item_id
-            FROM ai_proposal_snapshots p
-            JOIN ai_review_receipts r
-              ON r.owner_id=p.owner_id AND r.scan_id=p.scan_id AND r.run_id=p.run_id
-             AND r.proposal_sha256=p.proposal_sha256
-            WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s''', scope)
-        reviewed_items = {str(row['item_id']) for row in db.fetchall(cur)}
-        measured_contribution = {
-            'available': False,
-            'first_model_findings': None, 'fallback_additional_findings': None,
-            'reviewed_findings': None, 'baseline_findings': None,
-            'queue_items': {'first_model':len(draft_items),
-                            'fallback_only':len(fallback_items - draft_items),
-                            'reviewed':len(reviewed_items)},
-            'reason': 'immutable_baseline_finding_membership_unavailable',
-        }
-
         events = {}
         event_details_complete = True
         if proposals:
@@ -219,14 +187,18 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
                     value = dict(event)
                     snapshot_id = value.pop('snapshot_id')
                     events.setdefault(snapshot_id, {}).setdefault(key, []).append(value)
+    from remediation_contribution import read_contribution
+    measured_contribution = read_contribution(store, owner, scan_id, run_id)
+    verified_ids = {f['proposal_id'] for f in measured_contribution.get('findings', []) if f['state'] == 'fixed'}
     for proposal in proposals:
         proposal['proposal'] = json.loads(proposal.pop('proposal_json') or 'null')
         proposal.update(events.get(proposal['snapshot_id'], {}))
         # Approval metadata copied to a result is not actual writer evidence. Until
         # the writer records the bytes/value it used, even a cleared event cannot
         # prove this exact version. Keep historical evidence inspectable only.
-        proposal['version_verified'] = False
-        proposal['verification_reason'] = 'Actual writer source and approved-value proof unavailable.'
+        proposal['version_verified'] = proposal['snapshot_id'] in verified_ids
+        proposal['verification_reason'] = ('Exact approved values and source were written and verified in the saved artifact.'
+            if proposal['version_verified'] else 'Actual writer source and approved-value proof unavailable.')
 
     return {
         'contract_version': 'remediation-run-insights.v1', 'scan_id': scan_id, 'run_id': run_id, 'batch_id': run_id,
@@ -238,6 +210,7 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
                          'complete': complete,
                          'note': 'Saved proposal versions, not unique findings or verified fixes. Revisions may cover the same issue.'},
         'measured_contribution': measured_contribution,
-        'outcomes': {'verified_fix_count': None, 'reason': 'actual_writer_proof_unavailable'},
+        'outcomes': {'verified_fix_count': measured_contribution.get('outcomes', {}).get('fixed'),
+                     'unit':'baseline_findings', 'reason': 'exact_writer_proof_required'},
         'estimate': build_impact_estimate([], config_id='unavailable', change_family='unavailable'),
     }

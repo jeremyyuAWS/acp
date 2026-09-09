@@ -23,7 +23,7 @@ async function mount(component, props) {
 const button = (container, label) => [...container.querySelectorAll('button')].find(el => el.textContent === label)
 it('uses one baseline scale and drills into the same five fallback findings across revisions', async () => {
   const { container, render } = await mount(Contribution, { snapshot })
-  expect([...container.querySelectorAll('.contribution-track span')].map(el => el.style.width)).toEqual(['20%', '30%', '50%'])
+  expect([...container.querySelectorAll('[aria-label="Contribution by source, scaled to original findings"] .contribution-track span')].map(el => el.style.width)).toEqual(['20%', '30%', '50%'])
   expect(container.textContent).toContain('AI review checked 7 proposals')
   expect(container.querySelectorAll('table')).toHaveLength(2)
   await act(async () => button(container, 'Additional fallback proposals').click())

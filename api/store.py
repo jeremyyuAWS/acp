@@ -1875,8 +1875,9 @@ from ai_run_policy import RUN_POLICY_SCHEMA as _AI_RUN_POLICY_SCHEMA
 from ai_attempt_history import SCHEMA as _AI_ATTEMPT_HISTORY_SCHEMA
 from ai_review_chain import SCHEMA as _AI_REVIEW_SCHEMA
 from remediation_run_insights import SCHEMA as _AI_PROPOSAL_SNAPSHOT_SCHEMA
+from remediation_contribution import SCHEMA as _CONTRIBUTION_SCHEMA
 _SCHEMA.extend([*_AI_SPENDING_SCHEMA, _AI_RUN_POLICY_SCHEMA,
-                *_AI_ATTEMPT_HISTORY_SCHEMA, *_AI_REVIEW_SCHEMA, *_AI_PROPOSAL_SNAPSHOT_SCHEMA])
+                *_AI_ATTEMPT_HISTORY_SCHEMA, *_AI_REVIEW_SCHEMA, *_AI_PROPOSAL_SNAPSHOT_SCHEMA, *_CONTRIBUTION_SCHEMA])
 
 # ── Power BI read-only views (Postgres only) ────────────────────────────────
 # Three views that expose ACP scan data for Power BI DirectQuery. They are
@@ -2465,8 +2466,8 @@ class _PgAdapter:
     # v42 adds the tenant policy, exactly-once command receipt, and immutable run-policy
     # snapshot tables. All are additive and ignored by older replicas during rolling deploys.
     # v44 adds durable owner/run provider reservations and immutable spending policy.
-    _SCHEMA_VERSION = 46
-    _SCHEMA_CHECKSUM_AT_VERSION = "dbef33e91d0cb94be38719d3c659e9b0"
+    _SCHEMA_VERSION = 47
+    _SCHEMA_CHECKSUM_AT_VERSION = "ea469e345f7d4da7aa10afa4e2d05866"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -4765,6 +4766,7 @@ class Store:
                          "org_memory", "remediation_state", "finding_disposition",
                          "finding_disposition_event", "remediation_diff", "applied_fixes",
                          "ai_calls", "ai_validation_outcomes", "second_opinion_reservations",
+                         "remediation_contribution_runs", "remediation_contribution_proposals",
                          "ai_proposal_snapshots", "ai_attempt_trace_links", "ai_review_receipts", "ai_attempt_history",
                          "ai_spending_attempts", "ai_spending_run_policies", "ai_spending_budgets",
                          "finding_comments",
@@ -4952,7 +4954,8 @@ class Store:
                 cleared.append(t)
             # Policy actions are idempotency/audit receipts for customer changes, not the live
             # policy itself. The policy remains configuration; its historical receipts do not.
-            for t in ("ai_proposal_snapshots", "ai_attempt_trace_links", "ai_review_receipts", "ai_attempt_history",
+            for t in ("remediation_contribution_runs", "remediation_contribution_proposals",
+                         "ai_proposal_snapshots", "ai_attempt_trace_links", "ai_review_receipts", "ai_attempt_history",
                       "ai_spending_attempts", "ai_spending_run_policies", "ai_spending_budgets"):
                 self._db.execute(cur, f"DELETE FROM {t} WHERE owner_id=%s", (owner_email,))
                 cleared.append(t)
@@ -5042,7 +5045,7 @@ class Store:
             self._db.execute(cur, 'DELETE FROM ai_attempt_trace_links WHERE owner_id=%s AND run_id IN '
                              '(SELECT run_id FROM ai_attempt_history WHERE owner_id=%s AND scan_id=%s)',
                              (owner_email, owner_email, scan_id))
-            for table in ('ai_proposal_snapshots', 'ai_review_receipts', 'ai_attempt_history'):
+            for table in ('remediation_contribution_runs', 'remediation_contribution_proposals', 'ai_proposal_snapshots', 'ai_review_receipts', 'ai_attempt_history'):
                 self._db.execute(cur, f'DELETE FROM {table} WHERE owner_id=%s AND scan_id=%s', (owner_email, scan_id))
             for t in self._RESET_USER_SCAN_TABLES:
                 self._db.execute(cur, f"DELETE FROM {t} WHERE scan_id=%s", (scan_id,))
@@ -7645,7 +7648,7 @@ class Store:
                 verified_at=self._now())
 
     def seed_finding_dispositions(self, scan_id: str, batch_id: str, *,
-                                  snapshot_id: str | None = None) -> list[dict]:
+                                  snapshot_id: str | None = None, _cursor=None) -> list[dict]:
         """Create one stable row per assessed finding for this immutable remediation batch.
 
         `scan_rule_traces` is criterion-aggregate data, so an ordinal is the only honest locator
@@ -7656,7 +7659,8 @@ class Store:
         from finding_ledger import normalize_instance_key, stable_finding_id
 
         now = self._now()
-        with self._db.cursor() as cur:
+        from contextlib import nullcontext
+        with (nullcontext(_cursor) if _cursor is not None else self._db.cursor()) as cur:
             # Seeding is a snapshot operation, not an upsert from mutable live traces. Once any
             # rows exist, an exact replay returns that frozen set; reusing a batch id for another
             # snapshot fails closed instead of accumulating two assessments in one partition.
@@ -14694,6 +14698,14 @@ class Store:
                     (message_id, batch_id, work_item_id, job_type,
                      _json.dumps({"job_id": job_id, "execution_id": batch_id,
                                   "work_item_id": work_item_id}), now))
+            if stage == "remediate":
+                from remediation_contribution import freeze_baseline
+                selected = sorted({p.get("file") for p in payloads if p.get("file")})
+                self._db.execute(cur, "SELECT DISTINCT file FROM scan_rule_traces WHERE scan_id=%s", (scan_id,))
+                assessed = {r["file"] for r in self._db.fetchall(cur)}
+                if selected and set(selected) <= assessed:
+                    findings = self.seed_finding_dispositions(scan_id, batch_id, snapshot_id=snapshot_id, _cursor=cur)
+                    freeze_baseline(self._db, cur, owner, scan_id, batch_id, snapshot_id, findings, selected)
         self._record_stage_started(scan_id, stage, batch_id, job_type, len(job_ids))
         return {"batch_id": batch_id, "job_ids": job_ids, "reused": False,
                 # Uniform shape with the reuse/revive path above, so a caller can read `requeued`
