@@ -408,3 +408,19 @@ it('blocks stale third-model permission and never enables it on a different lega
   expect(getRemediationImpact.mock.calls.at(-1)[1]).toBeNull()
   expect(container.querySelector('.remediation-generation-chain input').checked).toBe(false)
 })
+
+it('passes the visible advance authorization into start and saved future defaults',async()=>{
+  const initial={rule_based:2,ai:1,ai_budget_usd:'1.00'}
+  getRemediationImpact.mockImplementation(async(_id,policy)=>({...result(policy || initial),capabilities:{...result().capabilities,ai_budget:true,ai_standing_approval:{supported:true}}}))
+  const onRun=vi.fn();const {container}=await mount({onRun})
+  const toggle=container.querySelector('.remediation-auto-approval input')
+  expect(toggle.checked).toBe(false)
+  expect(toggle.closest('details')).toBeNull()
+  await act(async()=>toggle.click())
+  await act(async()=>button(container,'Approve plan and start').click())
+  expect(onRun).toHaveBeenCalledWith({...initial,auto_approve_ai:true},expect.anything())
+  const save=[...container.querySelectorAll('button')].find(el=>/Save.*future|Save.*default/i.test(el.textContent))
+  expect(save).toBeTruthy()
+  await act(async()=>save.click())
+  expect(saveRemediationImpactPolicy.mock.calls[0][1].auto_approve_ai).toBe(true)
+})

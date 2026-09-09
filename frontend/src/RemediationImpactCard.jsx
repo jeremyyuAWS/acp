@@ -28,7 +28,7 @@ const number = value => Number.isFinite(value) ? value.toLocaleString() : 'Not y
 const delta = value => Number.isFinite(value) ? `${value > 0 ? '+' : ''}${value.toLocaleString()}` : 'Not yet available'
 const validPolicy = p => Number.isInteger(p?.rule_based) && p.rule_based >= 0 && p.rule_based <= 2 && Number.isInteger(p?.ai) && p.ai >= 0 && p.ai <= 3
 const validBudget = p => p?.ai_budget_usd === undefined || (/^\d{1,7}(?:\.\d{1,2})?$/.test(p.ai_budget_usd) && Number(p.ai_budget_usd) <= 1000000)
-const policyName = p => validPolicy(p) ? `${RULE_STOPS[p.rule_based][0]} · AI: ${AI_STOPS[p.ai][0]}` : 'Not yet available'
+const policyName = p => validPolicy(p) ? `${RULE_STOPS[p.rule_based][0]} · AI: ${AI_STOPS[p.ai][0]}${p.auto_approve_ai ? ' · Auto-approval on' : ''}` : 'Not yet available'
 const reasonText = reason => typeof reason === 'string' ? reason.replaceAll('_', ' ') : 'Reason not available'
 const fileType = file => {
   const match = String(file || '').trim().match(/\.([^.\/]+)$/)
@@ -119,12 +119,12 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const ready = !chainProblem && !!data && !loading && !error && data.integrity?.complete === true
   const countDeltas = useForecastDeltas({
     identity: JSON.stringify([runId, scopeKey]), ready,
-    policyKey: JSON.stringify([data?.policy?.rule_based, data?.policy?.ai, data?.policy?.ai_budget_usd, data?.policy?.ai_review, data?.policy?.generation_chain]),
+    policyKey: JSON.stringify([data?.policy?.rule_based, data?.policy?.ai, data?.policy?.ai_budget_usd, data?.policy?.ai_review, data?.policy?.generation_chain, data?.policy?.auto_approve_ai]),
     automatic: data?.lanes?.automatic?.findings,
     human: Number.isFinite(data?.lanes?.review?.findings) && Number.isFinite(data?.lanes?.manual?.findings)
       ? data.lanes.review.findings + data.lanes.manual.findings : undefined,
   })
-  const change = (key, value) => { setNotice(''); setFilter(null); setImpactDetails(null); setPolicy(current => ({ ...(current || selected), [key]: value })) }
+  const change = (key, value) => { setNotice(''); setFilter(null); setImpactDetails(null); setPolicy(current => ({ ...(current || selected), [key]: value, ...(key === 'ai' && value === 0 && Object.hasOwn(current || selected, 'auto_approve_ai') ? { auto_approve_ai: false } : {}) })) }
   const categoryFiles = (data?.files || []).filter(file => !filter || filter.type === 'all' || (filter.type === 'human' ? file.review > 0 || file.manual > 0 : filter.type === 'outlook' ? file.outlook === filter.key : file[filter.key] > 0))
   const fileTypes = [...new Set(categoryFiles.map(file => fileType(file.file)))].sort()
   const searchText = fileSearch.trim().toLowerCase()
@@ -176,7 +176,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       <div className="remediation-impact__start-summary">
         <strong>{ready ? `${number(data.open?.findings)} findings · ${number(data.open?.files)} files` : 'Preview not ready'}</strong>
         <span>{ready ? `${number(data.lanes?.automatic?.findings)} automatic · ${number(data.lanes?.review?.findings)} to approve · ${number(data.lanes?.manual?.findings)} manual · ${number(data.lanes?.blocked?.findings)} blocked` : 'Review the current preview before starting.'}</span>
-        <span>{selected.ai > 0 ? `AI drafts need approval · Up to ${selected.generation_chain?.steps?.length === 3 ? 3 : 2} generation models${data?.capabilities?.ai_budget === true ? ` · AI limit $${selected.ai_budget_usd}` : ' · Spending cap unavailable'}` : 'Rules only · No new AI suggestions'}</span>
+        <span>{selected.ai > 0 ? `${selected.auto_approve_ai ? 'Auto-approval on · Manual exceptions only' : 'AI drafts need approval'} · Up to ${selected.generation_chain?.steps?.length === 3 ? 3 : 2} generation models${data?.capabilities?.ai_budget === true ? ` · AI limit $${selected.ai_budget_usd}` : ' · Spending cap unavailable'}` : 'Rules only · No new AI suggestions'}</span>
       </div>
       <button type="button" className="remediation-impact__run" disabled={readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
       onClick={() => onRun(selected, data)}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>
@@ -185,6 +185,8 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     {chainProblem && <p role="alert">{chainProblem}</p>}
     <RemediationPlanChoices generationChainOptions={data?.capabilities?.generation_chain} policy={selected} providers={data?.providers}
       disabled={readOnly || !runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true}
+      standingApprovalSupported={data?.capabilities?.ai_standing_approval?.supported === true}
+      standingApprovalReason={data?.capabilities?.ai_standing_approval?.reason || ''}
       reviewSupported={data?.capabilities?.ai_review?.review_supported === true}
       automaticReviewSupported={data?.capabilities?.ai_review?.automatic_application_supported === true}
       reviewEligibleFamilies={data?.capabilities?.ai_review?.eligible_families || []}

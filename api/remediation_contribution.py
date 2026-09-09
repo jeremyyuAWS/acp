@@ -218,10 +218,10 @@ def read_contribution(store, owner, scan_id, run_id):
                     if p.get('operation_id') == r['operation_id'] and p['proposal_sha256'] == r['proposal_sha256']}
         review_count = len(reviewed) if not reviews or reviewed else None
         db.execute(cur, """SELECT p.proposal_id,q.status,q.approved_proposal_snapshot_ids,
-            q.approved_value_sha256,q.approved_source_revision,e.id AS human_approval_id,e.proposal_snapshot_ids AS approval_snapshot_ids FROM remediation_contribution_proposals p
+            q.approved_value_sha256,q.approved_source_revision,e.id AS authorization_event_id,e.action AS authorization_action,e.proposal_snapshot_ids AS approval_snapshot_ids FROM remediation_contribution_proposals p
             JOIN hitl_queue q ON q.id=p.item_id AND q.scan_id=p.scan_id AND q.file=p.file
             LEFT JOIN hitl_events e ON e.item_id=q.id AND e.scan_id=q.scan_id AND e.file=q.file
-                AND e.action IN ('approve','edit') AND e.source_revision=q.approved_source_revision
+                AND e.action IN ('approve','edit','standing_approve') AND e.source_revision=q.approved_source_revision
                 AND e.approved_value_sha256=q.approved_value_sha256
             WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s""", scope)
         approvals = {r['proposal_id']:r for r in db.fetchall(cur)}
@@ -259,7 +259,7 @@ def aggregate(baseline, proposals, events, *, dispositions=None, active_files=()
             approved = (approval.get('status') == 'approved' and p['proposal_id'] in
                         json.loads(approval.get('approved_proposal_snapshot_ids') or '[]')
                         and approval.get('approved_value_sha256') and approval.get('approved_source_revision') == baseline['snapshot_id']
-                        and approval.get('human_approval_id') and p['proposal_id'] in json.loads(approval.get('approval_snapshot_ids') or '[]'))
+                        and (approval.get('authorization_event_id') or approval.get('human_approval_id')) and p['proposal_id'] in json.loads(approval.get('approval_snapshot_ids') or '[]'))
             last = ev[-1] if ev else None
             if last and not exact_verification(p, last):
                 known_failure = (last.get('outcome') in ('verified_still_failing','verified_regressed','write_unresolved','could_not_verify')
@@ -268,9 +268,9 @@ def aggregate(baseline, proposals, events, *, dispositions=None, active_files=()
                 state = 'unresolved' if known_failure else 'unavailable'
                 reason = 'Verification failed' if known_failure else 'Exact source, value or artifact evidence is unavailable'
             elif last:
-                state, reason, approval_kind = 'fixed', 'Exact approved version applied and checked', 'human'
+                state, reason, approval_kind = 'fixed', 'Exact approved version applied and checked', ('run_authorization' if last.get('approval_action') == 'standing_approve' else 'human')
             elif approved:
-                state, reason, approval_kind = 'approved', 'Exact proposal approved; completion not verified', 'human'
+                state, reason, approval_kind = 'approved', 'Exact proposal approved; completion not verified', ('run_authorization' if approval.get('authorization_action') == 'standing_approve' else 'human')
             elif approval.get('status') == 'rejected':
                 state, reason = 'unresolved', 'Suggestion rejected'
             else:
@@ -295,7 +295,7 @@ def aggregate(baseline, proposals, events, *, dispositions=None, active_files=()
 
 def exact_verification(proposal, event):
     return bool(event.get('outcome') == 'verified_cleared' and event.get('regressions') in ('[]', [])
-        and event.get('approval_action') in ('approve', 'edit') and event.get('approval_event_id')
+        and event.get('approval_action') in ('approve', 'edit', 'standing_approve') and event.get('approval_event_id')
         and event.get('artifact_sha256') and event.get('source_revision')
         and event['source_revision'] == event.get('approval_source_revision') == proposal.get('assessment_revision')
         and event.get('actual_source_sha256') == proposal.get('source_sha256')
@@ -321,7 +321,7 @@ def writer_tickets(store, scan_id, file, item_ids, source_sha256, *, actual_valu
                 for p in values if isinstance(p, dict) and p.get('approved_value')):
                 continue
             snapshots = json.loads(queue.get('approved_proposal_snapshot_ids') or '[]')
-            db.execute(cur, "SELECT * FROM hitl_events WHERE scan_id=%s AND file=%s AND item_id=%s AND action IN ('approve','edit') ORDER BY created_at DESC,id", (scan_id, file, item_id))
+            db.execute(cur, "SELECT * FROM hitl_events WHERE scan_id=%s AND file=%s AND item_id=%s AND action IN ('approve','edit','standing_approve') ORDER BY created_at DESC,id", (scan_id, file, item_id))
             approvals = db.fetchall(cur)
             for index, proposal in enumerate(values):
                 snapshot = snapshots[index] if index < len(snapshots) else None

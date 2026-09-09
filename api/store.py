@@ -7992,7 +7992,7 @@ class Store:
             self._db.execute(cur,
                 f"SELECT item_id,model_call_id,rule_id,proposal_snapshot_ids,source_revision,"
                 f"approved_value_sha256 FROM hitl_events WHERE item_id IN ({marks}) "
-                "AND model_call_id IS NOT NULL AND action IN ('approve','edit') "
+                "AND model_call_id IS NOT NULL AND action IN ('approve','edit','standing_approve') "
                 "ORDER BY created_at DESC", tuple(ids))
             rows = self._db.fetchall(cur)
             latest: dict[tuple[str, str], dict] = {}
@@ -11176,7 +11176,8 @@ class Store:
                                expected_version: int | None = None,
                                expected_proposal_snapshot_ids: list[str] | None = None,
                                expected_source_revision: str | None = None,
-                               release_intent_id: str | None = None) -> tuple[dict | None, bool]:
+                               release_intent_id: str | None = None,
+                               standing_approval_run_id: str | None = None) -> tuple[dict | None, bool]:
         """Persist one reviewer decision atomically and make exact PUT replays a no-op.
 
         These writes collectively make the decision true.  Keeping them behind the adapter's
@@ -11197,6 +11198,8 @@ class Store:
                            expected_source_revision=expected_source_revision)
         if release_intent_id is not None:
             payload["release_intent_id"] = release_intent_id
+        if standing_approval_run_id is not None:
+            payload['standing_approval_run_id'] = standing_approval_run_id
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True,
                                     separators=(",", ":")).encode()).hexdigest()
 
@@ -11227,6 +11230,14 @@ class Store:
                 if current.get("last_decision_fingerprint") != fingerprint:
                     raise ValueError("decision request id was reused with a different payload")
                 return current, True
+            if standing_approval_run_id is not None:
+                from ai_standing_approval import authorization, eligible_item
+                if status != 'approved' or resolution is not None or release_intent_id is not None:
+                    raise ValueError('Invalid standing approval decision')
+                revision = authorization(self, actor, current['scan_id'], standing_approval_run_id)
+                if revision != expected_source_revision:
+                    raise ValueError('stale source revision')
+                eligible_item(self, actor, current['scan_id'], standing_approval_run_id, current)
             current_version = int(current.get("decision_version") or 0)
             if expected_version is not None and int(expected_version) != current_version:
                 raise ValueError("stale decision version")
@@ -11325,10 +11336,11 @@ class Store:
             if (status == "approved" and resolution == self.DESCRIBED_RESOLUTION
                     and self.queue_described_image_alt(item_id) is None):
                 raise ValueError("described decision produced no alt-text obligation")
-            self.log_decision(actor, f"hitl.{status}", scan_id=current.get("scan_id"),
+            self.log_decision('system' if standing_approval_run_id else actor,
+                              'hitl.approved_under_run_policy' if standing_approval_run_id else f"hitl.{status}", scan_id=current.get("scan_id"),
                               file=current.get("file"), rule_id=current.get("rule_id"),
                               detail=detail)
-            if (status == "approved" and current.get("scan_id") and current.get("file")
+            if (standing_approval_run_id is None and status == "approved" and current.get("scan_id") and current.get("file")
                     and self.has_approved_values_to_write(
                         current["scan_id"], current["file"])):
                 self.enqueue_job(

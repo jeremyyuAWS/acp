@@ -53,3 +53,16 @@ it('pages saved records and resets the page when the run changes', async()=>{
   expect(getRunInsights.mock.calls.at(-1).slice(0,2)).toEqual(['s2','b2'])
   expect(getRunInsights.mock.calls.at(-1)[3]).toBe(0)
 })
+
+it('identifies saved run authorization and system decisions without claiming human review',async()=>{
+  getRunInsights.mockResolvedValue({...view,standing_approval:{enabled:true,authorized_by:'owner@example.test'},
+    review_receipts:[{operation_id:'r',review:{verdict:'accept'}}],
+    proposals:[{snapshot_id:'p',system_approvals:[{id:'e'}],proposal:{proposed_value:'Title'},verification_reason:'Not verified'}]})
+  const {root,container}=createTestRoot()
+  await act(async()=>root.render(createElement(Insights,{scanId:'s',batchId:'b'})))
+  await open(container)
+  expect(container.textContent).toContain('Auto-approval on for this run')
+  expect(container.textContent).toContain('Approved automatically by the system')
+  expect(container.textContent).toContain('owner@example.test')
+  expect(container.textContent).not.toContain('Human approval still required')
+})

@@ -27,7 +27,7 @@ it('bounds review attempts and leaves uncalibrated reliability blank', async () 
   await act(async () => root.render(createElement(Policy, { onChange, supported:true, value:{enabled:true} })))
   expect([...container.querySelector('select').options].map(o=>o.value)).toEqual(['1','2'])
   expect(container.textContent).toContain('Review all AI changes — default')
-  expect(container.textContent).toContain('Automatic application is not available for this run.')
+  expect(container.textContent).toContain('Calibration-based automatic application is not available for this run.')
   expect(container.querySelector('input[type=number]').value).toBe('')
   expect(container.textContent).not.toContain('95%')
   expect(container.querySelector('input[type=number]').min).toBe('0')
@@ -48,7 +48,7 @@ it('keeps the validated automatic option unavailable until calibration and indep
   const { root, container } = createTestRoot()
   await act(async () => root.render(createElement(Policy, { onChange: vi.fn(), supported:true, value:{enabled:true} })))
   expect(container.querySelector('input[value="threshold"]').disabled).toBe(true)
-  expect(container.textContent).toContain('Automatic application is not available for this run.')
+  expect(container.textContent).toContain('Calibration-based automatic application is not available for this run.')
   expect(container.textContent).toContain('AI suggestions will remain drafts for your approval.')
 })
 
@@ -86,4 +86,14 @@ it('does not display an old uncalibrated default percentage as current configura
     value:{enabled:true,minimum_reliability:95}})))
   expect(container.querySelector('input[type=number]').value).toBe('')
   expect(container.textContent).not.toContain('95%')
+})
+
+
+it('distinguishes unavailable calibration from an explicit advance approval choice',async()=>{
+  const {root,container}=createTestRoot()
+  await act(async()=>root.render(createElement(Policy,{onChange:vi.fn(),supported:true,value:{enabled:true},standingApprovalEnabled:true})))
+  expect(container.textContent).toContain('Calibration-based automatic application is not available')
+  expect(container.textContent).toContain('This does not change the advance approval choice above')
+  expect(container.textContent).not.toContain('AI suggestions will remain drafts for your approval')
+  expect(container.textContent).not.toContain('Review all AI changes — default')
 })

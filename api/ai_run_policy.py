@@ -24,6 +24,8 @@ def normalize_run_policy(snapshot):
     if not isinstance(snapshot, dict):
         raise BudgetError("invalid remediation policy snapshot")
     if "ai_budget_usd" not in snapshot:
+        if snapshot.get("auto_approve_ai"):
+            raise BudgetError("Standing approval requires a managed run spending limit")
         if "generation_chain" in snapshot:
             raise BudgetError("An explicit generation chain requires a run spending limit")
         return None
@@ -36,6 +38,11 @@ def normalize_run_policy(snapshot):
     if type(ai) is not int or not 0 <= ai <= 3:
         raise BudgetError("AI policy level must be between zero and three")
     result = {"ai": ai, "ai_budget_usd": amount, "cap_units": cap, "currency": "USD"}
+    if 'auto_approve_ai' in snapshot:
+        from ai_standing_approval import normalize
+        result['auto_approve_ai'] = normalize(snapshot['auto_approve_ai'])
+        if result['auto_approve_ai'] and (ai != 1 or cap <= 0):
+            raise BudgetError('Standing approval requires AI and a positive run budget')
     if 'generation_chain' in snapshot:
         from ai_generation_chain import normalize_chain
         result['generation_chain'] = normalize_chain(snapshot['generation_chain'])
