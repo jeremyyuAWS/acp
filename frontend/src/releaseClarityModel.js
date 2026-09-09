@@ -2,6 +2,8 @@
 // A passing assessment or an uploaded certificate is not a delivery receipt.
 export const hasCorrectedCopy = (file) => (file.compliant === true || file.compliant === 1) && Boolean(file.remediated_at)
 
+export const hasSavedCorrectedCopy = (file) => Boolean(file.remediated_at && file.corrected_sha256)
+
 export function deliveryIsCurrent(file, result, done = {}) {
   if (result && result.status !== 'published') return false
   if (result?.artifact_digest && file.corrected_sha256) return result.artifact_digest === `sha256:${file.corrected_sha256}`
@@ -13,12 +15,17 @@ export function deliveryIsCurrent(file, result, done = {}) {
   return !file.remediated_at || (Number.isFinite(corrected) && published >= corrected)
 }
 
-export function releaseReadiness(file, { done = {}, results = {}, sourceState = () => undefined, pending = {}, blockers = {} } = {}) {
+export function releaseReadiness(file, { done = {}, results = {}, sourceState = () => undefined, pending = {}, blockers = {}, allowRemainingIssues = false } = {}) {
   const result = results[file.file]
   if (deliveryIsCurrent(file, result, done)) return { status: 'released', label: 'Delivered', reason: 'Delivery recorded. Originals unchanged.' }
   if (['queued', 'running'].includes(result?.status)) return { status: 'delivering', label: 'Delivering', reason: 'Release continues in the background. Return here for the receipt.' }
   if (sourceState(file) === 'stale') return { status: 'changed', label: 'Needs attention', reason: 'Source changed. Rescan before releasing this copy.' }
   if (sourceState(file) === 'unavailable') return { status: 'unreachable', label: 'Needs attention', reason: 'Source unreachable. Restore access and check again.' }
+  if (allowRemainingIssues && !hasSavedCorrectedCopy(file)) return { status: 'attention', label: 'Needs attention', reason: 'No saved corrected copy with an artifact identifier. Complete a document write before publishing.' }
+  if (allowRemainingIssues && hasSavedCorrectedCopy(file)) {
+    if (blockers[file.file]) return { status: 'attention', label: 'Needs attention', reason: blockers[file.file] }
+    if (!hasCorrectedCopy(file) || pending[file.file]) return { status: 'ready', label: 'Ready with remaining issues', reason: 'Publish the saved copy. Unresolved findings and unapproved suggestions remain recorded; this is not certification.' }
+  }
   if (pending[file.file]) return { status: 'attention', label: 'Needs attention', reason: `${pending[file.file]} review items pending. Approve, apply and verify changes in Remediate → Review.` }
   if (!hasCorrectedCopy(file)) return { status: 'attention', label: 'Needs attention', reason: file.compliant === true || file.compliant === 1
     ? 'No verified corrected copy. Apply and verify changes in Remediate.'

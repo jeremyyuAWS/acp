@@ -13,7 +13,7 @@ const file = (name, extra = {}) => ({ file: name, compliant: true, corrected_sha
 it('offers Release beside unfinished documents but excludes absent verification and delivered copies', async () => {
   const { root, container } = createTestRoot(); const navigate = vi.fn()
   await act(async () => root.render(<Access files={[file('ready.pdf'), file('processing.pdf',{compliant:false}), file('uncorrected.pdf',{remediated_at:null}), file('unknown.pdf',{corrected_sha256:null}), file('delivered.pdf',{published_at:'2026-09-10'})]} onNavigate={navigate} />))
-  expect(container.textContent).toContain('1 verified copy')
+  expect(container.textContent).toContain('2 copies')
   expect(container.textContent).toContain('other documents continue processing or review')
   await act(async () => container.querySelector('button').click())
   expect(navigate).toHaveBeenCalledWith('publish')

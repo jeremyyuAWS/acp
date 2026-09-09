@@ -134,3 +134,20 @@ def test_drive_preflight_uses_provider_can_add_children_capability(monkeypatch):
     assert result["folder_reachable"] is True
     assert result["write_permission"] is False
     assert result["ready"] is False
+
+
+def test_partial_preview_requires_opt_in_and_exact_corrected_artifact(monkeypatch):
+    store = _Store()
+    scan = store.get_scan("scan-1", "owner@example.com")
+    scan["files"][0].update(compliant=0, issues=[{"wcag": "SC_1_1_1"}])
+    monkeypatch.setattr(store, "get_scan", lambda *a, **kw: scan)
+    monkeypatch.setattr(scans.core, "store", store)
+    def preview(**kw):
+        return scans.preview_release_destination("scan-1", _request(), scans.ReleasePreviewRequest(files=["Report.pdf"], **kw))
+    assert not preview()["can_release"]
+    assert not preview(allow_remaining_issues=True)["can_release"]
+    result = preview(allow_remaining_issues=True, expected_artifacts={"Report.pdf": "a" * 64})
+    assert result["can_release"]
+    assert result["documents"][0]["release_review"]["remaining_issue_count"] == 1
+    scan["files"][0]["corrected_sha256"] = None
+    assert not preview(allow_remaining_issues=True)["can_release"]

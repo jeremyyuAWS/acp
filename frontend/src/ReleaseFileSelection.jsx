@@ -16,7 +16,7 @@ export function releaseFileSize(file) {
 
 const humanBytes = (bytes) => bytes < 1024 ? `${bytes} B` : bytes < 1024 ** 2 ? `${Math.round(bytes / 1024)} KB` : bytes < 1024 ** 3 ? `${(bytes / 1024 ** 2).toFixed(1)} MB` : `${(bytes / 1024 ** 3).toFixed(1)} GB`
 
-export default function ReleaseFileSelection({ files, selectedFiles, setSelectedFiles, done, sourceState, sourceProduct, releaseProvider, driveMirrorEnabled, driveMirrorFolder, releaseFolder, releaseResults, selectedFile: requestedFile, setSelectedFile, sourcePath, pending = {}, blockers = {}, destinationLabel }) {
+export default function ReleaseFileSelection({ files, selectedFiles, setSelectedFiles, done, sourceState, sourceProduct, releaseProvider, driveMirrorEnabled, driveMirrorFolder, releaseFolder, releaseResults, selectedFile: requestedFile, setSelectedFile, sourcePath, pending = {}, blockers = {}, allowRemainingIssues = false, destinationLabel }) {
   const selectedFile = files.find((file) => file.file === requestedFile?.file) || null
   const detailRef = useRef(null)
   const triggerRef = useRef(null)
@@ -28,8 +28,8 @@ export default function ReleaseFileSelection({ files, selectedFiles, setSelected
   const [status, setStatus] = useState('all')
   const rows = useMemo(() => files.map((file) => {
     const parts = sourcePath(file).replace(/\\/g, '/').split('/')
-    return { file, folder: parts.length > 1 ? parts.slice(0, -1).join('/') : 'Source root', ...releaseReadiness(file, { done, results: releaseResults, sourceState, pending, blockers }) }
-  }), [files, done, releaseResults, sourceState, sourcePath, pending, blockers])
+    return { file, folder: parts.length > 1 ? parts.slice(0, -1).join('/') : 'Source root', ...releaseReadiness(file, { done, results: releaseResults, sourceState, pending, blockers, allowRemainingIssues }) }
+  }), [files, done, releaseResults, sourceState, sourcePath, pending, blockers, allowRemainingIssues])
   const folders = [...new Set(rows.map((row) => row.folder))].sort((a, b) => a.localeCompare(b))
   const needle = query.trim().toLowerCase()
   const shown = rows.filter((row) => (!needle || `${row.file.file} ${row.file.sourceName || ''} ${row.file.department || ''} ${row.folder}`.toLowerCase().includes(needle)) && (folder === 'all' || row.folder === folder) && (status === 'all' || (status === 'attention' ? !['ready', 'released', 'delivering'].includes(row.status) : row.status === status)))
@@ -70,7 +70,7 @@ export default function ReleaseFileSelection({ files, selectedFiles, setSelected
         </section>)}
       </div>
       <aside hidden={!selectedFile} ref={detailRef} tabIndex={-1} onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); closeDetails() } }} className={`release-selection__drawer${selectedFile ? ' is-open' : ''}`} aria-label="Selected document release details">
-        {selectedFile ? <><div className="release-selection__drawer-heading"><h3>{selectedFile.file}</h3><button className="ghost small" onClick={closeDetails} aria-label="Close file details">Close</button></div><dl><dt>Release status</dt><dd>{releaseReadiness(selectedFile, { done, results: releaseResults, sourceState, pending, blockers }).label}</dd><dt>Original path</dt><dd>{result?.original_relative_path || sourcePath(selectedFile)}</dd><dt>Destination path</dt><dd>{result?.released_relative_path || 'Not confirmed — review delivery for the exact path'}</dd><dt>Verification</dt><dd>{result?.verification || 'No delivery verification recorded'}</dd></dl>{result?.status === 'failed' && <div role="alert" className="release-selection__error"><b>Needs attention:</b> {result.explanation}</div>}{result?.published_url && <a href={result.published_url} target="_blank" rel="noopener noreferrer">Open released document ↗</a>}<details><summary>Audit history</summary><p className="muted">{result?.published_at ? `Released ${new Date(result.published_at).toLocaleString()} · ${result.created ? 'created' : 'reused'}` : 'No release event yet.'}</p></details></> : <p className="muted">Choose Details to inspect a file’s source, destination, verification, and audit history.</p>}
+        {selectedFile ? <><div className="release-selection__drawer-heading"><h3>{selectedFile.file}</h3><button className="ghost small" onClick={closeDetails} aria-label="Close file details">Close</button></div><dl><dt>Release status</dt><dd>{releaseReadiness(selectedFile, { done, results: releaseResults, sourceState, pending, blockers, allowRemainingIssues }).label}</dd><dt>Original path</dt><dd>{result?.original_relative_path || sourcePath(selectedFile)}</dd><dt>Destination path</dt><dd>{result?.released_relative_path || 'Not confirmed — review delivery for the exact path'}</dd><dt>Verification</dt><dd>{result?.verification || 'No delivery verification recorded'}</dd></dl>{result?.status === 'failed' && <div role="alert" className="release-selection__error"><b>Needs attention:</b> {result.explanation}</div>}{result?.published_url && <a href={result.published_url} target="_blank" rel="noopener noreferrer">Open released document ↗</a>}<details><summary>Audit history</summary><p className="muted">{result?.published_at ? `Released ${new Date(result.published_at).toLocaleString()} · ${result.created ? 'created' : 'reused'}` : 'No release event yet.'}</p></details></> : <p className="muted">Choose Details to inspect a file’s source, destination, verification, and audit history.</p>}
       </aside>
     </div>
   </div>

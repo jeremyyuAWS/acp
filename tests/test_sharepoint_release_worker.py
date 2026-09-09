@@ -460,3 +460,63 @@ def test_sharepoint_worker_retries_a_401_so_silent_refresh_can_replace_the_token
     with pytest.raises(FatalJobError):
         handlers._publish_file(payload, {"attempts": 5, "max_attempts": 5})
     assert store.documents[FILE]["failure_category"] == "provider_session_expired"
+
+class PartialStore(FakeStore):
+    def __init__(self):
+        super().__init__()
+        self.audit = []
+
+    def get_file_record(self, sid, filename):
+        return {**super().get_file_record(sid, filename), "compliant": 0,
+                "issues": [{"wcag": "SC_1_1_1", "severity": "SERIOUS"}]}
+
+    def get_scan(self, sid, owner=None):
+        return {**super().get_scan(sid, owner), "files": [self.get_file_record(sid, FILE)]}
+
+    def log_decision(self, *args, **kwargs):
+        self.audit.append((args, kwargs))
+
+
+def test_partial_release_requires_explicit_current_artifact_and_preserves_issues(monkeypatch):
+    import core, handlers, publish, json
+    from routes.scans import publish_files
+    from fastapi import HTTPException
+    store = PartialStore()
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setattr(core, "register_scan_tokens", lambda *a, **kw: None)
+    request = SimpleNamespace(state=SimpleNamespace(user_email=OWNER), headers={"x-sp-token": "token"})
+    strict = publish_files(SID, request, {"files": [FILE]})
+    assert strict["queued"] == 0
+    with pytest.raises(HTTPException) as exc:
+        publish_files(SID, request, {"files": [FILE], "allow_remaining_issues": True})
+    assert exc.value.status_code == 409
+    response = publish_files(SID, request, {"files": [FILE], "allow_remaining_issues": True,
+                                           "expected_artifacts": {FILE: DIGEST}})
+    assert response["queued"] == 1
+    payload = store.jobs[2][0]
+    assert payload["allow_remaining_issues"] is True
+    evidence = json.loads(store.audit[-1][1]["detail"])
+    assert evidence["compliant"] is False
+    assert evidence["remaining_issue_count"] == 1
+    assert evidence["artifact_digest"] == f"sha256:{DIGEST}"
+    monkeypatch.setattr(core, "get_scan_tokens", lambda sid: {"sp": "token"})
+    monkeypatch.setattr(publish, "ensure_sharepoint_release_folder", lambda *a: {"id": "root-1", "name": "release"})
+    monkeypatch.setattr(publish, "archive_copy_publish_sharepoint", lambda *a, **kw: {
+        "id": "copy-1", "url": "https://sp/copy", "checksum": DIGEST, "created": True, "filename": FILE})
+    handlers._publish_file(payload, {"id": "job-1", "batch_id": "execution-1", "attempts": 1})
+    assert store.documents[FILE]["status"] == "published"
+    assert store.receipts[-1]["receipt"]["release_review"]["remaining_issue_count"] == 1
+    assert store.get_file_record(SID, FILE)["compliant"] == 0
+
+
+def test_partial_release_worker_still_rejects_changed_corrected_bytes(monkeypatch):
+    import core, handlers
+    from worker import FatalJobError
+    store = PartialStore()
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setattr(core, "get_scan_tokens", lambda sid: {"sp": "token"})
+    with pytest.raises(FatalJobError):
+        handlers._publish_file({"scan_id": SID, "release_id": "release-1", "file": FILE,
+            "owner": OWNER, "allow_remaining_issues": True, "artifact_digest": "sha256:stale",
+            "remediated_at": "now"}, {"attempts": 1})
+    assert store.published is None

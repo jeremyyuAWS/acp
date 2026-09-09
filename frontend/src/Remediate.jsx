@@ -1754,6 +1754,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           // and a JSX comment here is a parse error. Second time tonight.
           <RemediationInbox
             readOnly={readOnly}
+            onPublish={readOnly ? undefined : () => onNavigate?.('publish')}
             onOpenPlan={readOnly ? undefined : openRemediationPlan}
             preparingProposals={!runStream?.snapshot?.terminal && ((runStream?.status?.running ?? remProg?.running ?? 0) > 0 || (runStream?.status?.queued ?? remProg?.queued ?? 0) > 0)}
             renderDetailExtra={(sel) => (sel ? (

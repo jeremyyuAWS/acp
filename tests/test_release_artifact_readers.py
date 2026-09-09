@@ -44,3 +44,51 @@ def test_real_store_release_execution_distinguishes_new_bytes_at_same_timestamp(
     with isolated_store._db.cursor() as cur:
         isolated_store._db.execute(cur, 'SELECT COUNT(*) AS n FROM side_effect_receipts')
         assert isolated_store._db.fetchone(cur)['n'] == 2
+
+
+def test_partial_release_keeps_real_pending_review_and_records_remaining_issues(isolated_store, monkeypatch):
+    import json
+    import core
+    import publish
+    from routes import scans
+    store = isolated_store
+    data = b'corrected bytes with unresolved issues'
+    seed(store, data)
+    with store._db.cursor() as cur:
+        store._db.execute(cur, 'UPDATE file_records SET compliant=0,score=60 WHERE scan_id=%s',
+                          ('reader-scan',))
+        store._db.execute(cur,
+            'INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail) VALUES(%s,%s,%s,%s,%s,%s)',
+            ('reader-scan', 'one.pdf', 'SC_1_1_1', '1.1.1', 'critical', 'Image needs a description'))
+    items = store.queue_hitl_review_for_file('reader-scan', 'one.pdf', [
+        {'rule_id': 'SC_1_1_1', 'rule_name': 'Non-text Content', 'finding_count': 1}])
+    assert items
+    before = store.get_hitl_item(items[0]['id'])
+    assert before['status'] == 'pending'
+    record = store.get_file_record('reader-scan', 'one.pdf')
+    assert 'issues' not in record  # narrow Release reader is intentionally not a finding reader
+    monkeypatch.setattr(core, 'store', store)
+    monkeypatch.setattr(publish._blob, 'download_remediated', lambda *args: data)
+    request = SimpleNamespace(state=SimpleNamespace(user_email='reader@example.com'), headers={})
+    result = scans.publish_files('reader-scan', request, {
+        'files': ['one.pdf'], 'allow_remaining_issues': True,
+        'expected_artifacts': {'one.pdf': hashlib.sha256(data).hexdigest()}})
+    assert result['published'][0]['status'] == 'published', result
+    after = store.get_file_record('reader-scan', 'one.pdf')
+    assert after['compliant'] == 0
+    assert after['score'] == 60
+    assert store.get_hitl_item(items[0]['id']) == before
+    with store._db.cursor() as cur:
+        store._db.execute(cur, 'SELECT receipt FROM side_effect_receipts WHERE execution_id=%s',
+                          (result['batch_id'],))
+        receipts = store._db.fetchall(cur)
+    assert len(receipts) == 1
+    receipt = receipts[0]['receipt']
+    if isinstance(receipt, str):
+        receipt = json.loads(receipt)
+    audit = receipt['release_review']
+    assert audit['allow_remaining_issues'] is True
+    assert audit['compliant'] is False
+    assert audit['remaining_issue_count'] == 1
+    assert audit['pending_review_items'] == [{'id': items[0]['id'], 'rule_id': 'SC_1_1_1', 'status': 'pending'}]
+    assert audit['remaining_issues'][0]['detail'] == 'Image needs a description'

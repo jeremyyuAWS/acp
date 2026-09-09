@@ -265,3 +265,27 @@ it('publishes only the ready subset while the same run still has processing and 
     destination: null, expectedArtifacts: { 'ready.pdf': 'exact-ready' },
   })
 })
+
+it('publishes a saved partial copy only after explicit opt-in without approving pending work', async () => {
+  listHitlQueue.mockResolvedValue([{ id: 42, file: 'partial.docx', status: 'pending' }])
+  const files = [held('partial.docx', { remediated_at: '2026-09-09T12:00:00Z', corrected_sha256: 'saved-digest' }), held('draft.docx')]
+  const c = await mount({ run, files })
+  expect(c.querySelector('[aria-label="Select partial.docx"]').disabled).toBe(true)
+  const optIn = [...c.querySelectorAll('label')].find(el => el.textContent.includes('Publish with remaining issues')).querySelector('input')
+  expect(optIn.checked).toBe(false)
+  await click(optIn)
+  expect(c.querySelector('[aria-label="Select partial.docx"]').disabled).toBe(false)
+  expect(c.querySelector('[aria-label="Select draft.docx"]').disabled).toBe(true)
+  expect(c.textContent).toContain('Ready with remaining issues')
+  await review(c)
+  expect(previewReleaseDestination).toHaveBeenLastCalledWith(run.id, ['partial.docx'], '', true, null,
+    { allowRemainingIssues: true, expectedArtifacts: { 'partial.docx': 'saved-digest' } })
+  await click(button(c, 'Publish 1 copy'))
+  expect(c.querySelector('[role="dialog"]').textContent).toContain('does not mark them approved, inspected, verified or compliant')
+  await click(button(c, 'Publish 1'))
+  expect(publishAllFiles).toHaveBeenCalledWith(run.id, ['partial.docx'], 'Delivery',
+    { destination: null, allowRemainingIssues: true, expectedArtifacts: { 'partial.docx': 'saved-digest' } })
+  expect(files[0].compliant).toBe(false)
+  await c.rerender({ run: { id: 'other' }, files })
+  expect([...c.querySelectorAll('label')].find(el => el.textContent.includes('Publish with remaining issues')).querySelector('input').checked).toBe(false)
+})

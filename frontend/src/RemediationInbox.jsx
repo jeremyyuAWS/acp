@@ -656,7 +656,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 }
 
 export default function RemediationInbox({
-  queue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, preparingProposals = false, readOnly = false,
+  queue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false,
   initialSort = 'priority', initialTab = 'all', initialGroup = 'document', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
@@ -1176,6 +1176,10 @@ export default function RemediationInbox({
           onBusy={busy => setSavingId(busy ? 'selected-batch' : null)}
           onDecide={onDecide} onResult={batchResult} />
       </div>
+      {!bulkPreviewOpen && !readOnly && onPublish && <div style={{ padding: '14px 22px', borderTop: '1px solid var(--line)' }}>
+        <button type="button" className="primary" disabled={savingId != null} onClick={onPublish}>Skip inspection and publish →</button>
+        <p className="muted" style={{ margin: '8px 0 0' }}>Choose verified copies or publish saved copies with remaining issues on the next screen. This does not approve pending suggestions or mark anything inspected.</p>
+      </div>}
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
       {!bulkPreviewOpen && <WorkspaceFooter position={position} total={visIds.length} onPrev={goPrev} onNext={goNext}
                        activeStep={selected ? workflowStepIndex(selected, decisions) : null} />}
