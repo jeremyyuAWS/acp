@@ -20,21 +20,30 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
   // Null means the user has not chosen: the live server facts may still select the best default.
   const [chosen, setChosen] = useState(() => modeFromLocation() || storedMode(runId))
   const tabs = useRef([])
+  const panels = useRef({})
+  const pendingFocus = useRef(null)
+  const cancelPanelFocus = () => {
+    if (pendingFocus.current) cancelAnimationFrame(pendingFocus.current.id)
+    pendingFocus.current = null
+  }
   const lastWorkspaceRequest = useRef(workspaceRequest)
   const activeWork = !!snapshot && !snapshot.terminal && snapshot.state !== 'draft'
   const mode = chosen || (reviewCount > 0 ? 'review' : activeWork ? 'live' : 'plan')
 
   useEffect(() => {
+    cancelPanelFocus()
     setChosen(modeFromLocation() || storedMode(runId))
+    return cancelPanelFocus
   }, [runId])
 
   useEffect(() => {
-    const restore = () => setChosen(modeFromLocation() || storedMode(runId))
+    const restore = () => { cancelPanelFocus(); setChosen(modeFromLocation() || storedMode(runId)) }
     window.addEventListener('popstate', restore)
     return () => window.removeEventListener('popstate', restore)
   }, [runId])
 
   const select = (next, { focusPanel = false } = {}) => {
+    cancelPanelFocus()
     setChosen(next)
     try {
       sessionStorage.setItem(`acp-remediation-mode-${runId || 'none'}`, next)
@@ -43,10 +52,16 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
       url.searchParams.set('mode', next)
       history.pushState({}, '', url)
     } catch { /* navigation state is progressive enhancement */ }
-    if (focusPanel) requestAnimationFrame(() => {
-      const panel = document.getElementById(`rem-panel-${next}`)
-      panel?.focus()
-    })
+    if (focusPanel) {
+      const request = { id: null }
+      pendingFocus.current = request
+      request.id = requestAnimationFrame(() => {
+        if (pendingFocus.current !== request) return
+        pendingFocus.current = null
+        const panel = panels.current[next]
+        if (panel?.isConnected && !panel.hidden) panel.focus()
+      })
+    }
   }
 
   // Accepted launches and explicit header actions reveal their destination. Background
@@ -78,11 +93,11 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
         {value === 'live' && activeWork && <span className="rem-mode-live-dot" aria-label="active">●</span>}
       </button>)}
     </div>
-    <div id="rem-panel-plan" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-plan"
+    <div ref={node => { panels.current.plan = node }} id="rem-panel-plan" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-plan"
       hidden={mode !== 'plan'}>{plan}</div>
-    <div id="rem-panel-review" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-review"
+    <div ref={node => { panels.current.review = node }} id="rem-panel-review" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-review"
       hidden={mode !== 'review'}>{review}</div>
-    <div id="rem-panel-live" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-live"
+    <div ref={node => { panels.current.live = node }} id="rem-panel-live" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-live"
       hidden={mode !== 'live'}>
       <h2 className="sr-only">Live Processing</h2>
       {live}
