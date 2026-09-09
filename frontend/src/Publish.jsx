@@ -501,7 +501,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     : 'Delivery time unavailable'
   const publishedList = publishedEntries.map((e) => e.file)
   const sourcePath = (f) => f.source_relative_path || f.parent_folder || f.file
-  const failedCount = Object.values(releaseResults).filter((row) => row.status === 'failed').length
+  const failedCount = releaseFiles.filter((file) => releaseResults[file.file]?.status === 'failed').length
   const failedReady = ready.filter((f) => !done[f.file] && releaseResults[f.file]?.status === 'failed' && canSelectRelease(stateOf(f)))
   const downloadReleaseManifest = async () => {
     setManifestError('')
@@ -734,6 +734,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       {setStatus.status === SET_STATUS.CONDITIONAL && (
         <section className="panel" style={{ borderLeft: '4px solid var(--warn-fg)' }} aria-label="Conditional release status">
           <b style={{ fontSize: 13.5, color: 'var(--warn-fg)' }}>◐ Conditionally released</b>
+          <p>{setStatus.released} of {setStatus.total} in-scope files delivered · {setStatus.heldOpen} need verification · {setStatus.verifiedUnreleased} corrected copies await Release.</p>
+          <div hidden data-retired="release-graduation-explanation">
           <p style={{ fontSize: 13, lineHeight: 1.6, margin: '8px 0 0', maxWidth: 680 }}>
             <b>{setStatus.released}</b> of <b>{setStatus.total}</b> in-scope documents are released.
             {setStatus.heldOpen > 0 && <> <b>{setStatus.heldOpen}</b> {setStatus.heldOpen === 1 ? 'document is' : 'documents are'} still <b>held</b> pending remediation.</>}
@@ -742,6 +744,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <p className="muted" style={{ fontSize: 12.5, marginTop: 8, maxWidth: 680 }}>
             Remediate the held documents (each is re-validated on its own remediation path). This release becomes <b>complete within the selected scope</b> once every held document is verified and released — <b>no whole-estate re-scan required</b>.
           </p>
+          </div>
           {setStatus.verifiedUnreleased > 0 && (
             <button className="qbtn approve" style={{ marginTop: 10 }} disabled={readOnly || publishing}
                     title={readOnly ? 'Scan History replay — switch to the latest scan to release' : 'Release the remediated formerly-held documents'}
@@ -816,7 +819,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
 
       <section className="panel release-workspace" ref={builderRef} tabIndex={-1} aria-labelledby="release-workspace-title">
         <div className="rubrichdr">
-          <h2 id="release-workspace-title" style={{ margin: 0 }}>Choose files <span className="muted">· {selectedReady.length} of {selectableReady.length} selected</span></h2>
+          <h2 id="release-workspace-title" style={{ margin: 0 }}>Choose files <span className="muted">· {selectedReady.length} selected · {releaseFiles.length} in scope</span></h2>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="ghost small" disabled={!selectableReady.length} onClick={() => setSelectedFiles(new Set(selectableReady.map((f) => f.file)))}>Select all</button>
             <button className="ghost small" disabled={!selectedReady.length} onClick={() => setSelectedFiles(new Set())}>Clear</button>
@@ -856,13 +859,14 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
               <span className={builderStep === 2 ? 'active' : builderStep > 2 ? 'complete' : ''} aria-current={builderStep === 2 ? 'step' : undefined}>2 <b>Choose delivery</b></span>
               <span className={builderStep === 3 ? 'active' : ''} aria-current={builderStep === 3 ? 'step' : undefined}>3 <b>Review</b></span>
             </div>
-            <ReleasePlanSummary compact count={selectedReady.length}
+            {/* Retired duplicate plan card; the sticky action carries the live selection and destination. */}
+            <div hidden data-retired="release-plan-summary"><ReleasePlanSummary compact count={selectedReady.length}
               excluded={staleReady.length + selectedReady.filter((file) => done[file.file]).length}
               method={deliveryMethod} provider={sourceProduct}
               destination={releaseDestination
                 ? `${releaseDestination.folder_name} / Remediated / <release name>`
                 : releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}
-              preserveStructure={preserveHierarchy} estimatedBytes={packagePreview?.estimated_bytes ?? selectedEstimatedBytes} />
+              preserveStructure={preserveHierarchy} estimatedBytes={packagePreview?.estimated_bytes ?? selectedEstimatedBytes} /></div>
             {builderStep === 1 ? (
               <ReleaseStepPanel id="release-files-step" heading="Choose files" focusOnMount={false} className="release-builder__continue release-action-sticky">
                 <span className="muted">{selectedReady.length ? `${selectedReady.length} selected · ${selectedPublishable.length} awaiting Release · ${sourceProduct}` : 'Select at least one ready file.'}</span>
@@ -1008,7 +1012,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         {(releaseId || publishedList.length > 0) && <section className="release-receipt" aria-label="Delivery receipt">
           <h3>{failedCount ? 'Partial delivery receipt' : deliveringCount ? 'Delivery in progress' : 'Delivery receipt'}</h3>
           <p><b>{publishedCount} delivered</b> · {failedCount} failed · {deliveringCount} in progress · {releaseFiles.length - publishedCount} in-scope files not delivered.</p>
-          <p className="muted">Recorded delivery for this scan; changing the selection does not change this receipt. Originals unchanged.</p>
+          <p className="muted">Recorded delivery within this document scope; changing the checkboxes does not change this receipt. Originals unchanged.</p>
           {releaseId && <small>Release {releaseId}</small>}
           {releaseFolders.filter((folder) => folder.url).map((folder) => <p key={folder.id}><a href={folder.url} target="_blank" rel="noopener noreferrer">Open {folder.name || 'delivery folder'} ↗</a></p>)}
           <button className="ghost small" onClick={downloadReleaseManifest}>Download delivery receipt (manifest)</button>

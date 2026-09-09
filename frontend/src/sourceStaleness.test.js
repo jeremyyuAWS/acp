@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 // classification is proven server-side; this pins that the UI fetches it, warns honestly, and
 // only ever offers a re-scan for files it actually found changed.
 const HERE = dirname(fileURLToPath(import.meta.url))
-const pub = () => ['Publish.jsx', 'ReleaseFileSelection.jsx']
+const pub = () => ['Publish.jsx', 'ReleaseFileSelection.jsx', 'releaseClarityModel.js']
   .map((file) => readFileSync(join(HERE, file), 'utf8')).join('\n')
 const api = () => readFileSync(join(HERE, 'api.js'), 'utf8')
 const mon = () => readFileSync(join(HERE, 'Monitor.jsx'), 'utf8')

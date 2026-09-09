@@ -109,7 +109,7 @@ describe('Publish — W5 conditional-to-full graduation', () => {
     expect(publishAllFiles).not.toHaveBeenCalled()
     expect(onPublish).not.toHaveBeenCalled()
     expect(c.querySelector('#release-delivery-step')).toBeTruthy()
-    expect(c.textContent).toContain('1 of 2 selected')
+    expect(c.textContent).toContain('1 selected · 2 in scope')
   })
 
   it('reports completed delivery without claiming overall certification', async () => {

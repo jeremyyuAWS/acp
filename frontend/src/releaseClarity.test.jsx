@@ -51,6 +51,7 @@ const mount = async (props) => {
   const { container, root } = createTestRoot()
   await act(async () => { root.render(createElement(Publish, props)) })
   await flush()
+  container.rerender = async (next) => { await act(async () => root.render(createElement(Publish, next))); await flush() }
   return container
 }
 const verified = (file, over = {}) => ({ file, compliant: true, remediated_at: '2026-07-31T00:00:00Z', score: 100, department: 'D', sourceName: 'S', ...over })
@@ -170,10 +171,43 @@ describe('Release clarity and execution boundaries', () => {
   it('retains removed summaries deliberately hidden and cannot mount the direct graduate control', async () => {
     const c = await mount({ run, files: [verified('a.pdf', { published_at: '2026-08-01' })] })
     expect(c.querySelector('[data-retired="release-accounting"]').hidden).toBe(true)
+    expect(c.querySelector('[data-retired="release-plan-summary"]').hidden).toBe(true)
     expect(c.querySelector('[data-retired="release-audit-summary"]').hidden).toBe(true)
     const { readFileSync } = await import('node:fs')
     const source = readFileSync('src/Publish.jsx', 'utf8')
     expect(source).toContain('const graduate = async')
     expect(source).not.toMatch(/onClick=\{graduate\}/)
+  })
+})
+
+describe('Release selection changes', () => {
+  it('invalidates a preview when the selection changes and never submits the old plan', async () => {
+    const c = await mount({ run, files: [verified('a.pdf'), verified('b.pdf')] })
+    await review(c)
+    expect(button(c, 'Publish 2 copies').disabled).toBe(false)
+    await click(c.querySelector('[aria-label="Select b.pdf"]'))
+    expect(button(c, 'Publish 1 copy').disabled).toBe(true)
+    expect(publishAllFiles).not.toHaveBeenCalled()
+  })
+  it('preserves an explicit empty selection when eligible data refreshes', async () => {
+    const c = await mount({ run, files: [verified('a.pdf')] })
+    await click(c.querySelector('[aria-label="Select a.pdf"]'))
+    await c.rerender({ run, files: [verified('a.pdf'), verified('b.pdf')] })
+    expect(button(c, 'Choose delivery').disabled).toBe(true)
+    expect(c.querySelector('[aria-label="Select b.pdf"]').checked).toBe(false)
+  })
+  it('clears the old scan receipt when navigating to another scan with the same file name', async () => {
+    getReleaseStatus.mockResolvedValueOnce({ release_id: 'first', documents: [{ file: 'a.pdf', status: 'published', published_at: '2026-08-01' }] })
+    const c = await mount({ run, files: [verified('a.pdf')] })
+    expect(row(c, 'a.pdf').textContent).toContain('Delivered')
+    await c.rerender({ run: { ...run, id: 'second' }, files: [verified('a.pdf')] })
+    expect(row(c, 'a.pdf').textContent).toContain('awaiting Release')
+    expect(c.querySelector('[aria-label="Delivery receipt"]')).toBeNull()
+  })
+  it('keeps history replay read-only even after preview', async () => {
+    const c = await mount({ run, files: [verified('a.pdf')], readOnly: true })
+    await review(c)
+    expect(button(c, 'Publish 1 copy').disabled).toBe(true)
+    expect(publishAllFiles).not.toHaveBeenCalled()
   })
 })

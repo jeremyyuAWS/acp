@@ -75,7 +75,7 @@ describe('both downstream screens state it', () => {
     expect(s).toMatch(/docScope=\{documentScopeSentence\(documentSelection\(files, triage\)\)\}/)
     expect(s).toMatch(/const releaseFiles = documentsInSelection\(files, triage\)/)
     expect(s).toMatch(/const ready = releaseFiles\.filter/)
-    expect(s).toMatch(/certificationUniverse\(releaseFiles\)/)
+    expect(s).toMatch(/releaseSetStatus\(releaseFiles\.map/)
     expect(s).toContain("from './remediableScope.js'")
   })
 
