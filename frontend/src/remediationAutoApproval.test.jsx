@@ -9,6 +9,7 @@ const policy={ai:1,ai_budget_usd:'1.00',ai_review:{enabled:true}}
 async function mount(props={}) {
   const {root,container}=createTestRoot()
   await act(async()=>root.render(createElement(AutoApproval,{policy,supported:true,onChange:vi.fn(),...props})))
+  await act(async()=>container.querySelector('[aria-label="About review before applying AI suggestions"]').focus())
   return {root,container,checkbox:container.querySelector('input')}
 }
 it('offers review before applying and keeps publishing separate',async()=>{
@@ -17,7 +18,7 @@ it('offers review before applying and keeps publishing separate',async()=>{
   expect(checkbox.closest('details')).toBeNull()
   expect(checkbox.disabled).toBe(false)
   expect(container.textContent).toContain('Publishing is a separate action')
-  expect(container.querySelector('details').open).toBe(false)
+  expect(container.querySelector('[role=tooltip]')).not.toBeNull()
   await act(async()=>checkbox.click())
   expect(onChange).toHaveBeenCalledWith('auto_approve_ai',true)
 })

@@ -20,7 +20,7 @@ function Workspace({ items }) {
   const counts = remediationReviewCounts(items)
   const [request, setRequest] = useState(null)
   return createElement(RemediationWorkspaceTabs, {
-    runId: 'scan-119', reviewCount: counts.pendingItems, workspaceRequest: request,
+    runId: 'scan-119', snapshot: { scan_id: 'scan-119', batch_id: 'batch-119' }, reviewCount: counts.pendingItems, workspaceRequest: request,
     plan: createElement(AssessSummary, { ...props, reviewSummary: counts,
       onOpenReview: () => setRequest({ mode: 'review' }) }),
     review: 'Current review items',

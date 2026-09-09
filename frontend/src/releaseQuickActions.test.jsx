@@ -130,3 +130,8 @@ it('keeps both unavailable actions visible during loading and empty scope', asyn
   expect(v.button('Approve eligible changes').disabled).toBe(true)
   expect(v.container.textContent).toContain('No files are selected in this scope')
 })
+it('shows the durable timestamp folder in the destination before authorizing', async () => {
+  const v = await mount({ folderName: 'Stale form name' }, { ...plan, intent: { ...plan.intent, release_folder_name: '2026-09-09 15-00 PDT' } })
+  expect(v.container.textContent).toContain('Approved folder / Remediated / 2026-09-09 15-00 PDT')
+  expect(v.container.textContent).not.toContain('Stale form name')
+})

@@ -193,6 +193,15 @@ def build_snapshot(store, scan_id: str, owner: str | None = None, now_iso: str |
     # the file-outcome buckets above. Degrades to None (not a fake 0) if the store can't supply it.
     _fc = getattr(store, "live_findings_count", None)
     findings_so_far = _fc(scan_id) if callable(_fc) else None
+    # A completed assessment is audit evidence. Remediation may update live traces,
+    # but must not rewrite the assessment's original finding total after reconnect.
+    _manifest = getattr(store, "current_stage_output_manifest", None)
+    if callable(_manifest):
+        sealed = _manifest(scan_id, "assess")
+        if sealed:
+            audit = next((entry["assessment_summary"] for entry in sealed.get("entries") or []
+                          if isinstance(entry.get("assessment_summary"), dict)), None)
+            findings_so_far = audit.get("findings_recorded") if audit else None
 
     # Named, not faked — each needs live job-queue state this module does not do. The queue layer
     # (below) supplies queued / throughput / workers when present.

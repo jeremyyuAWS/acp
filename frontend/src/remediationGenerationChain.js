@@ -6,6 +6,7 @@ const validStep = (step, position) => step?.step_id === IDS[position] && step.po
   && Array.isArray(step.capabilities) && step.capabilities.length === 1 && step.capabilities[0] === 'text'
 const allowedModel = model => model?.allowed === true && model.available === true && model.capabilities?.includes('text')
 export function generationSteps(policy, options) {
+  if (policy?.ai_zone === 'local') return []
   // The server owns the default chain. `chain_options` appends fallback_2 to
   // default_steps and only THEN sets supported:true (api/ai_generation_chain.py), so a
   // supported catalog always already carries three steps. A client-side append for

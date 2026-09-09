@@ -84,7 +84,7 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
         tabIndex={mode === value ? 0 : -1} onKeyDown={(event) => onKeyDown(event, index)}
         onClick={() => select(value)}>
         {value === 'plan' ? 'Plan' : value === 'live' ? 'Live' : value === 'review' ? 'Review' : 'How modes work'}
-        {value === 'review' && <span>{reviewCount.toLocaleString()}</span>}
+        {value === 'review' && snapshot?.batch_id && (snapshot.scan_id || snapshot.run_id) === runId && <span>{reviewCount.toLocaleString()}</span>}
         {value === 'live' && activeWork && <span className="rem-mode-live-dot" aria-label="active">●</span>}
       </button>)}
     </div>

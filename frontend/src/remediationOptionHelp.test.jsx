@@ -13,8 +13,13 @@ it('offers separate accessible help without changing radio selection or budget',
     budgetSupported: true, onChange: changed,
   })))
   const buttons = [...container.querySelectorAll('.remediation-option-help button')]
-  expect(buttons).toHaveLength(4)
-  expect(container.querySelectorAll('.remediation-plan-option')).toHaveLength(4)
+  expect(buttons).toHaveLength(6)
+  expect(container.querySelectorAll('.remediation-plan-option')).toHaveLength(6)
+  expect(buttons.map(button => button.getAttribute('aria-label'))).toEqual([
+    'About review before applying', 'About apply and verify automatically',
+    'About rules only', 'About local-only Ollama', 'About AI waterfall',
+    'About review before applying AI suggestions',
+  ])
   for (const button of buttons) {
     expect(button.closest('label')).toBeNull()
     await act(async () => button.focus())

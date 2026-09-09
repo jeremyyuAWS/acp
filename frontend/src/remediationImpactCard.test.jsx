@@ -471,3 +471,16 @@ it('returns to human approval when the required AI reviewer is turned off',async
   expect(getRemediationImpact.mock.calls.at(-1)[1]).toMatchObject({auto_approve_ai:false,ai_review:{enabled:false}})
   expect(container.querySelector('.remediation-auto-approval input').checked).toBe(true)
 })
+
+it('passes a local-only plan to execution with cloud review and fallbacks removed', async () => {
+  const initial = { rule_based: 2, ai: 1, ai_budget_usd: '10.00', ai_review: { enabled: true } }
+  getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || initial), capabilities: { ...result().capabilities, ai_budget: true } }))
+  const onRun = vi.fn()
+  const { container } = await mount({ onRun })
+  const choice = [...container.querySelectorAll('label')].find(node => node.textContent.includes('Rules + Ollama'))
+  await act(async () => choice.querySelector('input').click())
+  const expected = { rule_based: 2, ai: 1, ai_zone: 'local', ai_budget_usd: '0.00', ai_review: { enabled: false }, auto_approve_ai: false }
+  expect(getRemediationImpact).toHaveBeenLastCalledWith('run-1', expected, undefined)
+  await act(async () => button(container, 'Approve plan and start').click())
+  expect(onRun).toHaveBeenCalledWith(expected, expect.anything())
+})

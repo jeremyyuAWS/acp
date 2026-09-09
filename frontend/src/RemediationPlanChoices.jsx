@@ -62,7 +62,8 @@ export function RetiredRemediationPlanChoices({ policy, providers, disabled, onC
 // The previous detailed panel is retained above for restoration, but is no longer mounted.
 export default function RemediationPlanChoices({ policy, disabled, onChange, generationChainOptions, budgetSupported = false, reviewSupported = false, automaticReviewSupported = false, automaticReviewReason = '', reviewAdministratorFloor = null, reviewEligibleFamilies = [], standingApprovalSupported = false, standingApprovalReason = '' }) {
   const id = useId()
-  const configured = generationSteps(policy, generationChainOptions)
+  const localOnly = policy.ai_zone === 'local'
+  const configured = localOnly ? [] : generationSteps(policy, generationChainOptions)
   const catalogFor = step => generationChainOptions?.models?.find(
     model => model.provider === step.provider && model.model === step.model)
   return <div className="remediation-plan-choices">
@@ -86,7 +87,7 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, gen
       </div>
     </fieldset>
     <fieldset disabled={disabled}>
-      <legend>2. May ACP also try AI?</legend>
+      <legend>2. Which tools may ACP use?</legend>
       <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
         <div className="remediation-plan-option">
           <label className={policy.ai === 0 ? 'is-selected' : ''}>
@@ -96,11 +97,18 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, gen
           <RemediationOptionHelp label="rules only">Use only fixes based on set rules. ACP will not ask AI to write new suggestions for this run. Your approval choice above still applies.</RemediationOptionHelp>
         </div>
         <div className="remediation-plan-option">
-          <label className={policy.ai > 0 ? 'is-selected' : ''}>
-            <input type="radio" name={`${id}-ai`} checked={policy.ai > 0} onChange={() => onChange('ai', 1)} />
-            <span><strong>Rules + AI waterfall</strong><span>Draft suggestions; try a fallback if needed. Choose how to approve below.</span></span>
+          <label className={policy.ai > 0 && localOnly ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-ai`} disabled={!budgetSupported} checked={policy.ai > 0 && localOnly} onChange={() => onChange('ai_mode', 'local')} />
+            <span><strong>Rules + Ollama · Local only</strong><span>Use deterministic fixes and self-hosted AI. No cloud AI usage charges.</span></span>
           </label>
-          <RemediationOptionHelp label="AI waterfall">A waterfall tries AI in stages, with up to {policy.generation_chain?.steps?.length === 3 ? 'three' : 'two'} generation models for a supported text suggestion. Later models run only after an empty or incomplete suggestion. Spending limits and availability still apply. Your approval choice below applies throughout the run. Document text or images may be sent to the configured providers; choose Rules only if those destinations are unsuitable for the content.</RemediationOptionHelp>
+          <RemediationOptionHelp label="local-only Ollama">AI uses the configured self-hosted Ollama service, not necessarily your computer. No cloud model or cloud fallback is allowed. If Ollama cannot produce a supported draft, the issue stays for human review. Hosting costs are separate.</RemediationOptionHelp>
+        </div>
+        <div className="remediation-plan-option">
+          <label className={policy.ai > 0 && !localOnly ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-ai`} checked={policy.ai > 0 && !localOnly} onChange={() => onChange('ai_mode', 'any')} />
+            <span><strong>Rules + Cloud AI</strong><span>Use configured cloud models and fallbacks within your spending limit.</span></span>
+          </label>
+          <RemediationOptionHelp label="AI waterfall">Cloud models draft and review supported suggestions. Later models run after an empty or incomplete suggestion. Your approval choice and spending limit apply throughout the run.</RemediationOptionHelp>
         </div>
       </div>
       {/* Where content actually goes, before Start. Read from the server's verified
@@ -122,7 +130,7 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, gen
         </li>)}</ol>
         <p>Later steps run only after an empty or incomplete suggestion. Provider selection is an application setting, not a per-run choice.</p>
       </div>}
-      {policy.ai > 0 && <div className="simple-remediation-budget">
+      {policy.ai > 0 && !localOnly && <div className="simple-remediation-budget">
         <label htmlFor={`${id}-budget`}>AI spending limit for this run (USD)</label>
         <input id={`${id}-budget`} type="number" min="0" max="1000000" step="0.01"
           disabled={disabled || !budgetSupported} value={budgetSupported ? (policy.ai_budget_usd ?? '0.00') : ''}
@@ -133,10 +141,11 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, gen
           : 'Spending limits are not available on this server. Choose Rules only if you need a firm cap.'}</p>
       </div>}
     </fieldset>
+    {policy.ai > 0 && localOnly && <p>Ollama drafts wait for your review. Cloud AI review and fallback models are off. Unavailable or unsupported local drafts remain for manual attention.</p>}
     <RemediationAutoApproval policy={policy} onChange={onChange} disabled={disabled}
       supported={standingApprovalSupported && budgetSupported} reason={standingApprovalReason} />
-    {policy.ai > 0 && <RemediationGenerationChain policy={policy} options={generationChainOptions} disabled={disabled} budgetSupported={budgetSupported} onChange={onChange} />}
-    {policy.ai > 0 && reviewSupported && <details><summary>Optional AI review and approval threshold</summary><RemediationReviewPolicy value={policy.ai_review} onChange={value => onChange('ai_review', value)}
+    {policy.ai > 0 && !localOnly && <RemediationGenerationChain policy={policy} options={generationChainOptions} disabled={disabled} budgetSupported={budgetSupported} onChange={onChange} />}
+    {policy.ai > 0 && !localOnly && reviewSupported && <details><summary>Optional AI review and approval threshold</summary><RemediationReviewPolicy value={policy.ai_review} onChange={value => onChange('ai_review', value)}
       disabled={disabled || !budgetSupported} supported={reviewSupported} automaticSupported={automaticReviewSupported} standingApprovalEnabled={policy.auto_approve_ai === true}
       automaticReason={automaticReviewReason} administratorFloor={reviewAdministratorFloor} eligibleFamilies={reviewEligibleFamilies} /></details>}
 
