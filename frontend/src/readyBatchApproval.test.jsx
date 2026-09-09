@@ -10,12 +10,12 @@ afterEach(unmountAll)
 const ready = id => ({ id, file: `z-${id}.docx`, ruleId: '1.1.1', hasProposal: true, after: `alt ${id}`,
   proposals: [{ proposed_value: `alt ${id}` }], _raw: { decision_version: 0, source_revision: 'source', proposal_snapshot_ids: [`snapshot-${id}`] } })
 const applied = Array.from({ length: 119 }, (_, i) => ({ id: `applied-${i}`, file: `a-${i}.docx`, autoApplied: true, after: 'Applied change' }))
-const click = async el => act(async () => el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+const click = async el => act(async () => el.tagName === 'OPTION' ? (el.parentElement.value = el.value, el.parentElement.dispatchEvent(new Event('change', { bubbles: true }))) : el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 async function mount(Component, props) {
   const { root, container } = createTestRoot()
   const render = async next => act(async () => root.render(createElement(Component, { ...props, ...next })))
   await render()
-  return { container, render, button: name => [...container.querySelectorAll('button')].find(b => b.textContent.includes(name)) }
+  return { container, render, button: name => [...container.querySelectorAll('button, select[aria-label="Filter by status"] option')].find(b => b.textContent.includes(name)) }
 }
 it('keeps 119 already-applied rows out of the selectable pages and surfaces later ready proposals', async () => {
   const v = await mount(BatchReviewSelection, { visible: [...applied, ready('one'), ready('two')], onDecide: vi.fn(), scopeKey: 'scan' })

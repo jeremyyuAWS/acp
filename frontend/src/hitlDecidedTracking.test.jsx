@@ -71,7 +71,7 @@ it('shows the decided item in the Completed tab of the inbox', async () => {
   await act(async () => root.render(createElement(Inbox, {
     queue: ui(SERVER_ROWS), decisions: {}, scanId: 'scan-1', initialTab: 'completed',
   })))
-  const tab = [...container.querySelectorAll('[role=tab]')].find((el) => el.textContent.includes('Completed'))
+  const tab = [...container.querySelectorAll('select[aria-label="Filter by status"] option:not([value=all])')].find((el) => el.textContent.includes('Completed'))
   expect(tab.textContent).toBe('Completed 1')
   expect(container.textContent).toContain('doc-12.docx')
   // The recorded outcome of an approved item, not a second approval prompt.
@@ -101,7 +101,7 @@ it('never offers an item that already carries a decision for bulk approval', asy
     queue: ui([...SERVER_ROWS, row(13, { status: 'skipped' })]),
     decisions: {}, scanId: 'scan-1', initialTab: 'needs-review', onDecide: () => {},
   })))
-  const button = [...container.querySelectorAll('button')].find((b) => b.textContent.includes('Approve all ready in this run'))
+  const button = [...container.querySelectorAll('button, select[aria-label="Filter by status"] option')].find((b) => b.textContent.includes('Approve all ready in this run'))
   expect(button.textContent).toBe('Approve all ready in this run (12)')
 })
 

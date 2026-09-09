@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import {
   rowModel, laneOf, sortQueue, groupByDocument, nextUnresolvedId, progress, railColorOf,
-  matchesWorkflow, workflowCounts, workflowStepIndex, isResolved, isAiAssistedDraft,
+  matchesWorkflow, workflowCounts, workflowStatusOf, workflowStepIndex, isResolved, isAiAssistedDraft,
   WORKFLOW_TABS, WORKFLOW_LABELS, SORTS,
 } from './remediationInboxModel.js'
 import { clusterRows, clusterOfFinding, batchTargetsOf } from './remediationClusters.js'
@@ -163,7 +163,7 @@ function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
               In review
             </span>
           )}
-          {r.resolved && <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>✓ resolved</span>}
+          <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{WORKFLOW_LABELS[workflowStatusOf(f, decisions)]}</span>
         </span>
       </span>
     </button>
@@ -372,7 +372,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
   const eyebrow = isHandoff ? 'Needs manual handling' : lane.key === 'manual' ? 'Manual remediation' : 'Review'
   // A drafted AI value the reviewer can adjust before applying. `draft` falls back to the finding's
   // proposed value until the reviewer types; `edited` flips the primary action to "Save edited fix".
-  const canEdit = !isManual && !isAutoFix && f.after != null && f.after !== ''
+  const canEdit = !resolved && !isManual && !isAutoFix && f.after != null && f.after !== ''
   const draftValue = draft ?? (f.after ?? '')
   const edited = canEdit && draftValue !== (f.after ?? '')
   // The plain-language "What ACP changed" sentence — real values only (null when nothing to describe).
@@ -657,7 +657,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 
 export default function RemediationInbox({
   queue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, preparingProposals = false, readOnly = false,
-  initialSort = 'priority', initialTab = 'needs-review', initialGroup = 'document', scanId = null,
+  initialSort = 'priority', initialTab = 'all', initialGroup = 'document', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
   // belong beside the selected finding, but this component must not import them: it already owns
@@ -744,18 +744,20 @@ export default function RemediationInbox({
     () => (myEmail ? queue.filter(assignedToMe).length : 0),
     [queue, assignees, myEmail]) // eslint-disable-line react-hooks/exhaustive-deps
   const aiDraftCount = useMemo(
-    () => queue.filter((f) => matchesWorkflow(f, tab, decisions) && isAiAssistedDraft(f)).length,
+    () => queue.filter((f) => (tab === 'all' || matchesWorkflow(f, tab, decisions)) && isAiAssistedDraft(f)).length,
     [queue, tab, decisions])
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
-    const filtered = queue.filter((f) => matchesWorkflow(f, tab, decisions) &&
+    const filtered = queue.filter((f) => (tab === 'all' || matchesWorkflow(f, tab, decisions)) &&
       (!assignedOnly || assignedToMe(f)) &&
       (priorityFilter === 'all' || String(f.severity || 'unrated').toLowerCase() === priorityFilter) &&
       (formatFilter === 'all' || fmtOf(f.file) === formatFilter) &&
       (sourceFilter === 'all' || (sourceFilter === 'ai' ? isAiAssistedDraft(f) : !isAiAssistedDraft(f))) &&
       (!q || rowModel(f, decisions).issue.toLowerCase().includes(q) || String(f.file).toLowerCase().includes(q)))
-    return sortQueue(filtered, sort)
+    const sorted = sortQueue(filtered, sort)
+    const order = { 'needs-review': 0, manual: 0, blocked: 1, 'awaiting-validation': 2, completed: 3 }
+    return tab === 'all' ? sorted.sort((a, b) => order[workflowStatusOf(a, decisions)] - order[workflowStatusOf(b, decisions)]) : sorted
   }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail, priorityFilter, formatFilter, sourceFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep a valid selection: default to the first unresolved visible row.
@@ -833,7 +835,7 @@ export default function RemediationInbox({
   const queueComplete = queue.length > 0 && queue.every((f) => isResolved(f, decisions))
   const emptyReviewState = queue.length === 0 || queueComplete
     ? <div><b style={{ color: 'var(--ink)' }}>All review items are complete.</b><br />{prog.resolved} resolved · {counts.completed || 0} completed</div>
-    : <p style={{ marginTop: 8 }}>No items are available in {WORKFLOW_LABELS[tab]}. Choose another status from the inbox.</p>
+    : <p style={{ marginTop: 8 }}>No items are available in {WORKFLOW_LABELS[tab] || 'Review'}. Choose another status from the inbox.</p>
 
   // Act on a finding, then auto-advance to the next unresolved one — the behaviour that makes the
   // queue feel like a controlled worklist rather than a scroll through an audit report.
@@ -960,36 +962,19 @@ export default function RemediationInbox({
         {announce}
       </div>
       {savedMessage && <div className="remediation-saved" role="status" aria-live="polite">✓ {savedMessage}</div>}
-      {/* Dark app header (mockup): the section title + the workflow-status tabs as the page's top
-          chrome — one lens on where every finding sits in the pipeline (Inbox → In progress →
-          Ready to validate → Blocked → Done), spanning the three panes below. */}
-      <div className="rinbox-topbar" role="tablist" aria-label="Workflow status"
-           style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
-                    background: '#1f2b3a', color: '#fff', borderRadius: '12px 12px 0 0', padding: '9px 16px' }}>
-        <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: '-.01em' }}>Remediate</span>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {WORKFLOW_TABS.map((t) => (
-            <button key={t} type="button" role="tab" aria-selected={tab === t} disabled={savingId != null} onClick={() => { setBulkPreviewOpen(false); setBatchScopeIds(null); setTab(t) }}
-                    style={{ fontSize: 12, padding: '3px 11px', borderRadius: 20, cursor: 'pointer',
-                             border: `1px solid ${tab === t ? 'transparent' : 'rgba(255,255,255,.22)'}`,
-                             background: tab === t ? '#3b6fd6' : 'transparent', color: '#fff',
-                             fontWeight: tab === t ? 700 : 500 }}>
-              {/* Every badge counts the rows ITS OWN tab lists. Needs-review used to show the
-                  bulk-approvable count instead, so a tab reading "5" opened onto six rows — the
-                  applied fix awaiting confirmation was in the list and not in the badge. The
-                  ready/inspect split #1888 wanted is still said, in the run summary below and on
-                  the approve button, where a number can carry its own noun. */}
-              {WORKFLOW_LABELS[t]} {counts[t] || ''}
-            </button>
-          ))}
-        </div>
+      {/* One review workspace. Status is an optional filter, not a separate approval step. */}
+      <div className="rinbox-topbar" style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', padding: '9px 16px', background: '#1f2b3a', color: '#fff', borderRadius: '12px 12px 0 0' }}>
+        <strong>Review</strong>
+        <span style={{ flex: 1, fontSize: 12 }}>{queue.length} items · {counts['awaiting-validation'] || 0} awaiting verification · {counts.completed || 0} completed</span>
+        <select aria-label="Filter by status" value={tab} disabled={savingId != null}
+          onChange={event => { setBulkPreviewOpen(false); setBatchScopeIds(null); setTab(event.target.value) }}>
+          <option value="all">All statuses ({queue.length})</option>
+          {WORKFLOW_TABS.map(status => <option key={status} value={status}>{WORKFLOW_LABELS[status]} {counts[status] || 0}</option>)}
+        </select>
       </div>
       <section className="run-approval-summary" aria-label="Whole-run approval">
-        <div><strong>Approve proposals for this run</strong>
-          {/* A ledger, not a highlight: these terms sum to the workflow tabs above, so the
-              headline count and the tab badges can be reconciled by reading. `inspection` (an
-              applied fix still awaiting the reviewer's confirmation) used to appear in the
-              needs-review LIST and in no count on screen. */}
+        <div><strong>Review and verify changes</strong>
+          {/* Keep approval readiness separate from verification and completed counts. */}
           <p>{runCounts.ready} ready review items · {runCounts.individual} need proposal information or individual review · {runCounts.inspection} applied changes to confirm · {runCounts.manual} manual review items</p>
           <p>Inspection is optional. Confirm all ready proposals together; writing and verification follow approval.</p>
           {preparingProposals && <p role="status">Preparing proposals — remediation is still processing. Readiness updates as work finishes.</p>}
@@ -1002,6 +987,7 @@ export default function RemediationInbox({
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       {!bulkPreviewOpen && <>
         <p className="remediation-category-help">{{
+          all: 'Select an item to approve a proposal, make a manual correction, or check its result. Items awaiting automatic verification do not need another approval.',
           'needs-review': 'AI suggestions have proposed changes you can approve. Already-applied changes are available for individual review.',
           manual: 'These issues need your input. Select an issue to see the required edit and instructions for fixing the source document.',
           'awaiting-validation': 'These changes are awaiting writing or verification. Another approval is not needed here.',
@@ -1054,7 +1040,7 @@ export default function RemediationInbox({
               <span>↑/↓ or J/K: move · Home/End: first/last · Enter: open selected item</span>
             </details>
           </div>
-          {tab === 'needs-review' && <button type="button" className="ghost" aria-expanded={bulkPreviewOpen}
+          {(tab === 'all' || tab === 'needs-review') && <button type="button" className="ghost" aria-expanded={bulkPreviewOpen}
                   disabled={savingId != null}
                   onClick={() => { setBatchScopeIds(null); setBulkPreviewOpen(open => !open) }}
                   style={{ marginTop: 8, fontWeight: 700 }}>
@@ -1107,7 +1093,7 @@ export default function RemediationInbox({
                 ? <>No findings match these filters. <button className="linklike" onClick={() => { setPriorityFilter('all'); setFormatFilter('all'); setSourceFilter('all') }}>Clear filters</button></>
                 : assignedOnly
                 ? <>Nothing in this view is assigned to you. <button className="linklike" onClick={() => setAssignedOnly(false)}>Show all</button></>
-                : <>No items in {WORKFLOW_LABELS[tab]}. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Review AI suggestions</button>}</>}
+                : <>No items in {WORKFLOW_LABELS[tab] || 'Review'}. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Review AI suggestions</button>}</>}
             </div>
           ) : group === 'issue' ? clusters.map((row) => (
             row.type === 'single'

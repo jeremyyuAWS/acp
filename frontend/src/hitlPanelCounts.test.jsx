@@ -38,21 +38,21 @@ const done = (id) => ({ id, file: `c-${id}.docx`, title: 'DOCX · Document has n
 const RUN = [draft(1), draft(2), draft(3), draft(4), draft(5), unversioned(6), autoApplied(7),
   manual(8), manual(9), manual(10), done(11), done(12), done(13)]
 
-const click = async (el) => act(async () => el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+const click = async (el) => act(async () => el.tagName === 'OPTION' ? (el.parentElement.value = el.value, el.parentElement.dispatchEvent(new Event('change', { bubbles: true }))) : el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 async function mount(props) {
   const { root, container } = createTestRoot()
   const render = async (next) => act(async () => root.render(createElement(RemediationInbox,
-    { queue: RUN, decisions: {}, scanId: 'fixture', initialGroup: 'document', initialSort: 'document',
+    { initialTab: 'needs-review', queue: RUN, decisions: {}, scanId: 'fixture', initialGroup: 'document', initialSort: 'document',
       onDecide: vi.fn().mockResolvedValue(undefined), ...props, ...next })))
   await render()
-  const tabs = () => [...container.querySelectorAll('[role=tab]')]
+  const tabs = () => [...container.querySelectorAll('select[aria-label="Filter by status"] option:not([value=all])')]
   return {
     container, render, tabs,
     tab: (label) => tabs().find((t) => t.textContent.startsWith(label)),
     // The trailing number a badge renders, or 0 when the badge is blank.
     badge: (label) => Number((tabs().find((t) => t.textContent.startsWith(label))?.textContent.match(/(\d+)\s*$/) || [, 0])[1]),
     rows: () => container.querySelectorAll('.rinbox-row').length,
-    button: (name) => [...container.querySelectorAll('button')].find((b) => b.textContent.includes(name)),
+    button: (name) => [...container.querySelectorAll('button, select[aria-label="Filter by status"] option')].find((b) => b.textContent.includes(name)),
   }
 }
 
@@ -182,7 +182,7 @@ it('a real scope change still invalidates the selection', async () => {
   const render = async (props) => act(async () => root.render(createElement(BatchReviewSelection,
     { visible: RUN, decisions: {}, scopeKey: 'scan-a', onDecide: vi.fn(), ...props })))
   await render()
-  await click([...container.querySelectorAll('button')].find((b) => b.textContent.includes('Approve all ready')))
+  await click([...container.querySelectorAll('button, select[aria-label="Filter by status"] option')].find((b) => b.textContent.includes('Approve all ready')))
   expect(container.textContent).toContain('5 findings selected')
   await render({ scopeKey: 'scan-b' })
   expect(container.textContent).not.toContain('findings selected')
