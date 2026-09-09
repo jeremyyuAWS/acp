@@ -1,10 +1,20 @@
 import { chromium } from '@playwright/test'
 import assert from 'node:assert/strict'
+import { fileURLToPath } from 'node:url'
+import { createServer } from 'vite'
+const server = await createServer({ root: fileURLToPath(new URL('../', import.meta.url)), server: { host: '127.0.0.1', port: 0 } })
+await server.listen()
+const origin = new URL(server.resolvedUrls.local[0]).origin
 const browser = await chromium.launch({ headless: true })
 try {
   for (const width of [1280, 390]) {
     const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' })
-    await page.goto('http://127.0.0.1:5187/fixtures/batch-review.html')
+    await page.route('**/*', route => {
+      assert.equal(route.request().method(), 'GET', 'Fixture must never write to an API')
+      assert.equal(new URL(route.request().url()).origin, origin, 'Fixture must remain local')
+      return route.continue()
+    })
+    await page.goto(`${origin}/fixtures/batch-review.html`)
     await page.getByRole('button', { name: 'Select findings for batch approval', exact: true }).click()
     const panel = page.getByRole('region', { name: 'Select findings for approval' })
     await panel.getByRole('button', { name: 'Next batch page' }).click()
@@ -22,4 +32,4 @@ try {
     await page.close()
   }
   console.log('Desktop/mobile batch selection, preview, exact write, feedback and reduced-motion layout passed.')
-} finally { await browser.close() }
+} finally { await browser.close(); await server.close() }
