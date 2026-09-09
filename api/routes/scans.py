@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
 import core
 import scanner
@@ -3563,7 +3563,16 @@ def publish_files(sid: str, request: Request, body: dict):
             validate_publish_request(core.store, sid, owner, files, body)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
+    allow_remaining_issues = body.get("allow_remaining_issues", False)
+    if not isinstance(allow_remaining_issues, bool):
+        raise HTTPException(422, "allow_remaining_issues must be a boolean")
     expected_artifacts = body.get("expected_artifacts") or {}
+    if not isinstance(expected_artifacts, dict):
+        raise HTTPException(422, "expected_artifacts must map selected files to corrected digests")
+    if allow_remaining_issues and (automatic_release_id or any(
+            not expected_artifacts.get(f) or expected_artifacts[f] !=
+            (core.store.get_file_record(sid, f) or {}).get("corrected_sha256") for f in files)):
+        raise HTTPException(409, "Confirm each current corrected artifact before releasing with remaining issues")
     if any((core.store.get_file_record(sid, file) or {}).get("corrected_sha256") != digest
            for file, digest in expected_artifacts.items() if file in files):
         raise HTTPException(409, "The authorized corrected artifact changed; confirm again")
@@ -3582,7 +3591,7 @@ def publish_files(sid: str, request: Request, body: dict):
         })
     owner_email = scan.get("run", {}).get("owner_email") or owner
     import publish as _publish
-    from release_artifacts import ReleaseArtifactError, artifact_tag, reuse_state, require_current_record, require_current_source
+    from release_artifacts import ReleaseArtifactError, artifact_tag, reuse_state, require_current_record, require_current_source, release_ready, release_review_evidence
     source = scan.get("run", {}).get("source") or "local"
     destination = _release_destination(source, body.get("destination"))
     if destination:
@@ -3591,7 +3600,7 @@ def publish_files(sid: str, request: Request, body: dict):
             raise HTTPException(409, detail={"code": "release_destination_not_ready",
                                             "preflight": destination_check})
     eligible = [row for row in scan.get("files", [])
-                if row.get("compliant") and row.get("remediated_at")
+                if release_ready(row, allow_remaining_issues)
                 and (document_selection is None or row.get("file") in document_selection)]
     try:
         preferred_folder_name = _publish.normalize_release_name(
@@ -3628,6 +3637,13 @@ def publish_files(sid: str, request: Request, body: dict):
             drive_svc = handlers._drive_client(drive_token)
         except Exception:
             drive_svc = None
+    if allow_remaining_issues:
+        import json
+        for filename in files:
+            current = core.store.get_file_record(sid, filename) or {}
+            core.store.log_decision(owner, "release.remaining_issues_authorized", scan_id=sid, file=filename,
+                detail=json.dumps({**release_review_evidence(current, owner=owner, allow_remaining_issues=True, store=core.store, scan_id=sid),
+                    "artifact_digest": artifact_tag(expected_artifacts[filename]), "release_id": release_id}))
     results = []
     folder_cache = {}
     synchronous_execution = None
@@ -3639,6 +3655,7 @@ def publish_files(sid: str, request: Request, body: dict):
             snapshot_id, input_manifest_id = _sealed_stage_input(sid, "remediate", release_id)
             fingerprint = hashlib.sha256(json.dumps({
                 "files": requested, "source": source, "release_id": release_id,
+                "allow_remaining_issues": allow_remaining_issues,
                 "artifacts": [(name, (core.store.get_file_record(sid, name) or {}).get("corrected_sha256"),
                                (core.store.get_file_record(sid, name) or {}).get("remediated_at"))
                               for name in requested],
@@ -3671,7 +3688,7 @@ def publish_files(sid: str, request: Request, body: dict):
         payloads = []
         for f in files:
             record = core.store.get_file_record(sid, f)
-            if not record or not record.get("compliant") or not record.get("remediated_at"):
+            if not release_ready(record, allow_remaining_issues):
                 result = {"file": f, "original_relative_path": None,
                           "released_relative_path": None, "status": "failed",
                           "failure_category": "not_approved",
@@ -3694,9 +3711,9 @@ def publish_files(sid: str, request: Request, body: dict):
             if state == "reuse":
                 try:
                     actual_digest = _publish.remediated_content_digest(owner, sid, f)
-                    require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner)
+                    require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
                     require_current_source(source, record, sp_token=sp_token)
-                    require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner)
+                    require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
                     if not actual_digest or reuse_state(saved, actual_digest) != "reuse":
                         raise ValueError("Corrected bytes changed; verify the new copy before Release.")
                 except Exception as exc:
@@ -3718,6 +3735,8 @@ def publish_files(sid: str, request: Request, body: dict):
             results.append(queued)
             payloads.append({"scan_id": sid, "release_id": release_id,
                              "file": f, "owner": owner,
+                             **({"allow_remaining_issues": True,
+                                 "release_review": release_review_evidence(record, owner=owner, allow_remaining_issues=True, store=core.store, scan_id=sid)} if allow_remaining_issues else {}),
                              "artifact_digest": artifact_tag(digest) if digest else None,
                              "remediated_at": record.get("remediated_at"),
                              **({"automatic_release_id": automatic_release_id} if automatic_release_id else {})})
@@ -3725,7 +3744,7 @@ def publish_files(sid: str, request: Request, body: dict):
         if payloads:
             import hashlib, json
             requested = sorted(p["file"] for p in payloads)
-            fingerprint_inputs = [(p["file"], p.get("artifact_digest"), p.get("remediated_at")) for p in payloads]
+            fingerprint_inputs = [(p["file"], p.get("artifact_digest"), p.get("remediated_at"), p.get("allow_remaining_issues")) for p in payloads]
             if automatic_release_id:
                 fingerprint_inputs = {"artifacts": fingerprint_inputs, "automatic_release_id": automatic_release_id}
             fingerprint = hashlib.sha256(json.dumps(fingerprint_inputs, sort_keys=True).encode()).hexdigest()
@@ -3747,7 +3766,7 @@ def publish_files(sid: str, request: Request, body: dict):
                 "batch_id": execution.get("batch_id") if execution else None}
     for f in files:
         record = core.store.get_file_record(sid, f)
-        if not record or not record.get("compliant") or not record.get("remediated_at"):
+        if not release_ready(record, allow_remaining_issues):
             result = {"file": f, "original_relative_path": None,
                             "released_relative_path": None, "status": "failed",
                             "failure_category": "not_approved",
@@ -3771,9 +3790,9 @@ def publish_files(sid: str, request: Request, body: dict):
                 raise IOError("corrected content was unavailable")
             if expected_artifacts.get(f) and expected_artifacts[f] != content_digest:
                 raise ReleaseArtifactError("The authorized corrected artifact changed; confirm again")
-            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner)
+            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
             require_current_source(source, record, drive_service=drive_svc, sp_token=sp_token)
-            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner)
+            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
             state = reuse_state(saved, content_digest)
             if state == "unresolved":
                 raise ReleaseArtifactError("Prior delivery has no exact artifact digest. Reconcile that delivery before retrying.", category="delivery_version_unresolved")
@@ -3872,12 +3891,14 @@ def publish_files(sid: str, request: Request, body: dict):
                            "verified": bool(publication.get("verified", True))}
                 if lineage is not None:
                     receipt["finding_lineage"] = lineage
+                receipt["release_review"] = release_review_evidence(record, owner=owner, allow_remaining_issues=allow_remaining_issues, store=core.store, scan_id=sid)
                 core.store.finalize_side_effect(
                     reservation["effect_id"], reservation["reservation_token"], receipt)
             elif source == "local" and execution_id:
                 receipt = {"checksum": content_digest, "filename": f, "verified": True}
                 if lineage is not None:
                     receipt["finding_lineage"] = lineage
+                receipt["release_review"] = release_review_evidence(record, owner=owner, allow_remaining_issues=allow_remaining_issues, store=core.store, scan_id=sid)
                 core.store.record_side_effect_receipt(
                     execution_id=execution_id, work_item_id=work_item_id,
                     effect_type="blob.release",
@@ -4027,6 +4048,8 @@ class ReleasePreviewRequest(BaseModel):
     release_folder_name: str | None = None
     preserve_hierarchy: bool = True
     destination: dict | None = None
+    allow_remaining_issues: StrictBool = False
+    expected_artifacts: dict[str, str] = {}
 
 
 @router.post("/scans/{sid}/release/preview")
@@ -4038,6 +4061,7 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
     selected = list(dict.fromkeys(name for name in body.files if name))
     if not selected:
         raise HTTPException(422, "select at least one corrected file")
+    from release_artifacts import release_ready, release_review_evidence
     import publish as _publish
     try:
         requested_name = _publish.normalize_release_name(
@@ -4068,8 +4092,11 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
     documents, blockers = [], []
     for name in selected:
         record = rows.get(name)
-        if not record or not record.get("compliant") or not record.get("remediated_at"):
+        if not release_ready(record, body.allow_remaining_issues):
             blockers.append({"file": name, "reason": "Only approved corrected copies can be released."})
+            continue
+        if body.allow_remaining_issues and body.expected_artifacts.get(name) != record.get("corrected_sha256"):
+            blockers.append({"file": name, "reason": "Confirm the current corrected artifact before releasing with remaining issues."})
             continue
         source_path = record.get("source_relative_path") or record.get("parent_folder") or name
         try:
@@ -4100,7 +4127,8 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
             continue
         action = "reuse" if identity == "reuse" else "create"
         documents.append({"file": name, "provider_location": location,
-                          "destination_path": destination, "action": action})
+                          "destination_path": destination, "action": action,
+                          **({"release_review": release_review_evidence(record, owner=owner, allow_remaining_issues=True, store=core.store, scan_id=sid)} if body.allow_remaining_issues else {})})
     return {
         "scan_id": sid,
         "folder_name": folder_name,

@@ -28,12 +28,12 @@ export function releaseDestinationPhrase({ provider, anyDrive, driveMirrorEnable
 
 // The confirmation-modal body: the exact, checkable consequences of releasing. Deliberately never
 // says "certify" as a positive claim — only ever to disclaim it.
-export function releaseConfirmLines({ count = 0, provider, anyDrive = false, driveMirrorEnabled = false, driveMirrorFolder = 'Remediated' } = {}) {
+export function releaseConfirmLines({ count = 0, provider, anyDrive = false, driveMirrorEnabled = false, driveMirrorFolder = 'Remediated', allowRemainingIssues = false } = {}) {
   const dest = releaseDestinationPhrase({ provider, anyDrive, driveMirrorEnabled, driveMirrorFolder })
   return [
     `ACP writes a corrected copy of ${count === 1 ? 'this document' : `these ${count} documents`} to ${dest}.`,
     'Your original files are never overwritten.',
     'Each release is recorded in the audit trail.',
-    'This records that the files were verified against the criteria in scope — it does not certify overall WCAG conformance.',
+    allowRemainingIssues ? 'The saved copies may contain unresolved accessibility issues. Findings and pending approvals stay recorded; this does not certify conformance.' : 'This records that the files were verified against the criteria in scope — it does not certify overall WCAG conformance.',
   ]
 }

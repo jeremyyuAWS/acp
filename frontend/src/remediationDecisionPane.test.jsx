@@ -165,6 +165,23 @@ describe('Guided pane — preserves the #412/#415 behaviours', () => {
 })
 
 describe('Guided pane — auto-fix rows get an obvious, honestly-labelled decision', () => {
+  it('opens Publish without recording skipped inspection as acceptance', async () => {
+    const decisions = {}, writes = [], destinations = []
+    await renderInbox({ queue: [CONTRAST_AUTO], decisions,
+      onDecide: (f, d) => writes.push([f.id, d]), onPublish: () => destinations.push('publish') })
+    await click(btnByText('Skip inspection and publish'))
+    expect(destinations).toEqual(['publish'])
+    expect(writes).toEqual([])
+    expect(decisions).toEqual({})
+    expect(btnByText('Mark inspected')).toBeTruthy()
+  })
+  it('offers Publish beside pending work but never from read-only history', async () => {
+    await renderInbox({ queue: [CONTRAST_APPLY], onPublish: () => {} })
+    expect(btnByText('Skip inspection and publish')).toBeTruthy()
+    await renderInbox({ queue: [CONTRAST_AUTO], readOnly: true, onPublish: () => {} })
+    expect(btnByText('Skip inspection and publish')).toBeFalsy()
+  })
+
   it('offers mark-inspected and a "This looks wrong" flag (no editable draft)', async () => {
     const calls = []
     // An UNacknowledged auto-fix awaits the reviewer's confirmation, so it sits in Needs review (the

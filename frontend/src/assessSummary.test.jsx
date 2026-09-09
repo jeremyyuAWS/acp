@@ -443,3 +443,25 @@ describe('remediation forecast change badges', () => {
     expect(badges[0].parentElement.textContent).toBe('40+8')
   })
 })
+
+describe('plan findings reconcile without adding queue tasks or checks', () => {
+  const eleven = [doc('a.docx', Array.from({ length: 11 }, () => finding('1.3.1')))]
+  it('shows the omitted blocked findings and an explicit eleven-finding equation', async () => {
+    const c = await mount({ files: eleven, remediationForecast: { automatic: 6, human: 2, blocked: 3, total: 11 },
+      reviewSummary: { pendingItems: 2, findings: 3, documents: 2 } })
+    expect(c.textContent).toContain('6 automatic + 2 needing your review + 3 blocked = 11 findings in this plan')
+    expect(c.textContent).toContain('Blocked · plan preview3')
+    expect(c.querySelector('[aria-label="Separate counts: review items and checks"]').textContent).toContain('Review queue items2')
+    expect(c.querySelector('[aria-label="Plan findings breakdown"]').textContent).not.toContain('Review queue items')
+  })
+  it('accounts for historical findings outside the current preview without calling them fixed', async () => {
+    const c = await mount({ files: eleven, remediationForecast: { automatic: 6, human: 2, blocked: 0, total: 8 } })
+    expect(c.textContent).toContain('8 in this plan + 3 outside this preview = 11 assessment findings')
+    expect(c.textContent).toContain('Outside this preview3')
+  })
+  it('does not invent a negative remainder when current findings exceed the assessment', async () => {
+    const c = await mount({ files: eleven, remediationForecast: { automatic: 12, human: 2, blocked: 0, total: 14 } })
+    expect(c.textContent).toContain('The current preview and assessment cover different finding populations')
+    expect(c.textContent).not.toContain('Outside this preview-3')
+  })
+})

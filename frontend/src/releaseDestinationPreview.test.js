@@ -28,7 +28,7 @@ describe('Release destination preview', () => {
   it('carries the previewed folder into the actual publish request', () => {
     expect(publish).toMatch(/folderName: releasePreview\?\.folder_name/)
     expect(api).toMatch(/options\.destination \? \{ destination: options\.destination \}/)
-    expect(publish).toMatch(/previewReleaseDestination\([\s\S]*releaseDestination\)/)
+    expect(publish).toMatch(/previewReleaseDestination\([\s\S]*releaseDestination, partialReleaseOptions/)
   })
 
   it('shows provider preflight and blocks publishing when it is not ready', () => {

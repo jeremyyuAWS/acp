@@ -17,7 +17,7 @@ import ReleaseDestinationPicker from './ReleaseDestinationPicker.jsx'
 import ReleaseTemplates from './ReleaseTemplates.jsx'
 import './release-plan-summary.css'
 import './release-clarity.css'
-import { hasCorrectedCopy, deliveryIsCurrent, releaseReadiness, canSelectRelease, releaseSourceState } from './releaseClarityModel.js'
+import { hasCorrectedCopy, hasSavedCorrectedCopy, deliveryIsCurrent, releaseReadiness, canSelectRelease, releaseSourceState } from './releaseClarityModel.js'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
 // is recorded in the audit trail and the fixed copy (already in Blob + the Drive
@@ -30,7 +30,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   // Release operates on the exact document cohort chosen in Remediate. The banner below explains
   // the restriction; this filter enforces it for selection, delivery, packaging and set status.
   const releaseFiles = documentsInSelection(files, triage)
-  const ready = releaseFiles.filter(hasCorrectedCopy)
+  const [allowRemainingIssues, setAllowRemainingIssues] = useState(false)
+  const ready = releaseFiles.filter(file => allowRemainingIssues ? hasSavedCorrectedCopy(file) : hasCorrectedCopy(file))
   const [sessionDone, setDone] = useState({})
   const [pubUrls, setPubUrls] = useState({})   // file -> published Drive URL, from POST /publish
   const [releaseFolder, setReleaseFolder] = useState(null)
@@ -73,7 +74,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [sel, setSel] = useState(null)
   useEffect(() => {
     continuationReported.current = new Set()
-    setDone({}); setReleaseResults({}); setPubUrls({}); setReleaseId(null)
+    setAllowRemainingIssues(false); setDone({}); setReleaseResults({}); setPubUrls({}); setReleaseId(null)
     setReleaseFolder(null); setReleaseFolders([]); setReleasePreview(null); setPackagePreview(null)
     setSelectedFiles(new Set()); selectionInitialized.current = false
     setConfirm(null); setSel(null); setBuilderStep(1); setReleaseAnnouncement('')
@@ -228,7 +229,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }, [run?.id, ready.length])
   const srcOf = (f) => releaseSourceState(srcStatus.byFile[f.file])
   const previewBlockers = Object.fromEntries([...(releasePreview?.blockers || []), ...(packagePreview?.blockers || [])].map((item) => [item.file, item.reason]))
-  const stateOf = (file) => releaseReadiness(file, { done, results: releaseResults, sourceState: srcOf, pending: pendingReview.byFile })
+  const stateOf = (file) => releaseReadiness(file, { done, results: releaseResults, sourceState: srcOf, pending: pendingReview.byFile, allowRemainingIssues })
   const states = releaseFiles.map(stateOf)
   const attentionCount = states.filter((state) => !['ready', 'released', 'delivering'].includes(state.status)).length
   const deliveringCount = states.filter((state) => state.status === 'delivering').length
@@ -240,7 +241,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     packageName: packageName.trim().replace(/\.zip$/i, ''), preserveHierarchy, includeManifest })
   const activePackageJob = packageJob?.plan_key === packagePlanKey ? packageJob : null
   const selectedPublishable = selectedReady.filter((f) => !done[f.file])
-  const deliveryPlanKey = JSON.stringify({ files: selectedPublishable.map((file) => [file.file, file.remediated_at, file.corrected_sha256 || null]).sort(), destination: releaseDestination, releaseFolderName, preserveHierarchy })
+  const deliveryPlanKey = JSON.stringify({ files: selectedPublishable.map((file) => [file.file, file.remediated_at, file.corrected_sha256 || null]).sort(), destination: releaseDestination, releaseFolderName, preserveHierarchy, allowRemainingIssues })
   const previewIsCurrent = reviewedPlanKey === deliveryPlanKey
   const selectedSizes = selectedReady.map(releaseFileSize)
   const selectedEstimatedBytes = selectedSizes.length > 0 && selectedSizes.every((size) => size != null)
@@ -387,13 +388,17 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     // Release state is durable; reload and resume polling when the selected scan changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run?.id])
-  const publishSelectedFiles = (fileNames, folderName = '') => releaseDestination
-    ? publishAllFiles(run?.id, fileNames, folderName, { destination: releaseDestination })
+  const partialReleaseOptions = (fileNames) => allowRemainingIssues ? {
+    allowRemainingIssues: true,
+    expectedArtifacts: Object.fromEntries(ready.filter(file => fileNames.includes(file.file)).map(file => [file.file, file.corrected_sha256])),
+  } : {}
+  const publishSelectedFiles = (fileNames, folderName = '') => (releaseDestination || allowRemainingIssues)
+    ? publishAllFiles(run?.id, fileNames, folderName, { destination: releaseDestination, ...partialReleaseOptions(fileNames) })
     : folderName ? publishAllFiles(run?.id, fileNames, folderName) : publishAllFiles(run?.id, fileNames)
   const publish = async (file) => {
     if (readOnly || done[file]) return
     try {
-      const res = releaseDestination
+      const res = allowRemainingIssues ? await publishSelectedFiles([file]) : releaseDestination
         ? await publishFile(run?.id, file, releaseDestination)
         : await publishFile(run?.id, file)
       const successful = rememberRelease(res, [file])
@@ -418,7 +423,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     try {
       const res = exact
         ? await publishAllFiles(run?.id, pending, preferredFolderName, { destination: releaseDestination,
-          expectedArtifacts: Object.fromEntries(selectableReady.filter(f => pending.includes(f.file)).map(f => [f.file, f.corrected_sha256])) })
+          ...partialReleaseOptions(pending), expectedArtifacts: Object.fromEntries(selectableReady.filter(f => pending.includes(f.file)).map(f => [f.file, f.corrected_sha256])) })
         : await publishSelectedFiles(pending, preferredFolderName)
       const successful = rememberRelease(res, pending)
       if (releaseProvider === 'sharepoint' && res?.queued) {
@@ -567,9 +572,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     try {
       const preview = await previewReleaseDestination(
         run?.id, selectedPublishable.map((file) => file.file),
-        releaseFolder?.name || releaseFolderName, preserveHierarchy, releaseDestination)
+        releaseFolder?.name || releaseFolderName, preserveHierarchy, releaseDestination, partialReleaseOptions(selectedPublishable.map(file => file.file)))
       setReleasePreview(preview)
-      setReviewedPlanKey(JSON.stringify({ files: selectedPublishable.map((file) => [file.file, file.remediated_at, file.corrected_sha256 || null]).sort(), destination: releaseDestination, releaseFolderName: !releaseFolder && !releaseFolderName.trim() ? preview.folder_name || '' : releaseFolderName, preserveHierarchy }))
+      setReviewedPlanKey(JSON.stringify({ files: selectedPublishable.map((file) => [file.file, file.remediated_at, file.corrected_sha256 || null]).sort(), destination: releaseDestination, releaseFolderName: !releaseFolder && !releaseFolderName.trim() ? preview.folder_name || '' : releaseFolderName, preserveHierarchy, allowRemainingIssues }))
       if (!releaseFolder && !releaseFolderName.trim()) setReleaseFolderName(preview.folder_name || '')
       setBuilderStep(3)
     } catch (error) {
@@ -867,6 +872,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             </button>
           </div>
         )}
+        <div className="panel" style={{ marginTop: 12, padding: 14 }}>
+          <label><input type="checkbox" checked={allowRemainingIssues} disabled={readOnly || publishing}
+            onChange={event => { setAllowRemainingIssues(event.target.checked); setReleasePreview(null); setPackagePreview(null); setReviewedPlanKey(null); setBuilderStep(1); setDeliveryMethod('publish'); setSelectedFiles(new Set()); selectionInitialized.current = false }} /> Publish with remaining issues</label>
+          <p className="muted" style={{ margin: '8px 0 0' }}>Optional: publish saved copies even when manual review or accessibility issues remain. Unapproved suggestions are not applied. Remaining issues stay in the audit record; publishing does not certify accessibility.</p>
+        </div>
         {ready.length === 0 ? (
           pendingReview.items > 0 ? (
             <div className="muted" style={{ marginTop: 10, padding: '12px 14px', borderRadius: 9, background: '#FBF1DF', border: '1px solid #EAD9BF', color: '#7A5A12' }}>
@@ -883,7 +893,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           releaseProvider={releaseProvider} driveMirrorEnabled={driveMirrorEnabled}
           driveMirrorFolder={driveMirrorFolder} releaseFolder={releaseFolder}
           releaseResults={releaseResults} selectedFile={sel} setSelectedFile={setSel}
-          sourcePath={sourcePath} pending={pendingReview.byFile} blockers={previewBlockers}
+          sourcePath={sourcePath} pending={pendingReview.byFile} blockers={previewBlockers} allowRemainingIssues={allowRemainingIssues}
           destinationLabel={releaseDestination?.folder_name ? `${releaseDestination.folder_name} / Remediated / ${releaseFolder?.name || releaseFolderName || '<release name>'}` : undefined}
         />}
         {ready.length > 0 && (
@@ -915,9 +925,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <span>{selectedPublishable.length ? `Create ${selectedPublishable.length} protected ${selectedPublishable.length === 1 ? 'copy' : 'copies'} in the connected source.` : 'Every selected file is already published. Choose download to retrieve another copy.'}</span>
                 </label>
                 <label className={deliveryMethod === 'download' ? 'selected' : ''}>
-                  <input type="radio" name="delivery-method" value="download" checked={deliveryMethod === 'download'} onChange={() => { setDeliveryMethod('download'); setKeptInAcp(false) }} />
+                  <input type="radio" name="delivery-method" value="download" disabled={allowRemainingIssues} checked={deliveryMethod === 'download'} onChange={() => { setDeliveryMethod('download'); setKeptInAcp(false) }} />
                   <b>Download to this device</b>
-                  <span>Build one ZIP package with the source folder structure and a release manifest; your browser chooses where to save it.</span>
+                  <span>{allowRemainingIssues ? 'ZIP downloads require verified copies. Turn off publishing with remaining issues to use this option.' : 'Build one ZIP package with the source folder structure and a release manifest; your browser chooses where to save it.'}</span>
                 </label>
                 <label className={deliveryMethod === 'acp' ? 'selected' : ''}>
                   <input type="radio" name="delivery-method" value="acp" checked={deliveryMethod === 'acp'} onChange={() => { setDeliveryMethod('acp'); setKeptInAcp(false) }} />
@@ -1086,7 +1096,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         const targets = confirm.kind === 'selected' ? selectedPublishable.filter((f) => requested.has(f.file)) : confirm.kind === 'all' ? ready.filter((f) => !done[f.file]) : ready.filter((f) => f.file === confirm.file)
         const cnt = targets.length
         const batchAnyDrive = targets.some((f) => f.drive_file_id)
-        const lines = releaseConfirmLines({ count: cnt, provider: releaseProvider, anyDrive: batchAnyDrive, driveMirrorEnabled, driveMirrorFolder })
+        const lines = releaseConfirmLines({ count: cnt, provider: releaseProvider, anyDrive: batchAnyDrive, driveMirrorEnabled, driveMirrorFolder, allowRemainingIssues })
         const onGo = () => { if (readOnly || publishing || !previewIsCurrent) return; setConfirm(null); if (isBatch) publishAll(targets.map((f) => f.file), confirm.folderName || ''); else publish(confirm.file) }
         return (
           <div role="dialog" aria-modal="true" aria-label="Confirm release" onClick={() => setConfirm(null)}
@@ -1096,6 +1106,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
               <h3 style={{ margin: '0 0 12px' }}>{isBatch ? `Publish ${cnt} corrected ${cnt === 1 ? 'copy' : 'copies'}?` : `Release ${confirm.file}?`}</h3>
               <ul style={{ margin: '0 0 18px', paddingLeft: 18, fontSize: 13.5, lineHeight: 1.65 }}>
                 {confirm.folderName && <li>Release folder: “{confirm.folderName}”</li>}
+                {allowRemainingIssues && <li><strong>Publish with remaining issues:</strong> unresolved findings and pending approvals remain recorded. This release does not mark them approved, inspected, verified or compliant.</li>}
                 {lines.map((l, i) => <li key={i}>{l}</li>)}
               </ul>
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>

@@ -29,14 +29,42 @@ def reuse_state(saved: dict | None, digest: str) -> str:
     return "new"
 
 
+def release_ready(record: dict | None, allow_remaining_issues: bool = False) -> bool:
+    """Opt-in releases only a durable corrected artifact, never an unwritten proposal."""
+    return bool(record and record.get("remediated_at") and (
+        record.get("compliant") or (allow_remaining_issues is True and record.get("corrected_sha256"))))
+
+
+def release_review_evidence(record: dict, *, owner: str, allow_remaining_issues: bool,
+                            store=None, scan_id: str | None = None) -> dict:
+    # Release identity readers intentionally omit issue bodies. Read the owned scan's
+    # finding rows rather than interpreting that projection's missing field as zero.
+    evidence = record
+    pending = None
+    if store is not None and scan_id:
+        scan = store.get_scan(scan_id, owner=owner) or {}
+        evidence = next((r for r in scan.get("files", []) if r.get("file") == record.get("file")), record)
+        queue_reader = getattr(store, "list_hitl_queue", None)
+        if callable(queue_reader):
+            pending = [{"id": q.get("id"), "rule_id": q.get("rule_id"), "status": q.get("status")}
+                       for q in queue_reader(scan_id=scan_id, owner=owner)
+                       if q.get("file") == record.get("file") and q.get("status") == "pending"]
+    issues = evidence.get("issues")
+    return {"allow_remaining_issues": allow_remaining_issues is True,
+            "acknowledged_by": owner, "compliant": bool(record.get("compliant")),
+            "remaining_issue_count": len(issues) if isinstance(issues, list) else None,
+            "remaining_issues": issues if isinstance(issues, list) else None,
+            "pending_review_items": pending}
+
+
 def require_current_record(store, scan_id: str, filename: str, digest: str,
-                           remediated_at: str | None, *, owner: str) -> dict:
+                           remediated_at: str | None, *, owner: str, allow_remaining_issues: bool = False) -> dict:
     from assessment_policy import selected_documents
     selected = selected_documents(store.get_decisions(scan_id, owner=owner))
     if selected is not None and filename not in selected:
         raise ReleaseArtifactError("Document is no longer in the Remediate selection.")
     record = store.get_file_record(scan_id, filename)
-    if not record or not record.get("compliant") or not record.get("remediated_at"):
+    if not release_ready(record, allow_remaining_issues):
         raise ReleaseArtifactError("Approval or corrected-copy readiness changed. Review and verify again.")
     if record.get("remediated_at") != remediated_at:
         raise ReleaseArtifactError("The corrected copy changed while preparing Release. Review the new copy.")

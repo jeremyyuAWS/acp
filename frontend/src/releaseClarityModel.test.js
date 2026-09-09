@@ -5,7 +5,7 @@ const corrected = { file: 'a.pdf', compliant: 1, remediated_at: '2026-09-01' }
 describe('Release corrected-copy contract', () => {
   it('matches the existing backend eligibility boundary without inferring from score', () => {
     const routes = readFileSync('../api/routes/scans.py', 'utf8')
-    expect(routes).toContain('if not record or not record.get("compliant") or not record.get("remediated_at"):')
+    expect(routes).toContain('release_ready(row, allow_remaining_issues)')
     expect(hasCorrectedCopy(corrected)).toBe(true)
     for (const file of [{ score: 100 }, { compliant: true }, { compliant: null, remediated_at: '2026-09-01' }, { compliant: 'false', remediated_at: '2026-09-01' }]) {
       expect(hasCorrectedCopy(file)).toBe(false)
@@ -40,4 +40,13 @@ it('prefers exact artifact identity over timestamps when the server provides it'
   const file = { ...corrected, corrected_sha256: 'b'.repeat(64), remediated_at: '2026-09-03' }
   expect(deliveryIsCurrent(file, { status: 'published', published_at: '2026-09-04', artifact_digest: `sha256:${'a'.repeat(64)}` })).toBe(false)
   expect(deliveryIsCurrent(file, { status: 'published', published_at: '2026-09-02', artifact_digest: `sha256:${'b'.repeat(64)}` })).toBe(true)
+})
+
+it('partial release preserves source and artifact gates while allowing unresolved findings explicitly', () => {
+  const file = { file: 'partial.docx', compliant: false, corrected_sha256: 'digest', remediated_at: '2026-09-09' }
+  expect(releaseReadiness(file).status).toBe('attention')
+  expect(releaseReadiness(file, { allowRemainingIssues: true, pending: { 'partial.docx': 3 } }).label).toBe('Ready with remaining issues')
+  expect(releaseReadiness({ ...file, corrected_sha256: null }, { allowRemainingIssues: true }).status).toBe('attention')
+  expect(releaseReadiness(file, { allowRemainingIssues: true, sourceState: () => 'stale' }).status).toBe('changed')
+  expect(releaseReadiness(file, { allowRemainingIssues: true, blockers: { 'partial.docx': 'Write incomplete' } }).status).toBe('attention')
 })

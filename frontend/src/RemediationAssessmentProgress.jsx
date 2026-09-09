@@ -20,11 +20,12 @@ export const FINDING_BUCKETS = [
 ]
 export function findingMath(snapshot) {
   const rec = snapshot.finding_reconciliation || {}
-  const exact = rec.exact === true && !rec.violations?.length
+  const exact = rec.baseline_valid !== false && rec.exact === true && !rec.violations?.length
     && !snapshot.integrity?.affected?.includes('finding_reconciliation')
     && valid(rec.assessed) && FINDING_BUCKETS.every(([key]) => valid(rec[key]))
     && FINDING_BUCKETS.reduce((sum, [key]) => sum + rec[key], 0) === rec.assessed
-  return { exact, total: valid(rec.assessed) ? rec.assessed : null,
+  const overcount = FINDING_BUCKETS.reduce((sum, [key]) => sum + (valid(rec[key]) ? rec[key] : 0), 0) > rec.assessed
+  return { exact, total: rec.baseline_valid !== false && valid(rec.assessed) && !overcount ? rec.assessed : null,
     fixed: exact ? rec.resolved_verified : null,
     remaining: exact ? rec.assessed - rec.resolved_verified : null, rec }
 }
@@ -117,15 +118,15 @@ export default function RemediationAssessmentProgress({ snapshot, assessmentCont
   return <section className="rap" aria-label="Assessment findings and remediation progress">
     <h4>Assessment findings · remediation progress</h4>
     <p>The starting assessment stays unchanged. Only verified finding resolutions reduce what remains.</p>
-    <dl className="rap-grid">
+    {exact && <dl className="rap-grid">
       {tile('Starting findings', total, 'The assessed findings for this run.')}
       {tile('Fixed and verified', fixed, 'Original findings with recorded verification evidence.', true)}
       {tile('Not yet verified fixed', remaining, 'Includes review, unfinished work, exclusions, and replaced findings.')}
-    </dl>
+    </dl>}
     {exact ? <p className="rap-equation">{n(fixed)} fixed + {n(remaining)} not yet verified fixed = {n(total)} starting findings</p>
-      : <p className="rap-equation">{n(total)} starting findings · outcome breakdown unavailable. Change records cannot be subtracted from findings.</p>}
-    {!original && <p>The original automatic-eligibility breakdown is unavailable for this recorded assessment.</p>}
-    {original && <>
+      : <div role="status" className="rap-equation"><strong>Finding totals need reconciliation</strong><p>{valid(total) ? `${n(total)} starting findings · outcome breakdown unavailable.` : (rec.baseline_valid === false ? 'This assessment was saved before its document checks finished. Run a new assessment to capture an auditable starting total.' : 'The saved assessment total does not yet match the finding records for this run.')} Verified changes and review items are shown separately below; neither can replace the original finding count.</p></div>}
+    {exact && !original && <p>The original automatic-eligibility breakdown is unavailable for this recorded assessment.</p>}
+    {exact && original && <>
       <dl className="rap-grid">
         {tile('Automatic fixes remaining', autoRemaining, `${n(original.autoFixAvailable)} originally eligible · ${n(resolvedAuto)} verified resolved. Eligibility does not guarantee a successful fix.`, true)}
         {tile('Other findings remaining', valid(autoRemaining) && exact ? remaining - autoRemaining : null, `${n(original.humanReviewRequired)} originally needed review or another approach.`)}

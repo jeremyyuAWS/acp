@@ -95,3 +95,29 @@ it('does not infer original eligibility for historical runs without sealed group
   expect(container.textContent).not.toContain('Automatic fixes remaining')
   expect(container.textContent).toContain('3 starting findings')
 })
+
+it('does not present a contradictory zero baseline or a grid of unavailable counts', async () => {
+  const snapshot = snap({ assessed: 0, original_assessment: [], exact: false,
+    accounted: 9, resolved_verified: 4, awaiting_review: 5, unchanged_no_fix: 0,
+    violations: [{ code: 'ledger_cardinality', assessed: 0, rows: 9 }] })
+  expect(findingMath(snapshot).total).toBeNull()
+  const { container } = await mount(snapshot)
+  expect(container.textContent).not.toContain('0 starting findings')
+  expect(container.textContent).not.toContain('Originally: 0 automatic')
+  expect(container.textContent).not.toContain('Unavailable')
+  expect(container.textContent).toContain('Finding totals need reconciliation')
+  expect(container.textContent).toContain('Verified changes · all origins')
+})
+it('shows real zero outcomes when a zero assessment and its empty ledger reconcile', async () => {
+  const { container } = await mount(snap({ assessed: 0, original_assessment: [],
+    resolved_verified: 0, awaiting_review: 0, unchanged_no_fix: 0 }))
+  expect(container.textContent).toContain('0 fixed + 0 not yet verified fixed = 0 starting findings')
+  expect(container.textContent).not.toContain('Unavailable')
+})
+it('explains prematurely sealed historical assessments without trusting even matching zero counts', async () => {
+  const { container } = await mount(snap({ assessed: 0, original_assessment: [], baseline_valid: false,
+    resolved_verified: 0, awaiting_review: 0, unchanged_no_fix: 0 }))
+  expect(container.textContent).toContain('saved before its document checks finished')
+  expect(container.textContent).not.toContain('0 starting findings')
+  expect(container.textContent).not.toContain('Unavailable')
+})

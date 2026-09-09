@@ -147,6 +147,11 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
 
   const tone = TONE[m.status] || TONE.attention
   const r = reconcile(m)
+  const forecastCounts = remediationForecast && ['automatic', 'human', 'blocked', 'total'].every(
+    key => Number.isSafeInteger(remediationForecast[key]) && remediationForecast[key] >= 0)
+    && remediationForecast.automatic + remediationForecast.human + remediationForecast.blocked === remediationForecast.total
+  const outsidePreview = forecastCounts ? m.totalFindings - remediationForecast.total : null
+  const grid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12, marginTop: 16 }
   const gaps = m.unableToAssess > 0 || m.documentsUnopened.length > 0
   const lifecycleExcluded = run?.scope?.lifecycle_eligible_excluded ?? 0
   // The by-severity addends, printed as an equation so the partition is checkable on screen — the
@@ -338,16 +343,37 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           )}
         </div>
 
-        <Metric label={remediationForecast ? "Can be fixed automatically · plan preview" : "Can be fixed automatically"} value={remediationForecast ? remediationForecast.automatic : m.autoFixAvailable} tone="#2F7D32"
+      </div>
+      <div role="group" aria-label="Plan findings breakdown" style={grid}>
+        <Metric label={remediationForecast ? "Can be fixed automatically · plan preview" : "Can be fixed automatically"} value={remediationForecast ? remediationForecast.automatic?.toLocaleString() : m.autoFixAvailable} tone="#2F7D32"
                 onClick={remediationForecast?.onAutomatic} delta={remediationForecast?.automaticDelta}>
           {remediationForecast ? <>Issues this plan can fix using set rules, without asking you to approve each change. These fixes have not been applied yet. {remediationForecast.onAutomatic && <b>View details →</b>}</> : <>Issues with a rule-based fix available. AI suggestions are counted under review instead.</>}
         </Metric>
 
-        <Metric label={remediationForecast ? "Needs your review · plan preview" : "Needs your review"} value={remediationForecast ? remediationForecast.human : m.humanReviewRequired}
+        <Metric label={remediationForecast ? "Needs your review · plan preview" : "Needs your review"} value={remediationForecast ? remediationForecast.human?.toLocaleString() : m.humanReviewRequired}
                 onClick={remediationForecast?.onHuman} delta={remediationForecast?.humanDelta}>
           {remediationForecast ? <>Issues that need you to approve a suggestion or make a change yourself. This includes AI suggestions. Items that cannot proceed are listed separately below. {remediationForecast.onHuman && <b>View details →</b>}</> : <>Issues that need a person to decide what to change, including AI suggestions awaiting approval.</>}
         </Metric>
 
+        {remediationForecast && <Metric label="Blocked · plan preview" value={forecastCounts ? remediationForecast.blocked : 'Not yet available'}
+                onClick={remediationForecast.onBlocked}>
+          Findings that cannot proceed until missing evidence or a processing issue is addressed.
+          {remediationForecast.onBlocked && <> <b>View details →</b></>}
+        </Metric>}
+        {outsidePreview > 0 && <Metric label="Outside this preview" value={outsidePreview}>
+          Assessment findings not represented in the current plan. This can reflect scope or changed results; it does not prove they were fixed.
+        </Metric>}
+      </div>
+      {remediationForecast && <div className="muted" style={{ fontSize: 12, marginTop: 12 }}>
+        {forecastCounts ? <>
+          <div>{remediationForecast.automatic.toLocaleString()} automatic + {remediationForecast.human.toLocaleString()} needing your review + {remediationForecast.blocked.toLocaleString()} blocked = {remediationForecast.total.toLocaleString()} findings in this plan</div>
+          {outsidePreview > 0 && <div>{remediationForecast.total.toLocaleString()} in this plan + {outsidePreview.toLocaleString()} outside this preview = {m.totalFindings.toLocaleString()} assessment findings</div>}
+          {outsidePreview < 0 && <div>The current preview and assessment cover different finding populations. Current plan findings cannot be added to the historical assessment.</div>}
+        </> : 'The plan breakdown is not yet available.'}
+      </div>}
+      <div role="group" aria-label="Separate counts: review items and checks" style={{ marginTop: 16 }}>
+      <div style={{ ...lab, fontWeight: 600 }}>Separate counts · not added to findings</div>
+      <div style={grid}>
         {Number.isInteger(reviewSummary?.pendingItems) && reviewSummary.pendingItems >= 0 && (
           <Metric label="Review queue items" value={reviewSummary.pendingItems.toLocaleString()}
                   onClick={onOpenReview}>
@@ -381,6 +407,8 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
             We show issues and unfinished checks separately so you can see what still needs attention.
           </div>
         </div>
+      </div>
+
       </div>
 
       {checksOpen && <AssessIncompleteChecks id={checksId} rows={m.rows} assessment={assessment} onClose={closeChecks} />}
