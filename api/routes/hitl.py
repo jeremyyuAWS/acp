@@ -151,11 +151,19 @@ def hitl_list(request: Request, status: str | None = None, scan_id: str | None =
 def hitl_metrics(request: Request, scan_id: str | None = None):
     """Human-review telemetry for the Intelligent Review Workspace dashboard — decisions by
     action, approval rate, edit rate (confidence-calibration signal), and average review time
-    (the headline metric: reviewer time eliminated). Scoped to one scan when scan_id is given."""
-    if scan_id is not None and core.store.get_scan(
-            scan_id, owner=getattr(request.state, "user_email", None)) is None:
+    (the headline metric: reviewer time eliminated). Scoped to one scan when scan_id is given,
+    and in every case to the signed-in user's own scans.
+
+    THE OWNER SCOPE IS NOT ONLY ON THE scan_id BRANCH. It used to be: a scan_id was checked
+    against get_scan(owner=...), and omitting the parameter skipped the check and aggregated
+    every tenant's decisions into one answer. That is a cross-tenant read reachable by any
+    signed-in user, and the numbers it returns are not the caller's own either — the workspace
+    asks this question about the caller's reviews, so an unscoped total is wrong even where it
+    is permitted."""
+    owner = getattr(request.state, "user_email", None)
+    if scan_id is not None and core.store.get_scan(scan_id, owner=owner) is None:
         raise HTTPException(404, "scan not found")
-    return core.store.hitl_analytics(scan_id)
+    return core.store.hitl_analytics(scan_id, owner=owner)
 
 
 @router.put("/hitl/queue/{item_id}")
@@ -308,6 +316,13 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         if body.model_call_ids is not None:
             proposals = item.get("proposals") or item.get("evidence") or []
             final_values = body.approved_values or []
+            # ONE of these rows is the decision; the rest are the drafts it covered. The flag is
+            # what stops a five-image card from reading as five reviews in hitl_analytics — see
+            # Store._decision_rows. It cannot be `index == 0`: the loop skips proposals with no
+            # recorded call, so the first row WRITTEN is not always the first row considered, and
+            # keying on the index would leave a burst with no primary row at all whenever
+            # proposal 0 happened to be human-authored.
+            wrote_primary = False
             for index, call_id in enumerate(body.model_call_ids):
                 if not call_id:
                     continue
@@ -320,7 +335,19 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
                                 and final_value != ai_value),
                     ai_value=ai_value, final_value=final_value,
                     reject_reason=(body.reject_reason if body.status == "rejected" else None),
-                    model_call_id=call_id, **event_kwargs)
+                    model_call_id=call_id, decision_primary=not wrote_primary, **event_kwargs)
+                wrote_primary = True
+            if not wrote_primary:
+                # Every id in the list was empty, so the loop wrote nothing and the decision went
+                # unrecorded — invisible in approval rate, review time and the maturity gate alike.
+                # A list of blanks means "no model call to attribute this to", which is exactly the
+                # human-authored case the else-branch below already handles; it just never ran,
+                # because the branch is chosen on the field being PRESENT rather than useful.
+                core.store.record_hitl_event(
+                    item.get("scan_id"), item.get("file"), item.get("rule_id"), item_id, _action,
+                    edited=body.edited, ai_value=body.ai_value, final_value=body.approved_value,
+                    reject_reason=(body.reject_reason if body.status == "rejected" else None),
+                    model_call_id=body.model_call_id, **event_kwargs)
         else:
             core.store.record_hitl_event(
                 item.get("scan_id"), item.get("file"), item.get("rule_id"), item_id, _action,
