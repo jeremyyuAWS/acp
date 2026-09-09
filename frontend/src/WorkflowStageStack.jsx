@@ -49,11 +49,10 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
         const model = snapshot ? canonicalStageCardModel(snapshot, { isCurrent }) : null
         const attention = Boolean(snapshot && stageNeedsAttention(snapshot))
         const isCompleted = completed(snapshot.state)
-        const defaultOpen = attention || (isCompleted ? stage !== 'assess' && stage === activeStage : isCurrent)
-        // Completion reveals the assessment results below. A live disclosure choice must not
-        // carry into that completed phase, but users can reopen the completed details normally.
-        const overrideKey = stage === 'assess'
-          ? `${stage}:${snapshot.execution_id}:${isCompleted ? 'complete' : 'live'}` : stage
+        // Completed stages collapse so the report below gets the user's attention. Keep
+        // attention/error cards open, and scope manual reopening to this execution and phase.
+        const defaultOpen = attention || (isCompleted ? false : isCurrent)
+        const overrideKey = `${stage}:${snapshot.execution_id}:${isCompleted ? 'complete' : 'live'}`
         const open = attention || (overrides[overrideKey] ?? defaultOpen)
         const detail = isCurrent ? stageDetails[stage] : null
         const bodyId = `workflow-stage-${stage}`
