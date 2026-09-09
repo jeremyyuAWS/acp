@@ -1885,8 +1885,9 @@ from ai_attempt_history import SCHEMA as _AI_ATTEMPT_HISTORY_SCHEMA
 from ai_review_chain import SCHEMA as _AI_REVIEW_SCHEMA
 from remediation_run_insights import SCHEMA as _AI_PROPOSAL_SNAPSHOT_SCHEMA
 from remediation_contribution import SCHEMA as _CONTRIBUTION_SCHEMA
+from automatic_release_store import SCHEMA as _AUTOMATIC_RELEASE_SCHEMA
 _SCHEMA.extend([*_AI_SPENDING_SCHEMA, _AI_RUN_POLICY_SCHEMA,
-                *_AI_ATTEMPT_HISTORY_SCHEMA, *_AI_REVIEW_SCHEMA, *_AI_PROPOSAL_SNAPSHOT_SCHEMA, *_CONTRIBUTION_SCHEMA])
+                *_AI_ATTEMPT_HISTORY_SCHEMA, *_AI_REVIEW_SCHEMA, *_AI_PROPOSAL_SNAPSHOT_SCHEMA, *_CONTRIBUTION_SCHEMA, *_AUTOMATIC_RELEASE_SCHEMA])
 
 # ── Power BI read-only views (Postgres only) ────────────────────────────────
 # Three views that expose ACP scan data for Power BI DirectQuery. They are
@@ -2480,8 +2481,8 @@ class _PgAdapter:
     # snapshot tables. All are additive and ignored by older replicas during rolling deploys.
     # v44 adds durable owner/run provider reservations and immutable spending policy.
     # v49 adds explicit durable approval-to-Release intents after exact artifact identity.
-    _SCHEMA_VERSION = 49
-    _SCHEMA_CHECKSUM_AT_VERSION = "c1058ac624a0f6e64943001b2f6f70cb"
+    _SCHEMA_VERSION = 50
+    _SCHEMA_CHECKSUM_AT_VERSION = "81084e00e249a06e9d8d7be8e0203be6"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -4802,7 +4803,7 @@ class Store:
                          "remediation_policy_action", "remediation_run_policy_snapshot",
                          # Release executions and their provider destinations are customer data.
                          "release_documents", "release_roots", "release_root_claims",
-                         "release_executions", "release_continuations",
+                         "release_executions", "release_continuations", "automatic_release_authorizations",
                          # Canonical execution history, delivery state, manifests and receipts
                          # are all records of customer work and must leave with the scan data.
                          "stage_executions", "stage_work_items", "stage_attempts", "stage_events",
@@ -4883,7 +4884,7 @@ class Store:
                                # Both are scan_id-keyed, so the standard subquery scopes them to
                                # this owner's runs exactly as it does the rest.
                                "remediation_delivery", "remediation_run_hold",
-                               "remediation_run_policy_snapshot", "release_continuations"]
+                               "remediation_run_policy_snapshot", "release_continuations", "automatic_release_authorizations"]
     # Tables that key on doc_id (not scan_id), scoped via a documents.owner_email join.
     _RESET_USER_DOC_TABLES = ["disposition_audit", "remediation_state"]
 
