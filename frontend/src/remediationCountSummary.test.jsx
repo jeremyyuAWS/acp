@@ -14,7 +14,8 @@ const manual = Array.from({ length: 47 }, (_, i) => ({ id: `manual-${i}`, file: 
 const rows = [...pending, ...manual, ...applied]
 it('counts 299 eligible approvals and 47 manual items across 177 documents, excluding 2000 inspection rows', async () => {
   const counts = remediationReviewCounts(rows)
-  expect(counts).toEqual({ ready: 299, manual: 47, individual: 0, pendingItems: 346, documents: 177, inspection: 2000 })
+  // `findings` matches `pendingItems` here: every fixture row covers a single finding.
+  expect(counts).toEqual({ ready: 299, manual: 47, individual: 0, pendingItems: 346, findings: 346, documents: 177, inspection: 2000 })
   expect(reviewBadgeTitle(counts.pendingItems)).toBe('346 review items requiring attention')
   const { root, container } = createTestRoot()
   await act(async () => root.render(createElement(Header, { counts: { automaticOnly: false, autoFixed: 2400, documents: 177, needsApproval: counts.ready, manual: counts.manual, inspection: counts.inspection } })))

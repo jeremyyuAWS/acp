@@ -150,6 +150,30 @@ export function remediationSubmissionFailureCopy(err) {
   return `Could not enqueue: ${err?.message || err}`
 }
 
+// The decision recorded on a hitl_queue row, in the inbox model's vocabulary. 'pending' becomes
+// undefined so a queued row is still classified by its remediation shape, exactly as before;
+// every other status is a durable decision the inbox must place (remediationInboxModel's
+// workflowStatusOf), not a row it may quietly drop.
+export function uiStatusOf(row) {
+  const status = String(row?.status || '').toLowerCase()
+  return !status || status === 'pending' ? undefined : status
+}
+
+// Rows keyed by id, first occurrence winning. The inbox is assembled from four sources that can
+// legitimately hold the same finding at once — the pending queue, this session's rejected
+// handoffs, the durable decided rows, and the applied-fix evidence — and a finding counted twice
+// is the same class of defect as one counted not at all.
+export function dedupeById(rows) {
+  const seen = new Set()
+  return rows.filter((row) => {
+    const key = row?.id
+    if (key == null) return true
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 export function dbItemToUi(it, files) {
   const sc = (it.rule_id || '').replace(/^(WCAG_?|SC_)/, '').replace(/_/g, '.')
   const ba = ITEM_BA[sc] || { meta: 'review AI proposal', before: (d) => d || 'issue found' }
@@ -166,6 +190,9 @@ export function dbItemToUi(it, files) {
     ruleId: it.rule_id,
     rule_id: it.rule_id,
     validated: !!it.validated,
+    // The reviewer's recorded decision. Without it a row that was approved, rejected or skipped
+    // came back from the server indistinguishable from untouched work.
+    status: uiStatusOf(it),
     aiDraftable: AI_DRAFTABLE_SCS.has(sc),
     source: fileRec.sourceName,
     rule: `WCAG ${sc}${it.rule_name ? ' — ' + it.rule_name : ITEM_NAME[sc] ? ' — ' + ITEM_NAME[sc] : ''}`,
@@ -390,6 +417,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // filters, and their sessionStorage rehydration) is gone with it.
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
+  // The run's rows that already carry a decision (approved / rejected / skipped). Held beside the
+  // pending queue rather than in it, so every count that means "still to do" (`queue.length`,
+  // "N remaining", the nav badge) keeps its meaning, while the inbox and the run total can
+  // account for the whole queue the server holds.
+  const [decidedItems, setDecidedItems] = useState([])
   // W2 — a rejected AI fix is not a dead end. It becomes a manual-handling item that stays visible
   // in the inbox's "Needs manual handling" lane until a person picks it up, rather than vanishing
   // from the queue the moment it is rejected. Kept as its own state (like deferredItems) so it
@@ -437,31 +469,56 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       })
       .catch(() => {})
   }
+  // ONE read of the run's durable review queue, split into the work still outstanding and the
+  // decisions already recorded. Both halves are kept.
+  //
+  // This used to ask for `status=pending` only, so a row the reviewer had approved, rejected or
+  // skipped never reached the page: the run total shrank by one on every decision (a run whose
+  // logs named 13 review items showed 12), and the Completed tab — where an approved AI
+  // suggestion is meant to be tracked — could only ever show what THIS browser session had
+  // decided, so it was empty after a reload. Superseded rows are still dropped by the server,
+  // deliberately: a finding re-verified as passing has stopped being work.
+  const applyHitlRows = (items) => {
+    const rows = (items || []).map((it) => ({ ...dbItemToUi(it, files), _raw: it }))
+    const served = new Set(rows.map((row) => row.id))
+    setQueue(rows.filter((row) => !row.status))
+    // A decision taken in this browser is kept until the server's own row for it arrives. The
+    // read is triggered by the same event that announces the decision and can therefore outrun
+    // its write — api.js deliberately suppresses a row whose PUT is still in flight — so
+    // dropping it here would take the item out of both lists and dip the run total by one.
+    setDecidedItems((previous) => [...rows.filter((row) => row.status),
+                                   ...previous.filter((row) => !served.has(row.id))])
+    return items || []
+  }
+  const recordDecided = (item, status) => {
+    if (!item?.id) return
+    setDecidedItems((d) => (d.some((x) => x.id === item.id)
+      ? d : [...d, { ...item, status, validated: false }]))
+  }
   useEffect(() => {
-    setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([]); setRejectedItems([]); setAckd({})
+    setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([]); setRejectedItems([]); setAckd({}); setDecidedItems([])
     clearInterval(pollRef.current); setRemProg(null); setRemBusy(false); setServerFixed(0); setRemMsg(''); setDiffTotals(null); setScanDiffs([]); setAppliedFixes([])
     fetchFixes()
     if (!runId) { setQueue(SIM ? buildHumanQueue(files, {}) : []); return }
     if (SIM) { setQueue(buildHumanQueue(files, {})); return }
     autoPopulateHitlQueue(runId)
-      .then(() => listHitlQueue(runId, 'pending'))
+      .then(() => listHitlQueue(runId))
       .then((items) => {
-        setQueue((items || []).map((it) => ({ ...dbItemToUi(it, files), _raw: it })))
         const seeded = {}
-        ;(items || []).forEach((it) => { if (it.assignee) seeded[it.file] = it.assignee })
+        applyHitlRows(items).forEach((it) => { if (it.assignee) seeded[it.file] = it.assignee })
         if (Object.keys(seeded).length) setAssignees?.((a) => ({ ...seeded, ...a }))
       })
-      .catch(() => setQueue(buildHumanQueue(files, {})))
+      .catch(() => { setQueue(buildHumanQueue(files, {})); setDecidedItems([]) })
   }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Drain in sync with the unified inbox: when an item is approved/rejected in the popup
-  // (or anywhere), re-fetch the pending set so "N remaining" + the review banner update,
-  // and re-pull the applied-fix evidence so the counts move with real progress.
+  // (or anywhere), re-read the queue so "N remaining", the review banner and the recorded
+  // decisions all update, and re-pull the applied-fix evidence so the counts move with real
+  // progress.
   useEffect(() => {
     if (!runId || SIM) return
     const reload = () => {
-      listHitlQueue(runId, 'pending')
-        .then((items) => setQueue((items || []).map((it) => ({ ...dbItemToUi(it, files), _raw: it })))).catch(() => {})
+      listHitlQueue(runId).then(applyHitlRows).catch(() => {})
       fetchFixes()
     }
     window.addEventListener('acp:hitl-changed', reload)
@@ -541,9 +598,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${failed ? `, ${failed} failed` : ''}.`)
     try { sessionStorage.removeItem(REMKEY(runId)) } catch { /* ignore */ }
     onRefresh?.(); fetchFixes()
-    if (!SIM) listHitlQueue(runId, 'pending')
-      .then((items) => setQueue((items || []).map((it) => dbItemToUi(it, files))))
-      .catch(() => {})
+    if (!SIM) listHitlQueue(runId).then(applyHitlRows).catch(() => {})
   }
 
   // THE SNAPSHOT AND THE STREAM ARE NO LONGER OWNED HERE. `useRemediationRun` holds both, at App
@@ -751,6 +806,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       if (kind === 'deferred') setDeferredItems((d) => d.filter((x) => x.id !== item.id))
       // W2 — the reject also created a handoff row; a refused write must pull that back too.
       if (kind === 'rejected') setRejectedItems((r) => r.filter((x) => x.id !== item.id))
+      // …as must the optimistic decided row: an undone decision is not a recorded one.
+      setDecidedItems((d) => d.filter((x) => x.id !== item.id))
     }
     setActed((a) => ({ ...a, [kind]: Math.max(0, (a[kind] || 0) - 1) }))
     window.dispatchEvent(new Event('acp:hitl-changed'))
@@ -789,6 +846,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     if (kind === 'self') { if (item) setSelf((s) => [{ ...item, status: 'awaiting' }, ...s]); return Promise.resolve() }
     if (kind === 'deferred') {
       if (item) setDeferredItems((d) => [...d, item])
+      // A skip is recorded on the row as `skipped`; keep it in the inbox as manual work owed,
+      // not as an item that quietly left the run.
+      recordDecided(item, 'skipped')
       setActed((a) => ({ ...a, deferred: a.deferred + 1 }))
       if (!SIM && item?.id) {
         return updateHitlItem(item.id, 'skipped', null, null, {
@@ -808,6 +868,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                         hasProposal: false, autoApplied: false, aiDraftable: false, rejectedFix: true }
       setRejectedItems((r) => (r.some((x) => x.id === handoff.id) ? r : [...r, handoff]))
     }
+    // An approval is a recorded decision awaiting the confirming re-scan — it belongs in the
+    // inbox's Awaiting-verification stage, and in the run total, from the moment it is taken.
+    // (A rejection is already represented by its handoff row above, which the inbox prefers.)
+    if (kind === 'approved') recordDecided(item, 'approved')
     window.dispatchEvent(new Event('acp:hitl-changed'))
     const apiStatus = kind === 'approved' ? 'approved' : kind === 'rejected' ? 'rejected' : null
     // approved_value is the headline text (audit log, telemetry); approvedValues carries one
@@ -878,7 +942,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const reVerified = verified + serverFixed + liveFixed
   const remLive = !!remProg || remBusy
   const pendingHitlFiles = new Set(queue.map((q) => q.file))
-  const totalHitl = queue.length + acted.approved + acted.rejected + acted.deferred + self.length
+  // The run's review total, from the queue the SERVER holds: outstanding rows plus rows that
+  // already carry a decision. It used to be the pending count plus this session's own tally, so
+  // it reset to "0 of 12 resolved" on every reload of a run whose queue held 13 items and one
+  // decision. `self` items (fixed by hand here, no server decision) are counted only while the
+  // server has not returned them.
+  const decidedIds = new Set(decidedItems.map((d) => d.id))
+  const queuedIds = new Set(queue.map((q) => q.id))
+  const selfOnly = self.filter((s) => !decidedIds.has(s.id) && !queuedIds.has(s.id))
+  const totalHitl = queue.length + decidedItems.length + selfOnly.length
   const hitlProgress = totalHitl > 0 ? Math.round(((totalHitl - queue.length) / totalHitl) * 100) : 0
   // Redesign R4: the ONE dominant statement — how many findings need review across how many
   // documents. Derived below from the assembled inbox queue (not the raw human queue) so the
@@ -937,7 +1009,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const autoFixItems = autoFixRows(fixSource, (sc) => ITEM_NAME[sc] || sc)
   // W2 — rejected AI fixes sit between the live human queue and the auto-applied rows, in the amber
   // "Needs manual handling" lane, so a reviewer sees exactly what was bounced back for a person.
-  const inboxQueue = [...queue, ...rejectedItems, ...autoFixItems]
+  // Decided rows sit between the two: after this session's handoffs (a rejection this reviewer
+  // just made is shown as the manual work it created, not as a closed decision) and before the
+  // applied-fix evidence. Deduped by id because a finding can legitimately be in two of these
+  // sources at once, and counting it twice is the same defect as dropping it.
+  const inboxQueue = dedupeById([...queue, ...rejectedItems, ...decidedItems, ...autoFixItems])
   const inboxDecisions = { ...decisions, ...ackd }
   // The hero "N need review" IS the Needs-review tab's population (workflowStatusOf over the inbox
   // queue), not the raw human queue — so an unconfirmed auto-fix counted under Needs review shows in
@@ -1536,6 +1612,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               ? <p className="rem-review-lead" style={{ margin: '2px 0 0', fontSize: 13 }}>
                   <b>{reviewCounts.pendingItems}</b> review item{reviewCounts.pendingItems === 1 ? '' : 's'} require attention across{' '}
                   <b>{reviewCounts.documents}</b> document{reviewCounts.documents === 1 ? '' : 's'}
+                  {/* One review item is one (document, criterion) pair and can cover several
+                      findings, so the item count and the run's finding count are different
+                      numbers. Said here when they differ, because the alternative is a reader
+                      comparing 12 cards against 13 findings in a log and concluding one was
+                      lost. */}
+                  {reviewCounts.findings > reviewCounts.pendingItems && <>
+                    {' · covering '}<b>{reviewCounts.findings}</b> finding{reviewCounts.findings === 1 ? '' : 's'}
+                  </>}
                 </p>
               // NOT unconditionally "All clear": an unreadable document is not a clear one, and
               // the reader who sees "All clear" stops reading (reviewQueueCopy.js).

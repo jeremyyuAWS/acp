@@ -101,8 +101,9 @@ describe('the review screens render the proposal, not a template', () => {
     // fed the combined queue: the human review items PLUS the auto-applied fixes folded in as
     // green review-lane rows (autoFixRows).
     expect(src).toMatch(/queue=\{inboxQueue\}/)
-    // …plus the rejected-fix handoff rows (W2), which sit between the two.
-    expect(src).toMatch(/inboxQueue = \[\.\.\.queue, \.\.\.rejectedItems, \.\.\.autoFixItems\]/)
+    // …plus the rejected-fix handoff rows (W2) and the rows that already carry a decision, so a
+    // decided item stays accounted for instead of leaving the page (hitlDecidedTracking).
+    expect(src).toMatch(/inboxQueue = dedupeById\(\[\.\.\.queue, \.\.\.rejectedItems, \.\.\.decidedItems, \.\.\.autoFixItems\]\)/)
     expect(src).toMatch(/proposals: it\.proposals/)   // dbItemToUi still carries proposals through
   })
 
