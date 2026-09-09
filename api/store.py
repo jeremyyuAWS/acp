@@ -1356,6 +1356,7 @@ _SCHEMA = [
       created_result INT NOT NULL DEFAULT 0, published_at TEXT,
       PRIMARY KEY(release_id,file)
     )""",
+    "ALTER TABLE release_documents ADD COLUMN IF NOT EXISTS artifact_digest TEXT",
     # ADR 0044 — ACP Managed Content Workspace, Phase 1. A workspace is the tenant-scoped
     # container a customer creates before uploading anything; `content_workspace_documents`/
     # `content_workspace_document_versions` (the actual upload targets) are deliberately NOT
@@ -2466,8 +2467,9 @@ class _PgAdapter:
     # v42 adds the tenant policy, exactly-once command receipt, and immutable run-policy
     # snapshot tables. All are additive and ignored by older replicas during rolling deploys.
     # v44 adds durable owner/run provider reservations and immutable spending policy.
-    _SCHEMA_VERSION = 47
-    _SCHEMA_CHECKSUM_AT_VERSION = "ea469e345f7d4da7aa10afa4e2d05866"
+    # v48 adds tagged Release artifact identity after v47 baseline attribution evidence.
+    _SCHEMA_VERSION = 48
+    _SCHEMA_CHECKSUM_AT_VERSION = "35dd2ef0184f9f7280f616b293f2ee60"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -6085,7 +6087,7 @@ class Store:
             run = self._fill_run_aggregate(cur, run)
             self._db.execute(cur,
                 "SELECT fr.file,fr.engine,fr.status,fr.score,fr.compliant,fr.skipped_rules,"
-                "fr.remediated_at,fr.drive_write_url,fr.acp_stamped,fr.published_at,"
+                "fr.remediated_at,fr.drive_write_url,fr.acp_stamped,fr.published_at,fr.corrected_sha256,"
                 "fr.size_kb,fr.pages,fr.sheets,fr.drive_file_id,fr.source_modified,"
                 "si.owner,si.parent_folder,si.path AS source_relative_path "
                 "FROM file_records fr "
@@ -9350,14 +9352,15 @@ class Store:
                 "INSERT INTO release_documents(release_id,file,source_document_id,"
                 "source_relative_path,destination_relative_path,released_document_id,"
                 "released_document_url,corrected_checksum,verification,status,failure_category,"
-                "explanation,created_result,published_at) "
-                "SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s WHERE EXISTS "
+                "explanation,created_result,published_at,artifact_digest) "
+                "SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s WHERE EXISTS "
                 "(SELECT 1 FROM release_executions WHERE id=%s AND owner_email=%s) "
                 "ON CONFLICT(release_id,file) DO UPDATE SET "
                 "destination_relative_path=EXCLUDED.destination_relative_path,"
                 "released_document_id=COALESCE(EXCLUDED.released_document_id,release_documents.released_document_id),"
                 "released_document_url=COALESCE(EXCLUDED.released_document_url,release_documents.released_document_url),"
                 "corrected_checksum=COALESCE(EXCLUDED.corrected_checksum,release_documents.corrected_checksum),"
+                "artifact_digest=COALESCE(EXCLUDED.artifact_digest,release_documents.artifact_digest),"
                 "verification=EXCLUDED.verification,status=EXCLUDED.status,"
                 "failure_category=EXCLUDED.failure_category,explanation=EXCLUDED.explanation,"
                 "created_result=EXCLUDED.created_result,"
@@ -9368,7 +9371,7 @@ class Store:
                  result.get("published_url"), result.get("corrected_checksum"),
                  result.get("verification"), result["status"],
                  result.get("failure_category"), result.get("explanation"),
-                 int(bool(result.get("created"))), result.get("published_at"),
+                 int(bool(result.get("created"))), result.get("published_at"), result.get("artifact_digest"),
                  release_id, owner))
 
     def release_status(self, release_id: str, owner: str) -> dict | None:
@@ -9458,7 +9461,7 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT f.file,f.engine,f.status,f.score,f.compliant,f.drive_file_id,"
-                "f.remediated_at,f.published_at,f.published_url,f.checksum,"
+                "f.remediated_at,f.published_at,f.published_url,f.checksum,f.corrected_sha256,f.source_modified,"
                 "i.source_name,i.path AS source_relative_path,i.parent_folder,i.drive_id,i.site_id,"
                 "i.library_name,i.site_name "
                 "FROM file_records f LEFT JOIN scan_inventory i "

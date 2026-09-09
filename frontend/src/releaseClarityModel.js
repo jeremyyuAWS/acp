@@ -4,6 +4,7 @@ export const hasCorrectedCopy = (file) => (file.compliant === true || file.compl
 
 export function deliveryIsCurrent(file, result, done = {}) {
   if (result && result.status !== 'published') return false
+  if (result?.artifact_digest && file.corrected_sha256) return result.artifact_digest === `sha256:${file.corrected_sha256}`
   const publishedAt = result?.published_at || file.published_at
   if (!publishedAt) return result?.status === 'published' || done[file.file] === true
   const published = Date.parse(publishedAt)

@@ -236,7 +236,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     packageName: packageName.trim().replace(/\.zip$/i, ''), preserveHierarchy, includeManifest })
   const activePackageJob = packageJob?.plan_key === packagePlanKey ? packageJob : null
   const selectedPublishable = selectedReady.filter((f) => !done[f.file])
-  const deliveryPlanKey = JSON.stringify({ files: selectedPublishable.map((file) => [file.file, file.remediated_at]).sort(), destination: releaseDestination, releaseFolderName, preserveHierarchy })
+  const deliveryPlanKey = JSON.stringify({ files: selectedPublishable.map((file) => [file.file, file.remediated_at, file.corrected_sha256 || null]).sort(), destination: releaseDestination, releaseFolderName, preserveHierarchy })
   const previewIsCurrent = reviewedPlanKey === deliveryPlanKey
   const selectedSizes = selectedReady.map(releaseFileSize)
   const selectedEstimatedBytes = selectedSizes.length > 0 && selectedSizes.every((size) => size != null)
@@ -336,7 +336,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       released_relative_path: row.destination_relative_path,
       released_document_id: row.released_document_id,
       published_url: row.released_document_url,
-      corrected_checksum: row.corrected_checksum,
+      corrected_checksum: row.corrected_checksum, artifact_digest: row.artifact_digest,
       verification: row.verification, published_at: row.published_at,
       created: !!row.created_result,
       failure_category: row.failure_category, explanation: row.explanation,
@@ -561,7 +561,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         run?.id, selectedPublishable.map((file) => file.file),
         releaseFolder?.name || releaseFolderName, preserveHierarchy, releaseDestination)
       setReleasePreview(preview)
-      setReviewedPlanKey(JSON.stringify({ files: selectedPublishable.map((file) => [file.file, file.remediated_at]).sort(), destination: releaseDestination, releaseFolderName: !releaseFolder && !releaseFolderName.trim() ? preview.folder_name || '' : releaseFolderName, preserveHierarchy }))
+      setReviewedPlanKey(JSON.stringify({ files: selectedPublishable.map((file) => [file.file, file.remediated_at, file.corrected_sha256 || null]).sort(), destination: releaseDestination, releaseFolderName: !releaseFolder && !releaseFolderName.trim() ? preview.folder_name || '' : releaseFolderName, preserveHierarchy }))
       if (!releaseFolder && !releaseFolderName.trim()) setReleaseFolderName(preview.folder_name || '')
       setBuilderStep(3)
     } catch (error) {

@@ -35,3 +35,9 @@ it('preserves source errors and drift under lifecycle overlays', () => {
   expect(releaseSourceState({ state: 'acp_newer', baseline: '2026-09-01', current: '2026-09-02' })).toBe('stale')
   expect(releaseSourceState({ state: 'publish_pending', baseline: '2026-09-01', current: '2026-09-01' })).toBe('publish_pending')
 })
+
+it('prefers exact artifact identity over timestamps when the server provides it', () => {
+  const file = { ...corrected, corrected_sha256: 'b'.repeat(64), remediated_at: '2026-09-03' }
+  expect(deliveryIsCurrent(file, { status: 'published', published_at: '2026-09-04', artifact_digest: `sha256:${'a'.repeat(64)}` })).toBe(false)
+  expect(deliveryIsCurrent(file, { status: 'published', published_at: '2026-09-02', artifact_digest: `sha256:${'b'.repeat(64)}` })).toBe(true)
+})

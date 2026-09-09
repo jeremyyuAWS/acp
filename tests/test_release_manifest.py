@@ -186,3 +186,23 @@ def test_stage_lineage_route_is_stable_owner_scoped_and_canonical(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         scans.stage_lineage("scan-1", _request("someone@example.com"))
     assert exc.value.status_code == 404
+
+
+@pytest.mark.parametrize("artifact_digest,verification,checksum,expected", [
+    ("sha256:" + "b" * 64, "md5", "a" * 32, "b" * 64),
+    (None, "md5", "a" * 32, None),
+    (None, "sha256", "a" * 64, "a" * 64),
+    (None, None, "a" * 64, None),
+])
+def test_manifest_keeps_artifact_identity_separate_from_provider_checksum(
+        artifact_digest, verification, checksum, expected):
+    row = {**STATUS["documents"][0], "artifact_digest": artifact_digest,
+           "verification": verification, "corrected_checksum": checksum}
+    manifest = scans._release_manifest_payload(
+        {**STATUS, "documents": [row]}, scan_id="scan-1", owner="owner@example.com",
+        snapshot_id="snapshot-1")
+    document = manifest["documents"][0]
+    assert document["artifact_digest"] == artifact_digest
+    assert document["corrected_checksum"] == checksum
+    assert document["verification"] == verification
+    assert document["corrected_sha256"] == expected

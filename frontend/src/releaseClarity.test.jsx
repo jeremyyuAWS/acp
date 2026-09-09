@@ -211,3 +211,23 @@ describe('Release selection changes', () => {
     expect(publishAllFiles).not.toHaveBeenCalled()
   })
 })
+
+describe('Exact corrected-copy changes', () => {
+  it('refreshes open details from current file evidence instead of its earlier selected object', async () => {
+    getReleaseStatus.mockResolvedValue({ release_id: 'versioned', documents: [{ file: 'a.pdf', status: 'published', artifact_digest: `sha256:${'a'.repeat(64)}`, published_at: '2026-08-01' }] })
+    const c = await mount({ run, files: [verified('a.pdf', { corrected_sha256: 'a'.repeat(64) })] })
+    await click(row(c, 'a.pdf').querySelector('.release-selection__details'))
+    expect(c.querySelector('aside').textContent).toContain('Delivered')
+    await c.rerender({ run, files: [verified('a.pdf', { corrected_sha256: 'b'.repeat(64) })] })
+    expect(c.querySelector('aside').textContent).toContain('Ready')
+    expect(c.querySelector('aside').textContent).not.toContain('Delivered')
+  })
+  it('invalidates delivery review when bytes change within the same timestamp', async () => {
+    const c = await mount({ run, files: [verified('a.pdf', { corrected_sha256: 'a'.repeat(64) })] })
+    await review(c)
+    expect(button(c, 'Publish 1 copy').disabled).toBe(false)
+    await c.rerender({ run, files: [verified('a.pdf', { corrected_sha256: 'b'.repeat(64) })] })
+    expect(button(c, 'Publish 1 copy').disabled).toBe(true)
+    expect(publishAllFiles).not.toHaveBeenCalled()
+  })
+})
