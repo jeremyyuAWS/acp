@@ -213,6 +213,24 @@ HEALTH_OPENAPI_SPEC: dict = {
                         },
                     },
                     "sources": {"type": "object", "description": "Informational, per-source-adapter readiness (e.g. smb) — never folds into `degraded`."},
+                    # Documented because deploy automation gates on it: redeploy.sh refuses a
+                    # worker cutover unless `active` is 0. Aggregate only — never a tenant, file
+                    # name, job id or payload.
+                    "queue": {
+                        "type": "object",
+                        "description": "Durable-queue activity, aggregate only.",
+                        "properties": {
+                            "queued": {"type": "integer", "nullable": True,
+                                       "description": "Every row with status='queued', including rows no worker can claim yet."},
+                            "running": {"type": "integer", "nullable": True},
+                            "claimable": {"type": "integer", "nullable": True,
+                                          "description": "Queued rows a worker could claim now: run_after due and attempts below max_attempts, the same predicate claim_job uses."},
+                            "active": {"type": "integer", "nullable": True,
+                                       "description": "running + claimable — the work a worker cutover would disturb, and the number the deploy gate reads. Deliberately NOT queued + running: a row past max_attempts or deferred behind a future run_after is unclaimable and permanent, and counting it blocked every deploy indefinitely."},
+                            "available": {"type": "boolean",
+                                          "description": "False when queue state could not be established; deploy automation fails closed on it."},
+                        },
+                    },
                     "service": {"type": "string", "example": "acp"},
                 },
             },

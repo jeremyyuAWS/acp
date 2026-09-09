@@ -52,23 +52,30 @@ export function ageBucketDistribution(rows) {
   if (!Array.isArray(rows) || rows.length === 0) return null
 
   const counts = Object.fromEntries(AGE_BUCKETS.map((b) => [b.key, 0]))
+  // Members are collected in the SAME pass that counts, so the drill-down under the bar cannot
+  // disagree with it. Re-deriving membership later means two copies of this rule; see
+  // bucketMembers.js for why that is the failure worth designing out.
+  const members = Object.fromEntries(AGE_BUCKETS.map((b) => [b.key, []]))
+  const unknownRows = []
   let unknown = 0
   let anyDate = false
 
   for (const r of rows) {
     const dateStr = r.source_modified || r.created_at || null
     const years = ageYears(dateStr)
-    if (years === null) { unknown++; continue }
+    if (years === null) { unknown++; unknownRows.push(r); continue }
     anyDate = true
     const bucket = AGE_BUCKETS.find((b) => years < b.maxYears)
-    if (bucket) counts[bucket.key]++
-    else unknown++
+    if (bucket) { counts[bucket.key]++; members[bucket.key].push(r) }
+    else { unknown++; unknownRows.push(r) }
   }
 
   if (!anyDate) return null
 
-  const buckets = AGE_BUCKETS.map((b) => ({ key: b.key, label: b.label, count: counts[b.key] }))
-  if (unknown > 0) buckets.push({ key: 'unknown', label: 'No date recorded', count: unknown })
+  const buckets = AGE_BUCKETS.map((b) => ({
+    key: b.key, label: b.label, count: counts[b.key], rows: members[b.key],
+  }))
+  if (unknown > 0) buckets.push({ key: 'unknown', label: 'No date recorded', count: unknown, rows: unknownRows })
 
   const total = rows.length
   const sum = buckets.reduce((n, b) => n + b.count, 0)
@@ -100,23 +107,27 @@ export function sizeBucketDistribution(rows) {
   if (!Array.isArray(rows) || rows.length === 0) return null
 
   const counts = Object.fromEntries(SIZE_BUCKETS.map((b) => [b.key, 0]))
+  const members = Object.fromEntries(SIZE_BUCKETS.map((b) => [b.key, []]))   // same pass as counts
+  const unknownRows = []
   let unknown = 0
   let anySize = false
 
   for (const r of rows) {
     const kb = r.size_kb ?? r._sizeKb ?? null
-    if (kb === null || !Number.isFinite(Number(kb))) { unknown++; continue }
+    if (kb === null || !Number.isFinite(Number(kb))) { unknown++; unknownRows.push(r); continue }
     anySize = true
     const n = Number(kb)
     const bucket = SIZE_BUCKETS.find((b) => n < b.maxKb)
-    if (bucket) counts[bucket.key]++
-    else unknown++
+    if (bucket) { counts[bucket.key]++; members[bucket.key].push(r) }
+    else { unknown++; unknownRows.push(r) }
   }
 
   if (!anySize) return null
 
-  const buckets = SIZE_BUCKETS.map((b) => ({ key: b.key, label: b.label, count: counts[b.key] }))
-  if (unknown > 0) buckets.push({ key: 'unknown', label: 'Size not recorded', count: unknown })
+  const buckets = SIZE_BUCKETS.map((b) => ({
+    key: b.key, label: b.label, count: counts[b.key], rows: members[b.key],
+  }))
+  if (unknown > 0) buckets.push({ key: 'unknown', label: 'Size not recorded', count: unknown, rows: unknownRows })
 
   const total = rows.length
   const sum = buckets.reduce((n, b) => n + b.count, 0)

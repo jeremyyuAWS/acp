@@ -5,7 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { getRemediationImpact, saveRemediationImpactPolicy, assignRemediationImpact } from './api.js'
 import './remediation-impact-card.css'
 import RemediationPlanChoices from './RemediationPlanChoices.jsx'
-import { generationChainProblem } from './remediationGenerationChain.js'
+import { generationChainProblem, generationSteps } from './remediationGenerationChain.js'
 import RemediationEstimateDisclosure from './RemediationEstimateDisclosure.jsx'
 import { apiBase, authEpoch } from './apiIdentity.js'
 import RemediationWaterfallImpact from './RemediationWaterfallImpact.jsx'
@@ -114,7 +114,14 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   }, [runId, policy, refreshKey, reload, scopeKey, epoch, myEmail, estimateKey])
 
   const basePolicy = policy || (validPolicy(data?.policy) ? data.policy : { rule_based: 0, ai: 0 })
-  const selected = data?.capabilities?.ai_budget === true ? { ai_budget_usd: '0.00', ...basePolicy } : basePolicy
+  const reviewDefault = data?.capabilities?.ai_review?.review_supported === true
+    && basePolicy.ai > 0 && basePolicy.ai_review === undefined
+  const selected = {
+    ...(data?.capabilities?.ai_budget === true ? { ai_budget_usd: '0.00' } : {}),
+    ...basePolicy,
+    ...(reviewDefault ? { ai_review: { enabled: true, mode: 'review_all', minimum_reliability: null,
+      max_review_attempts: 1, review_model: 'strong', permitted_families: [], evaluation_versions: {} } } : {}),
+  }
   const chainProblem = generationChainProblem(selected, data?.capabilities?.generation_chain, data?.capabilities?.ai_budget === true)
   const ready = !chainProblem && !!data && !loading && !error && data.integrity?.complete === true
   const countDeltas = useForecastDeltas({
@@ -176,7 +183,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       <div className="remediation-impact__start-summary">
         <strong>{ready ? `${number(data.open?.findings)} findings · ${number(data.open?.files)} files` : 'Preview not ready'}</strong>
         <span>{ready ? `${number(data.lanes?.automatic?.findings)} automatic · ${number(data.lanes?.review?.findings)} to approve · ${number(data.lanes?.manual?.findings)} manual · ${number(data.lanes?.blocked?.findings)} blocked` : 'Review the current preview before starting.'}</span>
-        <span>{selected.ai > 0 ? `${selected.auto_approve_ai ? 'Auto-approval on · Manual exceptions only' : 'AI drafts need approval'} · Up to ${selected.generation_chain?.steps?.length === 3 ? 3 : 2} generation models${data?.capabilities?.ai_budget === true ? ` · AI limit $${selected.ai_budget_usd}` : ' · Spending cap unavailable'}` : 'Rules only · No new AI suggestions'}</span>
+        <span>{selected.ai > 0 ? `${selected.auto_approve_ai ? 'Auto-approval on · Manual exceptions only' : 'AI drafts need approval'} · Up to ${generationSteps(selected, data?.capabilities?.generation_chain).length || 2} models${data?.capabilities?.ai_budget === true ? ` · AI limit $${selected.ai_budget_usd}` : ' · Spending cap unavailable'}` : 'Rules only · No new AI suggestions'}</span>
       </div>
       <button type="button" className="remediation-impact__run" disabled={readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
       onClick={() => onRun(selected, data)}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>

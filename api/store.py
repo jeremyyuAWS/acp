@@ -16148,6 +16148,34 @@ class Store:
                 (self._now(), owner) if owner else (self._now(),))
             return self._db.fetchone(cur)
 
+    def claimable_job_count(self, owner: str | None = None) -> int:
+        """How many queued jobs a worker could claim RIGHT NOW.
+
+        `job_stats` counts every `status='queued'` row. That is the honest observability number
+        and the wrong number for a gate: `claim_job` — and `oldest_queued_job` above, which says
+        so in as many words — will only ever take a row whose `run_after` is due and whose
+        `attempts` are still below `max_attempts`. A row failing either test is invisible to
+        every worker and permanent in `job_stats`.
+
+        So a deploy gate reading the raw count blocks on work that is not work. Measured in
+        production on 2026-09-09: `queued: 1, running: 0` held steady for over forty minutes
+        while all three worker roles heartbeated within seconds, and four consecutive deploys
+        died on `1 queued/running job(s) are active`. Nothing was draining because nothing was
+        claimable; nothing was interrupted because nothing was running.
+
+        Same predicate as `claim_job` MINUS its per-lane `type` filter: a row whose type no live
+        lane serves is unclaimable too, but which lanes exist is a worker-side fact this cannot
+        see. This therefore over-counts rather than under-counts — the safe direction for a gate
+        whose job is to protect live work."""
+        scope = " AND scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)" if owner else ""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='queued' AND run_after<=%s "
+                "AND attempts < max_attempts" + scope,
+                (self._now(), owner) if owner else (self._now(),))
+            row = self._db.fetchone(cur)
+            return int((row or {}).get("n") or 0)
+
     def queue_composition(self, *, window_s: int = 900) -> dict:
         """The shared queue as the four states a job is actually in, plus the two rates, for the
         Live Operations queue visualization. Global (not owner-scoped) like `oldest_queued_job`:

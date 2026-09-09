@@ -44,11 +44,34 @@ def test_exact_preservation_except_rollout_fields_and_queue_query():
     assert before == untouched
 
 
+def test_staging_bootstrap_queue_rule_keeps_its_name_and_settings():
+    # Live staging was provisioned by deploy.sh with jobs-queued, min=max=1.
+    # Its valid PostgreSQL rule must receive the lane query without resizing.
+    before = template()
+    before['scale'].update(minReplicas=1, maxReplicas=1)
+    before['scale']['rules'][1]['name'] = 'jobs-queued'
+    expected = deepcopy(before['scale'])
+    expected['rules'][1]['custom']['metadata']['query'] = helper.remediation_query()
+    patch = helper.worker_patch(before, 'new:image', 600, 540, helper.remediation_query())
+    assert patch['properties']['template']['scale'] == expected
+    assert before['scale']['rules'][1]['custom']['metadata']['query'] == 'OLD'
+
+
+def test_both_known_queue_rules_are_ambiguous():
+    source = template()
+    legacy = deepcopy(source['scale']['rules'][1])
+    legacy['name'] = 'jobs-queued'
+    source['scale']['rules'].append(legacy)
+    with pytest.raises(ValueError):
+        helper.worker_patch(source, 'new:image', 600, 540, helper.remediation_query())
+
+
 @pytest.mark.parametrize('mutation', [
     lambda t: t['scale'].update(rules=[]),
     lambda t: t['scale']['rules'].append(deepcopy(t['scale']['rules'][1])),
     lambda t: t['scale']['rules'][1]['custom'].update(type='http'),
     lambda t: t['scale']['rules'][1]['custom']['metadata'].pop('targetQueryValue'),
+    lambda t: t['scale']['rules'][1].update(name='unrelated-queue'),
     lambda t: t['containers'].append(deepcopy(t['containers'][0])),
 ])
 def test_ambiguous_or_missing_live_configuration_fails_closed(mutation):
@@ -88,10 +111,12 @@ def test_both_paths_use_same_update_after_active_job_guard():
     assert all(pos > gate for pos in [script.index('_update_lane_worker "$a"'), script.rindex('_update_lane_worker "$a"')])
 
 
+@pytest.mark.parametrize('queue_name', ['remediation-queue', 'jobs-queued'])
 @pytest.mark.parametrize('corrupt_verification', [False, True])
-def test_guarded_worker_helper_sends_one_patch_preserving_other_rules(tmp_path, corrupt_verification):
+def test_guarded_worker_helper_sends_one_patch_preserving_other_rules(tmp_path, corrupt_verification, queue_name):
     live = {'id': '/subscriptions/test/resourceGroups/test/providers/Microsoft.App/containerApps/acp-remediate',
             'properties': {'template': template()}}
+    live['properties']['template']['scale']['rules'][1]['name'] = queue_name
     fixture = tmp_path / 'live.json'
     fixture.write_text(json.dumps(live))
     output = tmp_path / 'patch.json'
