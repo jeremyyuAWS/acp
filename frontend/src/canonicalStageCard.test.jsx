@@ -367,7 +367,7 @@ describe('unified idempotent workflow integration', () => {
     await act(async () => { root.unmount() })
   })
 
-  it('opens a completed stage on its own tab and minimizes it after navigation', async () => {
+  it('keeps completed assessment minimized even on its own tab', async () => {
     const { container, root } = createTestRoot()
     const lineage = { workflow_id: 'completed-navigation', workflow_revision: 7, stages: [
       stage('discover', 'succeeded', 3), stage('assess', 'succeeded', 4),
@@ -378,7 +378,7 @@ describe('unified idempotent workflow integration', () => {
       lineage, activeStage: 'assess',
     })) })
     expect(container.querySelector('[data-stage="discover"] .workflow-stage-stack__body').hidden).toBe(true)
-    expect(container.querySelector('[data-stage="assess"] .workflow-stage-stack__body').hidden).toBe(false)
+    expect(container.querySelector('[data-stage="assess"] .workflow-stage-stack__body').hidden).toBe(true)
     expect(container.querySelector('[data-stage="remediate"] .workflow-stage-stack__body').hidden).toBe(false)
 
     await act(async () => { root.render(createElement(WorkflowStageStack, {
@@ -401,13 +401,41 @@ describe('unified idempotent workflow integration', () => {
     })) })
     const assessSummary = container.querySelector('[data-stage="assess"] .workflow-stage-stack__summary')
     await act(async () => { assessSummary.click() })
-    expect(container.querySelector('[data-stage="assess"] .workflow-stage-stack__body').hidden).toBe(true)
+    expect(container.querySelector('[data-stage="assess"] .workflow-stage-stack__body').hidden).toBe(false)
 
     await act(async () => { root.render(createElement(WorkflowStageStack, {
       lineage, activeStage: 'discover',
     })) })
     expect(container.querySelector('[data-stage="discover"] .workflow-stage-stack__body').hidden).toBe(false)
     expect(container.querySelector('[data-stage="assess"] .workflow-stage-stack__body').hidden).toBe(true)
+    await act(async () => { root.unmount() })
+  })
+
+  it('collapses assessment on completion, permits reopening, and opens a new execution', async () => {
+    const { container, root } = createTestRoot()
+    const render = async (state, execution = 'assess-run') => {
+      await act(async () => root.render(createElement(WorkflowStageStack, {
+        activeStage: 'assess', lineage: { workflow_id: 'auto-collapse', workflow_revision: 7,
+          stages: [stage('assess', state, 4, { execution_id: execution })] },
+      })))
+    }
+    const body = () => container.querySelector('[data-stage="assess"] .workflow-stage-stack__body')
+    const toggle = () => container.querySelector('[data-stage="assess"] .workflow-stage-stack__summary')
+    await render('processing')
+    expect(body().hidden).toBe(false)
+    // Explicitly opening the live panel must not hold it open after completion.
+    await act(async () => { toggle().click() })
+    await act(async () => { toggle().click() })
+    await render('succeeded')
+    expect(body().hidden).toBe(true)
+    expect(toggle().getAttribute('aria-expanded')).toBe('false')
+    await act(async () => { toggle().click() })
+    expect(body().hidden).toBe(false)
+    await render('succeeded')
+    expect(body().hidden).toBe(false)
+    await act(async () => { toggle().click() })
+    await render('processing', 'next-assess-run')
+    expect(body().hidden).toBe(false)
     await act(async () => { root.unmount() })
   })
 

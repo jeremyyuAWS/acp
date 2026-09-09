@@ -49,8 +49,12 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
         const model = snapshot ? canonicalStageCardModel(snapshot, { isCurrent }) : null
         const attention = Boolean(snapshot && stageNeedsAttention(snapshot))
         const isCompleted = completed(snapshot.state)
-        const defaultOpen = attention || (isCompleted ? stage === activeStage : isCurrent)
-        const open = attention || (overrides[stage] ?? defaultOpen)
+        const defaultOpen = attention || (isCompleted ? stage !== 'assess' && stage === activeStage : isCurrent)
+        // Completion reveals the assessment results below. A live disclosure choice must not
+        // carry into that completed phase, but users can reopen the completed details normally.
+        const overrideKey = stage === 'assess'
+          ? `${stage}:${snapshot.execution_id}:${isCompleted ? 'complete' : 'live'}` : stage
+        const open = attention || (overrides[overrideKey] ?? defaultOpen)
         const detail = isCurrent ? stageDetails[stage] : null
         const bodyId = `workflow-stage-${stage}`
         return (
@@ -59,7 +63,7 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
                key={`${stage}:${snapshot?.execution_id || snapshot?.revision || 'locked'}`}>
             <button type="button" className="workflow-stage-stack__summary"
                     aria-expanded={open} aria-controls={bodyId}
-                    onClick={() => setOverrides((value) => ({ ...value, [stage]: !open }))}>
+                    onClick={() => setOverrides((value) => ({ ...value, [overrideKey]: !open }))}>
               <span className="workflow-stage-stack__check" aria-hidden="true">
                 {attention ? '!' : snapshot.state === 'succeeded' ? '✓' : '•'}
               </span>
