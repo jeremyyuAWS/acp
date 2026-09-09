@@ -58,3 +58,16 @@ Schema 50 adds owner-scoped `automatic_release_authorizations`, including immuta
 request intent, progress, status, revision and stop time. Owner/scan erasure
 includes the new records. Tests use isolated databases and synthetic providers;
 no customer approvals, files or publications are performed by development tests.
+
+
+The status response also includes a read-only `planning` object with `available`,
+`reason`, sorted `files`, `source_revision`, `destination`, and `destination_label`.
+It validates the owned, selected assessment records and release grant without
+requiring an accepted remediation run, calling a provider, or recording consent.
+The existing top-level availability and authorization remain scoped to an accepted run.
+
+A Plan choice becomes permission only through an explicit authorization POST after
+Start returns its accepted execution ID. Callers may bind that choice with
+`expected_source_revision`; a mismatch with the accepted run is rejected. Public
+authorization includes `request_id` and `source_revision` so a lost response can be
+reconciled against the exact submitted request without choosing a different run.

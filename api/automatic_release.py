@@ -107,16 +107,53 @@ def public(row, store=None):
         counts[category] += 1
         details[file] = entry
     return dict(id=row['id'], status=row['status'], run_id=row['run_id'], files=list(files),
+                request_id=row['request_id'], source_revision=row['intent']['source_revision'],
                 destination_label=destination_label(row['intent']['destination']), destination=row['intent']['destination'],
                 progress=counts, file_progress=details, stopped_at=row.get('stopped_at'),
                 expires_at=row['intent']['expires_at'], revision=row['revision'])
+
+
+def planning_preview(store, sid, owner, files):
+    """Describe a local pre-Start choice without accepting release permission."""
+    from assessment_policy import selected_documents
+    result = dict(available=False, reason=None, files=[], source_revision=None,
+                  destination=None, destination_label=None)
+    try:
+        scan = store.get_scan(sid, owner=owner)
+        if not scan:
+            raise ValueError('Scan not found')
+        require_grants(store, owner, review=False)
+        if (not isinstance(files, list) or not 1 <= len(files) <= MAX_FILES
+                or any(not isinstance(f, str) or not f or len(f) > 4096 for f in files)
+                or len(set(files)) != len(files)):
+            raise ValueError('Choose between 1 and 500 distinct files.')
+        selected = selected_documents(store.get_decisions(sid, owner=owner))
+        if selected is not None and set(files) - selected:
+            raise ValueError('Files must belong to the current document selection.')
+        source = (scan.get('run') or {}).get('source')
+        if source not in {'drive', 'sharepoint'}:
+            raise ValueError('Automatic release requires a connected Google Drive or SharePoint destination.')
+        records = store.get_file_records(sid, owner=owner, files=files)
+        for file in files:
+            record = records.get(file) or {}
+            if record.get('score') is None or record.get('status') in {'error', 'queued', 'pending', 'processing'}:
+                raise ValueError('Assess every selected file before planning automatic release.')
+            if not record.get('drive_file_id') or not record.get('source_modified') or (source == 'sharepoint' and not record.get('drive_id')):
+                raise ValueError('Tracked source identity and assessment freshness are required for every selected file.')
+        destination = destination_for(store, sid, owner, source, records, files)
+        result.update(available=True, files=sorted(files), source_revision=store.remediation_source_revision(sid),
+                      destination=destination, destination_label=destination_label(destination))
+    except ValueError as exc:
+        result['reason'] = str(exc)
+    return result
 
 
 def preview(store, sid, owner, files):
     run = current_run(store, sid, owner)
     row = persistence.latest(store, sid, owner, run_id=run['execution_id']) if run else None
     result = dict(available=False, reason=None, run_id=run['execution_id'] if run else None,
-                  destination=None, destination_label=None, authorization=public(row, store))
+                  destination=None, destination_label=None, authorization=public(row, store),
+                  planning=planning_preview(store, sid, owner, files))
     try:
         run, source, records = selection(store, sid, owner, files)
         destination = destination_for(store, sid, owner, source, records, files)
@@ -126,14 +163,14 @@ def preview(store, sid, owner, files):
     return result
 
 
-def authorize(store, sid, owner, run_id, files, destination, request_id):
+def authorize(store, sid, owner, run_id, files, destination, request_id, expected_source_revision=None):
     import publish
     if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', request_id):
         raise ValueError('A bounded unique request ID is required.')
     # A lost-response replay must not recompute a later expiry or folder name.
     prior = persistence.by_request(store, owner, sid, request_id)
     if prior:
-        if prior['run_id'] != run_id or sorted(files) != list(prior['intent']['files']) or destination != prior['intent']['destination']:
+        if (expected_source_revision is not None and expected_source_revision != prior['intent']['source_revision']) or prior['run_id'] != run_id or sorted(files) != list(prior['intent']['files']) or destination != prior['intent']['destination']:
             raise ValueError('This request ID belongs to different release permission.')
         return prior
     with store.transaction():
@@ -141,10 +178,12 @@ def authorize(store, sid, owner, run_id, files, destination, request_id):
             store._db.execute(cur,'UPDATE scan_runs SET owner_email=owner_email WHERE id=%s AND owner_email=%s',(sid,owner))
         prior = persistence.by_request(store,owner,sid,request_id)
         if prior:
-            if prior['run_id'] != run_id or sorted(files) != list(prior['intent']['files']) or destination != prior['intent']['destination']:
+            if (expected_source_revision is not None and expected_source_revision != prior['intent']['source_revision']) or prior['run_id'] != run_id or sorted(files) != list(prior['intent']['files']) or destination != prior['intent']['destination']:
                 raise ValueError('This request ID belongs to different release permission.')
             return prior
         run, source, records = selection(store, sid, owner, files, run_id)
+        if expected_source_revision is not None and expected_source_revision != run['input_snapshot_id']:
+            raise ValueError('The assessed source changed after Plan. Review the plan and start again.')
         destination = destination_for(store, sid, owner, source, records, files, destination)
         existing = store.release_for_scan(sid, owner)
         intent = dict(version=1, source=source, source_revision=run['input_snapshot_id'],
