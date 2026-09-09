@@ -107,12 +107,14 @@ export async function reconcileHitlPutFailure(itemId, wanted, err, readQueue = l
       const actual = (row?.proposals || row?.evidence || [])[i]?.approved_value
       return String(actual || '').trim() === String(value || '').trim()
     })
-    const matches = row?.status === expected.status
+    const matches = (!expected.requestId || row?.last_decision_request_id === expected.requestId)
+      && row?.status === expected.status
       && String(row?.reviewer_note || '') === String(expected.reviewerNote || '')
       && String(row?.approved_value || '') === String(expected.approvedValue || '')
       && String(row?.resolution || '') === String(expected.resolution || '')
       && sameValues
     if (matches) return { outcome: 'saved', row }
+    if (expected.requestId && row?.status === expected.status) return { outcome: 'unknown', error: err }
     if (row) return { outcome: 'not_saved', row, error: err }
   } catch { /* the reconciliation read failed too; preserve uncertainty below */ }
   return { outcome: 'unknown', error: err }
@@ -816,7 +818,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           catch { /* the refresh is cosmetic — never let it disturb a saved decision */ }
         },
         (e) => settleActFailure(item, kind, {
-          status: apiStatus,
+          status: apiStatus, requestId: frozen?.decision.requestId,
           approvedValue: apiStatus === 'approved' ? (editedValue || null) : null,
           approvedValues: apiStatus === 'approved' ? (approvedValues || null) : null,
           resolution: apiStatus === 'approved' ? (resolution || null) : null,

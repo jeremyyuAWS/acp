@@ -11197,8 +11197,11 @@ class Store:
                     if self._superseded_items(cur, [current]):
                         raise ValueError("stale proposal selection")
                     for index, (snapshot_id, proposal) in enumerate(zip(snapshots, proposals)):
-                        self._db.execute(cur, "SELECT * FROM ai_proposal_snapshots WHERE snapshot_id=%s",
-                                         (snapshot_id,))
+                        self._db.execute(cur, "SELECT p.*, e.input_snapshot_id AS producing_source_revision "
+                            "FROM ai_proposal_snapshots p LEFT JOIN stage_executions e "
+                            "ON e.execution_id=p.run_id AND e.scan_id=p.scan_id "
+                            "AND e.owner_email=p.owner_id AND e.stage='remediate' WHERE p.snapshot_id=%s",
+                            (snapshot_id,))
                         snapshot = self._db.fetchone(cur)
                         content = {k: proposal[k] for k in PROPOSAL_KEYS if k in proposal}
                         digest = hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True,
@@ -11210,6 +11213,8 @@ class Store:
                                 or snapshot["proposal_index"] != index
                                 or snapshot["proposal_sha256"] != digest):
                             raise ValueError("stale proposal selection")
+                        if snapshot.get("producing_source_revision") != expected_source_revision:
+                            raise ValueError("stale source revision")
                 if (not expected_source_revision or not current.get("scan_id")
                         or expected_source_revision != self.stage_snapshot_id(current["scan_id"])):
                     raise ValueError("stale source revision")

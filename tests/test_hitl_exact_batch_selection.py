@@ -99,3 +99,15 @@ def test_queue_list_exposes_source_identity_without_mutating(decision):
     assert row["source_revision"] == st.stage_snapshot_id("s1")
     assert row["proposal_snapshot_ids"] == st.get_hitl_item(item_id)["proposal_snapshot_ids"]
     assert st.list_decisions("s1") == []
+
+
+def test_refreshed_source_cannot_relabel_an_old_proposal_as_current(decision):
+    st, item_id, update, Body, request = decision
+    with st._db.cursor() as cur:
+        st._db.execute(cur, "UPDATE scan_runs SET rubric_hash=%s WHERE id=%s", ("new-assessment", "s1"))
+    # The reviewer fetched the new current source identity, but these proposals were produced
+    # under the older stage input. Exact snapshot IDs alone cannot make them current.
+    with pytest.raises(Exception) as exc:
+        update(item_id, Body(**expectations(st, item_id)), request)
+    assert getattr(exc.value, "status_code", None) == 409
+    assert st.list_decisions("s1") == []
