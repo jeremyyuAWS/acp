@@ -8,6 +8,8 @@ import {
 } from './discoveryRecommendations.js'
 import { contentTypeBreakdown } from './contentTypeBreakdown.js'
 import { ageBucketDistribution, sizeBucketDistribution, folderDistribution } from './discoveryDistributions.js'
+import BreakdownBars from './BreakdownBars.jsx'
+import { formatMembers, groupBy } from './bucketMembers.js'
 
 // The Discovery results screen (approved design board `DiscoverResults.dc.html`).
 //
@@ -160,12 +162,19 @@ export default function DiscoveryResults({
     ? unread.buckets.filter((b) => b.recorded && reasonFetchLikely(b.reason))
     : []
   const fetchFiles = fetchBuckets.reduce((n, b) => n + b.count, 0)
+  // Membership for the two panels whose counts are not computed alongside their rows.
+  // BY FILE TYPE prefers the inventory listing: `files` structurally excludes the grey
+  // buckets (only assessable formats are ever scanned), so matching against it would open
+  // "Other" onto an empty list on exactly the estates where it is biggest.
+  const typeMembers = formatMembers(invRows, files)
+  const contentTypeMembers = groupBy(files, (f) => {
+    const ct = f && typeof f.content_type === 'string' ? f.content_type.trim() : ''
+    return ct === '' ? '__none__' : ct
+  })
   const ageDist = ageBucketDistribution(invRows)
   const sizeDist = sizeBucketDistribution(invRows)
   const folderDist = folderDistribution(invRows?.filter(supportedDiscoveryRow))
   const recommendations = recommendationReconciliation(files)
-
-  const maxType = types ? Math.max(1, ...types.buckets.map((b) => b.count)) : 1
 
   return (
     <section className="panel" aria-labelledby="discres-h">
@@ -324,16 +333,10 @@ export default function DiscoveryResults({
         {types && (
           <div className="panel" style={{ flex: '1 1 380px' }}>
             <h2>BY FILE TYPE</h2>
-            {types.buckets.map((b) => (
-              <div className="critrow" key={b.key} style={{ gridTemplateColumns: '110px 1fr 56px' }}>
-                <span className="critlabel" style={{ fontSize: 13 }}>{b.label}</span>
-                <span className="track">
-                  <i style={{ width: `${(b.count / maxType) * 100}%`,
-                              background: b.assessable ? BAR_COLOR.assessable : BAR_COLOR.other }} />
-                </span>
-                <span style={{ textAlign: 'right', fontSize: 13 }}>{b.count.toLocaleString()}</span>
-              </div>
-            ))}
+            <BreakdownBars
+              buckets={types.buckets} columns="110px 1fr 56px" idPrefix="type-files"
+              colorOf={(b) => (b.assessable ? BAR_COLOR.assessable : BAR_COLOR.other)}
+              membersOf={(b) => typeMembers.get(b.key)} />
             <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 56px', gap: 12,
                           marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line)',
                           fontSize: 13, fontWeight: 600 }} role="status">
@@ -357,18 +360,10 @@ export default function DiscoveryResults({
         {contentTypes && (
           <div className="panel" style={{ flex: '1 1 380px' }}>
             <h2>BY CONTENT TYPE <span className="muted" style={{ fontWeight: 400 }}>· from SharePoint</span></h2>
-            {contentTypes.buckets.map((b) => (
-              <div className="critrow" key={b.key} style={{ gridTemplateColumns: '160px 1fr 56px' }}>
-                <span className="critlabel" style={{ fontSize: 13, color: b.known ? undefined : 'var(--muted)' }}>
-                  {b.label}
-                </span>
-                <span className="track">
-                  <i style={{ width: `${(b.count / Math.max(1, ...contentTypes.buckets.map((x) => x.count))) * 100}%`,
-                              background: b.known ? BAR_COLOR.assessable : BAR_COLOR.other }} />
-                </span>
-                <span style={{ textAlign: 'right', fontSize: 13 }}>{b.count.toLocaleString()}</span>
-              </div>
-            ))}
+            <BreakdownBars
+              buckets={contentTypes.buckets} columns="160px 1fr 56px" idPrefix="ctype-files"
+              colorOf={(b) => (b.known ? BAR_COLOR.assessable : BAR_COLOR.other)}
+              membersOf={(b) => contentTypeMembers.get(b.key)} />
             <p className="muted" style={{ fontSize: 11.5, margin: '12px 0 0', lineHeight: 1.5 }}>
               Read from the source's own SharePoint Content Type column, where the library uses
               one. Not every file will carry one — that is the source's answer, not a gap in the
@@ -380,16 +375,9 @@ export default function DiscoveryResults({
         {ageDist && (
           <div className="panel" style={{ flex: '1 1 340px' }}>
             <h2>BY AGE <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>· last modified</span></h2>
-            {ageDist.buckets.map((b) => (
-              <div className="critrow" key={b.key} style={{ gridTemplateColumns: '140px 1fr 56px' }}>
-                <span className="critlabel" style={{ fontSize: 13 }}>{b.label}</span>
-                <span className="track">
-                  <i style={{ width: `${(b.count / Math.max(1, ...ageDist.buckets.map((x) => x.count))) * 100}%`,
-                              background: BAR_COLOR.assessable }} />
-                </span>
-                <span style={{ textAlign: 'right', fontSize: 13 }}>{b.count.toLocaleString()}</span>
-              </div>
-            ))}
+            <BreakdownBars
+              buckets={ageDist.buckets} columns="140px 1fr 56px" idPrefix="age-files"
+              colorOf={() => BAR_COLOR.assessable} membersOf={(b) => b.rows} />
             <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 56px', gap: 12,
                           marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line)',
                           fontSize: 13, fontWeight: 600 }} role="status">
@@ -403,16 +391,9 @@ export default function DiscoveryResults({
         {sizeDist && (
           <div className="panel" style={{ flex: '1 1 340px' }}>
             <h2>BY SIZE</h2>
-            {sizeDist.buckets.map((b) => (
-              <div className="critrow" key={b.key} style={{ gridTemplateColumns: '140px 1fr 56px' }}>
-                <span className="critlabel" style={{ fontSize: 13 }}>{b.label}</span>
-                <span className="track">
-                  <i style={{ width: `${(b.count / Math.max(1, ...sizeDist.buckets.map((x) => x.count))) * 100}%`,
-                              background: BAR_COLOR.other }} />
-                </span>
-                <span style={{ textAlign: 'right', fontSize: 13 }}>{b.count.toLocaleString()}</span>
-              </div>
-            ))}
+            <BreakdownBars
+              buckets={sizeDist.buckets} columns="140px 1fr 56px" idPrefix="size-files"
+              colorOf={() => BAR_COLOR.other} membersOf={(b) => b.rows} />
             <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 56px', gap: 12,
                           marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line)',
                           fontSize: 13, fontWeight: 600 }} role="status">
