@@ -15,7 +15,7 @@ const snapshot = {
   integrity: { ok: true, affected: [] },
 }
 
-describe('the three-mode remediation workspace', () => {
+describe('the remediation workspace', () => {
   beforeEach(() => {
     sessionStorage.clear()
     history.replaceState({}, '', '/?tab=remediate')
@@ -47,14 +47,36 @@ describe('the three-mode remediation workspace', () => {
   it('defaults to Plan even when decisions exist and keeps all panels mounted', async () => {
     const { host } = await mount()
     const tabs = host.querySelectorAll('[role="tab"]')
-    expect(tabs).toHaveLength(3)
+    expect(tabs).toHaveLength(4)
     expect(tabs[0].getAttribute('aria-selected')).toBe('true')
-    expect(Array.from(tabs, tab => tab.textContent.trim())).toEqual(['Plan', 'Live●', 'Review2'])
+    expect(Array.from(tabs, tab => tab.textContent.trim())).toEqual(['Plan', 'Live●', 'Review2', 'How modes work'])
     expect(host.querySelector('#rem-panel-plan').hidden).toBe(false)
     expect(host.querySelector('[data-testid="review-state"]')).toBeTruthy()
     expect(host.querySelector('[data-testid="live-state"]')).toBeTruthy()
     expect(host.querySelector('#rem-panel-live').hidden).toBe(true)
     expect(host.querySelector('[data-testid="rem-run-card"]')).toBeNull()
+  })
+
+  it('keeps the mode explanation in its own full-width tab and preserves planning edits', async () => {
+    const { host } = await mount()
+    const plan = host.querySelector('#rem-panel-plan')
+    const help = host.querySelector('#rem-panel-modes')
+    expect(plan.querySelector('.rmd')).toBeNull()
+    expect(help.hidden).toBe(true)
+    const input = host.querySelector('[data-testid="plan-state"]')
+    input.value = 'my settings'
+    const tab = host.querySelector('#rem-mode-modes')
+    await act(async () => tab.click())
+    expect(tab.getAttribute('aria-selected')).toBe('true')
+    expect(help.getAttribute('aria-labelledby')).toBe(tab.id)
+    expect(help.hidden).toBe(false)
+    expect(plan.hidden).toBe(true)
+    expect(help.querySelectorAll('tbody tr')).toHaveLength(3)
+    expect(help.querySelectorAll('thead th[data-stage]')).toHaveLength(7)
+    await act(async () => tab.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })))
+    expect(plan.hidden).toBe(false)
+    expect(document.activeElement).toBe(host.querySelector('#rem-mode-plan'))
+    expect(input.value).toBe('my settings')
   })
 
   it('keeps review-only work inactive without changing its state or completed label', async () => {
@@ -105,7 +127,7 @@ describe('the three-mode remediation workspace', () => {
     expect(input.value).toBe('changed selection')
   })
 
-  it.each(['plan', 'review', 'live'])('preserves the %s deep link', async mode => {
+  it.each(['plan', 'review', 'live', 'modes'])('preserves the %s deep link', async mode => {
     history.replaceState({}, '', `/?tab=remediate&mode=${mode}`)
     const { host } = await mount()
     expect(host.querySelector(`#rem-panel-${mode}`).hidden).toBe(false)
@@ -140,11 +162,11 @@ describe('the three-mode remediation workspace', () => {
     await press('#rem-mode-review', 'Home')
     expect(document.activeElement.id).toBe('rem-mode-plan')
     await press('#rem-mode-plan', 'ArrowLeft')
-    expect(document.activeElement.id).toBe('rem-mode-review')
-    await press('#rem-mode-review', 'ArrowRight')
+    expect(document.activeElement.id).toBe('rem-mode-modes')
+    await press('#rem-mode-modes', 'ArrowRight')
     expect(document.activeElement.id).toBe('rem-mode-plan')
     await press('#rem-mode-plan', 'End')
-    expect(document.activeElement.id).toBe('rem-mode-review')
+    expect(document.activeElement.id).toBe('rem-mode-modes')
     history.replaceState({}, '', '/?tab=remediate&mode=plan')
     await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
     expect(host.querySelector('#rem-panel-plan').hidden).toBe(false)

@@ -147,7 +147,7 @@ const fmtElapsed = (ms) => {
 const SKEY = (id) => `acp-assess-${id || 'none'}`
 const loadSaved = (id) => { try { return JSON.parse(sessionStorage.getItem(SKEY(id)) || 'null') } catch { return null } }
 
-export default function AssessRunner({ files = [], runId, scanBusy = false, onAssessed, onPhase,
+export default function AssessRunner({ files = [], runId, scanBusy = false, onAssessed, onPhase, onActivity,
                                        controlled = false, onReady, onViewMonitor, me = null }) {
   const saved = loadSaved(runId)
   // Derived from the selected scope, not a picker — see deriveLevel above.
@@ -160,6 +160,8 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // One server reconnect attempt per run id: the effect below re-runs as `docs` fills in, and a
   // reconnect is a decision about the run, not about how many documents have arrived yet.
   const serverResumeRef = useRef(null)
+  const [executionId, setExecutionId] = useState(saved?.executionId || null)
+  const executionRef = useRef(saved?.executionId || null)
   const [phase, setPhase] = useState(saved?.phase || 'idle') // idle | running | done
   const [progress, setProgress] = useState(0)
   const [currentFile, setCurrentFile] = useState(null)
@@ -301,6 +303,12 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   const discoveredN = assessmentFiles.filter((f) => f.status === 'discovered').length
   const deferredPending = discoveredN > 0 && docs.length === 0
   const assessN = deferredPending ? assessmentFiles.length : docs.length
+  // The stage header uses this same phase and document count as the activity panel.
+  useEffect(() => {
+    onActivity?.({ runId, executionId, phase,
+      completed: phase === 'done' ? progress || docs.length : progress,
+      total: liveTotal || assessN })
+  }, [onActivity, runId, executionId, phase, progress, liveTotal, assessN, docs.length])
   // Deterministic conformance result over a set of scored docs at a WCAG level. Defaults to the
   // docs already in props (immediate model); the deferred path passes the freshly-analysed files.
   const computeResultFrom = (scored, lvl) => {
@@ -335,7 +343,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // a person can register the bar moving); capped at 6s so it doesn't drag on large ones.
   const DURATION = Math.min(Math.max(1500, docs.length * 80), 6000)
 
-  const save = (obj) => { try { sessionStorage.setItem(SKEY(runId), JSON.stringify(obj)) } catch { /* ignore */ } }
+  const save = (obj) => { try { sessionStorage.setItem(SKEY(runId), JSON.stringify({ ...obj, executionId: executionRef.current })) } catch { /* ignore */ } }
 
   const runTicker = (startedAt, lvl, computed) => {
     clearInterval(timer.current)
@@ -502,6 +510,8 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     setPhase('running'); setResult(null); setProgress(0); setAccessFailed(false); setScanGone(null)
     setStartError(null)
     setExecutionNotice('')
+    executionRef.current = null
+    setExecutionId(null)
     setWorkersDown(false); setJobInfo(null); setLiveQueue(null)
     // ADR 0020: in the deferred model the DOWNLOAD happens now, at Assess — but GIS Drive tokens
     // live ~1h and are held in-memory per scan, so a scan discovered a while ago (or after a
@@ -509,6 +519,8 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     // token from the live session first (best-effort; the endpoint 422s harmlessly for a local /
     // SharePoint scan with no token). Then kick off the assessment.
     Promise.resolve(refreshScanDriveToken(runId)).catch(() => {}).then(() => assessScan(runId, opts?.level || level, opts ? !!opts.includeLifecycleFlagged : !ignoreLifecycle)).then((resp) => {
+      executionRef.current = resp?.execution_id || null
+      setExecutionId(executionRef.current)
       setExecutionNotice(stageExecutionNotice('Assessment', resp))
       if (resp && resp.deferred) {
         // Same "no workers available" guard doScan (App.jsx) already applies to a fresh scan

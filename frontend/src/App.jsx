@@ -255,6 +255,7 @@ export default function App() {
   const [sources, setSources] = useState([])
   const [scan, setScan] = useState(null)
   const [justAssessed, setJustAssessed] = useState(null) // scan id assessed this session (optimistic)
+  const [assessmentActivity, setAssessmentActivity] = useState(null)
   const [assessPhase, setAssessPhase] = useState('idle') // idle | starting | running | done
 
   // The two capability tables `AssessSummary` counts over. Held HERE rather than fetched inside
@@ -2246,6 +2247,7 @@ export default function App() {
         onLiveOps={() => { goToView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
       />
       <WorkflowStageStack lineage={canonicalRun.lineage} receivedAt={canonicalRun.receivedAt}
+        assessmentActivity={assessmentActivity}
         activeStage={view === 'publish' ? 'release'
           : ['discover', 'assess', 'remediate'].includes(view) ? view : null}
         stageDetails={{
@@ -2384,6 +2386,7 @@ export default function App() {
               <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy}
                             controlled onReady={registerAssessStart}
                             onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase}
+                            onActivity={setAssessmentActivity}
                             onViewMonitor={() => { setMonitorFocusScanId(run.id); setView('monitor') }}
                             me={me} />
             )}

@@ -1461,7 +1461,8 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
         return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS,
                 "worker_tier_alive": core.store.worker_tier_alive(),
                 "phase": "assessing", "deferred": True,
-                "snapshot_id": snapshot_id, "reused": execution["reused"]}
+                "snapshot_id": snapshot_id, "execution_id": execution["batch_id"],
+                "reused": execution["reused"]}
     # Immediate model — the results views gate on assessed_at; stamp it + build the assess trace.
     core.store.mark_assessed(sid, _dt.datetime.now(_dt.timezone.utc).isoformat())
     snapshot_id, input_manifest_id = _sealed_stage_input(
@@ -1475,7 +1476,7 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
         input_manifest_id=input_manifest_id)
     return {"scan_id": sid, "level": level, "job_id": execution["job_ids"][0],
             "workers": core.WORKERS, "snapshot_id": snapshot_id,
-            "reused": execution["reused"]}
+            "execution_id": execution["batch_id"], "reused": execution["reused"]}
 
 
 @router.get("/scans/{sid}/trace/session/data")
