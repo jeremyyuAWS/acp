@@ -26,7 +26,7 @@ def cohort(kind='evaluated'):
     return dict(schema_version='ai-review-calibration.v1', evaluation_version='fixture-v1',
         evaluated_at='2026-09-08T00:00:00Z', **CONFIG,
         provenance=dict(kind=kind,dataset_sha256='a'*64,evaluation_report_sha256='b'*64,
-                        representative=True,production_approved=True,approval_ref='fixture-only-not-production'),
+                        representative=True,production_approved=True,approval_ref='fixture-only-not-production',qualification_owner='owner'),
         samples=[dict(sample_id=str(i),passed=True,judgment_origin='objective_validator',evidence_ref='fixture:'+str(i)) for i in range(100)])
 
 
@@ -235,3 +235,57 @@ def test_hashes_and_evaluated_label_do_not_establish_production_qualification(db
     result=applicable_evaluation(db,'owner','fixture-v1',CONFIG,RULE,now=NOW)
     assert result['reason']=='calibration_production_approval_missing'
     assert result['available'] is False
+
+
+def test_snapshot_pins_evaluation_and_cannot_be_replaced_midrun(db):
+    from remediation_impact_settings import snapshot_impact_policy
+    from ai_run_policy import normalize_run_policy, persist_run_policy
+    from ai_spending_budget import AttemptConflict
+    from ai_threshold_execution import read_run_policy
+    policy,_=prepare(db)
+    # Fixture current date is fixed to keep this test independent of wall-clock freshness.
+    import ai_threshold_execution
+    original=ai_threshold_execution.seal_policy
+    from unittest.mock import patch
+    selection=dict(rule_based=2,ai=1,ai_budget_usd='5.00',ai_review=dict(enabled=True,mode='threshold',minimum_reliability=95,
+        permitted_families=['fixture_objective'],evaluation_versions={'fixture_objective':'fixture-v1'}))
+    with patch.object(ai_threshold_execution,'seal_policy',side_effect=lambda s,o,p:original(s,o,p,now=NOW)):
+        snapshot=snapshot_impact_policy(db,'owner',selection)
+    normalized=normalize_run_policy(snapshot)
+    assert normalized['threshold_policy']==policy
+    with db._db.cursor() as cur:
+        persist_run_policy(db._db,cur,'owner','scan','run',normalized)
+    assert read_run_policy(db,'owner','scan','run')==policy
+    assert read_run_policy(db,'other','scan','run') is None
+    assert read_run_policy(db,'owner','other','run') is None
+    changed=copy.deepcopy(normalized);changed['threshold_policy']['minimum_reliability']=0
+    with pytest.raises(AttemptConflict), db._db.cursor() as cur:
+        persist_run_policy(db._db,cur,'owner','scan','run',changed)
+    assert read_run_policy(db,'owner','scan','run')==policy
+
+
+def test_public_snapshot_cannot_inject_a_seal_or_enable_legacy_preference(db):
+    from remediation_impact_settings import snapshot_impact_policy
+    assert 'threshold_policy' not in snapshot_impact_policy(db,'owner',dict(rule_based=2,ai=1,ai_budget_usd='1.00',threshold_policy={'fake':True}))
+    with pytest.raises(ValueError):
+        snapshot_impact_policy(db,'owner',dict(rule_based=2,ai=1,ai_budget_usd='1.00',ai_review=dict(enabled=True,mode='threshold',minimum_reliability=95)))
+
+
+def test_foreign_qualification_reference_cannot_be_ingested_as_own(db):
+    foreign=cohort()
+    foreign['provenance']['qualification_owner']='other'
+    with pytest.raises(ValueError,match='does not belong'):
+        ingest_evaluation(db,'owner',foreign)
+    assert read_evaluation(db,'owner','fixture-v1') is None
+
+
+def test_existing_accepted_run_keeps_pre_threshold_canonical_policy(db):
+    from ai_run_policy import normalize_run_policy,persist_run_policy
+    legacy_review={'enabled':True,'mode':'review_all','minimum_reliability':95,'max_review_attempts':1,'review_model':'strong'}
+    legacy={'ai':1,'ai_budget_usd':'1.00','cap_units':1000000,'currency':'USD','ai_review':legacy_review}
+    with db._db.cursor() as cur: persist_run_policy(db._db,cur,'owner','scan','legacy',legacy)
+    normalized=normalize_run_policy({'ai':1,'ai_budget_usd':'1.00','ai_review':legacy_review})
+    assert normalized==legacy
+    with db._db.cursor() as cur: persist_run_policy(db._db,cur,'owner','scan','legacy',normalized)
+    from ai_threshold_execution import read_run_policy
+    assert read_run_policy(db,'owner','scan','legacy') is None

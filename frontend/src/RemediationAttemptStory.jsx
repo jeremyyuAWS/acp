@@ -1,3 +1,4 @@
+import RemediationThresholdDecision from './RemediationThresholdDecision.jsx'
 import { useId, useState } from 'react'
 import { authEpoch } from './apiIdentity.js'
 import useRemediationAttemptStory from './useRemediationAttemptStory.js'
@@ -93,6 +94,7 @@ export default function RemediationAttemptStory({ scanId, batchId, live = false,
             {group.reviewAttempts.map(attempt => <Attempt key={attempt.attempt_id} attempt={attempt} group={group} />)}
           </ol>
           {group.receipts.map((receipt, index) => <section className="attempt-story-review" key={`${receipt.operation_id}:${receipt.proposal_sha256}:${index}`}>
+            <RemediationThresholdDecision decision={receipt.review?.gate} />
             <h5>{reviewVerdict(receipt.review?.verdict)}</h5><p>{receipt.review?.reason ? attemptReason(receipt.review.reason) : 'No review explanation was retained.'}</p>
             <p>This review is linked to the saved output by its operation and content fingerprint. An AI review does not replace human approval.</p>
             <ul>{rows(receipt.review?.steps).map((step, i) => <li key={step.attempt_id || i}>{attemptPurpose(step.purpose)} · {step.provider || 'Provider not recorded'} · {step.model || 'Model not recorded'}: {attemptReason(step.reason)}</li>)}</ul>

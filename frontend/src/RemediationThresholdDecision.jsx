@@ -11,6 +11,7 @@ const LABELS = {
   no_hard_review_conditions: 'There are no conditions requiring a person',
   applicable_fresh_calibration: 'Applicable evaluated results are current and sufficiently sampled',
   validated_reliability_meets_threshold: 'Validated reliability meets the approved minimum',
+  exact_version_unchanged_before_write: 'The exact approved version and source are unchanged immediately before writing',
   registered_controlled_writer: 'A supported controlled writer is configured',
 }
 
@@ -21,7 +22,7 @@ export default function RemediationThresholdDecision({ decision }) {
       : 'Still needs your approval'
   return <section aria-label="AI change approval evidence">
     <p><strong>{label}</strong>{decision.approval_kind === 'policy' && decision.status !== 'fixed_and_checked'
-      ? ' — awaiting completion' : ''}</p>
+      ? decision.status === 'still_needs_work' ? ' — still needs work' : ' — awaiting completion' : ''}</p>
     {decision.approval_kind === 'policy' && <p>Approval is separate from application and verification. A change is fixed only after the result is checked.</p>}
     {Number.isFinite(decision.minimum_reliability) && <p>Approved minimum validated reliability: {decision.minimum_reliability}%.</p>}
     {Number.isFinite(decision.reliability_lower_bound) && <p>Evaluated reliability lower bound: {(decision.reliability_lower_bound * 100).toFixed(2)}%. This describes evaluated results for this type of change and does not guarantee this change is correct.</p>}

@@ -19,6 +19,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 from conftest import held  # noqa: E402
 
 import worker as w
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_handler_registry(monkeypatch):
+    # Test-only handlers must not leak into later stage-lane coverage checks.
+    monkeypatch.setattr(w, "HANDLERS", dict(w.HANDLERS))
 
 
 class _Ex(Exception):

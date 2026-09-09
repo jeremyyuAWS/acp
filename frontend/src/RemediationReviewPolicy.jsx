@@ -1,18 +1,32 @@
 import { useId } from 'react'
 import './remediation-run-insights.css'
 
-const DEFAULT = { enabled: false, mode: 'review_all', minimum_reliability: 95, max_review_attempts: 1 }
+const DEFAULT = { enabled: false, mode: 'review_all', minimum_reliability: null, max_review_attempts: 1,
+  review_model: 'strong', permitted_families: [], evaluation_versions: {} }
 
 export default function RemediationReviewPolicy({ value, onChange, disabled, supported = false,
-  automaticSupported = false, automaticReason = '', administratorFloor = 95 }) {
+  automaticSupported = false, automaticReason = '', administratorFloor = null, eligibleFamilies = [] }) {
   const id = useId()
   const policy = { ...DEFAULT, ...value }
+  const available = automaticSupported && eligibleFamilies.length > 0
   const change = delta => onChange({ ...policy, ...delta })
+  const selected = eligibleFamilies.filter(row => policy.permitted_families.includes(row.change_family)
+    && policy.evaluation_versions[row.change_family] === row.evaluation_version)
+  const floors = selected.map(row => row.minimum_reliability).filter(Number.isFinite)
+  if (available && Number.isFinite(administratorFloor)) floors.push(administratorFloor)
+  const minimum = floors.length ? Math.max(...floors) : 0
+  const selectFamily = (row, checked) => {
+    const families = policy.permitted_families.filter(family => family !== row.change_family)
+    const versions = { ...policy.evaluation_versions }
+    delete versions[row.change_family]
+    if (checked) { families.push(row.change_family); versions[row.change_family] = row.evaluation_version }
+    change({ permitted_families: families, evaluation_versions: versions })
+  }
   return <fieldset disabled={disabled || !supported} className="remediation-review-policy">
     <legend>Ask another AI to review suggestions?</legend>
     <label><input type="checkbox" checked={policy.enabled} onChange={event => change({ enabled: event.target.checked, mode: 'review_all' })} />
-      Check suggestions with a different configured model</label>
-    <p>Review calls use the same run spending limit. A model's agreement is not proof that a change is correct.</p>
+      Check suggestions with a configured reviewer model</label>
+    <p>Review calls use the same maximum spend for this run shown above. A model's agreement is not proof that a change is correct.</p>
     {!supported && <p>AI review is not available on this server yet.</p>}
     {policy.enabled && <>
       <label htmlFor={`${id}-attempts`}>If the reviewer is unsure or requests changes</label>
@@ -20,24 +34,34 @@ export default function RemediationReviewPolicy({ value, onChange, disabled, sup
         <option value={1}>Send the suggestion to me</option>
         <option value={2}>Allow one final AI review, then send it to me</option>
       </select>
-      <p>Refusals, uncertain charges and spending limits stop further AI review. The original suggestion remains available for your decision.</p>
-      <fieldset className="remediation-review-policy__mode" disabled={!automaticSupported}>
-        <legend>When may ACP skip your approval?</legend>
+      <label htmlFor={`${id}-reviewer`}>Reviewer preference</label>
+      <select id={`${id}-reviewer`} value={policy.review_model} onChange={event => change({ review_model: event.target.value })}>
+        <option value="strong">Different configured model</option><option value="low_cost">Lowest-cost configured model</option>
+      </select>
+      <p>Automatic application always requires an independent reviewer accepting the exact version. Refusals, uncertain charges and spending limits stop further AI review. Unresolved disagreement goes to you.</p>
+      <fieldset className="remediation-review-policy__mode">
+        <legend>When should a person review AI changes?</legend>
         <label><input type="radio" name={`${id}-mode`} value="review_all" checked={policy.mode === 'review_all'}
-          onChange={() => change({ mode: 'review_all' })} /> Review every AI suggestion</label>
-        <label><input type="radio" name={`${id}-mode`} value="threshold" checked={policy.mode === 'threshold'}
-          onChange={() => change({ mode: 'threshold' })} /> Automatically apply only validated suggestions</label>
+          onChange={() => change({ mode: 'review_all' })} /> Review all AI changes — default</label>
+        <label><input type="radio" name={`${id}-mode`} value="threshold" checked={policy.mode === 'threshold'} disabled={!available}
+          onChange={() => change({ mode: 'threshold' })} /> Automatically apply eligible, checked changes</label>
       </fieldset>
-      {!automaticSupported && <p className="remediation-review-policy__calibration-note">{automaticReason || 'Automatic approval is unavailable until this change type has current calibration data, an independent check, and a supported writer.'} Suggestions will continue to come to you for approval.</p>}
-      <details open={policy.mode === 'threshold'}><summary>Reliability threshold</summary>
-        <p>{policy.mode === 'threshold'
-          ? `ACP will require validated reliability of at least ${Math.max(administratorFloor, policy.minimum_reliability)}% before it can apply a suggestion. The administrator floor is ${administratorFloor}%.`
-          : 'This preference is ready for a future validated-auto policy. Every AI suggestion still requires your approval today.'}</p>
+      {!available && <p className="remediation-review-policy__calibration-note">Available after validation is configured. {automaticReason || 'No change family has a supported objective writer, exact-version independent review and current evaluated reliability configured.'} Suggestions will continue to come to you for approval.</p>}
+      <details open={policy.mode === 'threshold'}><summary>Minimum validated reliability</summary>
+        <p>This is based on evaluated results for this type of change. It is not the AI's own confidence and does not guarantee each change is correct.</p>
+        <p>Choose eligible change types and an explicit threshold. Approve plan and start authorizes this bounded run policy; later settings changes cannot broaden an approved run.</p>
+        {eligibleFamilies.length ? <fieldset disabled={!available}><legend>Eligible change types and evaluated reviewers</legend>
+          {eligibleFamilies.map(row => <label key={`${row.change_family}:${row.evaluation_version}`}>
+            <input type="checkbox" checked={selected.includes(row)} onChange={event => selectFamily(row, event.target.checked)} />
+            {row.change_family} ({row.format}) · Reviewer: {row.reviewer_provider} / {row.reviewer_model} · Administrator minimum: {row.minimum_reliability}% · Evaluation: {row.evaluation_version}
+          </label>)}
+        </fieldset> : <p>Eligible change types: not configured. Validated reviewer configuration: unavailable.</p>}
         <label htmlFor={`${id}-threshold`}>Minimum validated reliability for automatic application</label>
-        <input id={`${id}-threshold`} type="number" min={90} max={100} step={1} value={policy.minimum_reliability}
-          disabled={!automaticSupported}
-          onChange={event => { const n = Number(event.target.value); if (Number.isInteger(n) && n >= 90 && n <= 100) change({ minimum_reliability: n }) }} />
-        <p>This uses measured validation evidence, never an AI's self-reported confidence. A higher threshold sends more work to you.</p>
+        <input id={`${id}-threshold`} type="number" min={minimum} max={100} step="any" value={policy.minimum_reliability ?? ''}
+          placeholder="Not configured" disabled={!available}
+          onChange={event => { const raw = event.target.value; const n = Number(raw); if (!raw) change({ minimum_reliability: null }); else if (Number.isFinite(n) && n >= minimum && n <= 100) change({ minimum_reliability: n }) }} />
+        {floors.length > 0 && <p>The administrator minimum for your selected change types is {minimum}%.</p>}
+        <p>Previewing settings makes no paid calls. Eligibility not yet known stays unknown until exact source, proposal, review and validation evidence is available. Subjective changes, stale evidence, failed checks and missing calibration still need your approval.</p>
       </details>
     </>}
   </fieldset>

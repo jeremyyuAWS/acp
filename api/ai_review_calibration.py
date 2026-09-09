@@ -89,6 +89,10 @@ def _key(owner, version):
 def ingest_evaluation(store, owner, value):
     """Operator-only seam; replay identical evidence, reject version replacement."""
     result = normalize_evaluation(value)
+    if (result['provenance'].get('production_approved') is True
+            and result['provenance'].get('kind') == 'evaluated'
+            and result['provenance'].get('qualification_owner') != owner):
+        raise ValueError('Production qualification does not belong to this owner')
     encoded = json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False)
     key = _key(owner, result['evaluation_version'])
     with store._db.cursor() as cur:
@@ -140,6 +144,7 @@ def applicable_evaluation(store, owner, version, configuration, rule, *, now=Non
                 reason = 'synthetic_calibration_not_eligible'
             elif (record['provenance'].get('representative') is not True
                   or record['provenance'].get('production_approved') is not True
+                  or record['provenance'].get('qualification_owner') != owner
                   or not isinstance(record['provenance'].get('approval_ref'), str)
                   or not record['provenance']['approval_ref'].strip()):
                 reason = 'calibration_production_approval_missing'

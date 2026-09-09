@@ -168,7 +168,8 @@ def apply_under_run_policy(store, owner, scan_id, run_id, snapshot_id, change_fa
             or fresh.get('change_family') != change_family
             or fresh.get('proposal_sha256') != evidence.get('proposal_sha256')
             or fresh.get('source_sha256') != evidence.get('source_sha256')):
-        receipt = {**receipt, 'status':'awaiting_human_review', 'approval_required':True,
+        receipt = {**receipt, 'status':'awaiting_human_review', 'approval_required':True, 'approval_kind':None,
+                   'checks':gate['checks'] + [{'gate':'exact_version_unchanged_before_write','passed':False}],
                    'reason':'evidence_changed_before_application'}
     else:
         try:

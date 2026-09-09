@@ -55,6 +55,7 @@ completion/recovery and is fenced against automatic replay; its existence never 
 Dataset/report hashes establish artifact integrity only. They do not establish representativeness,
 unbiased sampling, correct judgments, or production authorization. Availability additionally requires
 `provenance.representative: true`, `provenance.production_approved: true`, and a nonempty
-`provenance.approval_ref` to the operator-reviewed qualification decision. These declarations must
+`provenance.approval_ref` to the operator-reviewed qualification decision, with
+`provenance.qualification_owner` matching the ingestion owner. Cross-owner qualifications are rejected. These declarations must
 be justified by the retained report; ingestion cannot independently prove them. Missing authorization
 keeps the cohort unavailable even when every hash and numerical check passes.
