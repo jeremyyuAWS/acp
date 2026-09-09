@@ -78,8 +78,8 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
   const selectedStage = stages.find(stage => stage.tier === (selection === 'first' ? 1 : selection === 'next' ? 2 : null))
   const descriptions = {
     rules: 'Supported rule-based changes follow the approval settings accepted for this run. Verified changes below include all origins; a rule-only finding split is not yet available.',
-    first: 'The first model tries supported drafting work. Counts describe recorded operations and charge states, not usable suggestions or fixed findings.',
-    next: 'A second model may try when the earlier response was unusable and the spending policy permits it. A fallback call alone does not mean an additional finding was helped.',
+    first: 'The first configured model handles drafting and, if requested, review work. Counts describe recorded operations and charge states, not usable suggestions or fixed findings.',
+    next: 'The next configured model can draft after an unusable response or review a draft when your plan permits. These counts include both purposes. Open saved history below to see which work it performed.',
     approval: 'You approve AI suggestions before they are applied. Optional AI reviews follow your accepted plan. Saved review results are available below; AI suggestions still require your approval.',
     verify: 'Approved changes must be applied and pass the existing verification checks. Document processing and provider responses do not count as fixed findings.',
   }
@@ -102,7 +102,7 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
       {[1, 2].map(tier => {
         const stage = stages.find(item => item.tier === tier)
         const selected = tier === 1 ? 'first' : 'next'
-        return <Stage key={tier} title={tier === 1 ? '02 · First AI' : '03 · Next AI'} detail={data?.available ? data.ai_enabled ? 'Bounded text drafting' : 'AI disabled for this run' : 'Attempt history unavailable'} identity={identity} stamp={JSON.stringify(stage)} paused={paused || state.error} selected={selection === selected} onClick={() => setSelection(selected)}>
+        return <Stage key={tier} title={tier === 1 ? '02 · First AI' : '03 · Next AI'} detail={data?.available ? data.ai_enabled ? 'Drafts and optional reviews' : 'AI disabled for this run' : 'Attempt history unavailable'} identity={identity} stamp={JSON.stringify(stage)} paused={paused || state.error} selected={selection === selected} onClick={() => setSelection(selected)}>
           {stage ? <><span className="wf-stage-total">{displayCount(stage.operations)} recorded operations</span><span className="wf-secondary">{displayCount(stage.active)} dispatched · {displayCount(stage.settled)} settled · {displayCount(stage.uncertain)} uncertain</span><span className="wf-secondary">{money(stage.spent_units)} settled · {money(stage.held_units)} reserved</span></> : <span className="wf-secondary">No measured count available</span>}
         </Stage>
       })}
