@@ -214,7 +214,7 @@ export function tabCounts(list, decisions = {}) {
 // still inferred only from a genuine decision, never an invented marker.
 export const WORKFLOW_TABS = ['needs-review', 'manual', 'awaiting-validation', 'blocked', 'completed']
 export const WORKFLOW_LABELS = {
-  'needs-review': 'Review AI suggestions', manual: 'Complete manual work',
+  'needs-review': 'Approve AI suggestions', manual: 'Fix manually',
   'awaiting-validation': 'Awaiting verification', blocked: 'Blocked', completed: 'Completed',
 }
 
