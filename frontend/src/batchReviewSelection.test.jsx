@@ -30,7 +30,7 @@ describe('explicit batch selection', () => {
     expect(onDecide).toHaveBeenCalledTimes(1)
     expect(onDecide.mock.calls[0][0].id).toBe(10)
     expect(onDecide.mock.calls[0][1]).toMatchObject({ expectedVersion: 2, expectedSourceRevision: 'source-1', expectedProposalSnapshotIds: ['snapshot-10'], approvedValues: ['draft 10'] })
-    expect(view.container.textContent).toContain('1 recorded')
+    expect(view.container.textContent).toContain('Approval finished: 1 approved')
   })
   it('never broadens selection with refresh or filters and blocks changed proposal versions', async () => {
     const a = finding(1), onDecide = vi.fn()
@@ -62,7 +62,7 @@ describe('explicit batch selection', () => {
     })
     const v = await mount({ visible: [finding(1), finding(2), finding(3)], onDecide })
     await click(v.button('Select all ready')); await click(v.button('Approve selected')); await click(v.button('Confirm approval'))
-    expect(v.container.textContent).toContain('1 recorded · 1 not recorded · 1 uncertain')
+    expect(v.container.textContent).toContain('Approval finished: 1 approved, 1 failed, 1 uncertain.')
     const requestId = onDecide.mock.calls[1][1].requestId
     await click(v.button('Approve selected')); await click(v.button('Confirm approval'))
     expect(onDecide.mock.calls.map(c => c[0].id)).toEqual([1, 2, 3, 2])
@@ -80,6 +80,7 @@ describe('explicit batch selection', () => {
     await act(async () => release())
     expect(onDecide).toHaveBeenCalledTimes(1)
     expect(v.container.textContent).toContain('Review scope changed')
+    expect(v.container.querySelector('.batch-sr-only[role=status]').textContent).toBe('')
   })
   it('freezes all values and detects locator and source replacement', () => {
     const f = finding(1), entry = snapshotFinding(f)
@@ -87,4 +88,39 @@ describe('explicit batch selection', () => {
     expect(batchDecision(entry).approvedValues).toEqual(['draft 1'])
     expect(selectionProblem(entry, [f], {}, {})).toContain('changed')
   })
+})
+
+it('keeps confirmation compact and shows only acknowledged success deltas with quiet announcements', async () => {
+  vi.stubGlobal('matchMedia', () => ({ matches: true }))
+  const calls = []
+  const onDecide = vi.fn(() => new Promise((resolve, reject) => calls.push({ resolve, reject })))
+  const multi = finding(1, { proposals: [{ proposed_value: 'A' }, { proposed_value: 'B' }], _raw: { ...finding(1)._raw, finding_count: 2, proposal_snapshot_ids: ['a', 'b'] } })
+  const v = await mount({ visible: [multi, finding(2), finding(3)], onDecide })
+  v.container.querySelector('.batch-review-inspection').open = true
+  await click(v.button('Approve all ready'))
+  expect(v.container.querySelector('.batch-review-inspection').open).toBe(false)
+  expect(v.container.querySelector('.batch-approval-summary').textContent).toContain('3 review items · 4 proposals · 3 files')
+  expect(onDecide).not.toHaveBeenCalled()
+  await click(v.button('Confirm approval'))
+  const counter = () => v.container.querySelector('.batch-approved .livecounter-n').textContent
+  expect(counter()).toBe('0')
+  expect(v.container.querySelector('.livecounter-delta')).toBeNull()
+  const announcement = v.container.querySelector('.batch-sr-only[role=status]').textContent
+  await act(async () => calls[0].resolve())
+  expect(counter()).toBe('1')
+  expect(v.container.querySelector('.livecounter-delta').textContent).toBe('+1')
+  expect(v.container.querySelector('.batch-sr-only[role=status]').textContent).toBe(announcement)
+  await act(async () => calls[1].reject(Object.assign(new Error('Conflict'), { status: 409 })))
+  expect(counter()).toBe('1')
+  await act(async () => calls[2].reject(new TypeError('Lost connection')))
+  expect(counter()).toBe('1')
+  expect(v.container.querySelector('.batch-approval-errors').open).toBe(false)
+  expect(v.container.textContent).toContain('2 review items need attention')
+  expect(v.container.querySelector('.batch-sr-only[role=status]').textContent).toContain('1 approved, 1 failed, 1 uncertain')
+  await v.render({})
+  expect(counter()).toBe('1')
+  expect(onDecide).toHaveBeenCalledTimes(3)
+  await v.render({ scopeKey: 'different-run' })
+  expect(v.container.querySelector('.batch-sr-only[role=status]').textContent).toBe('')
+  vi.unstubAllGlobals()
 })

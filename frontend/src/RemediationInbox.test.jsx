@@ -256,7 +256,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     await click(btnByText('Select all ready'))
     await click(btnByText('Approve selected'))
     await click(btnByText('Confirm approval'))
-    expect(container.textContent).toContain('1 recorded · 1 not recorded · 0 uncertain')
+    expect(container.textContent).toContain('Approval finished: 1 approved, 1 failed, 0 uncertain.')
     // Selection sits on the finding that failed, not past the whole cluster.
     expect(detailHeading()).toBe('Image needs alt text')
   })
