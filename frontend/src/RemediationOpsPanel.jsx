@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import useConfirmedRemediationActivity from './useConfirmedRemediationActivity.js'
 import LiveCounter from './LiveCounter.jsx'
 import RemediationWaterfallCard from './RemediationWaterfallCard.jsx'
 import RemediationThroughput from './RemediationThroughput.jsx'
@@ -236,6 +237,7 @@ function Activity({ events = [] }) {
 // them ACP may act on. See RemediationExceptions.jsx.
 
 export default function RemediationOpsPanel({ snapshot = null, connected = false, receivedAt = null, events = [], updateMode = 'idle', onViewMonitor = null, compactLayout = null, exceptions = null }) {
+  const activityConfirmed = useConfirmedRemediationActivity(snapshot)
   const [paused, setPaused] = useState(false)
   const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.hidden)
   const [clock, setClock] = useState(() => Date.now())
@@ -272,7 +274,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   // snapshot has never carried — so its delivery term was always false.
   const exceptionTotal = exceptionCount(exceptionState.view)
   return <section className={`panel remops${paused || hidden ? ' remops-motion-paused' : ''}`} aria-label="Remediation run status">
-    <header className="remops-header"><div><span className="remops-eyebrow">Remediation {snapshot.terminal ? 'complete' : 'in progress'}</span><h2>{line}</h2>{snapshot.source?.breadcrumb && <p>{snapshot.source.breadcrumb}</p>}<p className="muted">{snapshot.source?.locked_at ? `Snapshot locked ${new Date(snapshot.source.locked_at).toLocaleString()} · ` : ''}{snapshot.run_id}</p></div><div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /><button type="button" className="ghost" aria-pressed={paused} onClick={() => setPaused((value) => !value)}>{paused ? 'Resume visual updates' : 'Pause visual updates'}</button>{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>View in Monitor →</button>}</div></header>
+    <header className="remops-header"><div><span className="remops-eyebrow">{({ failed: 'Remediation failed', cancelled: 'Remediation stopped', paused: 'Remediation paused', stalled: 'Remediation stalled' })[snapshot.state] || (snapshot.terminal ? 'Remediation results' : activityConfirmed ? 'Remediation in progress' : 'Remediation run')}</span><h2>{line}</h2>{snapshot.source?.breadcrumb && <p>{snapshot.source.breadcrumb}</p>}<p className="muted">{snapshot.source?.locked_at ? `Snapshot locked ${new Date(snapshot.source.locked_at).toLocaleString()} · ` : ''}{snapshot.run_id}</p></div><div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /><button type="button" className="ghost" aria-pressed={paused} onClick={() => setPaused((value) => !value)}>{paused ? 'Resume visual updates' : 'Pause visual updates'}</button>{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>View in Monitor →</button>}</div></header>
     {suspect && <div className="remops-integrity" role="status"><b>{documentCountsSuspect ? 'Document status is temporarily inconsistent.' : 'Some supporting totals are catching up.'}</b> ACP cannot currently reconcile {(snapshot.integrity.affected || []).join(', ') || 'one or more values'}. {documentCountsSuspect ? 'Document counts below are the last ACP confirmed.' : 'Live document progress remains available.'}</div>}
     <ActivityPulse events={events} generatedAt={snapshot.generated_at} />
     <Milestones notices={milestones} onDismiss={(key) => setMilestones((current) => current.filter((notice) => notice.key !== key))} />
@@ -282,7 +284,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
     <Progress snapshot={snapshot} suspect={documentCountsSuspect} />
     <RemediationWaterfallCard key={`${snapshot.scan_id || snapshot.run_id}:${snapshot.batch_id || "legacy"}`} snapshot={snapshot} paused={paused || hidden} />
     <details className="wf-accounting"><summary>Detailed accounting and finding evidence</summary><FindingReconciliation snapshot={snapshot} /></details>
-    {snapshot.phases?.length > 0 && <Disclosure title="Phases" compact={compact}><Pipeline phases={snapshot.phases} attempts={snapshot.active_attempts || []} moving={connected && snapshot.state !== 'stalled' && (snapshot.active_attempts || []).length > 0} /></Disclosure>}
+    {snapshot.phases?.length > 0 && <Disclosure title="Phases" compact={compact}><Pipeline phases={snapshot.phases} attempts={snapshot.active_attempts || []} moving={activityConfirmed && connected && !paused && !hidden && (snapshot.active_attempts || []).length > 0} /></Disclosure>}
     <div className="remops-two"><Workstream attempts={snapshot.active_attempts || []} generatedAt={snapshot.generated_at} compact={compact} /><Throughput snapshot={snapshot} frozen={paused || hidden} /></div>
     <Disclosure title="Fix and delivery totals" compact={compact}><Secondary snapshot={snapshot} /></Disclosure>
     {/* The exception region is ALWAYS offered, unlike the stub it replaces: it names its own
