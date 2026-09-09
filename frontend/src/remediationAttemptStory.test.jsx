@@ -196,3 +196,17 @@ it('includes complete draft sequences matched through an explicitly linked revie
   expect(container.querySelector('.attempt-story-timeline').textContent).toContain('review-model')
   expect(container.querySelector('.attempt-story-preview')).not.toBeNull()
 })
+
+it('keeps configured unused steps empty even when another step uses the same model', async () => {
+  const { container } = await mount({ modelFilter: { provider: 'provider-two', model: 'recorded-fallback', attemptIds: [] } })
+  expect(container.querySelector('.attempt-story-timeline')).toBeNull()
+  expect(container.textContent).toContain('No matching recorded attempts')
+})
+it('filters by the exact selected step attempt IDs while retaining linked sequence context', async () => {
+  const unrelated = { ...record.attempts[1], attempt_id: 'other-step', operation_id: 'other-operation' }
+  getRunInsights.mockResolvedValue({ ...record, attempts: [...record.attempts, unrelated] })
+  const { container } = await mount({ modelFilter: { provider: 'provider-two', model: 'recorded-fallback', attemptIds: [record.attempts[1].attempt_id] } })
+  expect(container.querySelector('.attempt-story-timeline').textContent).toContain('recorded-first')
+  expect(container.querySelector('.attempt-story-timeline').textContent).toContain('recorded-fallback')
+  expect(container.querySelector('.attempt-story-selectors').textContent).not.toContain('Attempt sequence')
+})

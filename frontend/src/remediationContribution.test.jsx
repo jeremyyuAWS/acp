@@ -61,3 +61,54 @@ it('keeps a successful snapshot through refresh and failure but clears it on a r
   expect(container.textContent).not.toContain('10 original findings')
   expect(container.querySelector('.remediation-contribution')).toBeNull()
 })
+
+it('adds exact second fallback origin on the same baseline and drills into only its original findings', async () => {
+  const secondFallback = { ...snapshot, contributions: { rules: 2, first_ai: 3, fallback_ai: 0, fallback_2_ai: 5 }, findings: snapshot.findings.map(f => f.origin === 'fallback_ai' ? { ...f, origin: 'fallback_2_ai' } : f) }
+  const { container } = await mount(Contribution, { snapshot: secondFallback })
+  expect([...container.querySelectorAll('[aria-label="Contribution by source, scaled to original findings"] .contribution-track span')].map(el => el.style.width)).toEqual(['20%', '30%', '0%', '50%'])
+  expect(container.textContent).toContain('All source bars use the same 10-finding baseline')
+  await act(async () => button(container, 'Second fallback additional proposals').click())
+  const drawer = container.querySelector('[role=dialog]')
+  expect(drawer.querySelectorAll('li')).toHaveLength(5)
+  expect(drawer.textContent).not.toContain('first-ai.html')
+  expect(drawer.textContent).not.toContain('fixed.html')
+})
+
+it('omits absent legacy second fallback data and distinguishes missing count from recorded zero', async () => {
+  const { container, render } = await mount(Contribution, { snapshot })
+  expect(container.textContent).not.toContain('Second fallback')
+  await render({ snapshot: { ...snapshot, coverage: 'partial', contributions: { ...snapshot.contributions, fallback_2_ai: null } } })
+  expect(container.textContent).toContain('Second fallback additional proposals: Unavailable')
+  await render({ snapshot: { ...snapshot, contributions: { ...snapshot.contributions, fallback_2_ai: 0 } } })
+  expect(container.textContent).toContain('Second fallback additional proposals: 0')
+})
+
+it('adds second fallback exact finding totals only when supplied and keeps incomplete lineage gated', async () => {
+  const complete = { ...snapshot, available: true, first_model_findings: 3, fallback_additional_findings: 0, fallback_2_additional_findings: 5 }
+  getRunInsights.mockResolvedValue({ measured_contribution: complete })
+  const { container } = await mount(Insights, { scanId: 's1', batchId: 'b1' })
+  await act(async () => { const details = container.querySelector('details'); details.open = true; details.dispatchEvent(new Event('toggle')) })
+  const row = [...container.querySelectorAll('tr')].find(el => el.textContent.includes('Second fallback: additional suggestions'))
+  expect(row.querySelector('td').textContent).toBe('5')
+  getRunInsights.mockResolvedValue({ measured_contribution: { ...complete, available: false, coverage: 'partial', fallback_2_additional_findings: null } })
+  await act(async () => button(container, 'Refresh saved history').click())
+  expect(container.textContent).not.toContain('Second fallback: additional suggestions')
+  expect(container.textContent).toContain('Exact finding lineage is incomplete')
+})
+
+it('keeps contribution details inside an existing dialog and restores focus to their trigger', async () => {
+  getRunInsights.mockResolvedValue({ measured_contribution: snapshot })
+  const { container } = await mount(() => createElement('section', { role: 'dialog', 'aria-label': 'Stage evidence' }, createElement(Insights, { scanId: 's1', batchId: 'b1', inlineDrilldown: true })))
+  await act(async () => { const details = container.querySelector('details'); details.open = true; details.dispatchEvent(new Event('toggle')) })
+  const trigger = button(container, 'Additional fallback proposals')
+  await act(async () => { trigger.focus(); trigger.click() })
+  expect(container.querySelectorAll('[role=dialog]')).toHaveLength(1)
+  const details = container.querySelector('[aria-label="Additional fallback proposals finding details"]')
+  expect(details.querySelectorAll('li')).toHaveLength(5)
+  expect(details.textContent).not.toContain('fixed.html')
+  expect(document.activeElement).toBe(details)
+  await act(async () => button(container, 'Back to contribution').click())
+  expect(container.querySelector('[aria-label="Additional fallback proposals finding details"]')).toBeNull()
+  expect(document.activeElement).toBe(trigger)
+  expect(container.querySelectorAll('[role=dialog]')).toHaveLength(1)
+})

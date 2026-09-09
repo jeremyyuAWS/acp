@@ -1,13 +1,14 @@
 import { Component, useEffect, useRef, useState } from 'react'
 import { Background, Handle, MarkerType, Position, ReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
+import { recordedRunGraphGroups } from './remediationRunGraphPresentation.js'
 import WaterfallCount from './WaterfallCount.jsx'
 import { waterfallStageStatus } from './WaterfallRunNotice.jsx'
 import './remediation-waterfall-graph.css'
 
 const ORDER = ['rules', 'first', 'next', 'approval', 'verify']
 // The same restrained workflow colors used by LiveOps, paired with textual roles.
-const COLORS = { rules: '#246B79', first: '#5269A8', next: '#7B4D91', approval: '#A65A2E', verify: '#356B3F' }
+const COLORS = { rules: '#246B79', first: '#5269A8', next: '#7B4D91', approval: '#A65A2E', verify: '#356B3F', review: '#9A3F62', unknown: '#51606D' }
 const count = value => Number.isSafeInteger(value) && value >= 0
 
 function useReducedMotion() {
@@ -23,11 +24,11 @@ function useReducedMotion() {
 
 function StageButton({ data }) {
   return <button type="button" className={`wf-graph-node nodrag nopan${data.selected ? ' wf-graph-node-selected' : ''}${data.active ? ' wf-graph-node-active' : ''}`}
-      aria-pressed={data.selected} data-stage={data.stage} data-node-id={data.id} onClick={() => data.onSelect?.(data.id, { tier: data.tier, model: data.model, provider: data.provider, stage: data.stage })}
+      aria-pressed={data.selected} data-stage={data.stage} data-node-id={data.id} onClick={() => data.onSelect?.(data.id, { tier: data.tier, model: data.model, provider: data.provider, stage: data.stage, stepId: data.stepId, attemptIds: data.attemptIds, identityKind: data.identityKind, purpose: data.purpose, detail: data.explanation || data.detail })}
       onKeyDown={event => data.onKeyDown(event, data.id)} style={{ minHeight: data.height, '--stage-color': COLORS[data.stage] }}>
-      <span className="wf-graph-node-role"><span>{String(ORDER.indexOf(data.stage) + 1).padStart(2, '0')}</span>{data.role}</span>
+      <span className="wf-graph-node-role"><span>{String(data.groupIndex + 1).padStart(2, '0')}</span>{data.role}</span>
       <strong>{data.title}</strong>
-      <span className="wf-graph-node-provider">{data.provider}</span>
+      <span className="wf-graph-node-provider">{data.identityKind === 'configured' ? 'Configured · ' : ''}{data.provider || 'Provider not recorded'}</span>
       {data.metric && <span className="wf-graph-node-metric">{data.tier && !count(data.value) ? 'Activity count unavailable' : <><WaterfallCount value={data.value} identity={`${data.identity}:${data.id}`} paused={data.paused} /> {data.metric}</>}</span>}
       <span className={`wf-graph-node-state${data.active ? ' wf-graph-node-working' : ''}`}>{data.active ? <><i aria-hidden="true" />{data.id === 'verify' ? 'Verification in progress' : 'Request dispatched'}</> : data.detail}</span>
     </button>
@@ -56,11 +57,8 @@ class GraphBoundary extends Component {
 // This graph is the configured path, not evidence that every finding visits every stage.
 // Only the parent's confirmed motion stage can illuminate a connection.
 export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules', motion = {}, paused = false,
-  identity, reviewCount, verifiedCount, snapshot = {}, viewAvailable, reducedMotion = false, width = 1100, onSelect, onKeyDown = () => {} }) {
+  runGraph, identity, reviewCount, verifiedCount, snapshot = {}, viewAvailable, reducedMotion = false, width = 1100, onSelect, onKeyDown = () => {} }) {
   paused = paused || snapshot.terminal || CALM_STATES.includes(snapshot.state)
-  const narrow = width < 850
-  const columns = width < 420 ? 1 : narrow ? 2 : 5
-  const nodeWidth = Math.max(1, (width - 32 - (columns - 1) * 26) / columns)
   const aiNodes = tier => {
     const stage = stages.find(item => item.tier === tier)
     const models = (stage?.models || []).filter(item => typeof item.model === 'string' && item.model.trim())
@@ -85,16 +83,36 @@ export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules
       canAnimate: models.length === 1,
     }))
   }
+  const recorded = recordedRunGraphGroups(runGraph)
   const groups = [
     [{ id: 'rules', stage: 'rules', role: 'Rules', title: 'Rule-based fixes', provider: 'No LLM call required', detail: 'Supported corrections under your plan' }],
-    aiNodes(1), aiNodes(2),
+    ...(recorded || [aiNodes(1), aiNodes(2)]),
     [{ id: 'approval', stage: 'approval', role: 'Your approval', title: 'Human review', provider: 'You decide what is applied', value: reviewCount, metric: 'review items', detail: 'Suggestions are not verified fixes' }],
     [{ id: 'verify', stage: 'verify', role: 'Verify', title: 'Check the changes', provider: 'Evidence of completion', value: verifiedCount, metric: 'verified changes', detail: 'Across all correction origins' }],
   ]
-  const facts = groups.flat()
+  const narrow = width < 850
+  const columns = width < 420 ? 1 : narrow ? 2 : groups.length
+  const nodeWidth = Math.max(1, (width - 32 - (columns - 1) * 26) / columns)
+  const facts = groups.flatMap((group, groupIndex) => group.map(fact => ({ ...fact, groupIndex })))
   // Long recorded model names grow the rows; text is never clipped or replaced by an alias.
-  const charsPerLine = Math.max(12, Math.floor((nodeWidth - 24) / 7))
-  const height = Math.max(174, ...facts.map(item => 130 + Math.ceil(item.title.length / charsPerLine) * 18 + Math.ceil(item.provider.length / charsPerLine) * 14))
+  const lines = (text, averageWidth, inset = 30) => {
+    const capacity = Math.max(8, Math.floor((nodeWidth - inset) / averageWidth))
+    let rows = 1, used = 0
+    for (const token of String(text || '').split(/(?<=[\s-])/u)) {
+      const length = token.length
+      if (used && used + length > capacity) { rows += 1; used = 0 }
+      const pieces = Math.max(1, Math.ceil(length / capacity))
+      rows += pieces - 1
+      used += length - (pieces - 1) * capacity
+    }
+    return rows
+  }
+  // Account for word/hyphen wrapping, status pills and the configured-identity prefix.
+  // Seven readable columns must not clip the last line of a long model name.
+  const height = Math.max(174, ...facts.map(item => 30 + (item.metric ? 32 : 24)
+    + lines(item.role, 5.8) * 13 + lines(item.title, 8.4) * 19
+    + lines(`${item.identityKind === 'configured' ? 'Configured · ' : ''}${item.provider || 'Provider not recorded'}`, 5.8) * 15
+    + (item.metric ? 28 : 0) + lines(item.detail, 5.5, 44) * 15 + 10))
   const coords = narrow ? facts.map((_, index) => {
     const row = Math.floor(index / columns)
     return [row % 2 ? columns - 1 - index % columns : index % columns, row]
@@ -133,7 +151,7 @@ export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules
 }
 
 export default function RemediationWaterfallGraph({ stages, aiEnabled, selection, onSelect, motion = {}, paused = false,
-  error = false, identity, reviewCount, verifiedCount, snapshot = {}, viewAvailable }) {
+  runGraph, error = false, identity, reviewCount, verifiedCount, snapshot = {}, viewAvailable }) {
   const host = useRef(null)
   const flow = useRef(null)
   const expectedNodes = useRef(5)
@@ -203,7 +221,7 @@ export default function RemediationWaterfallGraph({ stages, aiEnabled, selection
     // activates the focused button when the reader chooses to inspect it.
     host.current?.querySelectorAll('[data-stage]')[next]?.focus()
   }
-  const graph = waterfallGraphModel({ stages, aiEnabled, snapshot, viewAvailable, selection, onSelect, motion, paused: stopped, reducedMotion: reduced, identity,
+  const graph = waterfallGraphModel({ stages, runGraph, aiEnabled, snapshot, viewAvailable, selection, onSelect, motion, paused: stopped, reducedMotion: reduced, identity,
     reviewCount: count(reviewCount) ? reviewCount : undefined, verifiedCount: count(verifiedCount) ? verifiedCount : undefined, width, onKeyDown })
   expectedNodes.current = graph.nodes.length
   return <section ref={host} className={`wf-graph${stopped || reduced ? ' wf-graph-stopped' : ''}`} aria-label="Remediation waterfall stages">

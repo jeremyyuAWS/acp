@@ -58,13 +58,14 @@ export default function RemediationAttemptStory({ scanId, batchId, live = false,
   const id = useId()
   const [open, setOpen] = useState(defaultOpen)
   const [choice, setChoice] = useState(null)
-  const filtering = typeof modelFilter?.provider === 'string' && typeof modelFilter?.model === 'string' && !!modelFilter.model
-  const identity = JSON.stringify([authEpoch(), scanId, batchId, filtering ? modelFilter.provider : null, filtering ? modelFilter.model : null])
+  const exactAttempts = Array.isArray(modelFilter?.attemptIds) ? modelFilter.attemptIds : null
+  const filtering = exactAttempts !== null || typeof modelFilter?.provider === 'string' && typeof modelFilter?.model === 'string' && !!modelFilter.model
+  const identity = JSON.stringify([authEpoch(), scanId, batchId, filtering ? modelFilter.provider : null, filtering ? modelFilter.model : null, exactAttempts])
   const current = choice?.identity === identity ? choice : { offset: 0 }
   const offset = current.offset || 0
   const { data, loading, error, receivedAt, refresh } = useRemediationAttemptStory({ scanId, batchId, live, paused, open, offset })
   // Filter whole, explicitly linked sequences rather than removing their predecessor evidence.
-  const matches = group => !filtering || [...group.attempts, ...group.reviewAttempts].some(attempt => attempt.provider === modelFilter.provider && attempt.model === modelFilter.model)
+  const matches = group => !filtering || [...group.attempts, ...group.reviewAttempts].some(attempt => exactAttempts ? exactAttempts.includes(attempt.attempt_id) : attempt.provider === modelFilter.provider && attempt.model === modelFilter.model)
   const availableFiles = attemptStory(data).files.filter(name => !filtering || attemptStory(data, name, { live }).groups.some(matches))
   const file = availableFiles.includes(current.file) ? current.file : availableFiles[0] || ''
   const unfilteredStory = attemptStory(data, file, { live })
@@ -76,7 +77,7 @@ export default function RemediationAttemptStory({ scanId, batchId, live = false,
   return <details className="attempt-story" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
     <summary>Follow an attempt <span>See what happened to a file, step by step</span></summary>
     {open && <div className="attempt-story-body">
-      {filtering && <p className="attempt-story-model-context">Sequences containing {modelFilter.provider} · {modelFilter.model}. Linked steps from other models remain visible for context. This filter covers the current record page.</p>}
+      {filtering && <p className="attempt-story-model-context">Sequences for {modelFilter.provider && modelFilter.model ? `${modelFilter.provider} · ${modelFilter.model}` : 'the selected step'}. Linked steps from other models remain visible for context. This filter covers the current record page.</p>}
       <div className="attempt-story-toolbar"><p>Saved evidence only. Reading this story makes no AI calls.</p><button type="button" disabled={loading || !scanId || !batchId} onClick={refresh}>Refresh story</button></div>
       {error && <p role="status" className="attempt-story-notice">Refresh delayed.{data ? ' Showing the last saved page.' : ' The story could not be loaded.'}</p>}
       {!scanId || !batchId ? <p>Select a remediation run.</p> : !data && loading ? <p role="status">Loading saved attempts…</p> : !data ? <p>Saved attempts are unavailable for this run.</p> : <>
