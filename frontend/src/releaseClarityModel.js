@@ -1,0 +1,30 @@
+// Release uses the same corrected-copy eligibility as POST /scans/{sid}/publish.
+// A passing assessment or an uploaded certificate is not a delivery receipt.
+export const hasCorrectedCopy = (file) => (file.compliant === true || file.compliant === 1) && Boolean(file.remediated_at)
+
+export function deliveryIsCurrent(file, result, done = {}) {
+  if (result && result.status !== 'published') return false
+  const publishedAt = result?.published_at || file.published_at
+  if (!publishedAt) return result?.status === 'published' || done[file.file] === true
+  const published = Date.parse(publishedAt)
+  const corrected = Date.parse(file.remediated_at)
+  if (!Number.isFinite(published)) return false
+  return !file.remediated_at || (Number.isFinite(corrected) && published >= corrected)
+}
+
+export function releaseReadiness(file, { done = {}, results = {}, sourceState = () => undefined, pending = {}, blockers = {} } = {}) {
+  const result = results[file.file]
+  if (deliveryIsCurrent(file, result, done)) return { status: 'released', label: 'Delivered', reason: 'Delivery recorded. Originals unchanged.' }
+  if (['queued', 'running'].includes(result?.status)) return { status: 'delivering', label: 'Delivering', reason: 'Release continues in the background. Return here for the receipt.' }
+  if (sourceState(file) === 'stale') return { status: 'changed', label: 'Needs attention', reason: 'Source changed. Rescan before releasing this copy.' }
+  if (sourceState(file) === 'unavailable') return { status: 'unreachable', label: 'Needs attention', reason: 'Source unreachable. Restore access and check again.' }
+  if (pending[file.file]) return { status: 'attention', label: 'Needs attention', reason: `${pending[file.file]} review items pending. Approve, apply and verify changes in Remediate → Review.` }
+  if (!hasCorrectedCopy(file)) return { status: 'attention', label: 'Needs attention', reason: file.compliant === true || file.compliant === 1
+    ? 'No verified corrected copy. Apply and verify changes in Remediate.'
+    : file.compliant === false || file.compliant === 0 ? 'Verification incomplete. Resolve findings in Remediate and verify the corrected copy.' : 'Readiness unknown. Assess and verify this file before Release.' }
+  if (blockers[file.file]) return { status: 'attention', label: 'Needs attention', reason: blockers[file.file] }
+  if (result?.status === 'failed') return { status: 'failed', label: 'Needs attention', reason: result.explanation || 'Delivery failed. Review the destination and retry this file.' }
+  return { status: 'ready', label: 'Ready', reason: 'Verified corrected copy awaiting Release.' }
+}
+
+export const canSelectRelease = (state) => ['ready', 'released', 'failed'].includes(state.status)

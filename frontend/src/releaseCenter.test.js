@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path'
 // honesty-critical copy is unit-tested in releasePolicy.test.js — this pins that Publish.jsx uses it.
 const HERE = dirname(fileURLToPath(import.meta.url))
 const pub = () => ['Publish.jsx', 'ReleaseFileSelection.jsx', 'ReleaseStepPanel.jsx',
-  'release-file-selection.css', 'release-accessibility.css']
+  'release-file-selection.css', 'releaseClarityModel.js', 'release-accessibility.css']
   .map((file) => readFileSync(join(HERE, file), 'utf8')).join('\n')
 
 describe('Release Center: honest policy panel', () => {
@@ -160,8 +160,8 @@ describe('Release builder', () => {
 
   it('does not allow changed sources into the releasable selection', () => {
     const s = pub()
-    expect(s).toMatch(/srcOf\(f\) !== 'stale'/)
-    expect(s).toMatch(/disabled=\{fileStatus === 'changed'\}/)
+    expect(s).toMatch(/sourceState\(file\) === 'stale'/)
+    expect(s).toMatch(/disabled=\{!canSelectRelease\(\{ status: fileStatus \}\)\}/)
   })
 
   it('moves focus from the overview action to the real builder', () => {
@@ -186,8 +186,8 @@ describe('Release builder', () => {
   it('uses an actionable blocked state when review is the reason nothing is selectable', () => {
     const s = pub()
     expect(s).toMatch(/No files are ready for release/)
-    expect(s).toMatch(/Review \{pendingReview\.files\} files/)
-    expect(s).toMatch(/workflow-tab-remediate/)
+    expect(s).toMatch(/Review \{pendingReview\.files\}/)
+    expect(s).toMatch(/\?tab=remediate&mode=review/)
   })
 
   it('uses three distinct steps instead of combining delivery and review', () => {
@@ -221,13 +221,13 @@ describe('Release builder', () => {
 
   it('keeps stale failed files out of retry and explains the rescan dependency', () => {
     const s = pub()
-    expect(s).toMatch(/releaseResults\[f\.file\]\?\.status === 'failed' && srcOf\(f\) !== 'stale'/)
-    expect(s).toMatch(/no longer retryable until the changed source is rescanned/)
+    expect(s).toMatch(/releaseResults\[f\.file\]\?\.status === 'failed' && canSelectRelease/)
+    expect(s).toMatch(/no longer retryable until its source, review or verification blocker is resolved/)
   })
 
   it('allows released files to be selected for download without republishing them', () => {
     const s = pub()
-    expect(s).toMatch(/const selectableReady = ready\.filter\(\(f\) => srcOf\(f\) !== 'stale'\)/)
+    expect(s).toMatch(/const selectableReady = ready\.filter\(\(f\) => canSelectRelease\(stateOf\(f\)\)\)/)
     expect(s).toMatch(/const selectedPublishable = selectedReady\.filter\(\(f\) => !done\[f\.file\]\)/)
     expect(s).toMatch(/if \(!selectedPublishable\.length\) setDeliveryMethod\('download'\)/)
     expect(s).toMatch(/Every selected file is already published/)

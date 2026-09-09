@@ -49,7 +49,7 @@ const mount = async (props) => {
   await flush()
   return container
 }
-const verified = (file, over = {}) => ({ file, compliant: true, score: 100, department: 'D', sourceName: 'S', ...over })
+const verified = (file, over = {}) => ({ file, compliant: true, remediated_at: '2026-07-31T00:00:00Z', score: 100, department: 'D', sourceName: 'S', ...over })
 const held = (file, over = {}) => ({ file, compliant: false, score: 40, issues: [{ wcag: 'SC_1_1_1' }], department: 'D', sourceName: 'S', ...over })
 const run = { id: 'scan1', files: 3, certifiable: 2 }
 

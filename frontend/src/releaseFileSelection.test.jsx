@@ -8,7 +8,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 let root
 let container
 
-const file = (name, extra = {}) => ({ file: name, source_relative_path: `Finance/${name}`, sourceName: 'Drive', score: 100, ...extra })
+const file = (name, extra = {}) => ({ file: name, source_relative_path: `Finance/${name}`, sourceName: 'Drive', compliant: 1, remediated_at: '2026-09-01', score: 100, ...extra })
 const renderSelection = async (props = {}) => {
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -39,7 +39,7 @@ describe('ReleaseFileSelection', () => {
   it('shows compact status totals, exclusions, and an exact package estimate', async () => {
     const view = await renderSelection()
     expect(view.textContent).toContain('1 source changed')
-    expect(view.textContent).toContain('1 already released')
+    expect(view.textContent).toContain('1 already delivered')
     expect(view.textContent).toContain('Estimated package 2 KB')
     expect(view.querySelector('[aria-label="Select changed.pptx"]').disabled).toBe(true)
   })
