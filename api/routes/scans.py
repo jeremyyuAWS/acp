@@ -3942,6 +3942,7 @@ def get_release_history(request: Request, limit: int = Query(50, ge=1, le=100)):
             "released_url": row.get("released_document_url"),
             "created": bool(row.get("created_result")),
             "checksum": row.get("corrected_checksum"),
+            "artifact_digest": row.get("artifact_digest"),
             "verification": row.get("verification"),
             "failure_category": row.get("failure_category"),
             "explanation": row.get("explanation"),

@@ -336,7 +336,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       released_relative_path: row.destination_relative_path,
       released_document_id: row.released_document_id,
       published_url: row.released_document_url,
-      corrected_checksum: row.corrected_checksum,
+      corrected_checksum: row.corrected_checksum, artifact_digest: row.artifact_digest,
       verification: row.verification, published_at: row.published_at,
       created: !!row.created_result,
       failure_category: row.failure_category, explanation: row.explanation,
