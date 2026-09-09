@@ -21,6 +21,7 @@ const activity = { view: { available: true, ai_enabled: true, stages: [
 it('shows durable units, costs, honest missing contribution, and accessible outcomes', async () => {
   const { root, container } = createTestRoot()
   await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot()} activity={activity} />))
+  expect(container.querySelector('.remediation-run-insights summary').textContent).toContain('Saved model history')
   expect(container.textContent).toContain('15 recorded operations')
   expect(container.textContent).not.toContain('15 suggestions')
   expect(container.textContent).toContain('$1.18')

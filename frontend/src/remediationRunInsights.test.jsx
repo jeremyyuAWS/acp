@@ -38,3 +38,18 @@ it('drops old run responses and offers retry after failure',async()=>{
   await act(async()=>container.querySelector('button').click())
   expect(container.textContent).toContain('No retained model attempts')
 })
+
+it('pages saved records and resets the page when the run changes', async()=>{
+  getRunInsights.mockImplementation(async(scan,batch,signal,offset)=>({...view,attempts:[],pagination:{offset,limit:100,has_more:offset===0}}))
+  const {root,container}=createTestRoot()
+  await act(async()=>root.render(createElement(Insights,{scanId:'s1',batchId:'b1'})))
+  await open(container)
+  const button=label=>Array.from(container.querySelectorAll('button')).find(el=>el.textContent===label)
+  expect(button('Previous records').disabled).toBe(true)
+  await act(async()=>button('Next records').click())
+  expect(getRunInsights.mock.calls.at(-1)[3]).toBe(100)
+  expect(button('Next records').disabled).toBe(true)
+  await act(async()=>root.render(createElement(Insights,{scanId:'s2',batchId:'b2'})))
+  expect(getRunInsights.mock.calls.at(-1).slice(0,2)).toEqual(['s2','b2'])
+  expect(getRunInsights.mock.calls.at(-1)[3]).toBe(0)
+})
