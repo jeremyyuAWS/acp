@@ -251,3 +251,15 @@ def test_durable_fallback_requires_earlier_unusable_same_source_operation(store,
                     scan_id='scan',file='a.docx',rule_id='1.1.1',item_id='item',attempt_id='next')
         assert c.read_contribution(store,'owner','scan',run)['contributions']['fallback_ai']==expected
     finally: c.SOURCE.reset(token)
+
+
+def test_ownerless_legacy_admission_has_no_unscoped_contribution_baseline(store):
+    store.init_scan_run('legacy','local',1,'2026-09-08T00:00:00Z','rubric','hash')
+    with store._db.cursor() as cur:
+        store._db.execute(cur,"INSERT INTO scan_rule_traces(scan_id,file,rule_id,outcome,finding_count) VALUES('legacy','a.docx','1.1.1','FAIL',5)")
+    run=store.enqueue_stage_batch('legacy','remediate','remediate_file',[{'file':'a.docx','scan_id':'legacy'}],snapshot_id='assessment',request_fingerprint='legacy')['batch_id']
+    with store._db.cursor() as cur:
+        store._db.execute(cur,'SELECT COUNT(*) AS n FROM remediation_contribution_runs')
+        assert store._db.fetchone(cur)['n']==0
+    for owner in ('owner','other',None):
+        with pytest.raises(PermissionError): c.read_contribution(store,owner,'legacy',run)
