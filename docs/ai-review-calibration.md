@@ -27,3 +27,27 @@ source/proposal identity must be rechecked immediately before controlled applica
 not a verified fix: the existing writer and verification/recovery path determine completion.
 No preview or ingestion operation calls a paid model. Genuine representative evaluated datasets
 and an explicitly authorized budget for acquiring them are separate prerequisites.
+
+Operator workflow:
+
+- Validate an evaluation offline: `python scripts/ingest_ai_review_calibration.py evaluation.json`.
+- Ingest a reviewed evaluation: add `--ingest --owner ACCOUNT` using the normal configured database environment.
+- Validate administrator configuration: `python scripts/ingest_ai_review_calibration.py admin.json --administrator`; add `--ingest` only when ready to save.
+
+Administrator schema is `ai-review-admin.v1`, with `families` mapping explicit family names to
+`minimum_reliability` (0–100), `minimum_sample_size` (positive integer), `freshness_days`
+(positive integer), and `writer_supported: true`. This declaration cannot register a writer:
+only the code-owned `SUPPORTED_WRITERS` registry authorizes a complete adapter. It is empty
+in production. Adapter tests register fixtures only and do not qualify any production model.
+
+Existing writer audit: alt text, link text, accessible names, sensory rewrites, labels/titles,
+and image transcription require semantic judgment or lack independent authoritative evidence.
+The restricted `html-root-language` helper can verify an explicitly authoritative language
+transformation, but lacks the real execution's exact structured review and source binding.
+Before registering that family, connect those bindings, validate its controlled writer and
+post-write artifact evidence, evaluate representative independent cases for the exact model /
+reviewer / validator configuration, and set a justified administrator floor and freshness window.
+
+The dispatch receipt is policy authorization, not a second proposal ledger. It references the
+canonical immutable snapshot and source digest. A crashed or uncertain write remains awaiting
+completion/recovery and is fenced against automatic replay; its existence never means verified.

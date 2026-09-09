@@ -1,0 +1,185 @@
+import copy
+import json
+from datetime import datetime, timezone
+import pytest
+import store as store_module
+from store import Store
+from ai_review_calibration import (normalize_evaluation, ingest_evaluation, read_evaluation,
+    applicable_evaluation, wilson_lower, load_calibration_records, ADMIN_KEY)
+from ai_threshold_execution import seal_policy, evaluate_policy
+
+NOW = datetime(2026,9,9,tzinfo=timezone.utc)
+CONFIG = dict(format='html', change_family='fixture_objective', generator_provider='provider', generator_model='g1',
+              reviewer_provider='provider', reviewer_model='r1', validator_version='v1')
+RULE = dict(minimum_reliability=90, minimum_sample_size=100, freshness_days=30, writer_supported=True)
+
+
+@pytest.fixture
+def db(tmp_path, monkeypatch):
+    monkeypatch.setattr(store_module, '_SQLITE_PATH', str(tmp_path / 'test.db'))
+    import ai_threshold_execution
+    monkeypatch.setitem(ai_threshold_execution.SUPPORTED_WRITERS, 'fixture_objective', object())
+    return Store()
+
+
+def cohort(kind='evaluated'):
+    return dict(schema_version='ai-review-calibration.v1', evaluation_version='fixture-v1',
+        evaluated_at='2026-09-08T00:00:00Z', **CONFIG,
+        provenance=dict(kind=kind,dataset_sha256='a'*64,evaluation_report_sha256='b'*64),
+        samples=[dict(sample_id=str(i),passed=True,judgment_origin='objective_validator',evidence_ref='fixture:'+str(i)) for i in range(100)])
+
+
+def prepare(db):
+    db.set_setting(ADMIN_KEY,json.dumps({'schema_version':'ai-review-admin.v1','families':{'fixture_objective':RULE}}))
+    ingest_evaluation(db,'owner',cohort())
+    policy = seal_policy(db,'owner',dict(enabled=True,mode='threshold',minimum_reliability=95,
+        permitted_families=['fixture_objective'],evaluation_versions={'fixture_objective':'fixture-v1'}),now=NOW)
+    evidence = dict(change_family='fixture_objective',supported=True,proposal_sha256='proposal',
+        snapshot_id='snapshot',source_sha256='source',current_source_sha256='source',configuration=CONFIG,
+        review=dict(verdict='accept',proposal_sha256='proposal',source_sha256='source',independent=True,model='r1',provider='provider'),
+        validation=dict(passed=True,objective=True,proposal_sha256='proposal',source_sha256='source',validator_version='v1'),
+        source_evidence_complete=True,subjective=False,disagreement=False,hard_review_conditions=[])
+    return policy,evidence
+
+
+def test_ingestion_computes_bound_and_rejects_fabricated_counts():
+    record=cohort()
+    record.update(sample_size=100000,successes=100000,reliability_lower_bound=1)
+    result=normalize_evaluation(record)
+    assert result['sample_size']==100
+    assert result['reliability_lower_bound']==pytest.approx(.9630065017930143)
+    with pytest.raises(ValueError):
+        normalize_evaluation({**record,'samples':record['samples']+[record['samples'][0]]})
+
+
+@pytest.mark.parametrize('mutation', [lambda r:r.update(evaluated_at='2026-09-08'),
+    lambda r:r['samples'][0].update(passed=1),lambda r:r['samples'][0].update(judgment_origin='model'),
+    lambda r:r['provenance'].update(dataset_sha256=''),lambda r:r.update(samples=[])])
+def test_invalid_evidence_rejected(mutation):
+    value=cohort();mutation(value)
+    with pytest.raises(ValueError):normalize_evaluation(value)
+
+
+def test_versions_immutable_replay_and_owner_scoping(db):
+    first=ingest_evaluation(db,'owner',cohort())
+    assert ingest_evaluation(db,'owner',cohort())==first
+    changed=cohort();changed['samples'][0]['passed']=False
+    with pytest.raises(ValueError,match='immutable'):ingest_evaluation(db,'owner',changed)
+    assert read_evaluation(db,'other','fixture-v1') is None
+    assert load_calibration_records(db,'other')==[]
+    assert load_calibration_records(db,'owner')==[first]
+
+
+@pytest.mark.parametrize('kind,now,rule,config,reason',[
+    ('synthetic',NOW,RULE,CONFIG,'synthetic_calibration_not_eligible'),
+    ('evaluated',datetime(2026,11,1,tzinfo=timezone.utc),RULE,CONFIG,'calibration_expired_or_future'),
+    ('evaluated',datetime(2026,9,1,tzinfo=timezone.utc),RULE,CONFIG,'calibration_expired_or_future'),
+    ('evaluated',NOW,{**RULE,'minimum_sample_size':101},CONFIG,'calibration_sample_size_insufficient'),
+    ('evaluated',NOW,RULE,{**CONFIG,'generator_model':'changed'},'calibration_configuration_mismatch')])
+def test_calibration_applicability_hard_gates(db,kind,now,rule,config,reason):
+    ingest_evaluation(db,'owner',cohort(kind))
+    check=applicable_evaluation(db,'owner','fixture-v1',config,rule,now=now)
+    assert check['available'] is False
+    assert check['reason']==reason
+
+
+@pytest.mark.parametrize('delta,requires',[(-.00001,True),(0,False),(.00001,False)])
+def test_real_computed_boundary_below_equal_above(db,delta,requires):
+    policy,evidence=prepare(db)
+    lower=wilson_lower(100,100)*100
+    policy['minimum_reliability']=lower-delta
+    gate=evaluate_policy(db,'owner',policy,evidence,now=NOW)
+    assert gate['approval_required'] is requires
+    assert all(row['passed'] for row in gate['checks'][:-1])
+
+
+@pytest.mark.parametrize('changed',[
+    {'supported':False},{'current_source_sha256':'changed'},{'subjective':True},
+    {'disagreement':True},{'source_evidence_complete':False},{'hard_review_conditions':['refusal']},
+    {'snapshot_id':None},{'configuration':{**CONFIG,'validator_version':'changed'}},
+    {'review':{}},{'validation':{}},{'hard_review_conditions':None}])
+def test_every_gate_remains_human_reviewed_despite_high_reliability(db,changed):
+    policy,evidence=prepare(db)
+    assert evaluate_policy(db,'owner',policy,{**evidence,**changed},now=NOW)['approval_required']
+
+
+def test_nested_review_and_validation_failures(db):
+    policy,evidence=prepare(db)
+    for key,changes in [('review',{'proposal_sha256':'old'}),('review',{'source_sha256':'old'}),
+       ('review',{'independent':False}),('review',{'model':'g1'}),('review',{'verdict':'revise'}),
+       ('validation',{'passed':False}),('validation',{'objective':False}),('validation',{'source_sha256':'old'})]:
+        changed=copy.deepcopy(evidence);changed[key].update(changes)
+        assert evaluate_policy(db,'owner',policy,changed,now=NOW)['approval_required']
+
+
+def test_missing_and_expired_calibration_never_qualify(db):
+    policy,evidence=prepare(db)
+    assert evaluate_policy(db,'other',policy,evidence,now=NOW)['approval_required']
+    assert evaluate_policy(db,'owner',policy,evidence,now=datetime(2027,1,1,tzinfo=timezone.utc))['approval_required']
+
+
+def test_midrun_admin_loosen_cannot_broaden_snapshot_and_tighten_denies(db):
+    policy,evidence=prepare(db)
+    policy['minimum_reliability']=99
+    db.set_setting(ADMIN_KEY,json.dumps({'schema_version':'ai-review-admin.v1','families':{'fixture_objective':{**RULE,'minimum_reliability':0}}}))
+    assert evaluate_policy(db,'owner',policy,evidence,now=NOW)['approval_required']
+    policy['minimum_reliability']=95
+    db.set_setting(ADMIN_KEY,json.dumps({'schema_version':'ai-review-admin.v1','families':{'fixture_objective':{**RULE,'minimum_reliability':99}}}))
+    assert evaluate_policy(db,'owner',policy,evidence,now=NOW)['approval_required']
+    assert policy['families']['fixture_objective']['administrator']==RULE
+
+
+def test_no_automatic_enablement_of_old_runs(db):
+    _,evidence=prepare(db)
+    assert evaluate_policy(db,'owner',None,evidence,now=NOW)['approval_required']
+    assert seal_policy(db,'owner',{'mode':'review_all'}) is None
+
+
+def test_registry_default_cannot_be_enabled_by_administrator_config(db,monkeypatch):
+    from ai_threshold_execution import apply_under_run_policy
+    prepare(db)
+    from ai_threshold_execution import SUPPORTED_WRITERS
+    monkeypatch.delitem(SUPPORTED_WRITERS,'fixture_objective')
+    assert apply_under_run_policy(db,'owner','scan','run','snapshot','fixture_objective')['reason']=='supported_objective_writer_unavailable'
+
+
+def test_controlled_adapter_replay_and_postwrite_verification(db,monkeypatch):
+    import ai_threshold_execution as execution
+    from types import SimpleNamespace
+    policy,evidence=prepare(db)
+    monkeypatch.setattr(execution,'read_run_policy',lambda *args:policy)
+    calls=[]
+    def apply(*args):
+        calls.append(args[-1])
+        assert args[-1]['status']=='approved_awaiting_completion'
+        return dict(verified=True,snapshot_id='snapshot',proposal_sha256='proposal',source_sha256='source',
+                    artifact_sha256='artifact',verification_ref='check')
+    monkeypatch.setitem(execution.SUPPORTED_WRITERS,'fixture_objective',SimpleNamespace(prepare=lambda *args:evidence,apply=apply))
+    first=execution.apply_under_run_policy(db,'owner','scan','run','snapshot','fixture_objective',now=NOW)
+    assert first['status']=='fixed_and_checked'
+    policy['minimum_reliability']=0
+    replay=execution.apply_under_run_policy(db,'owner','scan','run','snapshot','fixture_objective',now=NOW)
+    assert replay['replayed'] is True and replay['minimum_reliability']==95
+    assert len(calls)==1
+
+
+@pytest.mark.parametrize('outcome',[None, {'verified':True}, {'verified':False,'verification_ref':'failed'}])
+def test_failed_verification_never_counts_approved_as_fixed(db,monkeypatch,outcome):
+    import ai_threshold_execution as execution
+    from types import SimpleNamespace
+    policy,evidence=prepare(db)
+    monkeypatch.setattr(execution,'read_run_policy',lambda *args:policy)
+    monkeypatch.setitem(execution.SUPPORTED_WRITERS,'fixture_objective',SimpleNamespace(prepare=lambda *args:evidence,apply=lambda *args:outcome))
+    assert execution.apply_under_run_policy(db,'owner','scan','run','snapshot','fixture_objective',now=NOW)['status']=='still_needs_work'
+
+
+def test_source_change_between_gate_and_writer_stops_application(db,monkeypatch):
+    import ai_threshold_execution as execution
+    from types import SimpleNamespace
+    policy,evidence=prepare(db)
+    monkeypatch.setattr(execution,'read_run_policy',lambda *args:policy)
+    inputs=iter([evidence,{**evidence,'current_source_sha256':'changed'}])
+    monkeypatch.setitem(execution.SUPPORTED_WRITERS,'fixture_objective',SimpleNamespace(
+        prepare=lambda *args:next(inputs),apply=lambda *args:pytest.fail('stale source was written')))
+    result=execution.apply_under_run_policy(db,'owner','scan','run','snapshot','fixture_objective',now=NOW)
+    assert result['approval_required'] and result['reason']=='evidence_changed_before_application'

@@ -147,3 +147,11 @@ def applicable_evaluation(store, owner, version, configuration, rule, *, now=Non
         except (ValueError, KeyError, TypeError):
             reason = 'calibration_invalid'
     return {'available': reason is None, 'reason': reason, 'evaluation': record if reason is None else None}
+
+
+def load_calibration_records(store, owner):
+    prefix = 'ai_review_calibration:' + hashlib.sha256(owner.encode()).hexdigest() + ':'
+    with store._db.cursor() as cur:
+        store._db.execute(cur, 'SELECT value FROM app_settings WHERE key LIKE %s ORDER BY key', (prefix + '%',))
+        rows = store._db.fetchall(cur)
+    return [json.loads(row['value']) for row in rows]
