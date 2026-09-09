@@ -18,6 +18,13 @@ try {
     await page.getByRole('button', { name: /Approve all ready in this run/ }).click()
     const panel = page.getByRole('region', { name: 'Select findings for approval' })
     assert.ok(await panel.getByRole('button', { name: 'Confirm approval of 37 findings', exact: true }).isVisible())
+    const typography = await panel.evaluate(el => {
+      const family = getComputedStyle(document.body).fontFamily
+      return { matches: [el, ...el.querySelectorAll('h3,p,summary,button,input,select')].every(node => getComputedStyle(node).fontFamily === family),
+        summarySize: getComputedStyle(el.querySelector('summary')).fontSize,
+        bodySize: getComputedStyle(el).fontSize }
+    })
+    assert.deepEqual(typography, { matches: true, summarySize: '13px', bodySize: '13px' })
     assert.equal(await panel.locator('input[type=checkbox]:disabled').count(), 0)
     assert.equal(await panel.locator('details[open]').count(), 0)
     await page.getByRole('tab', { name: /Fix manually/ }).click()
@@ -36,6 +43,7 @@ try {
     await page.waitForFunction(() => window.fixtureDecisions.length === 1)
     assert.equal(await page.evaluate(() => window.fixtureDecisions[0].id), 'finding-10')
     assert.ok(await panel.getByText('Approved', { exact: true }).isVisible())
+    assert.equal(await panel.locator('.batch-approved dd').evaluate(el => getComputedStyle(el).fontSize), '28px')
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)
     assert.equal(overflow, false, `horizontal overflow at ${width}`)
     await page.screenshot({ path: `/tmp/acp-batch-${width}.png`, fullPage: true })
