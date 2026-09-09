@@ -23,3 +23,5 @@
 .wd-donut { width:140px; display:block; margin:0 auto 12px; }
 .wd-spend-list li { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 12px; margin:8px 0; overflow-wrap:anywhere; }
 .wd-spend-list i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; }
+
+.wd-chart-axis { font-family:var(--font-mono,ui-monospace,monospace); font-size:12px; font-variant-numeric:tabular-nums; margin-left:5%; }

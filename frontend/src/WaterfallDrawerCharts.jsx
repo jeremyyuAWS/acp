@@ -38,13 +38,15 @@ export function ActivityTrend({ data }) {
   return <section className="wd-chart" aria-label="Activity over time"><h3>Activity over time</h3>
     {!known.length ? <Empty>{data?.reason}</Empty> : <>
       <p>{data.unit} · {data.bucketLabel} · {data.timeZone}<br />{data.windowLabel}</p>
+      <div className="wd-chart-axis">{format(max)} {data.unit}</div>
       <svg className="wd-trend" viewBox="0 0 360 135" role="img" aria-labelledby={titleId}>
         <title id={titleId}>Recorded activity; exact timestamps and values are in the chart data table. Missing observations are gaps.</title>
         <path d="M18 20V110H342" fill="none" stroke="currentColor" opacity=".25" />
         <path d={path} fill="none" stroke="#3966bf" strokeWidth="3" />
         {known.map((point, index) => <circle key={`${point.timestamp}-${index}`} cx={x(point)} cy={y(point)} r="3" fill="#8254a1" />)}
-        <text x="20" y="132">0</text><text x="20" y="15">{format(max)} {data.unit}</text>
+        
       </svg>
+      <div className="wd-chart-axis">0</div>
       <details><summary>Chart data</summary><table><caption>{data.unit} · {data.timeZone}</caption><thead><tr><th>Time</th><th>Value</th></tr></thead><tbody>{points.map((point, index) => <tr key={`${point.timestamp}-${index}`}><td><time>{point.timestamp}</time></td><td>{format(point.value)}</td></tr>)}</tbody></table></details>
     </>}
   </section>
