@@ -3,7 +3,7 @@ import { batchDecision, exclusionReason, proposalValues, selectionProblem, snaps
 import './batch-review-selection.css'
 
 const PAGE_SIZE = 10
-export default function BatchReviewSelection({ visible = [], decisions = {}, drafts = {}, scopeKey, onDecide, onResult, disabled = false }) {
+export default function BatchReviewSelection({ visible = [], decisions = {}, drafts = {}, scopeKey, onDecide, onResult, onBusy, disabled = false }) {
   const [entries, setEntries] = useState([])
   const [page, setPage] = useState(0)
   const [confirming, setConfirming] = useState(false)
@@ -35,7 +35,7 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
   }
   async function approve() {
     if (lock.current || disabled || !entries.length || problems.some(Boolean) || !onDecide) return
-    lock.current = true; setBusy(true)
+    lock.current = true; setBusy(true); onBusy?.(true)
     const batch = entries.slice(), initialScope = scopeKey, outcomes = []
     // Sequential writes bound pressure and permit a changed scope/source to stop unsent work.
     for (const entry of batch) {
@@ -54,7 +54,7 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
     }
     setResults(old => [...old.filter(r => !outcomes.some(o => o.id === r.id)), ...outcomes])
     setEntries(old => old.filter(e => !outcomes.some(r => r.id === e.finding.id && r.state !== 'failed')))
-    setConfirming(false); setBusy(false); lock.current = false
+    setConfirming(false); setBusy(false); lock.current = false; onBusy?.(false)
     onResult?.(outcomes)
   }
   return <section className="batch-review" aria-label="Select findings for approval">

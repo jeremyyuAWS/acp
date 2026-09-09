@@ -14,7 +14,8 @@ export function exclusionReason(f, decisions = {}, drafts = {}) {
   if (drafts[f.id] != null && drafts[f.id] !== f.after) return 'Unsaved edit — review individually'
   if (!proposalValues(f).every(v => typeof v === 'string' && v.trim())) return 'Missing proposal'
   // Production rows require persisted lineage; legacy/demo rows may be inspected individually.
-  if (!f._raw?.proposal_snapshot_ids?.length || f._raw?.source_revision == null || f._raw?.decision_version == null)
+  if (!f._raw?.proposal_snapshot_ids?.length || f._raw.proposal_snapshot_ids.length !== proposalValues(f).length
+    || f._raw.proposal_snapshot_ids.some(id => !id) || f._raw?.source_revision == null || f._raw?.decision_version == null)
     return 'Version unavailable — review individually'
   return null
 }
