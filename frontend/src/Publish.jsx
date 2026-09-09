@@ -622,7 +622,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         <div className="release-overview__heading">
           <div>
             <h2 id="release-title" style={{ margin: 0 }}>Release</h2>
-            <p className="muted" style={{ margin: '5px 0 0' }}>Deliver verified, remediated copies without changing the originals.</p>
+            <p className="muted" style={{ margin: '5px 0 0' }}>{allowRemainingIssues ? 'Deliver saved corrected copies with remaining issues recorded. Originals stay unchanged.' : 'Deliver corrected copies without changing the originals. Choose below whether to include remaining issues.'}</p>
           </div>
           <div className="release-overview__actions">
             <button className="ghost" onClick={() => run?.id && openReport(run.id)}>Download report</button>
@@ -673,6 +673,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       </section>
       <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
         folderName={releaseFolderName} readOnly={readOnly} publishing={publishing}
+        allowRemainingIssues={allowRemainingIssues}
+        releaseOptions={<div className="panel" style={{ marginTop: 12, padding: 14 }}>
+          <label><input type="checkbox" checked={allowRemainingIssues} disabled={readOnly || publishing}
+            onChange={event => { setAllowRemainingIssues(event.target.checked); setReleasePreview(null); setPackagePreview(null); setReviewedPlanKey(null); setBuilderStep(1); setDeliveryMethod('publish'); setSelectedFiles(new Set()); selectionInitialized.current = false }} /> Publish with remaining issues</label>
+          <p className="muted" style={{ margin: '8px 0 0' }}>Optional: publish saved copies even when manual review or accessibility issues remain. Unapproved suggestions are not applied. Remaining issues stay in the audit record; publishing does not certify accessibility.</p>
+        </div>}
         readyReasons={[...new Set(states.filter(state => state.status !== 'ready').map(state => state.reason))]}
         destinationLabel={releaseDestination ? `${releaseDestination.folder_name} / Remediated / ${releaseFolder?.name || releaseFolderName || 'Timestamp + user email'}` : releaseProvider === 'drive' ? 'Google Drive / Remediated / Timestamp + user email' : releaseProvider === 'sharepoint' ? 'SharePoint source library / Remediated / Timestamp + user email' : 'ACP managed storage'}
         destinationPicker={['drive', 'sharepoint'].includes(releaseProvider) ? <ReleaseDestinationPicker provider={releaseProvider} value={releaseDestination}
@@ -872,11 +878,6 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             </button>
           </div>
         )}
-        <div className="panel" style={{ marginTop: 12, padding: 14 }}>
-          <label><input type="checkbox" checked={allowRemainingIssues} disabled={readOnly || publishing}
-            onChange={event => { setAllowRemainingIssues(event.target.checked); setReleasePreview(null); setPackagePreview(null); setReviewedPlanKey(null); setBuilderStep(1); setDeliveryMethod('publish'); setSelectedFiles(new Set()); selectionInitialized.current = false }} /> Publish with remaining issues</label>
-          <p className="muted" style={{ margin: '8px 0 0' }}>Optional: publish saved copies even when manual review or accessibility issues remain. Unapproved suggestions are not applied. Remaining issues stay in the audit record; publishing does not certify accessibility.</p>
-        </div>
         {ready.length === 0 ? (
           pendingReview.items > 0 ? (
             <div className="muted" style={{ marginTop: 10, padding: '12px 14px', borderRadius: 9, background: '#FBF1DF', border: '1px solid #EAD9BF', color: '#7A5A12' }}>
