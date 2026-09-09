@@ -226,3 +226,26 @@ def test_missing_assessment_count_is_not_an_empty_measured_baseline(store):
     result=c.read_contribution(store,'owner','scan',run)
     assert result['baseline_total'] is None
     assert result['coverage']=='unavailable'
+
+
+@pytest.mark.parametrize('first_status,expected', [('empty_response',5),('unusable_response',5),('drafted',0),('refused',0)])
+def test_durable_fallback_requires_earlier_unusable_same_source_operation(store,first_status,expected):
+    from ai_attempt_history import AttemptHistory
+    from ai_spending_budget import BudgetLedger
+    run=admitted(store)
+    BudgetLedger(store._db).create_budget('owner',run,100)
+    history=AttemptHistory(store._db)
+    for attempt,purpose,status in [('first','draft',first_status),('next','fallback','drafted')]:
+        history.begin('owner','scan',run,'same-operation',attempt,file='a.docx',input_sha256='a'*64,model='fixture',provider='fixture',purpose=purpose)
+        history.finish('owner','scan',run,attempt,status=status)
+    ids=[f['finding_id'] for f in c.read_contribution(store,'owner','scan',run)['findings']]
+    ctx=SimpleNamespace(owner_id='owner',run_id=run,scan_id='scan',file='a.docx')
+    token=c.SOURCE.set(('scan','a.docx','a'*64))
+    try:
+        for revision in ('first-version','second-version','second-version'):
+            with store._db.cursor() as cur:
+                c.capture(store._db,cur,ctx,snapshot_id=revision,
+                    proposal={'locator':'image','proposed_value':'A tree','baseline_finding_ids':ids},
+                    scan_id='scan',file='a.docx',rule_id='1.1.1',item_id='item',attempt_id='next')
+        assert c.read_contribution(store,'owner','scan',run)['contributions']['fallback_ai']==expected
+    finally: c.SOURCE.reset(token)

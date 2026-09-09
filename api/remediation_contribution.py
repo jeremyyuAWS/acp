@@ -92,7 +92,7 @@ def capture(db, cur, ctx, *, snapshot_id, proposal, scan_id, file, rule_id, item
         raise ValueError('proposal finding membership outside immutable baseline')
     origin, operation = None, None
     if attempt_id:
-        db.execute(cur, '''SELECT purpose,operation_id,status FROM ai_attempt_history
+        db.execute(cur, '''SELECT purpose,operation_id,status,input_sha256,created_at FROM ai_attempt_history
             WHERE owner_id=%s AND scan_id=%s AND run_id=%s AND file=%s AND attempt_id=%s''',
             (owner, scan_id, run, file, attempt_id))
         attempt = db.fetchone(cur)
@@ -102,8 +102,9 @@ def capture(db, cur, ctx, *, snapshot_id, proposal, scan_id, file, rule_id, item
                 origin = 'first_ai'
             elif attempt['purpose'] == 'fallback':
                 db.execute(cur, '''SELECT purpose,status FROM ai_attempt_history WHERE owner_id=%s
-                    AND scan_id=%s AND run_id=%s AND operation_id=%s AND file=%s AND purpose='draft' ''',
-                    (owner, scan_id, run, operation, file))
+                    AND scan_id=%s AND run_id=%s AND operation_id=%s AND file=%s AND purpose='draft'
+                    AND input_sha256=%s AND created_at<%s ''',
+                    (owner, scan_id, run, operation, file, attempt['input_sha256'], attempt['created_at']))
                 earlier = db.fetchall(cur)
                 if earlier and all(row['status'] in ('unusable_response', 'empty_response') for row in earlier):
                     origin = 'fallback_ai'
