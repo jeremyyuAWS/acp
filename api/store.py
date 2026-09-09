@@ -9410,10 +9410,11 @@ class Store:
         now = self._now()
         requested_total = max(0, int(documents_total))
         release_id = uuid.uuid4().hex[:16]
-        from datetime import datetime, timezone
-        folder_name = (preferred_folder_name or
-                       datetime.fromisoformat(now).astimezone(timezone.utc).strftime(
-                           "%Y-%m-%d %H-%M UTC"))
+        from datetime import datetime
+        from publish import release_folder_name, sharepoint_release_name
+        folder_name = (sharepoint_release_name(preferred_folder_name, owner, at=datetime.fromisoformat(now))
+                       if source == "sharepoint" else preferred_folder_name or release_folder_name(
+                           datetime.fromisoformat(now), owner_email=owner))
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO release_executions(id,scan_id,owner_email,source,folder_name,"

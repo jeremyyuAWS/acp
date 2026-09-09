@@ -188,7 +188,7 @@ def authorize(store, sid, owner, run_id, files, destination, request_id, expecte
         existing = store.release_for_scan(sid, owner)
         intent = dict(version=1, source=source, source_revision=run['input_snapshot_id'],
                       files={f: record_identity(records[f]) for f in sorted(files)}, destination=destination,
-                      release_folder_name=(existing or {}).get('folder_name') or publish.release_folder_name(),
+                      release_folder_name=(existing or {}).get('folder_name') or publish.release_folder_name(owner_email=owner),
                       release_parent_id=existing.get('parent_folder_id') if existing else destination['folder_id'],
                       expires_at=(datetime.now(timezone.utc)+timedelta(hours=24)).isoformat())
         return persistence.create(store, owner, sid, run_id, request_id, intent)

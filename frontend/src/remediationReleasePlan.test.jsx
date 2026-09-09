@@ -29,7 +29,7 @@ it('disables unsupported or read-only planning',async()=>{
 })
 it('keeps the timestamp destination visible and moves explanation behind keyboard-accessible info', async () => {
   const v=await mount()
-  expect(v.container.textContent).toContain('Google Drive / root / Remediated / Release date and time')
+  expect(v.container.textContent).toContain('Google Drive / root / Remediated / Timestamp + user email')
   expect(v.container.textContent).not.toContain('Off by default')
   const tip=v.container.querySelector('button[aria-label="About automatic release"]')
   expect(tip.closest('label')).toBeNull()

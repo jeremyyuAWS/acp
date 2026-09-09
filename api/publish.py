@@ -18,7 +18,8 @@ RELEASE_TIMEZONES = frozenset({
 })
 
 
-def release_folder_name(at: datetime | None = None, timezone_name: str = "UTC") -> str:
+def release_folder_name(at: datetime | None = None, timezone_name: str = "UTC",
+                        *, owner_email: str | None = None) -> str:
     """Human-facing release folder name; the underlying release instant remains UTC."""
     if timezone_name not in RELEASE_TIMEZONES:
         raise ValueError("unsupported release timezone")
@@ -29,7 +30,18 @@ def release_folder_name(at: datetime | None = None, timezone_name: str = "UTC") 
     moment = at or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(zone).strftime("%Y-%m-%d %H-%M %Z")
+    stamp = moment.astimezone(zone).strftime("%Y-%m-%d %H-%M %Z")
+    if not owner_email:
+        return stamp
+    # Identity comes from the authenticated owner, never a submitted folder label.
+    # Keep the complete ordinary email while replacing provider-invalid path characters.
+    email = _RELEASE_NAME_INVALID.sub("_", owner_email.strip()).rstrip(". ")
+    if not email:
+        email = "user-" + hashlib.sha256(owner_email.encode()).hexdigest()[:10]
+    limit = 100 - len(stamp) - 3
+    if len(email) > limit:
+        email = email[:limit - 11] + "-" + hashlib.sha256(owner_email.encode()).hexdigest()[:10]
+    return f"{stamp} - {email}"
 RELEASE_PROPERTY = "acpReleaseId"
 IDEMPOTENCY_PROPERTY = "acpPublishKey"
 _FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -63,6 +75,28 @@ def normalize_release_name(value: str | None, *, field: str) -> str | None:
     if _RELEASE_NAME_INVALID.search(cleaned):
         raise UnsafeReleasePath(f"{field} contains a character that cannot be used in a file or folder name")
     return cleaned
+
+
+def sharepoint_release_name(value: str | None, owner_email: str, *,
+                            timezone_name: str = "UTC", at: datetime | None = None) -> str:
+    """Bind every new SharePoint folder to time and the authenticated releasing owner.
+
+    A name returned by preview can be submitted unchanged, even across a minute boundary.
+    Persisted release roots are reused by callers before consulting this helper.
+    """
+    requested = normalize_release_name(value, field="Release folder name")
+    generated = release_folder_name(at, timezone_name, owner_email=owner_email)
+    stamp_pattern = r"^\d{4}-\d{2}-\d{2} \d{2}-\d{2} (?:UTC|PST|PDT|MST|MDT|CST|CDT|EST|EDT|IST) - "
+    identity = re.sub(stamp_pattern, "", generated)
+    if requested:
+        candidate = re.sub(stamp_pattern, "", requested)
+        if candidate != requested and (candidate == identity or candidate.startswith(identity + " - ")):
+            return requested
+        available = 100 - len(generated) - 3
+        label = requested[:max(0, available)].rstrip(". ")
+        if label:
+            return f"{generated} - {label}"
+    return generated
 
 
 def _mime_for(filename: str) -> str:

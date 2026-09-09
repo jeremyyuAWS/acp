@@ -36,11 +36,11 @@ def test_preview_resolves_exact_path_without_writing(monkeypatch):
         "scan-1", _request(),
         scans.ReleasePreviewRequest(files=["Report.pdf"],
                                     release_folder_name="Q3 Accessibility"))
-    assert result["folder_name"] == "Q3 Accessibility"
+    assert result["folder_name"].endswith(" - owner@example.com - Q3 Accessibility")
     assert result["folder_state"] == "proposed"
     assert result["documents"] == [{
         "file": "Report.pdf", "provider_location": "graph:lib",
-        "destination_path": "Remediated/Q3 Accessibility/Clinical/Report.pdf",
+        "destination_path": f"Remediated/{result['folder_name']}/Clinical/Report.pdf",
         "action": "create",
     }]
     assert result["can_release"] is True
@@ -76,7 +76,7 @@ def test_preview_can_flatten_the_source_hierarchy(monkeypatch):
         "scan-1", _request(), scans.ReleasePreviewRequest(
             files=["Report.pdf"], release_folder_name="Release",
             preserve_hierarchy=False))
-    assert result["documents"][0]["destination_path"] == "Remediated/Release/Report.pdf"
+    assert result["documents"][0]["destination_path"] == f"Remediated/{result['folder_name']}/Report.pdf"
     assert result["preserve_hierarchy"] is False
 
 
@@ -101,7 +101,7 @@ def test_preview_uses_selected_sharepoint_parent_and_requires_preflight(monkeypa
     assert result["destination"]["folder_id"] == "target-drive/target-folder"
     assert result["documents"][0]["provider_location"] == "graph:target-drive"
     assert result["documents"][0]["destination_path"] == (
-        "Board packets/Remediated/Release/Clinical/Report.pdf")
+        f"Board packets/Remediated/{result['folder_name']}/Clinical/Report.pdf")
     assert result["can_release"] is True
 
 

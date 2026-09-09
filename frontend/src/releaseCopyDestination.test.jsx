@@ -10,7 +10,7 @@ async function mount(props) {
 }
 it('shows the timestamp subfolder before SharePoint publication without inventing a link', async () => {
   const c = await mount({ provider: 'sharepoint', destination: { folder_name: 'Policies' } })
-  expect(c.textContent).toContain('SharePoint / Policies / Remediated / Release date and time')
+  expect(c.textContent).toContain('SharePoint / Policies / Remediated / Timestamp + user email')
   expect(c.textContent).toContain('original documents stay unchanged')
   expect(c.querySelector('a')).toBeNull()
   expect(c.querySelector('section').closest('[hidden]')).toBeNull()

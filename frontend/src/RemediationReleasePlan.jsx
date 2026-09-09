@@ -30,9 +30,9 @@ export default function RemediationReleasePlan({ scanId, files, intent, onChange
     <InfoTip label="automatic release">
       When you approve this plan and start, release each selected file after its required approvals and verification pass. Other files can keep processing.
       {' '}{checked ? `Selected for ${files.length} file${files.length === 1 ? '' : 's'} in this plan. Permission starts only after this run is accepted and lasts up to 24 hours.` : 'Off by default for each new plan. This choice is separate from AI approval and is not saved as a future default.'}
-      {' '}Changing files or leaving this page clears this choice. After starting, use Live to see progress or stop future releases. Corrected copies go into a timestamped release subfolder; originals stay unchanged.
+      {' '}Changing files or leaving this page clears this choice. After starting, use Live to see progress or stop future releases. Corrected copies go into a release subfolder named with the timestamp and your email; originals stay unchanged.
     </InfoTip></div>
-    <p><b>Destination:</b> {preview?.destination_label ? `${preview.destination_label} / Remediated / Release date and time` : (preview || error ? 'Not available' : 'Checking destination…')}</p>
+    <p><b>Destination:</b> {preview?.destination_label ? `${preview.destination_label} / Remediated / Timestamp + user email` : (preview || error ? 'Not available' : 'Checking destination…')}</p>
     {preview?.reason && <p>{preview.reason}</p>}
     {error && <p role="alert">{error} <button className="linklike" type="button" disabled={disabled} onClick={() => setReload(n => n + 1)}>Refresh destination</button></p>}
   </section>

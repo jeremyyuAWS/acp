@@ -669,7 +669,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
         folderName={releaseFolderName} readOnly={readOnly} publishing={publishing}
         readyReasons={[...new Set(states.filter(state => state.status !== 'ready').map(state => state.reason))]}
-        destinationLabel={releaseDestination ? `${releaseDestination.folder_name} / Remediated / ${releaseFolder?.name || releaseFolderName || 'Release date and time'}` : releaseProvider === 'drive' ? 'Google Drive / Remediated / Release date and time' : releaseProvider === 'sharepoint' ? 'SharePoint source library / Remediated / Release date and time' : 'ACP managed storage'}
+        destinationLabel={releaseDestination ? `${releaseDestination.folder_name} / Remediated / ${releaseFolder?.name || releaseFolderName || 'Timestamp + user email'}` : releaseProvider === 'drive' ? 'Google Drive / Remediated / Timestamp + user email' : releaseProvider === 'sharepoint' ? 'SharePoint source library / Remediated / Timestamp + user email' : 'ACP managed storage'}
         destinationPicker={['drive', 'sharepoint'].includes(releaseProvider) ? <ReleaseDestinationPicker provider={releaseProvider} value={releaseDestination}
           onChange={value => { setReleaseDestination(value); setReleasePreview(null) }}
           onError={error => setReleaseError({ summary: 'Destination unavailable', details: error?.message })} /> : <p>Verified copies remain in ACP’s managed storage.</p>}
