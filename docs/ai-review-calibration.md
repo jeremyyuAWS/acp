@@ -31,7 +31,7 @@ and an explicitly authorized budget for acquiring them are separate prerequisite
 Operator workflow:
 
 - Validate an evaluation offline: `python scripts/ingest_ai_review_calibration.py evaluation.json`.
-- Ingest a reviewed evaluation: add `--ingest --owner ACCOUNT` using the normal configured database environment.
+- Ingest a reviewed evaluation: add `--ingest --owner ACCOUNT --dataset dataset.json --report report.json` using the normal configured database environment. Evaluated ingestion requires both local artifacts to match the recorded SHA256 values; synthetic fixtures cannot qualify production.
 - Validate administrator configuration: `python scripts/ingest_ai_review_calibration.py admin.json --administrator`; add `--ingest` only when ready to save.
 
 Administrator schema is `ai-review-admin.v1`, with `families` mapping explicit family names to
@@ -51,3 +51,10 @@ reviewer / validator configuration, and set a justified administrator floor and 
 The dispatch receipt is policy authorization, not a second proposal ledger. It references the
 canonical immutable snapshot and source digest. A crashed or uncertain write remains awaiting
 completion/recovery and is fenced against automatic replay; its existence never means verified.
+
+Dataset/report hashes establish artifact integrity only. They do not establish representativeness,
+unbiased sampling, correct judgments, or production authorization. Availability additionally requires
+`provenance.representative: true`, `provenance.production_approved: true`, and a nonempty
+`provenance.approval_ref` to the operator-reviewed qualification decision. These declarations must
+be justified by the retained report; ingestion cannot independently prove them. Missing authorization
+keeps the cohort unavailable even when every hash and numerical check passes.

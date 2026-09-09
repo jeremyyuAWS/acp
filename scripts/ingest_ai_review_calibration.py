@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validate evidence offline; --ingest performs an explicit operator database write."""
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -11,6 +12,8 @@ from ai_review_calibration import ingest_evaluation, normalize_evaluation, norma
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('input', type=Path)
+    parser.add_argument('--dataset', type=Path, help='Dataset artifact whose SHA256 matches evaluated provenance')
+    parser.add_argument('--report', type=Path, help='Independent evaluation report whose SHA256 matches provenance')
     parser.add_argument('--owner', help='Required owner identity for evaluation ingestion')
     parser.add_argument('--administrator', action='store_true', help='Validate administrator family configuration instead')
     parser.add_argument('--ingest', action='store_true', help='Write to the configured application database')
@@ -20,6 +23,12 @@ def main():
     if args.ingest:
         if not args.administrator and not args.owner:
             parser.error('--owner is required for ingestion')
+        if not args.administrator and result['provenance']['kind'] == 'evaluated':
+            for path, field in ((args.dataset, 'dataset_sha256'), (args.report, 'evaluation_report_sha256')):
+                if path is None or not path.is_file():
+                    parser.error('Evaluated ingestion requires --dataset and --report artifacts')
+                if hashlib.sha256(path.read_bytes()).hexdigest() != result['provenance'][field]:
+                    parser.error('Evaluation artifact digest does not match recorded provenance: ' + field)
         from store import Store
         store = Store()
         if args.administrator:

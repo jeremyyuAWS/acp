@@ -138,6 +138,11 @@ def applicable_evaluation(store, owner, version, configuration, rule, *, now=Non
             age = (now - timestamp(record['evaluated_at'])).total_seconds()
             if record['provenance']['kind'] != 'evaluated':
                 reason = 'synthetic_calibration_not_eligible'
+            elif (record['provenance'].get('representative') is not True
+                  or record['provenance'].get('production_approved') is not True
+                  or not isinstance(record['provenance'].get('approval_ref'), str)
+                  or not record['provenance']['approval_ref'].strip()):
+                reason = 'calibration_production_approval_missing'
             elif record['config_id'] != config_id(configuration):
                 reason = 'calibration_configuration_mismatch'
             elif record['sample_size'] < rule['minimum_sample_size']:

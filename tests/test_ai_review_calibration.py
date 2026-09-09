@@ -25,7 +25,8 @@ def db(tmp_path, monkeypatch):
 def cohort(kind='evaluated'):
     return dict(schema_version='ai-review-calibration.v1', evaluation_version='fixture-v1',
         evaluated_at='2026-09-08T00:00:00Z', **CONFIG,
-        provenance=dict(kind=kind,dataset_sha256='a'*64,evaluation_report_sha256='b'*64),
+        provenance=dict(kind=kind,dataset_sha256='a'*64,evaluation_report_sha256='b'*64,
+                        representative=True,production_approved=True,approval_ref='fixture-only-not-production'),
         samples=[dict(sample_id=str(i),passed=True,judgment_origin='objective_validator',evidence_ref='fixture:'+str(i)) for i in range(100)])
 
 
@@ -210,3 +211,27 @@ def test_seal_changed_threshold_or_families_rejected(db):
     assert normalize_sealed_policy(policy)==policy
     with pytest.raises(ValueError):normalize_sealed_policy({**policy,'minimum_reliability':0})
     with pytest.raises(ValueError):normalize_sealed_policy({**policy,'families':{}})
+
+
+def test_cli_default_only_validates_and_evaluated_ingest_requires_artifacts(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    script=Path(__file__).resolve().parents[1]/'scripts/ingest_ai_review_calibration.py'
+    data=tmp_path/'evaluation.json';data.write_text(json.dumps(cohort('synthetic')))
+    check=subprocess.run([sys.executable,str(script),str(data)],capture_output=True,text=True)
+    assert check.returncode==0
+    assert json.loads(check.stdout)['ingested'] is False
+    data.write_text(json.dumps(cohort()))
+    refused=subprocess.run([sys.executable,str(script),str(data),'--ingest','--owner','owner'],capture_output=True,text=True)
+    assert refused.returncode==2
+    assert 'requires --dataset and --report' in refused.stderr
+
+
+def test_hashes_and_evaluated_label_do_not_establish_production_qualification(db):
+    record=cohort()
+    record['provenance'].pop('production_approved')
+    ingest_evaluation(db,'owner',record)
+    result=applicable_evaluation(db,'owner','fixture-v1',CONFIG,RULE,now=NOW)
+    assert result['reason']=='calibration_production_approval_missing'
+    assert result['available'] is False
