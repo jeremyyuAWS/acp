@@ -1,0 +1,159 @@
+/* Remediation mode diagram — who acts at each stage, per automation mode.
+   Colour is decoration here: every cell states its actor in words, so these rules only make the
+   distinction faster to see. Tokens come from styles.css (:root) so the WCAG toggle propagates. */
+
+.rmd { min-width: 0; margin-block: 18px; }
+
+/* The scroller, not the table, is the wide box — so a narrow viewport scrolls this strip and
+   never the page. */
+.rmd__scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line, #ece8ee);
+  border-radius: 12px;
+  background: var(--card, #fff);
+}
+.rmd__scroll:focus-visible { outline: 3px solid var(--focus-ring, #7a5c8e); outline-offset: 2px; }
+
+.rmd__table {
+  min-width: 720px;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.rmd__caption {
+  caption-side: top;
+  padding: 14px 16px 10px;
+  text-align: left;
+}
+.rmd__title { display: block; font-size: 15px; font-weight: 650; color: var(--ink, #2b2330); }
+.rmd__subtitle { display: block; margin-top: 4px; max-width: 68ch; font-size: 12px; line-height: 1.5; color: var(--muted, #6c6470); }
+
+.rmd__table th, .rmd__table td {
+  padding: 10px 12px;
+  vertical-align: top;
+  border-top: 1px solid var(--line, #ece8ee);
+}
+
+/* Stage header row. */
+.rmd__corner, .rmd__stage {
+  position: relative;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--muted, #6c6470);
+  background: var(--surface, #fff);
+  white-space: nowrap;
+}
+.rmd__stage--after { padding-left: 20px; }
+.rmd__step {
+  display: inline-block;
+  min-width: 16px;
+  margin-right: 6px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg, #faf8fb);
+  color: var(--muted, #6c6470);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.rmd__stage-label { color: var(--ink, #2b2330); }
+.rmd__arrow { position: absolute; left: 4px; color: #b8adc0; font-weight: 400; }
+
+/* Mode column — pinned so the mode name stays readable while the stages scroll. Needs an opaque
+   background or the scrolling cells bleed through. */
+.rmd__corner, .rmd__mode {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 220px;
+  min-width: 200px;
+  background: var(--surface, #fff);
+  border-right: 1px solid var(--line, #ece8ee);
+}
+.rmd__mode { white-space: normal; font-weight: 400; }
+.rmd__mode-name { display: block; font-size: 13px; font-weight: 650; color: var(--ink, #2b2330); line-height: 1.35; }
+.rmd__mode-desc, .rmd__note { display: block; margin-top: 5px; font-size: 11.5px; line-height: 1.5; color: var(--muted, #6c6470); }
+.rmd__note { padding-left: 9px; border-left: 2px solid var(--warn-fg, #854F0B); color: var(--warn-fg, #854F0B); }
+
+.rmd__selected, .rmd__recommended {
+  display: inline-block;
+  margin-top: 6px;
+  margin-right: 6px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+.rmd__selected { background: var(--plum, #46303F); color: #fff; }
+.rmd__recommended { background: var(--success-bg, #E7F0DC); color: var(--success-fg-strong, #2F5310); }
+
+/* The active mode: a bar, a tint and a weight change, on top of the "Your selection" text. */
+.rmd__row--active > .rmd__mode { box-shadow: inset 3px 0 0 var(--plum, #46303F); }
+.rmd__row--active > .rmd__cell { background: #fbf8fc; }
+.rmd__row--active > .rmd__mode, .rmd__row--active > .rmd__cell { border-top-color: #d9cfe0; }
+
+/* Cells. */
+.rmd__cell { min-width: 96px; }
+.rmd__actor {
+  display: inline-block;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+.rmd__cell[data-actor="person"] .rmd__actor, .rmd__actor[data-actor="person"] {
+  background: var(--warn-bg, #FAEEDA);
+  border-color: #e4c891;
+  color: var(--warn-fg, #854F0B);
+}
+.rmd__cell[data-actor="acp"] .rmd__actor, .rmd__actor[data-actor="acp"] {
+  background: var(--info-bg, #E2EDFB);
+  border-color: #bcd3ef;
+  color: var(--info-fg, #1F5FA8);
+}
+.rmd__cell[data-actor="none"] .rmd__actor {
+  background: var(--bg, #faf8fb);
+  border-color: var(--line, #ece8ee);
+  color: var(--muted, #6c6470);
+}
+.rmd__what { display: block; margin-top: 5px; line-height: 1.45; color: var(--ink, #2b2330); overflow-wrap: anywhere; }
+.rmd__count {
+  display: block;
+  margin-top: 5px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted, #6c6470);
+}
+.rmd__count-sep { color: #b8adc0; }
+
+.rmd__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 10px 2px 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted, #6c6470);
+}
+.rmd__legend-item { display: inline-flex; align-items: center; gap: 7px; }
+
+@media (max-width: 700px) {
+  .rmd__table { min-width: 640px; font-size: 12px; }
+  .rmd__corner, .rmd__mode { width: 168px; min-width: 156px; }
+  .rmd__caption { padding: 12px 12px 8px; }
+}
+
+/* Forced-colours: drop the tints and let the browser's own palette through. The words still say
+   who acts, which is the point of writing them. */
+@media (forced-colors: active) {
+  .rmd__actor { border-color: currentColor; }
+  .rmd__row--active > .rmd__mode { box-shadow: none; border-left: 3px solid currentColor; }
+}

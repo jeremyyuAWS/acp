@@ -4,6 +4,7 @@ import RemediationOptionHelp from './RemediationOptionHelp.jsx'
 import RemediationReviewPolicy from './RemediationReviewPolicy.jsx'
 import RemediationAutoApproval from './RemediationAutoApproval.jsx'
 import RemediationGenerationChain from './RemediationGenerationChain.jsx'
+import RemediationModeDiagram from './RemediationModeDiagram.jsx'
 import ProviderMark from './ProviderMark.jsx'
 import { generationSteps } from './remediationGenerationChain.js'
 
@@ -133,6 +134,13 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, gen
           : 'Spending limits are not available on this server. Choose Rules only if you need a firm cap.'}</p>
       </div>}
     </fieldset>
+    {/* What each automation choice above actually costs the reviewer, as one matrix. The point a
+        reader is meant to take from it is the bottom row: with standing approval on, ACP does not
+        stop to ask about AI suggestions. `activeModeId` is DERIVED from the live policy rather than
+        stored, so the highlighted row cannot drift from the radios above it. Publishing stays a
+        person's step in every row — the backstop that makes the automated row safe to choose. */}
+    <RemediationModeDiagram activeModeId={policy.ai > 0 && policy.auto_approve_ai === true ? 'end-to-end'
+      : policy.rule_based === 0 ? 'review-every-change' : 'rule-based-auto'} />
     <RemediationAutoApproval policy={policy} onChange={onChange} disabled={disabled}
       supported={standingApprovalSupported && budgetSupported} reason={standingApprovalReason} />
     {policy.ai > 0 && <RemediationGenerationChain policy={policy} options={generationChainOptions} disabled={disabled} budgetSupported={budgetSupported} onChange={onChange} />}

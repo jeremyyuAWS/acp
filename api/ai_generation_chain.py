@@ -72,7 +72,13 @@ def chain_options(rows=()):
         return result
     for position, model in enumerate(generator.models):
         spec = generator.specs[model.name]
+        # `zone` is the governance zone of the endpoint this model is dispatched to,
+        # derived from configuration by providers.zone_for_url ('local' when the
+        # endpoint is on our own infrastructure, else 'cloud'). It is never inferred
+        # from the provider's name. None means the server does not report one for this
+        # model: render it as not reported, never as a default.
         result['models'].append({'provider': spec.provider, 'model': model.name,
+                                'zone': generator.zones.get(model.name),
                                 'capabilities': ['text'], 'allowed': True, 'available': True,
                                 'access_verified': False,
                                 'reason': 'Configuration verified; account model access has not been tested.'})
@@ -81,16 +87,35 @@ def chain_options(rows=()):
                 'provider': spec.provider, 'model': model.name, 'enabled': True, 'capabilities': ['text']})
     if len(generator.models) < 3:
         return result
+    third = generator.models[2]
+    third_spec = generator.specs[third.name]
+    if (third.name in {model.name for model in generator.models[:2]}
+            or third_spec.provider != generator.specs[generator.models[0].name].provider):
+        # Not a distinct model on the owner-selected provider: no third position to
+        # offer, and the initial 'Verified third model configuration is unavailable.'
+        # stands.
+        return result
     if not any(str(row.get('file', '')).lower().endswith('.pptx')
                and row.get('criterion', row.get('rule_id')) == '2.4.6'
                and row.get('finding_count') == 1 for row in rows):
         result['reason'] = 'Second fallback requires a supported PPTX slide-title finding with an exact source binding.'
         return result
-    # A supported scope gets the complete verified chain by default. The run
-    # policy still snapshots this choice, and execution remains fail-closed on
-    # the exact source/adapter checks before any third-model dispatch.
-    third = generator.models[2]
-    third_spec = generator.specs[third.name]
+    # `default_steps` and `supported` are set together, and deliberately so. Defaulting the
+    # third step on a scope this server would not ADMIT for execution was tried and reverted:
+    # the frontend derives its toggle state from default_steps
+    # (remediationGenerationChain.js:9 falls back to it when the policy carries no chain, and
+    # RemediationGenerationChain.jsx reads `steps.length === 3`), while it takes its
+    # availability reason from `supported`. Split the two and the panel renders "Second
+    # fallback enabled" beside "a second fallback is not available for this scope", with the
+    # run then using two models — a control reporting itself on while stating it cannot run.
+    # Nothing executes wrongly (a chain only reaches the policy through the explicit toggle,
+    # so remediation_impact.py:228's refusal never fires), which is exactly what would have
+    # made it ship.
+    #
+    # So "set the fallbacks automatically" reaches as far as admission does, and no further.
+    # Widening it means widening `supported`, which guards the fail-closed adapter and exact
+    # source-binding checks before any third-model dispatch — a different decision, and not
+    # one a default should make quietly.
     result['default_steps'].append({'step_id': STEP_IDS[2], 'position': 2,
         'provider': third_spec.provider, 'model': third.name, 'enabled': True,
         'capabilities': ['text']})

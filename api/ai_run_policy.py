@@ -17,6 +17,29 @@ RUN_POLICY_SCHEMA = """CREATE TABLE IF NOT EXISTS ai_spending_run_policies (
     FOREIGN KEY(owner_id,run_id) REFERENCES ai_spending_budgets(owner_id,run_id))"""
 
 
+# Where a run's AI may process content. `local` is the self-hosted Ollama floor only —
+# providers.zone_for_url reports zone `local` for it and providers.py:442 records its
+# cost as a real measured 0 — so a local-only run has nothing to meter. `any` permits the
+# configured cloud waterfall. ABSENT is neither: it is the pre-field meaning of an already
+# stored snapshot, which must keep normalizing to exactly the dict it did before, byte for
+# byte, or persist_run_policy's immutability comparison rejects its own accepted run.
+#
+# This is a DECLARATION, not an enforcement point. Nothing in the dispatch path reads
+# `ai_zone` yet, so `local` does not by itself keep a call off the cloud waterfall. What
+# does the keeping here is the cap: every managed generation seam
+# (llm_waterfall_provider.managed_text_generate / managed_generate_attempts /
+# managed_text_ready, ai.run_verified_remediation) refuses on `not ctx.enabled`, and
+# RunContext.enabled is false whenever cap_units == 0. So the zero-cap local run this
+# module now accepts can buy nothing at all, cloud or otherwise.
+AI_ZONES = ("local", "any")
+
+
+def _zone(value):
+    if type(value) is not str or value not in AI_ZONES:
+        raise BudgetError("ai_zone must be either 'local' or 'any'")
+    return value
+
+
 def normalize_run_policy(snapshot):
     """None means legacy/unmanaged; an explicit zero is managed and denies AI."""
     if snapshot is None:
@@ -28,6 +51,8 @@ def normalize_run_policy(snapshot):
             raise BudgetError("Standing approval requires a managed run spending limit")
         if "generation_chain" in snapshot:
             raise BudgetError("An explicit generation chain requires a run spending limit")
+        if "ai_zone" in snapshot:
+            raise BudgetError("An explicit processing zone requires a run spending limit")
         return None
     amount = snapshot["ai_budget_usd"]
     if not isinstance(amount, str) or not re.fullmatch(r"(?:0|[1-9][0-9]{0,12})\.[0-9]{2}", amount):
@@ -38,10 +63,17 @@ def normalize_run_policy(snapshot):
     if type(ai) is not int or not 0 <= ai <= 3:
         raise BudgetError("AI policy level must be between zero and three")
     result = {"ai": ai, "ai_budget_usd": amount, "cap_units": cap, "currency": "USD"}
+    if 'ai_zone' in snapshot:
+        result['ai_zone'] = _zone(snapshot['ai_zone'])
     if 'auto_approve_ai' in snapshot:
         from ai_standing_approval import normalize
         result['auto_approve_ai'] = normalize(snapshot['auto_approve_ai'])
-        if result['auto_approve_ai'] and (ai != 1 or cap <= 0):
+        # A cloud-capable run (zone 'any', or absent = the pre-field default) still needs a
+        # real spending limit before it may run unattended. A local-only run cannot spend:
+        # requiring a positive cap there demands a limit that can never be reached, which is
+        # why that one case is exempt. Every other precondition is unchanged, and `ai != 1`
+        # binds regardless of zone.
+        if result['auto_approve_ai'] and (ai != 1 or (cap <= 0 and result.get('ai_zone') != 'local')):
             raise BudgetError('Standing approval requires AI and a positive run budget')
     if 'generation_chain' in snapshot:
         from ai_generation_chain import normalize_chain
