@@ -1,0 +1,101 @@
+import { act, createElement } from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createTestRoot, unmountAll } from './testRoots.js'
+import RemediationAttemptStory from './RemediationAttemptStory.jsx'
+import { attemptStory } from './remediationAttemptStoryModel.js'
+import { getRunInsights } from './remediationRunInsightsClient.js'
+vi.mock('./remediationRunInsightsClient.js', () => ({ getRunInsights: vi.fn() }))
+vi.mock('./apiIdentity.js', () => ({ authEpoch: () => 1 }))
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+const record = {
+  scan_id: 'scan', batch_id: 'batch', coverage: 'complete',
+  attempts: [
+    { file: 'Report.docx', operation_id: 'op', attempt_id: 'a1', purpose: 'draft', provider: 'provider-one', model: 'recorded-first', status: 'empty_response', reason: 'empty_response', created_at: '2026-09-08T12:00:00Z', actual_cost_units: 12 },
+    { file: 'Report.docx', operation_id: 'op', attempt_id: 'a2', purpose: 'fallback', provider: 'provider-two', model: 'recorded-fallback', status: 'drafted', output_sha256: 'digest', output_retention: 'full', result: { text: 'Saved generated text <script>not code</script>' }, actual_cost_units: 42 },
+    { file: 'Other.pdf', operation_id: 'other', attempt_id: 'a3', purpose: 'draft', status: 'started' },
+  ],
+  proposals: [{ snapshot_id: 'p1', attempt_id: 'a2', file: 'Report.docx', rule_id: '1.1.1', proposal: { before: 'Original', proposed_value: 'Suggested' }, verification_reason: 'Exact version verification is unavailable.' }],
+  review_receipts: [{ operation_id: 'op', proposal_sha256: 'digest', review: { verdict: 'revise', reason: 'Add source context', steps: [{ purpose: 'review', provider: 'review-provider', model: 'recorded-reviewer', reason: 'Needs detail' }] } }],
+  pagination: { offset: 0, limit: 100, has_more: true },
+}
+beforeEach(() => { vi.clearAllMocks(); getRunInsights.mockResolvedValue(record) })
+afterEach(unmountAll)
+async function mount(props = {}) {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(createElement(RemediationAttemptStory, { scanId: 'scan', batchId: 'batch', defaultOpen: true, ...props })))
+  return { root, container }
+}
+const buttons = (container, name) => [...container.querySelectorAll('button')].find(button => button.textContent === name)
+
+describe('Follow an attempt', () => {
+  it('is lazy while collapsed and only reads saved records when opened', async () => {
+    const { container } = await mount({ defaultOpen: false })
+    expect(getRunInsights).not.toHaveBeenCalled()
+    await act(async () => { const details = container.querySelector('details'); details.open = true; details.dispatchEvent(new Event('toggle')) })
+    expect(getRunInsights).toHaveBeenCalledWith('scan', 'batch', expect.any(AbortSignal), 0)
+  })
+
+  it('selects a file and renders actual models, output, review reason, costs and next action', async () => {
+    const { container } = await mount({ reviewHref: '/?tab=remediate&mode=review' })
+    const select = container.querySelector('select')
+    await act(async () => { select.value = 'Report.docx'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(container.textContent).toContain('provider-two · recorded-fallback')
+    expect(container.textContent).toContain('$0.000042 USD')
+    expect(container.textContent).toContain('Add source context')
+    expect(container.textContent).toContain('Why this fallback was requested is not recorded')
+    expect(container.querySelector('a').getAttribute('href')).toBe('/?tab=remediate&mode=review')
+    expect(container.querySelector('script')).toBeNull()
+    expect([...container.querySelectorAll('.attempt-story-output,.attempt-story-proposal')].every(detail => !detail.open)).toBe(true)
+    expect(container.textContent).toContain('Exact version verification is unavailable.')
+  })
+
+  it('reports related human and validation evidence without claiming this version was verified', async () => {
+    getRunInsights.mockResolvedValue({ ...record, proposals: [{ ...record.proposals[0], human_reviews: [{ id: 1, action: 'approve' }], validation_events: [{ id: 2, outcome: 'passed', detail: 'Related recorded check' }] }] })
+    const { container } = await mount()
+    const select = container.querySelector('select')
+    await act(async () => { select.value = 'Report.docx'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(container.textContent).toContain('Related human decisions already exist')
+    expect(container.textContent).toContain('Related recorded check')
+    expect(container.textContent).toContain('do not prove verification of this exact proposal version')
+  })
+
+  it('paginates bounded server records and says sequences may cross page boundaries', async () => {
+    const { container } = await mount()
+    expect(container.textContent).toContain('sequence can continue on another page')
+    getRunInsights.mockResolvedValue({ ...record, attempts: [], proposals: [], pagination: { offset: 100, limit: 100, has_more: false } })
+    await act(async () => buttons(container, 'Next records').click())
+    expect(getRunInsights).toHaveBeenLastCalledWith('scan', 'batch', expect.any(AbortSignal), 100)
+    expect(container.textContent).toContain('Record page 2')
+    expect(container.textContent).not.toContain('recorded-fallback')
+    expect(buttons(container, 'Next records').disabled).toBe(true)
+  })
+
+  it('does not tell a completed run to keep waiting for an unretained final response', () => {
+    expect(attemptStory(record, 'Other.pdf', { live: false }).groups[0].next).toContain('No final response was retained')
+    expect(attemptStory(record, 'Other.pdf', { live: true }).groups[0].next).toContain('Wait for the recorded response')
+  })
+
+  it('does not join unrelated attempts by same file, timestamp, or model', () => {
+    const data = { ...record, attempts: [...record.attempts, { ...record.attempts[1], attempt_id: 'a4', operation_id: 'unrelated', output_sha256: 'different' }] }
+    const story = attemptStory(data, 'Report.docx')
+    expect(story.groups).toHaveLength(2)
+    expect(story.groups[1].receipts).toEqual([])
+    expect(story.groups[1].proposals).toEqual([])
+    const changedReceipt = { ...record, review_receipts: [{ ...record.review_receipts[0], proposal_sha256: 'different' }] }
+    expect(attemptStory(changedReceipt, 'Report.docx').groups[0].receipts).toEqual([])
+  })
+
+  it('keeps missing operation IDs separate and unmatched proposal snapshots unattributed', () => {
+    const data = { ...record, attempts: record.attempts.map(attempt => ({ ...attempt, operation_id: null })), proposals: [...record.proposals, { file: 'Report.docx', snapshot_id: 'unlinked', attempt_id: 'missing' }] }
+    const story = attemptStory(data, 'Report.docx')
+    expect(story.groups).toHaveLength(2)
+    expect(story.groups.every(group => !group.receipts.length)).toBe(true)
+    expect(story.unlinkedProposals.map(proposal => proposal.snapshot_id)).toEqual(['unlinked'])
+  })
+
+  it('follows review attempt IDs only when linked by an exact output review receipt', () => {
+    const review = { file: 'Report.docx', operation_id: 'review-op', attempt_id: 'review-a', purpose: 'review' }
+    const data = { ...record, attempts: [...record.attempts, review], review_receipts: [{ ...record.review_receipts[0], review: { steps: [{ attempt_id: 'review-a' }] } }] }
+    expect(attemptStory(data, 'Report.docx').groups[0].reviewAttempts).toEqual([review])
+  })
+})

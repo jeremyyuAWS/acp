@@ -5,7 +5,9 @@ import { join } from 'node:path'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import RemediationWaterfallCard from './RemediationWaterfallCard.jsx'
 import WaterfallCount from './WaterfallCount.jsx'
+import { getRunInsights } from './remediationRunInsightsClient.js'
 import { getFindingDispositions } from './api.js'
+vi.mock('./remediationRunInsightsClient.js', () => ({ getRunInsights: vi.fn(async () => ({ available: false })) }))
 vi.mock('./api.js', () => ({ getFindingDispositions: vi.fn() }))
 vi.mock('./useWaterfallActivity.js', () => ({ default: () => ({ view: null, error: false }) }))
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -22,6 +24,8 @@ const activity = { view: { available: true, ai_enabled: true, stages: [
 it('shows durable units, costs, honest missing contribution, and accessible outcomes', async () => {
   const { root, container } = createTestRoot()
   await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot()} activity={activity} />))
+  expect(container.querySelector('.attempt-story').open).toBe(true)
+  expect(container.querySelector('.wf-stage-evidence').open).toBe(false)
   expect(container.querySelector('.remediation-run-insights summary').textContent).toContain('Saved model history')
   expect(container.querySelector('[data-stage=first]').textContent).toContain('Recorded identity unavailable')
   expect(container.textContent).toContain('15 recorded operations')
@@ -122,4 +126,31 @@ it('uses the connected graph and deliberately leaves the old vertical Stage unmo
   expect(source).not.toContain('<Stage ')
   await act(async () => container.querySelector('[data-stage=next]').click())
   expect(container.querySelector('.wf-detail h4').textContent).toBe('What the next AI did')
+})
+it('keeps stage accounting collapsed and explains cancelled runs without claiming completion', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot({ state: 'cancelled', terminal: true })} activity={activity} />))
+  expect(container.querySelector('.wf-stage-evidence').open).toBe(false)
+  expect(container.querySelector('[data-waterfall-state]').textContent).toContain('Run cancelled')
+  expect(container.querySelector('[data-stage=first]')).toBeTruthy()
+})
+
+it('opens a stage drawer and keeps history polling when animation is paused', async () => {
+  vi.useFakeTimers()
+  getRunInsights.mockResolvedValue({ scan_id: 'scan', batch_id: 'batch', attempts: [], proposals: [], review_receipts: [] })
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot({ state: 'running' })} activity={activity} />))
+  await act(async () => container.querySelector('[data-stage=first]').click())
+  expect(document.querySelector('[role=dialog]').textContent).toContain('What the first AI did')
+  const storySummary = document.querySelector('[role=dialog] .attempt-story > summary')
+  storySummary.focus()
+  await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot({ state: 'running', fixes: { verified: 31 } })} activity={activity} />))
+  expect(document.activeElement).toBe(storySummary)
+  await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+  expect(document.querySelector('[role=dialog]')).toBeNull()
+  const pause = [...container.querySelectorAll('button')].find(button => button.textContent === 'Pause animation')
+  await act(async () => pause.click())
+  const reads = getRunInsights.mock.calls.length
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+  expect(getRunInsights.mock.calls.length).toBeGreaterThan(reads)
 })

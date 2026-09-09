@@ -9,6 +9,8 @@ import WaterfallCount from './WaterfallCount.jsx'
 import useWaterfallMotion from './useWaterfallMotion.js'
 import RemediationThroughput from './RemediationThroughput.jsx'
 import RemediationWaterfallGraph from './RemediationWaterfallGraph.jsx'
+import RemediationAttemptStory from './RemediationAttemptStory.jsx'
+import WaterfallRunNotice from './WaterfallRunNotice.jsx'
 import './remediation-waterfall-card.css'
 
 const OUTCOMES = [
@@ -56,13 +58,16 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
     && count(rec.assessed) && OUTCOMES.every(([key]) => count(rec[key]))
     && OUTCOMES.reduce((sum, [key]) => sum + rec[key], 0) === rec.assessed
   const [selection, setSelection] = useState('rules')
+  const [stageDrawer, setStageDrawer] = useState(false)
+  const closeStageDrawer = useCallback(() => setStageDrawer(false), [])
+  const storyLive = !snapshot.terminal && (snapshot.state === 'running' || (snapshot.state === 'needs_attention' && snapshot.also?.includes('running')))
   const [motionPaused, setMotionPaused] = useState(false)
   const motion = useWaterfallMotion(snapshot, data, { paused: paused || motionPaused, error: state.error, selected: selection })
   const visualsPaused = paused || motionPaused || motion.hidden
   const [drawer, setDrawer] = useState(null)
   const requestId = useRef(0)
   const close = useCallback(() => { requestId.current += 1; setDrawer(null) }, [])
-  useEffect(() => { setSelection('rules'); close() }, [identity, close])
+  useEffect(() => { setSelection('rules'); setStageDrawer(false); close() }, [identity, close])
   useEffect(() => () => { requestId.current += 1 }, [])
   const openOutcome = async ([key, label, disposition, detail]) => {
     const id = ++requestId.current
@@ -80,6 +85,9 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
   }
   const displayCount = value => <WaterfallCount value={value} identity={`${identity}:${exact ? 'findings' : 'changes'}`} paused={visualsPaused || state.error} />
   const stages = data?.stages || []
+  const reviewUrl = new URL(typeof window !== 'undefined' ? window.location.href : 'http://localhost/')
+  reviewUrl.searchParams.set('tab', 'remediate')
+  reviewUrl.searchParams.set('mode', 'review')
   const spending = data?.spending
   const selectedStage = stages.find(stage => stage.tier === (selection === 'first' ? 1 : selection === 'next' ? 2 : null))
   const descriptions = {
@@ -89,9 +97,14 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
     approval: 'You approve AI suggestions before they are applied. Optional AI reviews follow your accepted plan. Saved review results are available below; AI suggestions still require your approval.',
     verify: 'Approved changes must be applied and pass the existing verification checks. Document processing and provider responses do not count as fixed findings.',
   }
+  const stageEvidence = <><h4>{({ rules: 'Rules lead the way', first: 'What the first AI did', next: 'What the next AI did', approval: 'Your decision matters', verify: 'Evidence of completion' })[selection]}</h4><p>{descriptions[selection]}</p>{selectedStage?.models?.length > 0 && <ul>{selectedStage.models.map(model => <li key={`${model.provider}:${model.model}`}>{model.provider} · {model.model}</li>)}</ul>}{selectedStage && <><dl key={selectedStage.tier} className="wf-spending">{[['reserved', 'Reserved, not dispatched'], ['active', 'Dispatched, awaiting charge'], ['settled', 'Charge recorded'], ['released', 'Released without charge'], ['uncertain', 'Charge uncertain'], ['breached', 'Charge exceeded reservation']].map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{displayCount(selectedStage[key])}</dd></div>)}</dl><p className="wf-secondary">{money(selectedStage.spent_units)} settled · {money(selectedStage.held_units)} reserved for this step.</p><p className="wf-secondary">These are attempt states. Recorded operations deduplicate admission retries.</p></>}
+      <section><h4>What each AI step added</h4><p>{data?.contribution_reason || 'AI step breakdown unavailable for this run. Calls cannot yet be joined to usable suggestions.'}</p><p className="wf-secondary">Optional AI reviews check a suggestion; they do not add another finding. Open saved model history below to see recorded reviews.</p></section>
+      <section><h4>Models behind current proposals</h4>{data?.models?.length ? <><ul className="wf-models">{data.models.map(model => <li key={`${model.provider}:${model.model}`}><strong>{model.provider} · {model.model}</strong><span>{model.linked_calls} recorded call{model.linked_calls === 1 ? '' : 's'} linked to current proposals</span><span>Recorded call cost: {typeof model.recorded_cost_usd === 'number' ? money(Math.round(model.recorded_cost_usd * 1000000)) : 'Unavailable'}</span></li>)}</ul><p className="wf-secondary">These models produced the current proposals for this scan. Proposals and their recorded call costs may come from other runs. This is not a model breakdown for the selected run; do not add these costs to its charges below.</p></> : <p>No provider/model identity is linked to current proposals for this view. Historical run attribution is unavailable.</p>}</section>
+      <section><h4>Spending for this run</h4><dl className="wf-spending">{[['spent_units', 'Settled provider charges'], ['held_units', 'Reserved · may still be charged'], ['available_units', 'Remaining allowance'], ['cap_units', 'Approved spending limit']].map(([key, label]) => <div key={key}><dt>{label}</dt><dd><WaterfallCount value={spending?.[key]} identity={identity} paused={visualsPaused || state.error} format={money} /></dd></div>)}</dl>{spending?.unknown_charges > 0 && <p className="wf-note">{spending.unknown_charges} charge(s) unknown. Their reservations remain held.</p>}{spending?.blocked && <p className="wf-note">Further AI spending is blocked pending reconciliation.</p>}<p className="wf-secondary">Provider charges only. Infrastructure costs are separate.</p></section></>
   return <section className={`wf-card${visualsPaused ? ' wf-paused' : ''}`} aria-label="Live remediation waterfall">
     <header className="wf-header"><div><span className="wf-eyebrow">Results · live remediation</span><h3>Watch the work move forward</h3><p>Rules first. AI where permitted. Your approval, then verification.</p></div><div className="wf-header-status"><span className="wf-tag">AI suggestions require your approval</span><RemediationThroughput mini data={snapshot.throughput} identity={identity} paused={visualsPaused || state.error} /></div></header>
-    <div className="wf-motion-status"><span>{motion.documents > 0 ? <><i className="wf-processing-dot" aria-hidden="true" />{motion.documents} documents processing · counts update as results arrive</> : snapshot.terminal ? 'Automatic processing finished · review the recorded results' : 'Motion follows confirmed activity'}</span><button type="button" aria-pressed={motionPaused} disabled={paused} onClick={() => setMotionPaused(value => !value)}>{motionPaused ? 'Resume animation' : 'Pause animation'}</button></div>
+    <div className="wf-motion-status"><span>{motion.documents > 0 ? <><i className="wf-processing-dot" aria-hidden="true" />{motion.documents} documents processing · counts update as results arrive</> : snapshot.terminal ? 'Recorded run results' : 'Motion follows confirmed activity'}</span><button type="button" aria-pressed={motionPaused} disabled={paused} onClick={() => setMotionPaused(value => !value)}>{motionPaused ? 'Resume animation' : 'Pause animation'}</button></div>
+    <WaterfallRunNotice snapshot={snapshot} view={data} error={state.error} paused={visualsPaused} />
     <div className="wf-metrics">
       <div><span>{exact ? 'Fixed and checked · findings' : 'Verified changes · all origins'}</span><strong>{displayCount(exact ? rec.resolved_verified : snapshot.fixes?.verified)}</strong></div>
       <div><span>{exact ? 'Awaiting your review · findings' : 'Review items · not findings'}</span><strong>{displayCount(exact ? rec.awaiting_review : snapshot.review?.items)}</strong></div>
@@ -106,16 +119,16 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
     </section>
     <div className="wf-layout wf-layout-graph">
       <RemediationWaterfallGraph stages={stages} aiEnabled={data?.ai_enabled}
-        selection={selection} onSelect={setSelection} motion={motion}
+        selection={selection} onSelect={stage => { setSelection(stage); setStageDrawer(true) }} motion={motion}
+        snapshot={snapshot} viewAvailable={data?.available}
         paused={visualsPaused} error={state.error} identity={identity}
         reviewCount={snapshot.review?.items} verifiedCount={snapshot.fixes?.verified} />
-      <aside className="wf-detail"><h4>{({ rules: 'Rules lead the way', first: 'What the first AI did', next: 'What the next AI did', approval: 'Your decision matters', verify: 'Evidence of completion' })[selection]}</h4><p>{descriptions[selection]}</p>{selectedStage && <><dl key={selectedStage.tier} className="wf-spending">{[['reserved', 'Reserved, not dispatched'], ['active', 'Dispatched, awaiting charge'], ['settled', 'Charge recorded'], ['released', 'Released without charge'], ['uncertain', 'Charge uncertain'], ['breached', 'Charge exceeded reservation']].map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{displayCount(selectedStage[key])}</dd></div>)}</dl><p className="wf-secondary">{money(selectedStage.spent_units)} settled · {money(selectedStage.held_units)} reserved for this step.</p><p className="wf-secondary">These are attempt states. Recorded operations deduplicate admission retries.</p></>}
-      <section><h4>What each AI step added</h4><p>{data?.contribution_reason || 'AI step breakdown unavailable for this run. Calls cannot yet be joined to usable suggestions.'}</p><p className="wf-secondary">Optional AI reviews check a suggestion; they do not add another finding. Open saved model history below to see recorded reviews.</p></section>
-      <section><h4>Models behind current proposals</h4>{data?.models?.length ? <><ul className="wf-models">{data.models.map(model => <li key={`${model.provider}:${model.model}`}><strong>{model.provider} · {model.model}</strong><span>{model.linked_calls} recorded call{model.linked_calls === 1 ? '' : 's'} linked to current proposals</span><span>Recorded call cost: {typeof model.recorded_cost_usd === 'number' ? money(Math.round(model.recorded_cost_usd * 1000000)) : 'Unavailable'}</span></li>)}</ul><p className="wf-secondary">These models produced the current proposals for this scan. Proposals and their recorded call costs may come from other runs. This is not a model breakdown for the selected run; do not add these costs to its charges below.</p></> : <p>No provider/model identity is linked to current proposals for this view. Historical run attribution is unavailable.</p>}</section>
-      <section><h4>Spending for this run</h4><dl className="wf-spending">{[['spent_units', 'Settled provider charges'], ['held_units', 'Reserved · may still be charged'], ['available_units', 'Remaining allowance'], ['cap_units', 'Approved spending limit']].map(([key, label]) => <div key={key}><dt>{label}</dt><dd><WaterfallCount value={spending?.[key]} identity={identity} paused={visualsPaused || state.error} format={money} /></dd></div>)}</dl>{spending?.unknown_charges > 0 && <p className="wf-note">{spending.unknown_charges} charge(s) unknown. Their reservations remain held.</p>}{spending?.blocked && <p className="wf-note">Further AI spending is blocked pending reconciliation.</p>}<p className="wf-secondary">Provider charges only. Infrastructure costs are separate.</p></section>
-    </aside></div>
+      <div className="wf-inspection"><RemediationAttemptStory scanId={scanId} batchId={batchId} defaultOpen={true} live={storyLive} paused={paused || motion.hidden || stageDrawer} reviewHref={`${reviewUrl.pathname}${reviewUrl.search}${reviewUrl.hash}`} />
+      <details className="wf-detail wf-stage-evidence"><summary>Stage evidence and costs</summary>{stageEvidence}
+    </details></div></div>
     <RemediationRunInsights scanId={scanId} batchId={batchId} />
     <footer className="wf-footer"><span>{state.error ? data ? 'Refresh delayed · showing the last recorded AI activity' : 'AI activity unavailable · retrying' : visualsPaused ? 'Animation paused · recorded totals remain available' : 'Updates follow recorded activity'}</span><span>{data?.generated_at ? `AI snapshot ${new Date(data.generated_at).toLocaleTimeString()}` : data?.available === false ? 'No managed waterfall records for this run' : 'Waiting for AI activity records'}</span></footer>
+    {stageDrawer && createPortal(<Drawer title="Stage evidence and costs" onClose={closeStageDrawer}><div className="wf-detail"><p>{descriptions[selection]}</p>{selectedStage?.models?.map(model => <p key={`${model.provider}:${model.model}`}><strong>{model.provider} · {model.model}</strong></p>)}</div><RemediationAttemptStory scanId={scanId} batchId={batchId} defaultOpen={true} live={storyLive} paused={paused || motion.hidden} reviewHref={`${reviewUrl.pathname}${reviewUrl.search}${reviewUrl.hash}`} /><details className="wf-detail"><summary>Stage evidence and costs</summary>{stageEvidence}</details></Drawer>, document.body)}
     {drawer?.identity === identity && createPortal(<Drawer title={drawer.label} subtitle={drawer.detail} onClose={close}><div className="wf-drawer-content">{drawer.loading && <p role="status">Loading findings…</p>}{drawer.error && <p role="alert">{drawer.error}</p>}{drawer.items && <><p>{drawer.items.length} findings in this outcome.</p>{drawer.items.length === 0 && <p>No findings in this outcome.</p>}<ul>{drawer.items.map(item => <li key={item.finding_id}><strong>{item.file}</strong><span>WCAG {item.rule_id} · {item.instance_key}</span>{item.verified_at && <span>Verified {new Date(item.verified_at).toLocaleString()}</span>}</li>)}</ul></>}</div></Drawer>, document.body)}
   </section>
 }

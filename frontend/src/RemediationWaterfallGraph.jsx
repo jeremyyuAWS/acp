@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Background, Handle, MarkerType, Position, ReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import WaterfallCount from './WaterfallCount.jsx'
+import { waterfallStageStatus } from './WaterfallRunNotice.jsx'
 import './remediation-waterfall-graph.css'
 
 const ORDER = ['rules', 'first', 'next', 'approval', 'verify']
@@ -38,7 +39,7 @@ const nodeTypes = { waterfall: WaterfallNode }
 // This graph is the configured path, not evidence that every finding visits every stage.
 // Only the parent's confirmed motion stage can illuminate a connection.
 export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules', motion = {}, paused = false,
-  identity, reviewCount, verifiedCount, reducedMotion = false, width = 1100, onSelect, onKeyDown = () => {} }) {
+  identity, reviewCount, verifiedCount, snapshot = {}, viewAvailable, reducedMotion = false, width = 1100, onSelect, onKeyDown = () => {} }) {
   const narrow = width < 850
   const columns = narrow ? 2 : 5
   const nodeWidth = Math.max(120, (width - 32 - (columns - 1) * 26) / columns)
@@ -50,7 +51,7 @@ export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules
       title: models.length ? [...new Set(models.map(item => item.model))].join(' + ') : stage?.operations === 0 ? 'Not used yet' : 'Model not recorded',
       provider: models.length ? [...new Set(models.map(item => item.provider || 'Provider not recorded'))].join(' · ') : aiEnabled === false ? 'AI disabled for this run' : 'Recorded identity unavailable',
       value: stage?.operations, metric: 'recorded operations',
-      detail: aiEnabled === false ? 'Not requested by this plan' : 'AI suggestions need approval',
+      detail: waterfallStageStatus(stage, { aiEnabled, terminal: snapshot.terminal, unavailable: viewAvailable === false }),
     }
   }
   const facts = [
@@ -85,7 +86,7 @@ export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules
 }
 
 export default function RemediationWaterfallGraph({ stages, aiEnabled, selection, onSelect, motion = {}, paused = false,
-  error = false, identity, reviewCount, verifiedCount }) {
+  error = false, identity, reviewCount, verifiedCount, snapshot, viewAvailable }) {
   const host = useRef(null)
   const [width, setWidth] = useState(1100)
   const reduced = useReducedMotion()
@@ -104,7 +105,7 @@ export default function RemediationWaterfallGraph({ stages, aiEnabled, selection
     onSelect?.(ORDER[next])
     host.current?.querySelector(`[data-stage="${ORDER[next]}"]`)?.focus()
   }
-  const graph = waterfallGraphModel({ stages, aiEnabled, selection, onSelect, motion, paused: stopped, reducedMotion: reduced, identity,
+  const graph = waterfallGraphModel({ stages, aiEnabled, snapshot, viewAvailable, selection, onSelect, motion, paused: stopped, reducedMotion: reduced, identity,
     reviewCount: count(reviewCount) ? reviewCount : undefined, verifiedCount: count(verifiedCount) ? verifiedCount : undefined, width, onKeyDown })
   return <section ref={host} className={`wf-graph${stopped || reduced ? ' wf-graph-stopped' : ''}`} aria-label="Remediation waterfall stages">
     <div className="wf-graph-heading"><h4>Live AI waterfall</h4><span>Select a stage to inspect its evidence</span></div>
