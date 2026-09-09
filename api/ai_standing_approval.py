@@ -185,11 +185,16 @@ def approve_file(store, ctx):
             approved.append({'id': row['id'], 'version': updated['decision_version'],
                              'request_id': request_id, 'snapshots': row['proposal_snapshot_ids'],
                              'value_sha256': updated['approved_value_sha256']})
-            for p in row['proposals']:
+            # One row per proposal, one DECISION — the same grain split routes/hitl.py makes for
+            # a reviewer's own approval. Without the flag a standing approval covering five
+            # drafts counted as five approvals toward the maturity gate that promotes a rule to
+            # AI-Assisted mode, which is the one count that must not be self-reinforcing.
+            for index, p in enumerate(row['proposals']):
                 store.record_hitl_event(sid, file, row['rule_id'], row['id'], ACTION,
                     ai_value=p['proposed_value'], final_value=p['proposed_value'], reviewer='system',
                     model_call_id=p['model_call_id'], proposal_snapshot_ids=row['proposal_snapshot_ids'],
-                    source_revision=revision, approved_value_sha256=updated['approved_value_sha256'])
+                    source_revision=revision, approved_value_sha256=updated['approved_value_sha256'],
+                    decision_primary=(index == 0))
         if approved:
             store.enqueue_job('apply_approved_values', {'scan_id': sid, 'file': file,
                 'standing_approval': {'owner': owner, 'run_id': run_id, 'source_revision': revision,

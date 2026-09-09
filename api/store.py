@@ -849,6 +849,22 @@ _SCHEMA = [
     "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS proposal_snapshot_ids TEXT",
     "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS source_revision TEXT",
     "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS approved_value_sha256 TEXT",
+    # ONE HUMAN DECISION IS ONE ROW HERE — decision_primary says which row that is.
+    #
+    # routes/hitl.py writes one event PER PROPOSAL when the card carries several model calls
+    # (a .docx with five unlabelled images is one review card and five vision drafts), because
+    # the per-draft ai_value/final_value pair is what the edit-rate calibration reads. That is
+    # the right grain for calibration and the wrong grain for every count of REVIEWER work:
+    # before this column, one decision on a five-image card counted as five reviews, repeated
+    # its single review_ms five times in the median, and pushed the rule five approvals closer
+    # to _MATURITY_MIN_APPROVALS — the gate that nominates a criterion for AI-Assisted mode.
+    # Two such cards cleared a gate written to need ten human decisions.
+    #
+    # So the fan-out stays and the counting splits: exactly one row per decision carries
+    # decision_primary=1, and hitl_analytics counts decisions over those while keeping the
+    # edit signal over all of them. Legacy rows are backfilled below; NULL is never treated as
+    # primary, or the backfill would be undone by its own default.
+    "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS decision_primary INT",
     # Append-only post-write evidence for model-generated proposals. A reviewer acceptance says
     # the draft looked right; this row says whether the corrected bytes subsequently cleared the
     # detector. Keeping those as separate immutable events prevents transport success or approval
@@ -7926,26 +7942,34 @@ class Store:
                           model_call_id: str | None = None,
                           proposal_snapshot_ids: list[str | None] | None = None,
                           source_revision: str | None = None,
-                          approved_value_sha256: str | None = None) -> None:
-        """One immutable row per human review decision — the telemetry the review workspace
-        reports on (reviewer time saved) and calibrates from (edit rate on High-confidence
-        proposals). `reject_reason` (Reviewer Feedback Intelligence) records WHY a rejection
-        happened, so 'which rules/doc types are weakest' is answered by real reviewer behaviour
-        rather than intuition. Best-effort: callers wrap so it never blocks a review."""
+                          approved_value_sha256: str | None = None,
+                          decision_primary: bool = True) -> None:
+        """One immutable row per model draft a human review decision covered — the telemetry the
+        review workspace reports on (reviewer time saved) and calibrates from (edit rate on
+        High-confidence proposals). `reject_reason` (Reviewer Feedback Intelligence) records WHY
+        a rejection happened, so 'which rules/doc types are weakest' is answered by real reviewer
+        behaviour rather than intuition. Best-effort: callers wrap so it never blocks a review.
+
+        `decision_primary` marks the ONE row per decision that stands for the reviewer's act.
+        It defaults True because the ordinary case is one draft per decision; a caller writing a
+        fan-out (routes/hitl.py, one row per model call on a multi-image card) must pass False
+        for every row after the first, or the review counts inflate by the card's image count.
+        Read back by _decision_rows."""
         from datetime import datetime, timezone
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO hitl_events(id,scan_id,file,rule_id,item_id,action,edited,"
                 "review_ms,ai_value,final_value,reviewer,created_at,reject_reason,model_call_id,"
-                "proposal_snapshot_ids,source_revision,approved_value_sha256) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "proposal_snapshot_ids,source_revision,approved_value_sha256,decision_primary) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (uuid.uuid4().hex, scan_id, file, rule_id, item_id, action,
                  1 if edited else 0, review_ms, ai_value or None, final_value or None,
                  reviewer, datetime.now(timezone.utc).isoformat(), reject_reason or None,
                  model_call_id or None,
                  json.dumps(proposal_snapshot_ids, separators=(",", ":"))
                  if proposal_snapshot_ids else None,
-                 source_revision or None, approved_value_sha256 or None))
+                 source_revision or None, approved_value_sha256 or None,
+                 1 if decision_primary else 0))
 
     # Every outcome a post-write validation row may carry. Each names what the applier OBSERVED
     # about ONE approved draft, never what it hoped:
@@ -8076,10 +8100,54 @@ class Store:
     _MATURITY_MAX_EDIT_RATE = 0.20     # ≤20% of approvals were edited
     _MATURITY_MIN_APPROVAL_RATE = 0.90  # ≥90% of decided reviews were approved
 
-    def hitl_analytics(self, scan_id: str | None = None) -> dict:
+    @staticmethod
+    def _decision_rows(rows: list[dict]) -> list[dict]:
+        """The subset of hitl_events rows that each stand for ONE human decision.
+
+        A card carrying several model calls writes one row per call (see the decision_primary
+        migration), so counting rows counts DRAFTS, not reviews. This picks the decision-level
+        subset back out:
+
+          - decision_primary set → trust it. Exactly one row per decision carries 1.
+          - decision_primary NULL → a row written before the column existed, where the fan-out
+            is not marked and cannot be reconstructed exactly. Rows of one burst share their
+            item, their action and their card-level review_ms, so that triple is the grouping
+            key and the first row of each group stands for the decision.
+
+        The legacy grouping can only ever merge two decisions that hit the same item with the
+        same action AND the same millisecond review time — which under-counts by one in a case
+        a client clock makes vanishingly rare, against an over-count that was multiplying every
+        figure by the image count of the card. Neither backfills the other's rows: the flag is
+        authoritative wherever it is set."""
+        marked = [r for r in rows if r.get("decision_primary") is not None]
+        legacy = [r for r in rows if r.get("decision_primary") is None]
+        out = [r for r in marked if r.get("decision_primary")]
+        seen: set[tuple] = set()
+        for r in legacy:
+            key = (r.get("item_id"), r.get("action"), r.get("review_ms"))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(r)
+        return out
+
+    def hitl_analytics(self, scan_id: str | None = None, owner: str | None = None) -> dict:
         """Aggregate HITL review telemetry — headline metric is reviewer time eliminated,
-        not % automated. Scoped to one scan when scan_id is given (owner-checked at the
-        route), else across all recorded decisions.
+        not % automated. Scoped to one scan when scan_id is given, and to one signed-in user's
+        own scans when `owner` is given; both, or neither, are valid.
+
+        `owner` exists because the unscoped call is not a harmless default. Aggregates over
+        every tenant's decisions are neither this user's numbers nor safe to hand them, and the
+        route used to owner-check only the scan_id branch — so omitting the parameter was the
+        way to see everyone's. Scoped the same way as list_hitl_queue: through the scan's
+        owner_email, never a column on the events themselves.
+
+        COUNTS OF REVIEWS ARE COUNTS OF DECISIONS, and counts of the edit signal are counts of
+        drafts. `total`, `reviewed`, `by_action`, `approval_rate`, the review-time figures and
+        the per-rule/per-format `reviewed`/`approved`/`rejected` all count decision rows
+        (_decision_rows). `edit_rate` and `avg_edit_distance` deliberately count DRAFTS — a
+        reviewer who accepted four vision drafts and rewrote the fifth edited one draft in
+        five, and that is the calibration signal, not one edit in one card.
 
         Reviewer Feedback Intelligence: also rolls up per-RULE and per-FORMAT quality (which
         criteria/doc types the AI is weakest on) and the reject-reason histogram — every figure
@@ -8088,25 +8156,35 @@ class Store:
         Maturity signal (ADR 0019 §8.5): rules that pass the three-threshold gate
         (_MATURITY_MIN_APPROVALS, _MATURITY_MAX_EDIT_RATE, _MATURITY_MIN_APPROVAL_RATE) are
         flagged ready_to_promote so the UI can surface them as candidates for AI-Assisted mode.
+        The volume threshold counts decisions, which is what it was written against: on draft
+        rows two five-image cards cleared a gate that asks for ten human reviews.
         avg_edit_distance (normalised Levenshtein ratio via difflib) is included for information
         but is NOT part of the promotion gate — it requires ai_value/final_value to be populated,
         which is not guaranteed for all rows."""
         import difflib as _difflib
         with self._db.cursor() as cur:
-            cols = "action,edited,review_ms,rule_id,file,reject_reason,ai_value,final_value"
+            cols = ("action,edited,review_ms,rule_id,file,reject_reason,ai_value,final_value,"
+                    "item_id,decision_primary")
+            conds, params = [], []
             if scan_id:
-                self._db.execute(cur,
-                    f"SELECT {cols} FROM hitl_events WHERE scan_id=%s", (scan_id,))
-            else:
-                self._db.execute(cur, f"SELECT {cols} FROM hitl_events")
+                conds.append("scan_id=%s"); params.append(scan_id)
+            if owner:
+                conds.append("scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)")
+                params.append(owner)
+            where = (" WHERE " + " AND ".join(conds)) if conds else ""
+            self._db.execute(cur, f"SELECT {cols} FROM hitl_events{where}", tuple(params))
             rows = self._db.fetchall(cur)
+        decisions = self._decision_rows(rows)
         by: dict = {}
-        for r in rows:
+        for r in decisions:
             by[r["action"]] = by.get(r["action"], 0) + 1
         approvals = by.get("approve", 0) + by.get("edit", 0)
-        decided = len(rows) - by.get("skip", 0)
+        decided = len(decisions) - by.get("skip", 0)
+        # Drafts, not decisions — see the docstring. The denominator is every draft the reviewer
+        # accepted, so the rate answers "how often is a draft good enough to keep as written?"
+        approved_drafts = sum(1 for r in rows if r.get("action") in ("approve", "edit"))
         edited_n = sum(1 for r in rows if r.get("edited"))
-        ms = [r["review_ms"] for r in rows if r.get("review_ms") is not None]
+        ms = [r["review_ms"] for r in decisions if r.get("review_ms") is not None]
 
         def _edit_dist(ai_val: str | None, final_val: str | None) -> float | None:
             if not ai_val or not final_val:
@@ -8114,14 +8192,25 @@ class Store:
             ratio = _difflib.SequenceMatcher(None, ai_val, final_val).ratio()
             return round(1.0 - ratio, 4)
 
-        def _bucket(rows_iter, keyfn, *, include_maturity: bool = False):
+        def _bucket(decision_iter, draft_iter, keyfn, *, include_maturity: bool = False):
+            """Two passes over the same bucket, because the two grains answer different questions.
+
+            `decision_iter` carries reviewer decisions and drives the work counts — how many
+            reviews happened, what they decided, how long they took. `draft_iter` carries every
+            model draft those decisions covered and drives the edit signal. Feeding one to both
+            is exactly the conflation this split exists to end."""
             out: dict[str, dict] = {}
-            for r in rows_iter:
+
+            def _b(key):
+                return out.setdefault(key, {"reviewed": 0, "approved": 0, "rejected": 0,
+                                            "edited": 0, "approved_drafts": 0,
+                                            "reject_reasons": {}, "_ms": [], "_dists": []})
+
+            for r in decision_iter:
                 k = keyfn(r)
                 if not k:
                     continue
-                b = out.setdefault(k, {"reviewed": 0, "approved": 0, "rejected": 0, "edited": 0,
-                                       "reject_reasons": {}, "_ms": [], "_dists": []})
+                b = _b(k)
                 a = r.get("action")
                 if a in ("approve", "edit", "reject"):
                     b["reviewed"] += 1
@@ -8132,21 +8221,29 @@ class Store:
                     rr = r.get("reject_reason")
                     if rr:
                         b["reject_reasons"][rr] = b["reject_reasons"].get(rr, 0) + 1
-                if r.get("edited"):
-                    b["edited"] += 1
                 if r.get("review_ms") is not None:
                     b["_ms"].append(r["review_ms"])
-                if include_maturity and r.get("edited"):
-                    d = _edit_dist(r.get("ai_value"), r.get("final_value"))
-                    if d is not None:
-                        b["_dists"].append(d)
+            for r in draft_iter:
+                k = keyfn(r)
+                if not k:
+                    continue
+                b = _b(k)
+                if r.get("action") in ("approve", "edit"):
+                    b["approved_drafts"] += 1
+                if r.get("edited"):
+                    b["edited"] += 1
+                    if include_maturity:
+                        d = _edit_dist(r.get("ai_value"), r.get("final_value"))
+                        if d is not None:
+                            b["_dists"].append(d)
             result = []
             for k, b in out.items():
                 rev = b["reviewed"]
                 appr = b["approved"]
                 edit_n = b["edited"]
+                appr_drafts = b["approved_drafts"]
                 approval_rate = round(appr / rev, 3) if rev else None
-                edit_rate = round(edit_n / appr, 3) if appr else None
+                edit_rate = round(edit_n / appr_drafts, 3) if appr_drafts else None
                 avg_dist = round(sum(b["_dists"]) / len(b["_dists"]), 4) if b["_dists"] else None
                 entry: dict = {
                     "key": k,
@@ -8154,6 +8251,10 @@ class Store:
                     "approved": appr,
                     "rejected": b["rejected"],
                     "edited": edit_n,
+                    # Drafts the reviewer accepted — `edited` divided by this is `edit_rate`.
+                    # Published so a reader of by_rule can see the denominator rather than
+                    # assuming it is `approved`, which counts a different thing.
+                    "approved_drafts": appr_drafts,
                     "approval_rate": approval_rate,
                     "avg_review_ms": round(sum(b["_ms"]) / len(b["_ms"])) if b["_ms"] else None,
                     "reject_reasons": b["reject_reasons"],
@@ -8173,20 +8274,24 @@ class Store:
             return result
 
         reasons: dict[str, int] = {}
-        for r in rows:
+        for r in decisions:
             rr = r.get("reject_reason")
             if r.get("action") == "reject" and rr:
                 reasons[rr] = reasons.get(rr, 0) + 1
-        by_rule = _bucket(rows,
+        by_rule = _bucket(decisions, rows,
                           lambda r: (r.get("rule_id") or "").replace("SC_", "").replace("_", ".") or None,
                           include_maturity=True)
         promotable_rules = [b["key"] for b in by_rule if b.get("ready_to_promote")]
         return {
-            "total": len(rows),
+            "total": len(decisions),
             "by_action": by,
             "reviewed": decided,
             "approval_rate": round(approvals / decided, 3) if decided else None,
-            "edit_rate": round(edited_n / approvals, 3) if approvals else None,   # calibration signal
+            # Calibration signal — DRAFTS edited over drafts accepted, not cards. See the
+            # docstring: one rewritten image among five accepted is 20%, not 100%.
+            "edit_rate": round(edited_n / approved_drafts, 3) if approved_drafts else None,
+            "drafts": len(rows),
+            "approved_drafts": approved_drafts,
             "avg_review_ms": round(sum(ms) / len(ms)) if ms else None,
             # The policy preview projects review effort from a typical completed card. Median is
             # deliberately separate from the legacy average: it is robust to a card left open
@@ -8196,7 +8301,7 @@ class Store:
             "reject_reasons": reasons,
             "promotable_rules": promotable_rules,
             "by_rule": by_rule,
-            "by_format": _bucket(rows, lambda r: (r.get("file") or "").rsplit(".", 1)[-1].lower() if "." in (r.get("file") or "") else None),
+            "by_format": _bucket(decisions, rows, lambda r: (r.get("file") or "").rsplit(".", 1)[-1].lower() if "." in (r.get("file") or "") else None),
         }
 
     def undo_applied_fix(self, scan_id: str, file: str, rule_id: str) -> bool:
