@@ -10,6 +10,7 @@ export default function RemediationGenerationChain({ policy, options, disabled, 
   const unavailable = secondFallbackUnavailable(policy, options, budgetSupported)
   const problem = generationChainProblem(policy, options, budgetSupported)
   const current = steps[2]
+  const currentModel = options?.models?.find(model => model.provider === current?.provider && model.model === current?.model)
   const currentIndex = models.findIndex(model => model.provider === current?.provider && model.model === current?.model)
   return <details className="remediation-generation-chain">
     <summary>AI options · {enabled ? 'Second fallback enabled' : 'Second fallback off'}</summary>
@@ -32,6 +33,7 @@ export default function RemediationGenerationChain({ policy, options, disabled, 
         {models.map((model, index) => <option key={`${model.provider}/${model.model}`} value={index}>{model.provider} · {model.model}</option>)}
       </select>
     </label>}
+    {enabled && currentModel?.access_verified !== true && <p role="note">{currentModel?.reason || 'Account access to the selected second fallback has not been tested. No paid access check is made from this preview.'}</p>}
     <p id={`${id}-reason`}>{problem || unavailable || 'Available for the supported text findings in this scope. Other formats and findings keep their supported path.'}</p>
     <p>Up to {enabled ? 3 : 2} generation models per supported text suggestion; transport retries and AI review are separate. The run spending limit remains ${policy.ai_budget_usd ?? '0.00'}.</p>
     <small>Changing this plan makes no paid requests. Existing accepted runs retain their original model chain.</small>

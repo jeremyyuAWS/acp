@@ -33,6 +33,7 @@ it('freezes all three steps and removes only the third when turned off', async (
   const chain = v.changed.mock.calls[0][1]
   expect(chain).toEqual({ version: 1, steps: [...options.default_steps, step('third-model', 2)] })
   expect(v.container.querySelectorAll('option')).toHaveLength(1)
+  expect(v.container.querySelector('[role=note]').textContent).toContain('Account access')
   options.default_steps[0].model = 'settings-changed-later'
   expect(chain.steps[0].model).toBe('primary-model')
   await click(v.container.querySelector('input'))
@@ -68,4 +69,13 @@ it('rejects duplicate, cross-provider and unordered steps; absent legacy chains 
     expect(generationChainProblem({ ...policy(), generation_chain: bad }, options, true)).toContain('invalid')
   }
   expect(secondFallbackUnavailable(policy(), options, false)).toContain('enforced')
+})
+
+it('displays the authoritative account-access caveat for the selected third model without probing it', async () => {
+  const options = catalog()
+  options.models[2] = { ...options.models[2], access_verified: false, reason: 'Configuration verified; account model access has not been tested.' }
+  const v = await mount({ options })
+  await click(v.container.querySelector('input'))
+  expect(v.container.querySelector('[role=note]').textContent).toBe(options.models[2].reason)
+  expect(v.changed).toHaveBeenCalledTimes(1)
 })
