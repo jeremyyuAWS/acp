@@ -39,10 +39,12 @@ def normalize_run_policy(snapshot):
         result['ai_review'] = normalize_review_policy(snapshot['ai_review'])
         # Existing accepted jobs predate family/evaluation selections. Do not add
         # keys to their canonical persisted policy and break immutable replays.
-        for key in ('permitted_families', 'evaluation_versions'):
+        for key in ('permitted_families', 'evaluation_versions', 'review_model'):
             if key not in snapshot['ai_review']:
                 result['ai_review'].pop(key, None)
     if 'threshold_policy' in snapshot:
+        if ai != 1 or cap <= 0:
+            raise BudgetError('An approved threshold policy requires AI enabled and a positive run budget')
         from ai_threshold_execution import normalize_sealed_policy
         result['threshold_policy'] = normalize_sealed_policy(snapshot['threshold_policy'])
         selection = result.get('ai_review', {})
