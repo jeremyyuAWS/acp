@@ -310,7 +310,8 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
               provider: str = "ollama", zone: str | None = None, cost_usd: float = 0.0,
               reason: str | None = None, prompt_tokens: int | None = None,
               completion_tokens: int | None = None, temperature: float | None = None,
-              prompt_version: str | None = None, managed_output_sha256: str | None = None) -> str | None:
+              prompt_version: str | None = None, managed_output_sha256: str | None = None,
+              managed_operation_id: str | None = None) -> str | None:
     """Emit a Langfuse span + persist an ai_calls provenance row for one model call — model,
     latency, prompt size, completion, ok, and (ADR 0019 §1) which provider/zone/cost it ran on.
     model defaults to the text model; vision calls pass the vision model. `provider`/`zone`/`cost_usd`
@@ -331,7 +332,7 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
         import hashlib
         ctx = optional_current_run_context()
         if ctx is not None and ok and completion and scan_id == ctx.scan_id and file == ctx.file:
-            operation = hashlib.sha256(prompt.encode()).hexdigest()
+            operation = managed_operation_id or hashlib.sha256(prompt.encode()).hexdigest()
             digest = managed_output_sha256 or hashlib.sha256(completion.encode()).hexdigest()
             matches = [row for row in AttemptHistory(ctx.ledger.db).list_operation(ctx.owner_id,ctx.scan_id,ctx.run_id,operation,file=file)
                        if row['status'] == 'drafted' and row.get('spending_state') == 'settled'
@@ -369,7 +370,7 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
             ctx = optional_current_run_context()
             if managed_identity and ctx is not None and ok and completion and scan_id == ctx.scan_id and file == ctx.file:
                 AttemptHistory(ctx.ledger.db).bind_trace(ctx.owner_id, ctx.scan_id, ctx.run_id,
-                    hashlib.sha256(prompt.encode()).hexdigest(), call_id, file=file,
+                    managed_operation_id or hashlib.sha256(prompt.encode()).hexdigest(), call_id, file=file,
                     output_sha256=managed_output_sha256 or hashlib.sha256(completion.encode()).hexdigest())
         except Exception:
             swallowed('ai._trace_ai: exact attempt linkage unavailable', scan_id)
@@ -1427,6 +1428,10 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     memory is active — "" (the default) leaves the prompt byte-identical to pre-memory."""
     from llm_waterfall_provider import managed_context, defer_managed
     _managed_run = managed_context()
+    if _managed_run is not None:
+        from ai_generation_adapter import current_generation_adapter
+        if current_generation_adapter() is not None:
+            scan_id, file = _managed_run.scan_id, _managed_run.file
     if _managed_run is not None and rule_id == "1.1.1":
         defer_managed('vision_pricing_not_verified', kind='alt_text')
         return None
@@ -1480,7 +1485,8 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                       completion_tokens=_cr["completion_tokens"],
                       cost_usd=_cr["cost_usd"], temperature=0.4,
                       prompt_version="suggest-v1", scan_id=scan_id, file=file,
-                      managed_output_sha256=hashlib.sha256(_cr['text'].encode()).hexdigest() if _managed_run is not None else None)
+                      managed_output_sha256=hashlib.sha256(_cr['text'].encode()).hexdigest() if _managed_run is not None else None,
+                      managed_operation_id=_cr.get('operation_id') if _managed_run is not None else None)
             kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
             out = {"suggestion": text, "kind": kind,
                    "is_template": rule_id == "1.1.1", "model": _cr["model"],
