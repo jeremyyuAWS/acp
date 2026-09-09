@@ -13,6 +13,7 @@ import WorkspaceFooter from './WorkspaceFooter.jsx'
 import './RemediationInbox.css'
 import MatchingReviewPreview from './MatchingReviewPreview.jsx'
 import BatchReviewSelection from './BatchReviewSelection.jsx'
+import { exclusionReason } from './batchReviewSelection.js'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is a TWO-column split: a 35% work queue on the left to find and
@@ -706,6 +707,7 @@ export default function RemediationInbox({
   // measured size, so jsdom's zero-size rects leave the value untouched (keyboard drives the tests).
   const dragLeft = (x) => { const r = rowRef.current?.getBoundingClientRect(); if (r?.width) setLeftW(clamp(((x - r.left) / r.width) * 100, 28, 40)) }
 
+  const readyAcrossScan = queue.filter(f => !exclusionReason(f, decisions, drafts))
   const counts = useMemo(() => workflowCounts(queue, decisions), [queue, decisions])
   const prog = useMemo(() => progress(queue, decisions), [queue, decisions])
 
@@ -941,7 +943,7 @@ export default function RemediationInbox({
         <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: '-.01em' }}>Remediate</span>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {WORKFLOW_TABS.map((t) => (
-            <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
+            <button key={t} type="button" role="tab" aria-selected={tab === t} disabled={savingId != null} onClick={() => { setBulkPreviewOpen(false); setBatchScopeIds(null); setTab(t) }}
                     style={{ fontSize: 12, padding: '3px 11px', borderRadius: 20, cursor: 'pointer',
                              border: `1px solid ${tab === t ? 'transparent' : 'rgba(255,255,255,.22)'}`,
                              background: tab === t ? '#3b6fd6' : 'transparent', color: '#fff',
@@ -952,7 +954,16 @@ export default function RemediationInbox({
         </div>
       </div>
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
-      <WorkspaceProgress queue={queue} decisions={decisions} selected={selected} />
+      {!bulkPreviewOpen && <>
+        <p className="remediation-category-help">{{
+          'needs-review': 'AI suggestions have proposed changes you can approve. Already-applied changes are available for individual review.',
+          manual: 'These issues need your input. Select an issue to see the required edit and instructions for fixing the source document.',
+          'awaiting-validation': 'These changes are awaiting writing or verification. Another approval is not needed here.',
+          blocked: 'These issues cannot continue yet. Select an issue to see what needs attention.',
+          completed: 'These issues are complete. Select an item to inspect its recorded result.',
+        }[tab]}</p>
+        <WorkspaceProgress queue={queue} decisions={decisions} selected={selected} />
+      </>}
       <div className="rinbox" data-layout="two-column" data-narrow={narrow ? narrowPane : undefined} ref={rowRef} style={{ display: bulkPreviewOpen ? 'none' : 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: '0 0 12px 12px', overflow: 'hidden', minHeight: 480 }}>
       {/* ── Left: the work queue — find and select the next finding (resizable) ── */}
       <div className="rinbox-queuepane" hidden={narrow && narrowPane !== 'queue'}
@@ -997,12 +1008,12 @@ export default function RemediationInbox({
               <span>↑/↓ or J/K: move · Home/End: first/last · Enter: open selected item</span>
             </details>
           </div>
-          <button type="button" className="ghost" aria-expanded={bulkPreviewOpen}
+          {tab === 'needs-review' && <button type="button" className="ghost" aria-expanded={bulkPreviewOpen}
                   disabled={savingId != null}
                   onClick={() => { setBatchScopeIds(null); setBulkPreviewOpen(open => !open) }}
                   style={{ marginTop: 8, fontWeight: 700 }}>
-            Select findings for batch approval
-          </button>
+            Bulk approve ready proposals · all documents
+          </button>}
           {/* "Assigned to me" filter + a context assign chip for the selected document. Mirrors the
               #417 backend (files_assigned_to); shown only for a signed-in reviewer with an assign
               action, so it is never a dead control. Assigning is per-DOCUMENT (a file's whole set of
@@ -1113,16 +1124,20 @@ export default function RemediationInbox({
         <button type="button" className="ghost" disabled={savingId != null}
                 onClick={() => { setBulkPreviewOpen(false); focusReviewRef.current = true; setNarrowPane('detail') }}>Return to individual review</button>
         <BatchReviewSelection
-          visible={batchScopeIds ? visible.filter(f => batchScopeIds.includes(f.id)) : visible}
+          visible={batchScopeIds ? queue.filter(f => batchScopeIds.includes(f.id)) : queue}
           decisions={decisions} drafts={drafts}
-          scopeKey={JSON.stringify([scanId, batchScopeIds])}
+          scopeKey={JSON.stringify([scanId, batchScopeIds, tab])}
+          scopeLabel={batchScopeIds ? 'Selected matching issue in this scan' : 'All documents in this scan'}
+          readyOutsideScope={batchScopeIds ? readyAcrossScan.filter(f => !batchScopeIds.includes(f.id)).length : 0}
+          onShowAllReady={() => setBatchScopeIds(null)}
+          onReviewExcluded={() => { setBulkPreviewOpen(false); setBatchScopeIds(null); focusReviewRef.current = true; setNarrowPane('detail') }}
           disabled={savingId != null && savingId !== 'selected-batch'}
           onBusy={busy => setSavingId(busy ? 'selected-batch' : null)}
           onDecide={onDecide} onResult={batchResult} />
       </div>
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
-      <WorkspaceFooter position={position} total={visIds.length} onPrev={goPrev} onNext={goNext}
-                       activeStep={selected ? workflowStepIndex(selected, decisions) : null} />
+      {!bulkPreviewOpen && <WorkspaceFooter position={position} total={visIds.length} onPrev={goPrev} onNext={goNext}
+                       activeStep={selected ? workflowStepIndex(selected, decisions) : null} />}
     </div>
   )
 }

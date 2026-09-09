@@ -19,7 +19,7 @@ describe('explicit batch selection', () => {
   it('starts empty, paging and preview never write; one checkbox binds only that exact finding', async () => {
     const onDecide = vi.fn().mockResolvedValue(undefined)
     const view = await mount({ visible: Array.from({ length: 23 }, (_, i) => finding(i)), onDecide })
-    expect(view.button('Approve selected').disabled).toBe(true)
+    expect(view.button('Approve selected')).toBeUndefined()
     await click(view.button('Next batch page'))
     await click(view.container.querySelector('input'))
     await click(view.button('Approve selected'))
@@ -44,13 +44,13 @@ describe('explicit batch selection', () => {
     expect(v.container.textContent).toContain('Proposal or source changed')
     expect(onDecide).not.toHaveBeenCalled()
     await v.render({ scopeKey: 'other-scan' })
-    expect(v.container.textContent).toContain('0 findings selected')
+    expect(v.button('Approve selected')).toBeUndefined()
   })
   it('counts every proposal and excludes manual, missing, applied and edited work', async () => {
     const multi = finding(1, { proposals: [{ proposed_value: 'A' }, { proposed_value: 'B' }], _raw: { ...finding(1)._raw, finding_count: 2, proposal_snapshot_ids: ['a', 'b'] } })
     const missing = finding(2, { proposals: [{ proposed_value: 'A' }, {}] })
     const v = await mount({ visible: [multi, missing, finding(3, { autoApplied: true }), finding(4)], drafts: { 4: 'unsaved' }, onDecide: vi.fn() })
-    await click(v.button('Select eligible'))
+    await click(v.button('Select all ready'))
     expect(v.container.textContent).toContain('2 findings selected (1 review items) · 2 proposals · 1 files')
     expect(v.container.textContent).toContain('missing proposal')
     expect(exclusionReason(finding(9, { hasProposal: false, after: null, proposals: [] }))).toBe('Manual work')
@@ -61,7 +61,7 @@ describe('explicit batch selection', () => {
       if (f.id === 3) throw new TypeError('connection lost')
     })
     const v = await mount({ visible: [finding(1), finding(2), finding(3)], onDecide })
-    await click(v.button('Select eligible')); await click(v.button('Approve selected')); await click(v.button('Confirm approval'))
+    await click(v.button('Select all ready')); await click(v.button('Approve selected')); await click(v.button('Confirm approval'))
     expect(v.container.textContent).toContain('1 recorded · 1 not recorded · 1 uncertain')
     const requestId = onDecide.mock.calls[1][1].requestId
     await click(v.button('Approve selected')); await click(v.button('Confirm approval'))
@@ -72,7 +72,7 @@ describe('explicit batch selection', () => {
     let release
     const onDecide = vi.fn(() => new Promise(resolve => { release = resolve }))
     const v = await mount({ visible: [finding(1), finding(2)], onDecide })
-    await click(v.button('Select eligible')); await click(v.button('Approve selected'))
+    await click(v.button('Select all ready')); await click(v.button('Approve selected'))
     const confirm = v.button('Confirm approval')
     await click(confirm); await click(confirm)
     expect(onDecide).toHaveBeenCalledTimes(1)

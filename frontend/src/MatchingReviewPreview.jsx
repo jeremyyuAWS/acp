@@ -15,7 +15,7 @@ export default function MatchingReviewPreview({ findings = [] }) {
   const choose = next => setSelection({ identity, page: next })
   return <section className="matching-review-preview" aria-labelledby={`${id}-heading`}>
     <h4 id={`${id}-heading`}>Other matching findings · {findings.length}</h4>
-    <p className="muted">Inspect each proposal before a group decision. Paging changes only this preview; select proposals separately for batch approval.</p>
+    <p className="muted">Inspect matching proposals if you want more detail. Paging changes only this preview; select proposals separately for batch approval.</p>
     <ol start={start + 1}>
       {findings.slice(start, start + PAGE_SIZE).map(item => <li key={item.id}>
         <strong>{value(item.file) || 'File not recorded'}</strong>
