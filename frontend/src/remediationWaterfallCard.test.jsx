@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createTestRoot, unmountAll } from './testRoots.js'
-import RemediationWaterfallCard from './RemediationWaterfallCard.jsx'
+import RemediationWaterfallCard, { resultBuckets } from './RemediationWaterfallCard.jsx'
 import WaterfallCount from './WaterfallCount.jsx'
 import { getRunInsights } from './remediationRunInsightsClient.js'
 import { getFindingDispositions } from './api.js'
@@ -20,6 +20,13 @@ const activity = { view: { available: true, ai_enabled: true, stages: [
   { tier: 1, operations: 15, active: 2, settled: 13, uncertain: 0 },
   { tier: 2, operations: 5, active: 1, settled: 3, uncertain: 1 },
 ], spending: { cap_units: 5000000, spent_units: 1180000, held_units: 200000, available_units: 3620000, unknown_charges: 1, blocked: true } } }
+
+it('reconciles the results summary into mutually exclusive baseline buckets', () => {
+  const rows = resultBuckets(snapshot().finding_reconciliation)
+  expect(rows.map(row => row[0])).toEqual(['fixed', 'awaiting_review', 'approved_pending', 'needs_work', 'processing', 'unavailable'])
+  expect(rows.reduce((sum, row) => sum + (Number.isSafeInteger(row[3]) ? row[3] : 0), 0)).toBe(100)
+  expect(rows.find(row => row[0] === 'needs_work')[3]).toBe(45)
+})
 
 it('shows durable units, costs, honest missing contribution, and accessible outcomes', async () => {
   const { root, container } = createTestRoot()
