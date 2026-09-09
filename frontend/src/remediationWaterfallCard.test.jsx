@@ -40,7 +40,7 @@ it('shows durable units, costs, honest missing contribution, and accessible outc
   expect(container.textContent).toContain('$1.18')
   expect(container.textContent).toContain('$3.62')
   expect(container.textContent).toContain('AI step breakdown unavailable')
-  expect(container.querySelectorAll('tbody tr')).toHaveLength(7)
+  expect(container.querySelectorAll('.wf-outcome-table tbody tr')).toHaveLength(7)
   expect(container.querySelector('.wf-outcome-bar').children[0].style.width).toBe('30%')
   expect(container.querySelector('.wf-delta')).toBeNull()
   expect(container.querySelector('.wf-stage-flare')).toBeNull()
