@@ -11309,7 +11309,8 @@ class Store:
                 digest = hashlib.sha256(json.dumps(
                     approved_values_for_digest, separators=(",", ":"), ensure_ascii=False).encode()
                 ).hexdigest() if approved_values_for_digest else None
-                source_revision = self.remediation_source_revision(current["scan_id"]) if current.get("scan_id") else None
+                source_revision = expected_source_revision or (
+                    self.remediation_source_revision(current["scan_id"]) if current.get("scan_id") else None)
                 with self._db.cursor() as cur:
                     self._db.execute(cur,
                         "UPDATE hitl_queue SET approved_proposal_snapshot_ids=%s,"

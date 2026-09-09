@@ -124,3 +124,12 @@ it('keeps confirmation compact and shows only acknowledged success deltas with q
   expect(v.container.querySelector('.batch-sr-only[role=status]').textContent).toBe('')
   vi.unstubAllGlobals()
 })
+
+it('explains stale source recovery without automatically retrying approval', async () => {
+  const onDecide = vi.fn().mockRejectedValue(Object.assign(new Error('stale source revision'), { status: 409 }))
+  const v = await mount({ visible: [finding(1)], onDecide })
+  await click(v.button('Approve all ready'))
+  await click(v.button('Confirm approval'))
+  expect(v.container.textContent).toContain('refresh this page, then select the current proposals and confirm again')
+  expect(onDecide).toHaveBeenCalledOnce()
+})
