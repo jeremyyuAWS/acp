@@ -9,10 +9,10 @@ const plan = { id: 'fixed-intent', status: 'draft', intent: { destination: { fol
   'changes.pdf': { rows: [{ id: 'v1', rule_id: '1.1.1', authorize: true, proposals: [{ proposed_value: 'Exact draft' }] }], blockers: [] },
   'manual.pdf': { rows: [], blockers: ['Manual repair required'] },
 } } }
-const flush = async () => act(async () => { await new Promise(r => setTimeout(r, 0)) })
+const flush = async () => act(async () => { await Promise.resolve() })
 const click = async el => { await act(async () => el.click()); await flush() }
-async function mount(extra = {}) {
-  api.planReleaseContinuation.mockResolvedValue(plan); api.getReleaseContinuation.mockResolvedValue(null)
+async function mount(extra = {}, response = plan) {
+  api.planReleaseContinuation.mockResolvedValue(response); api.getReleaseContinuation.mockResolvedValue(null)
   api.authorizeReleaseContinuation.mockResolvedValue({ ...plan, status: 'waiting', progress: {} })
   const props = { runId: 'run-1', files: ['ready.pdf', 'changes.pdf', 'manual.pdf'].map(file => ({ file, corrected_sha256: 'v1' })),
     ready: [{ file: 'ready.pdf' }], destination: { folder_id: 'fixed', folder_name: 'Approved folder' }, destinationLabel: 'Approved folder', onReady: vi.fn(), ...extra }
@@ -21,7 +21,7 @@ async function mount(extra = {}) {
   return { container, props, button: text => [...container.querySelectorAll('button')].find(b => b.textContent.includes(text)),
     render: async update => { await act(async () => root.render(h(Quick, { ...props, ...update }))); await flush() } }
 }
-afterEach(async () => { await unmountAll(); vi.resetAllMocks() })
+afterEach(async () => { await unmountAll(); vi.useRealTimers(); vi.resetAllMocks() })
 it('publishes only ready files without opening details or reviewing others', async () => {
   const v = await mount(); await click(v.button('Publish ready files (1)'))
   expect(v.props.onReady).toHaveBeenCalledWith(['ready.pdf'])
@@ -61,4 +61,45 @@ it('restores partial delivery and retries only the original intent', async () =>
 it('prevents writes in read-only replay', async () => {
   const v = await mount({ readOnly: true }); expect(v.button('Publish ready files').disabled).toBe(true)
   expect(api.planReleaseContinuation).not.toHaveBeenCalled(); expect(api.authorizeReleaseContinuation).not.toHaveBeenCalled()
+})
+
+it('shows loading separately from known zero eligibility and preserves ready-only publishing', async () => {
+  let resolve
+  const v = await mount({}, new Promise(r => { resolve = r }))
+  expect(v.container.textContent).toContain('Checking which proposals')
+  expect(v.container.textContent).not.toContain('Other files do not hold eligible')
+  expect(v.button('Publish ready files').disabled).toBe(false)
+  await click(v.button('Publish ready files'))
+  expect(v.props.onReady).toHaveBeenCalledWith(['ready.pdf'])
+  await act(async () => resolve({ ...plan, intent: { files: {} } }))
+  expect(v.container.textContent).not.toContain('Checking which proposals')
+  expect(v.container.textContent).toContain('Other files do not hold eligible')
+})
+
+it('bounds a stalled check, aborts it, retries explicitly, and ignores its late result', async () => {
+  vi.useFakeTimers()
+  let resolve
+  const v = await mount({}, new Promise(r => { resolve = r }))
+  const signal = api.planReleaseContinuation.mock.calls[0][4].signal
+  await act(async () => vi.advanceTimersByTimeAsync(20000))
+  expect(signal.aborted).toBe(true)
+  expect(v.container.textContent).toContain('Eligibility could not be confirmed in time')
+  expect(v.container.textContent).not.toContain('Checking which proposals')
+  expect(v.button('Publish ready files').disabled).toBe(false)
+  api.planReleaseContinuation.mockResolvedValue({ ...plan, intent: { files: {} } })
+  await click(v.button('Refresh eligibility and status'))
+  expect(v.container.textContent).toContain('Other files do not hold eligible')
+  await act(async () => resolve(plan))
+  expect(v.button('Approve eligible changes')).toBeUndefined()
+  expect(api.authorizeReleaseContinuation).not.toHaveBeenCalled()
+})
+
+it('shows failed eligibility as unknown with a retry instead of a known zero', async () => {
+  const v = await mount()
+  api.planReleaseContinuation.mockRejectedValue(new Error('Eligibility service unavailable'))
+  await v.render({ folderName: 'New destination' })
+  expect(v.container.textContent).toContain('Eligibility service unavailable')
+  expect(v.container.textContent).not.toContain('Other files do not hold eligible')
+  expect(v.button('Refresh eligibility and status')).toBeDefined()
+  expect(v.button('Publish ready files').disabled).toBe(false)
 })
