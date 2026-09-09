@@ -56,7 +56,7 @@ export function RetiredRemediationPlanChoices({ policy, providers, disabled, onC
 }
 
 // The previous detailed panel is retained above for restoration, but is no longer mounted.
-export default function RemediationPlanChoices({ policy, disabled, onChange, budgetSupported = false, reviewSupported = false }) {
+export default function RemediationPlanChoices({ policy, disabled, onChange, budgetSupported = false, reviewSupported = false, automaticReviewSupported = false, reviewAdministratorFloor = 95 }) {
   const id = useId()
   return <div className="remediation-plan-choices">
     <fieldset disabled={disabled}>
@@ -107,8 +107,9 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, bud
           : 'Spending limits are not available on this server. Choose Rules only if you need a firm cap.'}</p>
       </div>}
     </fieldset>
-    {policy.ai > 0 && reviewSupported && <details><summary>Optional AI review</summary><RemediationReviewPolicy value={policy.ai_review} onChange={value => onChange('ai_review', value)}
-      disabled={disabled || !budgetSupported} supported={reviewSupported} /></details>}
+    {policy.ai > 0 && reviewSupported && <details><summary>Optional AI review and approval threshold</summary><RemediationReviewPolicy value={policy.ai_review} onChange={value => onChange('ai_review', value)}
+      disabled={disabled || !budgetSupported} supported={reviewSupported} automaticSupported={automaticReviewSupported}
+      administratorFloor={reviewAdministratorFloor} /></details>}
 
   </div>
 }
