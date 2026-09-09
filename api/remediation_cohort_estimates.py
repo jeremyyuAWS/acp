@@ -150,7 +150,7 @@ def estimate_plan(records, population, *, now=None):
                    'reason': 'eligible_population_unknown', 'sample_size': None,
                    'additional_usable_suggestions_range': None,
                    'expected_provider_cost_range_usd': None}
-    if not isinstance(population, dict) or population.get('complete') is not True or not population.get('scope_revision'):
+    if not isinstance(population, dict) or population.get('complete') is not True or not all(population.get(k) for k in ('scope_revision', 'assessment_revision', 'configuration_revision')):
         return unavailable
     findings = population.get('findings')
     if not isinstance(findings, list) or not findings:
@@ -169,12 +169,14 @@ def estimate_plan(records, population, *, now=None):
     if len(dimensions) != 1:
         return {**unavailable, 'reason': 'out_of_population'}
     applies = dict(zip(DIMENSIONS, next(iter(dimensions))))
+    if population['configuration_revision'] != applies['config_id']:
+        return {**unavailable, 'reason': 'configuration_revision_mismatch'}
     matching = [r for r in records if all(r.get(k) == applies[k] for k in DIMENSIONS)]
     # Deterministic newest evaluation; never fall back to an older, better-looking rate.
     matching.sort(key=lambda r: str(r.get('evaluated_at', '')), reverse=True)
     result = estimate_cohort(matching[0] if matching else None, applicability=applies,
                              eligible_findings=len(identities), now=now)
-    result['scope_revision'] = population['scope_revision']
+    result.update({k: population[k] for k in ('scope_revision', 'assessment_revision', 'configuration_revision')})
     return result
 
 

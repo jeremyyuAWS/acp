@@ -93,7 +93,7 @@ def test_content_is_not_ingested_or_returned():
 def test_plan_scope_is_deduplicated_and_mixed_config_is_unavailable():
     from remediation_cohort_estimates import estimate_plan
     row = dict(**APPLIES, finding_id='f', source_revision='s', eligible=True)
-    population = dict(complete=True, scope_revision='scope-2', findings=[row, deepcopy(row)])
+    population = dict(complete=True, scope_revision='scope-2', assessment_revision='a1', configuration_revision=APPLIES['config_id'], findings=[row, deepcopy(row)])
     result = estimate_plan([cohort()], population, now=NOW)
     assert result['eligible_findings'] == 1 and result['scope_revision'] == 'scope-2'
     population['findings'][1]['config_id'] = 'other'
@@ -141,7 +141,7 @@ def test_shared_registry_reader_is_owner_scoped(monkeypatch):
         return []
     monkeypatch.setitem(sys.modules, 'ai_review_calibration', SimpleNamespace(load_calibration_records=read))
     row = dict(**APPLIES, finding_id='f', source_revision='s', eligible=True)
-    result = read_plan_estimate(object(), 'alice', {'estimate_population': dict(complete=True, scope_revision='current', findings=[row])})
+    result = read_plan_estimate(object(), 'alice', {'estimate_population': dict(complete=True, scope_revision='current', assessment_revision='a1', configuration_revision=APPLIES['config_id'], findings=[row])})
     assert seen == ['alice']
     assert not result['available'] and result['scope_revision'] == 'current'
 
@@ -150,3 +150,23 @@ def test_shared_registry_reader_is_owner_scoped(monkeypatch):
 def test_rules_only_or_zero_budget_does_not_offer_future_ai_estimates(policy):
     from remediation_cohort_estimates import read_plan_estimate
     assert read_plan_estimate(object(), 'owner', {'policy': policy})['reason'] == 'ai_not_planned'
+
+
+def test_zero_usable_outcomes_has_no_cost_per_usable_denominator():
+    r = cohort()
+    for sample in r['impact_evidence']['samples']:
+        sample['usable'] = False
+    result = estimate(r)
+    assert result['available']
+    assert result['additional_usable_suggestions_range'][0] == 0
+    assert result['observed_cost_per_usable_outcome_usd'] is None
+    assert result['expected_provider_cost_range_usd'] == ['2.00', '2.00']
+
+
+@pytest.mark.parametrize('missing', ['scope_revision', 'assessment_revision', 'configuration_revision'])
+def test_unversioned_producer_cannot_enable_numeric_estimates(missing):
+    from remediation_cohort_estimates import estimate_plan
+    population = dict(complete=True, scope_revision='s1', assessment_revision='a1', configuration_revision=APPLIES['config_id'],
+                      findings=[dict(**APPLIES, finding_id='f', source_revision='v', eligible=True)])
+    population.pop(missing)
+    assert not estimate_plan([cohort()], population, now=NOW)['available']

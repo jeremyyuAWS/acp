@@ -13,7 +13,8 @@ const money = value => new Intl.NumberFormat('en-US', { style: 'currency', curre
 export default function RemediationEstimateDisclosure({ estimate, aiEnabled, loading = false }) {
   const id = useId()
   if (!aiEnabled) return null
-  const available = !loading && estimate?.available === true && range(estimate?.additional_usable_suggestions_range)
+  const versioned = !!estimate?.scope_revision && !!estimate?.assessment_revision && !!estimate?.configuration_revision && estimate.configuration_revision === estimate.applicability?.config_id
+  const available = !loading && versioned && estimate?.available === true && range(estimate?.additional_usable_suggestions_range)
   return <details className="remediation-impact__providers" aria-labelledby={id}>
     <summary id={id}>Estimated extra AI help and cost</summary>
     {!available ? <p>{loading ? 'Updating estimate for this plan.' : <>
@@ -31,7 +32,7 @@ export default function RemediationEstimateDisclosure({ estimate, aiEnabled, loa
         <p>{estimate.cost_uncertainty}</p>
         {estimate.observed_cost_per_usable_outcome_usd != null && <p>Observed cost per usable outcome: {money(estimate.observed_cost_per_usable_outcome_usd)}.</p>}
       </> : <p>Provider cost estimate unavailable: complete, settled charges are required.</p>}
-      {estimate.cohort_spending && <p>Evaluation charges: generation {money(estimate.cohort_spending.generation_usd)}, review {money(estimate.cohort_spending.review_usd)}, final review or revision {money(estimate.cohort_spending.adjudication_usd)}.
+      {estimate.cohort_spending && <p>Settled evaluation charges: generation {money(estimate.cohort_spending.generation_usd)}, review {money(estimate.cohort_spending.review_usd)}, final review or revision {money(estimate.cohort_spending.adjudication_usd)}.
         {' '}Held {money(estimate.cohort_spending.held_usd)}; unknown charges {estimate.cohort_spending.unknown_charges}; operations missing charges {estimate.cohort_spending.unattributed_operations}.</p>}
     </>}
     <p>Opening this preview makes no paid AI requests. These estimates do not promise completed fixes or compliance.</p>

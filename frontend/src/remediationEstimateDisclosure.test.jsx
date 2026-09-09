@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest'
 import Disclosure from './RemediationEstimateDisclosure.jsx'
 const render = props => renderToStaticMarkup(<Disclosure aiEnabled {...props} />)
 const estimate = {
+  scope_revision: 'scope-1', assessment_revision: 'assessment-1', configuration_revision: 'exact-model-reviewer',
   available: true, additional_usable_suggestions_range: [59, 86], eligible_findings: 100,
   sample_size: 40, evaluation_version: 'v1', evaluated_at: '2026-09-07', expires_at: '2026-09-20',
   applicability: { format: 'html', change_family: 'link-label', config_id: 'exact-model-reviewer' },
@@ -32,4 +33,9 @@ describe('representative estimate disclosure', () => {
     expect(html).toContain('complete, settled charges are required')
     expect(html).not.toContain('$0')
   })
+})
+
+it('refuses numbers without immutable assessment and configuration bindings', () => {
+  expect(render({ estimate: { ...estimate, assessment_revision: null } })).not.toContain('59–86')
+  expect(render({ estimate: { ...estimate, configuration_revision: 'other-model' } })).not.toContain('59–86')
 })
