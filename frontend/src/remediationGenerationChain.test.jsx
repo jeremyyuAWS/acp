@@ -6,7 +6,12 @@ import { generationChainProblem, secondFallbackUnavailable, withSecondFallback }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 afterEach(unmountAll)
 const step = (model, position) => ({ step_id: ['primary', 'fallback_1', 'fallback_2'][position], position, provider: 'fixture-provider', model, enabled: true, capabilities: ['text'] })
-const catalog = () => ({ version: 1, supported: true, max_steps: 3, default_steps: [step('primary-model', 0), step('fallback-model', 1)], models: ['primary-model', 'fallback-model', 'third-model'].map(model => ({ provider: 'fixture-provider', model, capabilities: ['text'], allowed: true, available: true })) })
+// Matches what the server actually emits: chain_options appends fallback_2 to
+// default_steps and only THEN sets supported:true, so supported never comes back with
+// two steps. A fixture with that shape tests a response no server can produce.
+const catalog = () => ({ version: 1, supported: true, max_steps: 3, default_steps: [step('primary-model', 0), step('fallback-model', 1), step('third-model', 2)], models: ['primary-model', 'fallback-model', 'third-model'].map(model => ({ provider: 'fixture-provider', model, capabilities: ['text'], allowed: true, available: true })) })
+// A catalog with no verified third model: two steps, and supported is false.
+const twoStepCatalog = () => ({ ...catalog(), supported: false, default_steps: [step('primary-model', 0), step('fallback-model', 1)], reason: 'Verified third model configuration is unavailable.' })
 const policy = () => ({ ai: 1, rule_based: 2, ai_budget_usd: '10.00' })
 const click = async el => act(async () => el.click())
 async function mount(extra = {}) {
@@ -32,10 +37,10 @@ it('freezes all three steps and removes only the third when turned off', async (
   expect(v.container.querySelector('input').checked).toBe(true)
   await click(v.container.querySelector('input'))
   const off = v.changed.mock.calls[0][1]
-  expect(off.steps).toEqual(options.default_steps)
+  expect(off.steps).toEqual(options.default_steps.slice(0, 2))
   await click(v.container.querySelector('input'))
   const chain = v.changed.mock.calls[1][1]
-  expect(chain).toEqual({ version: 1, steps: [...options.default_steps, step('third-model', 2)] })
+  expect(chain).toEqual({ version: 1, steps: options.default_steps })
   expect(v.container.querySelectorAll('option')).toHaveLength(1)
   expect(v.container.querySelector('[role=note]').textContent).toContain('Account access')
   options.default_steps[0].model = 'settings-changed-later'
@@ -43,10 +48,12 @@ it('freezes all three steps and removes only the third when turned off', async (
 })
 it.each([
   ['missing metadata', undefined, '10.00', 'not available'],
-  ['unsupported scope', { ...catalog(), supported: false, reason: 'Only exact slide-title findings are supported.' }, '10.00', 'Only exact slide-title'],
+  // A server that cannot offer the third position reports two default_steps, so these
+  // cases build from twoStepCatalog rather than trimming a three-step one by hand.
+  ['unsupported scope', { ...twoStepCatalog(), reason: 'Only exact slide-title findings are supported.' }, '10.00', 'Only exact slide-title'],
   ['zero budget', catalog(), '0.00', 'positive AI spending'],
-  ['denied provider', { ...catalog(), models: catalog().models.map(m => ({ ...m, allowed: false })) }, '10.00', 'permitted text models'],
-  ['third unavailable', { ...catalog(), models: catalog().models.slice(0, 2) }, '10.00', 'No distinct'],
+  ['denied provider', { ...twoStepCatalog(), supported: true, models: catalog().models.map(m => ({ ...m, allowed: false })) }, '10.00', 'permitted text models'],
+  ['third unavailable', { ...twoStepCatalog(), supported: true, models: catalog().models.slice(0, 2) }, '10.00', 'No distinct'],
 ])('disables with an explicit reason: %s', async (_name, options, budget, reason) => {
   const v = await mount({ options, initial: { ...policy(), ai_budget_usd: budget } })
   expect(v.container.querySelector('input').disabled).toBe(true)
@@ -79,4 +86,26 @@ it('displays the authoritative account-access caveat for the selected third mode
   const v = await mount({ options })
   expect(v.container.querySelector('[role=note]').textContent).toBe(options.models[2].reason)
   expect(v.changed).not.toHaveBeenCalled()
+})
+
+it('takes the default chain from the server and does not invent a third step', async () => {
+  // Bite check for removing the client-side append: with a server that reports only two
+  // verified models, the plan must stay at two. The old client branch would have added a
+  // third from `models`, defaulting a paid step the server never offered.
+  const options = twoStepCatalog()
+  const v = await mount({ options })
+  expect(v.container.querySelector('input').checked).toBe(false)
+  expect(v.container.textContent).toContain('fixture-provider · fallback-model')
+  expect(v.container.textContent).not.toContain('third-model')
+})
+
+it('always states the model count and the run spending limit', async () => {
+  // This disclosure was deleted once in the same change that raised the default from two
+  // paid models to three. It is the only place the plan says what a suggestion can cost.
+  const on = await mount()
+  expect(on.container.textContent).toContain('Up to 3 generation models')
+  expect(on.container.textContent).toContain('The run spending limit remains $10.00')
+  expect(on.container.textContent).toContain('makes no paid requests')
+  await click(on.container.querySelector('input'))
+  expect(on.container.textContent).toContain('Up to 2 generation models')
 })

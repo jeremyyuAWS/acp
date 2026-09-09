@@ -35,5 +35,12 @@ export default function RemediationGenerationChain({ policy, options, disabled, 
     </label>}
     {enabled && currentModel?.access_verified !== true && <p role="note">{currentModel?.reason || 'Account access to the selected second fallback has not been tested. No paid access check is made from this preview.'}</p>}
     <p id={`${id}-reason`}>{problem || unavailable || 'Available for supported text findings.'}</p>
+    {/* Do not remove without replacing: this is the only place the plan states how many
+        paid models a suggestion can cost and what the run cap is. It was dropped once in
+        the same change that raised the default from two models to three. */}
+    <p>Up to {enabled ? 3 : 2} generation models per supported text suggestion, plus the AI
+      review if it is on. Transport retries are separate. The run spending limit remains
+      ${policy.ai_budget_usd ?? '0.00'}.</p>
+    <small>Changing this plan makes no paid requests. Existing accepted runs keep their original model chain.</small>
   </details>
 }

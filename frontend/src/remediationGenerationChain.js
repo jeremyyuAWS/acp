@@ -6,17 +6,23 @@ const validStep = (step, position) => step?.step_id === IDS[position] && step.po
   && Array.isArray(step.capabilities) && step.capabilities.length === 1 && step.capabilities[0] === 'text'
 const allowedModel = model => model?.allowed === true && model.available === true && model.capabilities?.includes('text')
 export function generationSteps(policy, options) {
+  // The server owns the default chain. `chain_options` appends fallback_2 to
+  // default_steps and only THEN sets supported:true (api/ai_generation_chain.py), so a
+  // supported catalog always already carries three steps. A client-side append for
+  // "supported with two steps" describes a response the server cannot produce, and
+  // duplicating the default in two layers means a later server change silently
+  // disagrees with the client. An explicit saved policy still wins.
   const steps = policy?.generation_chain?.steps ?? options?.default_steps
   if (!Array.isArray(steps)) return []
-  // Supported scopes start with the complete verified chain. An explicit saved
-  // policy still wins, so accepted runs remain immutable.
-  if (!policy?.generation_chain && options?.supported === true && steps.length === 2
-    && Number(policy?.ai_budget_usd) > 0) {
-    const model = (options.models || []).find(candidate => allowedModel(candidate)
-      && candidate.provider === steps[0]?.provider && !steps.some(step => sameModel(step, candidate)))
-    if (model) return [...steps, { step_id: 'fallback_2', position: 2, provider: model.provider,
-      model: model.model, enabled: true, capabilities: ['text'] }]
-  }
+  // The server builds the default without knowing this run's cap, and permission can be
+  // revoked after the catalog was built. A third position the run cannot pay for, or
+  // whose model is no longer permitted, must not arrive PRE-SELECTED -- that is a paid
+  // step nobody chose. Trim only the SERVER default; a saved generation_chain is what an
+  // accepted run relies on and is never rewritten here.
+  if (!policy?.generation_chain && steps.length === 3
+    && (!(Number(policy?.ai_budget_usd) > 0)
+      || !options?.models?.some(model => sameModel(steps[2], model) && allowedModel(model))))
+    return steps.slice(0, 2)
   return steps
 }
 export function secondFallbackModels(policy, options) {
