@@ -2595,3 +2595,21 @@ export const getRecentRemediationActivity = (scanId) => {
   if (SIM || !scanId) return sim({ available: false, events: [] })
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/activity`, { headers: headers() }).then(j)
 }
+
+// Separate per-run release consent. AI approval settings never enable publication.
+export const getAutomaticRelease = (scanId, files = [], options = {}) => {
+  if (SIM) return sim({ available: false, reason: 'Automatic release requires a connected remediation run.', authorization: null }, 50)
+  const query = new URLSearchParams()
+  files.forEach(file => query.append('files', file))
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/automatic?${query}`, {
+    headers: headers(), signal: options.signal,
+  }).then(j)
+}
+export const enableAutomaticRelease = (scanId, intent) => fetch(
+  `${BASE}/scans/${encodeURIComponent(scanId)}/release/automatic`, {
+    method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(intent),
+  }).then(j)
+export const stopAutomaticRelease = (scanId, authorizationId) => fetch(
+  `${BASE}/scans/${encodeURIComponent(scanId)}/release/automatic/${encodeURIComponent(authorizationId)}/stop`, {
+    method: 'POST', headers: headers(),
+  }).then(j)
