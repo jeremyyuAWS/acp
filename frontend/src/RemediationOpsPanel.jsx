@@ -226,8 +226,8 @@ function FindingReconciliation({ snapshot }) {
   </section>
 }
 
-function Activity({ events = [], status = 'ready', terminal = false }) {
-  return <section className="remops-activity">{events.length ? <ol aria-label="Recent remediation activity">{events.slice(0, 10).map((event) => <li key={event.key}><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span>{event.line}</span></li>)}</ol> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
+function Activity({ events = [], status = 'ready', terminal = false, compact = false }) {
+  return <section className="remops-activity">{!compact && <h3>Live activity</h3>}{events.length ? <ol aria-label="Recent remediation activity">{events.slice(0, 10).map((event) => <li key={event.key}><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span>{event.line}</span></li>)}</ol> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
 }
 
 // The stub this replaces summed four numbers into "Needs attention · N" and offered nothing to do
@@ -292,7 +292,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
         run that is going well, and a heading that only appears once something is wrong is one
         nobody has learned where to look for. The Disclosure's summary is this region's name, so
         the region itself renders no second heading under it. */}
-    <div className={`remops-bottom${events.length ? '' : ' remops-bottom-empty'}`}><Disclosure title="Live activity" compact={compact}><Activity events={events} status={activityStatus} terminal={snapshot.terminal} /></Disclosure><Disclosure title={`Needs attention${exceptionTotal ? ` · ${exceptionTotal}` : ''}`} compact={compact}><RemediationExceptions view={exceptionState.view} error={exceptionState.error} onReload={exceptionState.reload} runId={snapshot.run_id} onAnnounce={setAnnouncement} heading={null} /></Disclosure></div>
+    <div className={`remops-bottom${events.length ? '' : ' remops-bottom-empty'}`}><Disclosure title="Live activity" compact={compact}><Activity events={events} status={activityStatus} terminal={snapshot.terminal} compact={compact} /></Disclosure><Disclosure title={`Needs attention${exceptionTotal ? ` · ${exceptionTotal}` : ''}`} compact={compact}><RemediationExceptions view={exceptionState.view} error={exceptionState.error} onReload={exceptionState.reload} runId={snapshot.run_id} onAnnounce={setAnnouncement} heading={null} /></Disclosure></div>
     <p aria-live="polite" className="sr-only" data-testid="rem-ops-announce">{announcement || line}</p>
   </section>
 }
