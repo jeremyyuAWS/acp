@@ -148,3 +148,8 @@ def update_file(store, authorization_id, owner, file, update, *, schedule=False,
         files[file]={**(files.get(file) or {}),**update}
         progress['files']=files
         return save(store,row,status=row['status'],progress=progress,schedule=schedule,delay=delay)
+
+
+def by_request(store, owner, scan, request_id):
+    identity = store.canonical_request_fingerprint([owner, scan, request_id])
+    return get(store, identity, owner)

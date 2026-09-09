@@ -844,6 +844,13 @@ def _release_failure(release_id: str, owner: str, filename: str, record: dict,
 
 @handler("publish_file")
 def _publish_file(payload: dict, job: dict) -> None:
+    if payload.get("automatic_release_id"):
+        from automatic_release import publish_job
+        return publish_job(core.store, payload, job, _publish_file_guarded)
+    return _publish_file_guarded(payload, job)
+
+
+def _publish_file_guarded(payload: dict, job: dict) -> None:
     """Durably publish one approved corrected copy to its source SharePoint library.
 
     Tokens are resolved from the short-lived Redis token store at execution time and are never
@@ -5492,5 +5499,8 @@ def _audit_detail(payload: dict) -> str:
 
 @handler("release_continue")
 def _release_continue(payload: dict, job: dict) -> None:
+    if payload.get("mode") == "automatic":
+        from automatic_release import advance
+        return advance(core.store, payload, job)
     from release_continuation import advance
     advance(core.store, payload, job)

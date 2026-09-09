@@ -3555,6 +3555,13 @@ def publish_files(sid: str, request: Request, body: dict):
     if not files:
         raise HTTPException(422, "provide 'file' or 'files' in body")
     owner = _owner(request)
+    automatic_release_id = body.get("automatic_release_id")
+    if automatic_release_id:
+        from automatic_release import validate_publish_request
+        try:
+            validate_publish_request(core.store, sid, owner, files, body)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
     expected_artifacts = body.get("expected_artifacts") or {}
     if any((core.store.get_file_record(sid, file) or {}).get("corrected_sha256") != digest
            for file, digest in expected_artifacts.items() if file in files):
@@ -3708,12 +3715,16 @@ def publish_files(sid: str, request: Request, body: dict):
             payloads.append({"scan_id": sid, "release_id": release_id,
                              "file": f, "owner": owner,
                              "artifact_digest": artifact_tag(digest) if digest else None,
-                             "remediated_at": record.get("remediated_at")})
+                             "remediated_at": record.get("remediated_at"),
+                             **({"automatic_release_id": automatic_release_id} if automatic_release_id else {})})
         execution = None
         if payloads:
             import hashlib, json
             requested = sorted(p["file"] for p in payloads)
-            fingerprint = hashlib.sha256(json.dumps([(p["file"], p.get("artifact_digest"), p.get("remediated_at")) for p in payloads], sort_keys=True).encode()).hexdigest()
+            fingerprint_inputs = [(p["file"], p.get("artifact_digest"), p.get("remediated_at")) for p in payloads]
+            if automatic_release_id:
+                fingerprint_inputs = {"artifacts": fingerprint_inputs, "automatic_release_id": automatic_release_id}
+            fingerprint = hashlib.sha256(json.dumps(fingerprint_inputs, sort_keys=True).encode()).hexdigest()
             snapshot_id, input_manifest_id = _sealed_stage_input(sid, "remediate", release_id)
             execution = _enqueue_stage_batch(
                 sid, "release", "publish_file", payloads,
