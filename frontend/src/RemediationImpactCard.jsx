@@ -178,6 +178,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       disabled={!runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true}
       reviewSupported={data?.capabilities?.ai_review?.review_supported === true}
       automaticReviewSupported={data?.capabilities?.ai_automatic === true && data?.capabilities?.ai_review?.automatic_application_supported === true}
+      automaticReviewReason={data?.capabilities?.ai_review?.reason || data?.capabilities?.ai_automatic_reason || ''}
       reviewAdministratorFloor={data?.capabilities?.ai_review?.administrator_floor ?? 95} />
     {ready && data?.capabilities?.execute !== true && <p>Execution unavailable: {data?.capabilities?.execute_reason || data?.capabilities?.reason || 'This preview cannot currently be executed.'}</p>}
 
