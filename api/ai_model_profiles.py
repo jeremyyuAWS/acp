@@ -32,7 +32,19 @@ PROFILES = {
 }
 
 
-def model_config(profile: str) -> list[dict]:
+# Optional catalog candidate; never part of an old run's implicit two positions.
+# Verified 2026-09-09 from first-party model limits/pricing. No paid probe.
+SECOND_FALLBACK = {
+    'anthropic-balanced': {**_spec('anthropic', 'claude-opus-5', '5.00', '25.00',
+        1000000, 1024, 'https://platform.claude.com/docs/en/models/opus-5/overview'),
+        'plain_text_only': True},
+}
+
+
+def model_config(profile: str, *, include_second_fallback: bool = False) -> list[dict]:
     if profile not in PROFILES:
         raise ValueError('unknown bounded text profile')
-    return deepcopy(PROFILES[profile])
+    selected = deepcopy(PROFILES[profile])
+    if include_second_fallback and profile in SECOND_FALLBACK:
+        selected.append(deepcopy(SECOND_FALLBACK[profile]))
+    return selected

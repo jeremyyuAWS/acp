@@ -23,6 +23,7 @@ class ImpactPreviewRequest(BaseModel):
     ai: StrictInt | None = Field(default=None, ge=0, le=3)
     ai_budget_usd: StrictStr | None = Field(default=None, pattern=r'^\d{1,7}(?:\.\d{1,2})?$', max_length=10)
     ai_review: dict | None = None
+    generation_chain: dict | None = None
 
 
 class ImpactSaveRequest(ImpactPreviewRequest):

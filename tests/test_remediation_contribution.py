@@ -39,7 +39,7 @@ def test_one_proposal_covers_five_findings_and_retries_revisions_stay_five():
 
 def test_first_usable_generation_is_not_fallback_additional():
     data=c.aggregate(baseline(),[proposal(origin='first_ai'),proposal('next')],[])
-    assert data['contributions']==dict(rules=0,first_ai=5,fallback_ai=0)
+    assert data['contributions']==dict(rules=0,first_ai=5,fallback_ai=0,fallback_2_ai=0)
 
 
 @pytest.mark.parametrize('change',[

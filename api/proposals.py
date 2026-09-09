@@ -1264,6 +1264,7 @@ def propose_slide_titles(path, ext: str, *, ai_enabled: bool = True, guidance: s
     import zipfile
 
     import office_structure as _os
+    empty_count = 0
     empties: list[tuple[int, str]] = []        # (slide number, slide body text)
     try:
         with zipfile.ZipFile(path) as zf:
@@ -1276,6 +1277,7 @@ def propose_slide_titles(path, ext: str, *, ai_enabled: bool = True, guidance: s
                 shape_text = xml[ph.end():].split("</p:sp>", 1)[0]
                 if "".join(_os._AT.findall(shape_text)).strip():
                     continue                   # title filled — not this finding
+                empty_count += 1
                 body = " ".join(t for t in _os._AT.findall(xml) if t.strip())
                 if body.strip():
                     empties.append((int(_re.search(r"slide(\d+)", slide_name).group(1)), body))
@@ -1290,15 +1292,18 @@ def propose_slide_titles(path, ext: str, *, ai_enabled: bool = True, guidance: s
             return []
     except Exception:
         return []
+    from ai_generation_adapter import generation_adapter, slide_title_context, validate_slide_title
     out: list[dict] = []
     for num, body in empties[:_SLIDE_TITLE_CAP]:
+        binding = slide_title_context(path, f"slide {num}", empty_count=empty_count)
         try:
-            res = _ai.suggest_fix("2.4.6", "Headings and Labels", "AA", "",
+            with generation_adapter(binding):
+                res = _ai.suggest_fix("2.4.6", "Headings and Labels", "AA", "",
                                   detail=f"slide content: {body[:400]}", guidance=guidance)
         except Exception:
             res = None
         title = (res or {}).get("suggestion", "").strip().strip('"')
-        if not title or len(title) > 90:
+        if not title or len(title) > 90 or (binding and validate_slide_title((res or {}).get("suggestion"))):
             continue
         out.append(proposal(
             locator=f"slide {num}",
@@ -1306,7 +1311,12 @@ def propose_slide_titles(path, ext: str, *, ai_enabled: bool = True, guidance: s
             proposed_value=title,
             rationale=f"AI named the slide from its own content — “{body[:110]}…” — "
                       "confirm the title describes it",
-            source=f"AI text model ({(res or {}).get('model', 'llama')})"))
+            source=f"AI text model ({(res or {}).get('model', 'llama')})",
+            model=(res or {}).get("model"), model_call_id=(res or {}).get("model_call_id") or (res or {}).get("ai_call_id") or (res or {}).get("call_id")))
+        if (res or {}).get("model"):
+            out[-1]["model"] = res["model"]
+        if binding:
+            out[-1]["baseline_finding_ids"] = binding["finding_ids"]
     return out
 
 
