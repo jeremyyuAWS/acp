@@ -79,3 +79,11 @@ it('requires an explicit family and pins its evaluation without inventing a thre
   await act(async () => container.querySelectorAll('input[type=checkbox]')[1].click())
   expect(onChange.mock.calls[0][0]).toMatchObject({permitted_families:['fixture'],evaluation_versions:{fixture:'v1'},minimum_reliability:null})
 })
+
+it('does not display an old uncalibrated default percentage as current configuration', async () => {
+  const {root,container}=createTestRoot()
+  await act(async () => root.render(createElement(Policy,{supported:true,onChange:vi.fn(),
+    value:{enabled:true,minimum_reliability:95}})))
+  expect(container.querySelector('input[type=number]').value).toBe('')
+  expect(container.textContent).not.toContain('95%')
+})

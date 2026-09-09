@@ -57,7 +57,7 @@ export default function RemediationReviewPolicy({ value, onChange, disabled, sup
           </label>)}
         </fieldset> : <p>Eligible change types: not configured. Validated reviewer configuration: unavailable.</p>}
         <label htmlFor={`${id}-threshold`}>Minimum validated reliability for automatic application</label>
-        <input id={`${id}-threshold`} type="number" min={minimum} max={100} step="any" value={policy.minimum_reliability ?? ''}
+        <input id={`${id}-threshold`} type="number" min={minimum} max={100} step="any" value={available ? (policy.minimum_reliability ?? '') : ''}
           placeholder="Not configured" disabled={!available}
           onChange={event => { const raw = event.target.value; const n = Number(raw); if (!raw) change({ minimum_reliability: null }); else if (Number.isFinite(n) && n >= minimum && n <= 100) change({ minimum_reliability: n }) }} />
         {floors.length > 0 && <p>The administrator minimum for your selected change types is {minimum}%.</p>}

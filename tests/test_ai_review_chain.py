@@ -96,3 +96,10 @@ def test_review_preferences_are_preserved_in_the_immutable_run_snapshot():
 def test_invalid_or_unbounded_review_preferences_rejected(policy):
     with pytest.raises(ValueError):
         normalize_review_policy(policy)
+
+
+def test_missing_reviewer_model_never_claims_independent_review():
+    result = review_managed_draft('Task', DRAFT, context(), GENERATOR,
+        generate=lambda *a, **k: {'text':'{"verdict":"accept","reason":"Accepted."}'})
+    assert result['review']['independent'] is False
+    assert result['approval_required'] is True

@@ -24,6 +24,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_handler_registry(monkeypatch):
+    import handlers  # noqa: F401 — retain production registrations before isolating test additions
     # Test-only handlers must not leak into later stage-lane coverage checks.
     monkeypatch.setattr(w, "HANDLERS", dict(w.HANDLERS))
 

@@ -15,6 +15,13 @@ ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
 
 
+@pytest.fixture(autouse=True)
+def isolated_handler_registry(monkeypatch):
+    import handlers  # noqa: F401 — retain production registrations before isolating test additions
+    import worker
+    monkeypatch.setattr(worker, "HANDLERS", dict(worker.HANDLERS))
+
+
 @pytest.fixture()
 def store(monkeypatch):
     import store as store_mod

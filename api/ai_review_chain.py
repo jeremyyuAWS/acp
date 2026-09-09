@@ -100,7 +100,8 @@ def review_managed_draft(prompt, result, ctx, generator, history=None, *, genera
     gate = approval_gate(policy, review=review, estimate=None, validation=None,
                          proposal_sha256=digest, source_revision=None, supported=False)
     receipt = {**review, 'steps': steps, 'gate': gate,
-               'independent': bool(review and steps and steps[-1].get('model') != draft_model),
+               'independent': bool(review and steps and draft_model and steps[-1].get('model')
+                                   and steps[-1]['model'] != draft_model),
                'source_sha256': getattr(ctx, 'source_sha256', None),
                'disagreement': any(step['verdict'] != 'accept' for step in steps)}
     try:
