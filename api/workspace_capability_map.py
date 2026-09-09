@@ -231,7 +231,9 @@ _map_many([("GET", "/ai/suggest"), ("GET", "/ai/explain"), ("GET", "/ai/validate
 
 # ── Release ───────────────────────────────────────────────────────────────────
 # Publishing is a GRANT (PRD §5), never implied by seeing the Release tab.
-_map_many([("POST", "/scans/{sid}/publish")], {"release.publish"})
+_map_many([("POST", "/scans/{sid}/publish"),
+           ("POST", "/scans/{sid}/release/automatic"),
+           ("POST", "/scans/{sid}/release/automatic/{authorization_id}/stop")], {"release.publish"})
 _map_many([("POST", "/scans/{sid}/release/continuation/{intent_id}/authorize")],
           {"release.publish", "remediate.review"})
 _map_many([("POST", "/scans/{sid}/release/continuation/{intent_id}/resume")], {"release.publish"})
@@ -241,6 +243,7 @@ _map_many([
     ("GET", "/releases"),
     ("GET", "/scans/{sid}/release"),
     ("GET", "/scans/{sid}/release/continuation"),
+    ("GET", "/scans/{sid}/release/automatic"),
     ("POST", "/scans/{sid}/release/continuation/plan"),
     ("GET", "/scans/{sid}/release/manifest"),
     # This is a read-only projection despite using POST: the selected filenames are carried in

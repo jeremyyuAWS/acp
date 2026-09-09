@@ -69,3 +69,10 @@ def test_publish_route_rejects_forged_scope_or_unadmitted_artifact(prepared):
     flow.publish_admission(prepared.store,row['id'],OWNER,SID,FILE,DIGEST)
     for changed in ({'files':['outside.pptx']},{'expected_artifacts':{FILE:'b'*64}},{'automatic_release_id':'forged'}):
         with pytest.raises(HTTPException):real_publish(SID,request(),{**body,**changed})
+
+
+def test_automatic_release_capabilities_do_not_grant_review_authority():
+    from workspace_capability_map import ROUTE_CAPABILITIES
+    assert ROUTE_CAPABILITIES[('GET','/scans/{sid}/release/automatic')] == {'release.view'}
+    for path in ('/scans/{sid}/release/automatic','/scans/{sid}/release/automatic/{authorization_id}/stop'):
+        assert ROUTE_CAPABILITIES[('POST',path)] == {'release.publish'}
