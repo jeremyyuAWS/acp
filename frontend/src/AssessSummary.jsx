@@ -118,7 +118,7 @@ function EmptyState({ discovered, onChangeScope }) {
  */
 export default function AssessSummary({ files, cap, assessment, criteria, level = 'AA',
                                         assessedAt, notStarted, run, discovered, integrityCaveat = null,
-                                        onRemediate, onRunDetails, onReconnect, onChangeScope, remediationForecast }) {
+                                        onRemediate, onRunDetails, onReconnect, onChangeScope, remediationForecast, reviewSummary, onOpenReview }) {
   // The run's own status decides two of the seven screen states the file list cannot: a run of
   // 'error' is `failed` even with a stray record, and one 'cancelled'/'interrupted' is `partial`
   // even before the not-started count is known. 'done'/absent leaves classification to the findings.
@@ -277,7 +277,7 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
         </div>
       )}
 
-      {/* ── The seven, and only these seven ──────────────────────────────────────────────── */}
+      {/* Assessment metrics, plan previews, and the current review queue use distinct units. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
                     gap: 12, marginTop: 16 }}>
 
@@ -341,6 +341,18 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           {remediationForecast ? <>Issues that need you to approve a suggestion or make a change yourself. This includes AI suggestions. Items that cannot proceed are listed separately below. {remediationForecast.onHuman && <b>View details →</b>}</> : <>Issues that need a person to decide what to change, including AI suggestions awaiting approval.</>}
         </Metric>
 
+        {Number.isInteger(reviewSummary?.pendingItems) && reviewSummary.pendingItems >= 0 && (
+          <Metric label="Review queue items" value={reviewSummary.pendingItems.toLocaleString()}
+                  onClick={onOpenReview}>
+            {reviewSummary.pendingItems > 0 ? <>
+              {reviewSummary.findings.toLocaleString()} findings grouped into {reviewSummary.pendingItems.toLocaleString()} review items
+              across {reviewSummary.documents.toLocaleString()} documents. Each item groups the same criterion within one document.
+            </> : <>No proposals or remediation exceptions are currently queued.</>}
+            {' '}This is the count on the Review tab. Plan previews count individual findings instead.
+            {onOpenReview && <> <b>Open Review →</b></>}
+          </Metric>
+        )}
+
         <Metric label="Checks not completed" value={m.unableToAssess} unit="checks">
           Checks ACP could not complete
           {m.unassessableCriteria.length > 0 && <> — {m.unassessableCriteria.length} {m.unassessableCriteria.length === 1 ? 'check type is' : 'check types are'}
@@ -365,7 +377,7 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
       {/* ── The arithmetic, printed. Either it holds on screen or it is a visible bug. ───── */}
       <div className="muted" style={{ fontSize: 12, marginTop: 12, paddingTop: 10,
                                       borderTop: '1px solid var(--line)', lineHeight: 1.6 }}>
-        <div>{remediationForecast ? 'Assessment totals above are historical. The two remediation tiles preview the selected scope; changing permissions does not change assessment results.' : r.findings.line}</div>
+        <div>{remediationForecast ? 'Assessment totals above are historical. The automatic-fix and review previews cover the selected scope; the Review queue tile shows current items for this run. Changing permissions does not change assessment results.' : r.findings.line}</div>
         <div>{r.checks.line}</div>
       </div>
 

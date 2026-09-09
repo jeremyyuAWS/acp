@@ -101,7 +101,7 @@ export function laneOf(f) {
   // A deterministic fix ACP already wrote: the reviewer confirms it (the green lane).
   if (f?.autoApplied || f?.applied || f?.rec?.action === 'auto') return LANES.review
   // ACP drafted a value for a person to approve (the blue lane).
-  if (f?.hasProposal || (f?.after != null && f?.after !== '') || f?.aiDraftable) return LANES.apply
+  if (f?.hasProposal || (f?.after != null && f?.after !== '')) return LANES.apply
   // Nothing ACP can safely write: a person re-authors it in the source app (the amber lane).
   return LANES.manual
 }

@@ -62,9 +62,9 @@ import { resetJobsFeed } from './jobsFeed.js'
 const { default: AssessRunner } = await import('./AssessRunner.jsx')
 
 let container, root, errSpy
-const mount = async (files) => {
+const mount = async (files, onActivity) => {
   ;({ container, root } = createTestRoot())
-  await act(async () => { root.render(createElement(AssessRunner, { files, runId: 's1' })) })
+  await act(async () => { root.render(createElement(AssessRunner, { files, runId: 's1', onActivity })) })
 }
 const settle = async (n = 8) => {
   for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
@@ -123,6 +123,29 @@ async function runWithClaimedJobAndStaleHeartbeat() {
 }
 
 describe('the Assess status contradiction', () => {
+  it('reports the same live counts and completion signal to the stage header', async () => {
+    const onActivity = vi.fn()
+    const partial = { run: { files: 3 }, files: [
+      { file: 'a.docx', score: 80, status: 'assessed', issues: [] },
+      { file: 'b.pdf', score: null, status: 'discovered' },
+      { file: 'c.pptx', score: null, status: 'discovered' },
+    ] }
+    assessScan.mockResolvedValue({ deferred: true, job_id: 'j1', execution_id: 'assess-1', worker_tier_alive: true })
+    getScan.mockResolvedValue(partial)
+    getJobs.mockResolvedValue(SPLIT_TOPOLOGY_HEARTBEAT_STALE)
+    await mount(NOTHING_SCORED.files, onActivity)
+    await clickText('Assess')
+    await settle()
+    expect(onActivity).toHaveBeenLastCalledWith({ runId: 's1', executionId: 'assess-1', phase: 'running', completed: 1, total: 3 })
+    expect(text()).toContain('Completed 1 of 3')
+    getScan.mockResolvedValue({ run: { files: 3, assessed_at: '2026-09-09T12:00:00Z' },
+      files: partial.files.map(file => ({ ...file, score: 80, issues: [] })) })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 2100)) })
+    expect(onActivity).toHaveBeenLastCalledWith({ runId: 's1', executionId: 'assess-1', phase: 'done', completed: 3, total: 3 })
+    expect(text()).not.toContain('Completed 1 of 3')
+    expect(JSON.parse(sessionStorage.getItem('acp-assess-s1')).executionId).toBe('assess-1')
+  })
+
   it('does not claim nothing is processing while a worker is running the job', async () => {
     await runWithClaimedJobAndStaleHeartbeat()
 

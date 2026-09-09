@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import CompletedStageDetails, { liveDiscoverProgress } from './CompletedStageDetails.jsx'
+import { assessmentStageActivity } from './assessmentStageActivity.js'
 import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import WorkflowStageActivityCard from './WorkflowStageActivityCard.jsx'
@@ -28,7 +29,7 @@ function primaryOutcome(model) {
 /** The sole outer shell for all four workflow stages. Detail nodes stay mounted under `hidden`
  * so disclosure changes do not end live subscriptions or reset rolling heartbeat history. */
 export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = null,
-  stageDetails = {}, activeStage = null }) {
+  stageDetails = {}, activeStage = null, assessmentActivity = null }) {
   const snapshots = useMemo(() => canonicalWorkflowStages(lineage), [lineage])
   const current = useMemo(() => currentCanonicalStage(lineage), [lineage])
   const key = storageKey(lineage)
@@ -48,7 +49,9 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
           && snapshot.execution_id === current?.execution_id)
         const model = snapshot ? canonicalStageCardModel(snapshot, { isCurrent }) : null
         const attention = Boolean(snapshot && stageNeedsAttention(snapshot))
-        const isCompleted = completed(snapshot.state)
+        const assessment = assessmentStageActivity(snapshot, assessmentActivity, lineage?.scan_id)
+        const displayState = assessment?.state || snapshot.state
+        const isCompleted = completed(displayState)
         // Completed stages collapse so the report below gets the user's attention. Keep
         // attention/error cards open, and scope manual reopening to this execution and phase.
         const defaultOpen = attention || (isCompleted ? false : isCurrent)
@@ -64,14 +67,14 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
                     aria-expanded={open} aria-controls={bodyId}
                     onClick={() => setOverrides((value) => ({ ...value, [overrideKey]: !open }))}>
               <span className="workflow-stage-stack__check" aria-hidden="true">
-                {attention ? '!' : snapshot.state === 'succeeded' ? '✓' : '•'}
+                {attention ? '!' : displayState === 'succeeded' ? '✓' : '•'}
               </span>
               <span className="workflow-stage-stack__label"><b>{model.stageLabel}</b>
-                <span className="workflow-stage-stack__state"> · {model.stateLabel}</span>
+                <span className="workflow-stage-stack__state"> · {assessment?.label || model.stateLabel}</span>
               </span>
               <span className="workflow-stage-stack__meta">
-                <span className="muted workflow-stage-stack__count">{primaryOutcome(model)}</span>
-                {!open && !terminal(snapshot.state) && <LiveHeartbeatBars measuredAt={receivedAt} stage={stage}
+                <span className="muted workflow-stage-stack__count">{assessment?.count || primaryOutcome(model)}</span>
+                {!open && !terminal(displayState) && <LiveHeartbeatBars measuredAt={receivedAt} stage={stage}
                   historyKey={`${snapshot.workflow_id || lineage?.workflow_id || 'workflow'}:${snapshot.execution_id || stage}`}
                   showText />}
                 {isCurrent && <span className="workflow-stage-stack__ownership">Current</span>}
@@ -80,7 +83,7 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
             </button>
             <div id={bodyId} className="workflow-stage-stack__body" hidden={!open}>
               {detail ? <div className="workflow-stage-stack__live-detail" data-detail-owner="current">{detail}</div>
-                : completed(snapshot.state) && ['discover', 'assess'].includes(stage)
+                : isCompleted && ['discover', 'assess'].includes(stage)
                   ? <CompletedStageDetails snapshot={snapshot} />
                   : stage === 'discover' && !terminal(snapshot.state)
                     ? <DiscoverRunProgress progress={liveDiscoverProgress(snapshot)} busy

@@ -178,7 +178,7 @@ describe('RemediationImpactCard', () => {
     // reporting it as a reconciliation failure. Assert the thing the test is actually about, and
     // then assert the stronger claim the proxy was reaching for: no digit is rendered anywhere.
     expect(container.querySelector('.remediation-impact__table-wrap')).toBeNull()
-    expect(container.querySelector('.rmd__table')).not.toBeNull()
+    expect(container.querySelector('.rmd__table')).toBeNull()
     expect(container.querySelector('.rmd__count')).toBeNull()
     expect(button(container, 'Approve plan and start').disabled).toBe(true)
   })
@@ -433,11 +433,41 @@ it('passes the visible advance authorization into start and saved future default
   const toggle=container.querySelector('.remediation-auto-approval input')
   expect(toggle.checked).toBe(false)
   expect(toggle.closest('details')).toBeNull()
-  await act(async()=>toggle.click())
+  expect(getRemediationImpact.mock.calls.at(-1)[1]).toEqual({...initial,auto_approve_ai:true})
+  expect(onRun).not.toHaveBeenCalled()
   await act(async()=>button(container,'Approve plan and start').click())
   expect(onRun).toHaveBeenCalledWith({...initial,auto_approve_ai:true},expect.anything())
   const save=[...container.querySelectorAll('button')].find(el=>/Save.*future|Save.*default/i.test(el.textContent))
   expect(save).toBeTruthy()
   await act(async()=>save.click())
   expect(saveRemediationImpactPolicy.mock.calls[0][1].auto_approve_ai).toBe(true)
+})
+
+it('respects electing to review before applying across a preview refresh',async()=>{
+  const initial={rule_based:2,ai:1,ai_budget_usd:'1.00',ai_review:{enabled:true}}
+  getRemediationImpact.mockImplementation(async(_id,policy)=>({...result(policy || initial),capabilities:{...result().capabilities,ai_budget:true,ai_standing_approval:{supported:true}}}))
+  const onRun=vi.fn();const {container,root}=await mount({onRun})
+  await act(async()=>container.querySelector('.remediation-auto-approval input').click())
+  expect(getRemediationImpact.mock.calls.at(-1)[1].auto_approve_ai).toBe(false)
+  await act(async()=>root.render(createElement(RemediationImpactCard,{runId:'run-1',onRun,refreshKey:1})))
+  expect(container.querySelector('.remediation-auto-approval input').checked).toBe(true)
+  await act(async()=>button(container,'Approve plan and start').click())
+  expect(onRun.mock.calls[0][0].auto_approve_ai).toBe(false)
+})
+it.each([{auto_approve_ai:false},{ai_budget_usd:'0.00'},{ai_review:{enabled:false}}])('retains an ineligible or explicitly reviewed plan: %j',async override=>{
+  const initial={rule_based:2,ai:1,ai_budget_usd:'1.00',ai_review:{enabled:true},...override}
+  getRemediationImpact.mockImplementation(async(_id,policy)=>({...result(policy || initial),capabilities:{...result().capabilities,ai_budget:true,ai_standing_approval:{supported:true}}}))
+  const {container}=await mount()
+  expect(container.querySelector('.remediation-auto-approval input').checked).toBe(true)
+  expect(getRemediationImpact.mock.calls.every(([,policy])=>policy?.auto_approve_ai !== true)).toBe(true)
+})
+
+it('returns to human approval when the required AI reviewer is turned off',async()=>{
+  const initial={rule_based:2,ai:1,ai_budget_usd:'1.00',ai_review:{enabled:true}}
+  getRemediationImpact.mockImplementation(async(_id,policy)=>({...result(policy || initial),capabilities:{...result().capabilities,ai_budget:true,ai_standing_approval:{supported:true},ai_review:{review_supported:true}}}))
+  const {container}=await mount()
+  expect(getRemediationImpact.mock.calls.at(-1)[1].auto_approve_ai).toBe(true)
+  await act(async()=>container.querySelector('.remediation-review-policy input[type=checkbox]').click())
+  expect(getRemediationImpact.mock.calls.at(-1)[1]).toMatchObject({auto_approve_ai:false,ai_review:{enabled:false}})
+  expect(container.querySelector('.remediation-auto-approval input').checked).toBe(true)
 })

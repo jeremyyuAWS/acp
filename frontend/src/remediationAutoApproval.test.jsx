@@ -11,9 +11,9 @@ async function mount(props={}) {
   await act(async()=>root.render(createElement(AutoApproval,{policy,supported:true,onChange:vi.fn(),...props})))
   return {root,container,checkbox:container.querySelector('input')}
 }
-it('keeps advance approval visible and off by default with separate publishing',async()=>{
+it('offers review before applying and keeps publishing separate',async()=>{
   const onChange=vi.fn();const {container,checkbox}=await mount({onChange})
-  expect(checkbox.checked).toBe(false)
+  expect(checkbox.checked).toBe(true)
   expect(checkbox.closest('details')).toBeNull()
   expect(checkbox.disabled).toBe(false)
   expect(container.textContent).toContain('Publishing is a separate action')
@@ -46,7 +46,7 @@ it('requires the AI reviewer, and says so',async()=>{
   // let one be built -- otherwise Save throws an opaque error.
   const {checkbox,container}=await mount({policy:{ai:1,ai_budget_usd:'1.00'}})
   expect(checkbox.disabled).toBe(true)
-  expect(container.textContent).toContain('Turn on the AI review below first')
+  expect(container.textContent).toContain('Turn on AI review in the AI options first')
   const on=await mount({policy:{ai:1,ai_budget_usd:'1.00',ai_review:{enabled:true}}})
   expect(on.checkbox.disabled).toBe(false)
 })

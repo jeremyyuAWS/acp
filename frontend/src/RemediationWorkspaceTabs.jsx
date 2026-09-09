@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import RemediationModeDiagram from './RemediationModeDiagram.jsx'
 import useConfirmedRemediationActivity from './useConfirmedRemediationActivity.js'
-const MODES = ['plan', 'live', 'review']
+const MODES = ['plan', 'live', 'review', 'modes']
 
 function modeFromLocation() {
   try {
@@ -82,7 +83,7 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
         id={`rem-mode-${value}`} aria-controls={`rem-panel-${value}`} aria-selected={mode === value}
         tabIndex={mode === value ? 0 : -1} onKeyDown={(event) => onKeyDown(event, index)}
         onClick={() => select(value)}>
-        {value === 'plan' ? 'Plan' : value === 'live' ? 'Live' : 'Review'}
+        {value === 'plan' ? 'Plan' : value === 'live' ? 'Live' : value === 'review' ? 'Review' : 'How modes work'}
         {value === 'review' && <span>{reviewCount.toLocaleString()}</span>}
         {value === 'live' && activeWork && <span className="rem-mode-live-dot" aria-label="active">●</span>}
       </button>)}
@@ -95,6 +96,10 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
       hidden={mode !== 'live'}>
       <h2 className="sr-only">Live Processing</h2>
       {live}
+    </div>
+    <div ref={node => { panels.current.modes = node }} id="rem-panel-modes" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-modes"
+      hidden={mode !== 'modes'}>
+      <RemediationModeDiagram />
     </div>
   </>
 }

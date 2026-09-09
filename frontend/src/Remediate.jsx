@@ -1,3 +1,4 @@
+import { reviewableRemediationItems } from './remediationReviewAvailability.js'
 import RemediationAutoRelease from './RemediationAutoRelease.jsx'
 import RemediationReleasePlan from './RemediationReleasePlan.jsx'
 import { authorizeAcceptedRelease } from './releasePlanIntent.js'
@@ -32,7 +33,7 @@ import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, listAllHitl, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
+import { remediateScan, getRemediationStatus, getRemediationExceptions, downloadRemediated, listHitlQueue, listAllHitl, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
 import { stageExecutionNotice } from './stageExecutionNotice.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
@@ -54,7 +55,7 @@ import ProposalThumb from './ProposalThumb.jsx'
 import { remediableFiles, emptyScopeReason, scopeSummary, ineligibleReason,
          hasDocumentSelection, documentSelection, documentScopeSentence } from './remediableScope.js'
 import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
-import { reviewEmptyLine, reviewLeadLine } from './reviewQueueCopy.js'
+import { unreadableCaveat, reviewLeadLine } from './reviewQueueCopy.js'
 import { canClaimLowRisk, unassessedRiskText } from './riskOverUnassessed.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
@@ -434,6 +435,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [scanDiffs, setScanDiffs] = useState([])
   const [diffTotals, setDiffTotals] = useState(null)
   const [appliedFixes, setAppliedFixes] = useState([])
+  const [reviewExceptions, setReviewExceptions] = useState(null)
   // Reviewer acknowledgements of the auto-applied (green) fixes shown in the inbox, keyed by their
   // `af:…` id. Local: an auto fix is already applied and re-scanned, so "Approve" is a confidence
   // check, not a re-application — it just marks the row resolved and advances to the next.
@@ -450,11 +452,17 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const releasePlanScan = useRef(runId)
   releasePlanScan.current = runId
   useEffect(() => { setReleasePlanIntent(null); setReleasePlanNotice('') }, [runId])
+  useEffect(() => { setReviewExceptions(null) }, [runId])
   const fixRequest = useRef(0)
   const fetchFixes = () => {
     const request = ++fixRequest.current
     if (!runId) { setScanDiffs([]); setDiffTotals(null); setAppliedFixes([]); setAiZoneByFile({}); return }
-    Promise.all([getScanRemediationDiffs(runId, true), getAppliedFixes(runId), getScanAiCalls(runId)])
+    Promise.all([getScanRemediationDiffs(runId, true), getAppliedFixes(runId), getScanAiCalls(runId),
+      getRemediationExceptions(runId).then(exceptions => {
+        if (request === fixRequest.current) setReviewExceptions(exceptions)
+      }).catch(() => {
+        if (request === fixRequest.current) setActError('Review exceptions could not be loaded. Some review items may be unavailable.')
+      })])
       .then(([d, a, calls]) => {
         if (request !== fixRequest.current) return
         const page = remediationDiffPage(d)
@@ -501,14 +509,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     fetchFixes()
     if (!runId) { setQueue(SIM ? buildHumanQueue(files, {}) : []); return }
     if (SIM) { setQueue(buildHumanQueue(files, {})); return }
-    autoPopulateHitlQueue(runId)
-      .then(() => listHitlQueue(runId))
+    // Opening Plan only reads existing work; it must not create approvals from findings.
+    listHitlQueue(runId)
       .then((items) => {
         const seeded = {}
         applyHitlRows(items).forEach((it) => { if (it.assignee) seeded[it.file] = it.assignee })
         if (Object.keys(seeded).length) setAssignees?.((a) => ({ ...seeded, ...a }))
       })
-      .catch(() => { setQueue(buildHumanQueue(files, {})); setDecidedItems([]) })
+      .catch(() => { setQueue([]); setDecidedItems([]); setActError('Review items could not be loaded. Try opening this run again.') })
   }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Drain in sync with the unified inbox: when an item is approved/rejected in the popup
@@ -1013,7 +1021,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // just made is shown as the manual work it created, not as a closed decision) and before the
   // applied-fix evidence. Deduped by id because a finding can legitimately be in two of these
   // sources at once, and counting it twice is the same defect as dropping it.
-  const inboxQueue = dedupeById([...queue, ...rejectedItems, ...decidedItems, ...autoFixItems])
+  const inboxQueue = reviewableRemediationItems(dedupeById([...queue, ...rejectedItems, ...decidedItems, ...autoFixItems]),
+    { files, exceptions: reviewExceptions?.run_id === runId ? reviewExceptions : null })
+  const hasRemediationResults = inboxQueue.length > 0 || files.some(file => file.remediated_at || file.drive_write_url)
+    || (runStream?.snapshot?.terminal === true && runStream.snapshot.total_documents > 0)
   const inboxDecisions = { ...decisions, ...ackd }
   // The hero "N need review" IS the Needs-review tab's population (workflowStatusOf over the inbox
   // queue), not the raw human queue — so an unconfirmed auto-fix counted under Needs review shows in
@@ -1640,7 +1651,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 </p>
               // NOT unconditionally "All clear": an unreadable document is not a clear one, and
               // the reader who sees "All clear" stops reading (reviewQueueCopy.js).
-              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>{reviewLeadLine(files, reviewCounts.pendingItems)}</p>}
+              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>{hasRemediationResults ? reviewLeadLine(files, reviewCounts.pendingItems) : 'Run the plan to generate fixes. Review items appear when there is a proposal or an exception to handle.'}</p>}
           </div>
           {reviewProgress.total > 0 && (
             <div className="rem-sec-prog">
@@ -1723,8 +1734,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             rather than living inside one of them — which is how the original defect happened. */}
         {inboxQueue.length === 0 ? (
           <div className="remediation-complete" role="status">
-            <h3>All review items are complete.</h3>
-            <p className="muted">{reviewEmptyLine(files, { totalHitl, acted })}</p>
+            <h3>{hasRemediationResults ? 'No items awaiting review.' : 'No fixes to review yet.'}</h3>
+            <p className="muted">{hasRemediationResults ? `No generated proposals or remediation exceptions are currently queued. ${unreadableCaveat(files)}`
+              : 'Run the plan first. Eligible generated fixes proceed automatically unless you select Review before applying.'}</p>
             <div className="remediation-complete-counts" aria-label="Remediation completion summary">
               <span><b>{acted.approved || 0}</b> approved</span>
               <span><b>{revalidated.length}</b> verified</span>
@@ -1851,7 +1863,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`}
             renderAssessment={forecast => <AssessSummary files={files} cap={cap} assessment={assessment}
               assessedAt={assessedAt} run={run} notStarted={run?.not_assessed?.count}
-              remediationForecast={forecast} />}
+              remediationForecast={forecast} reviewSummary={reviewCounts}
+              onOpenReview={() => setWorkspaceRequest({ mode: 'review' })} />}
             releaseOption={<RemediationReleasePlan scanId={runId} files={impactScope.map(file => file.file)}
               intent={releasePlanIntent} onChange={setReleasePlanIntent} disabled={readOnly || remBusy} />}
             onRun={readOnly ? undefined : (policy) => {

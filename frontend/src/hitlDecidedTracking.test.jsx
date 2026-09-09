@@ -123,6 +123,6 @@ it('loads every status for the run and folds decided items into the inbox and it
   // The page reads the durable queue for the run, not only its pending slice.
   expect(page).not.toMatch(/listHitlQueue\(runId, 'pending'\)/)
   expect(page).toContain('applyHitlRows')
-  expect(page).toContain('const inboxQueue = dedupeById([...queue, ...rejectedItems, ...decidedItems, ...autoFixItems])')
+  expect(page).toContain('const inboxQueue = reviewableRemediationItems(dedupeById([...queue, ...rejectedItems, ...decidedItems, ...autoFixItems])')
   expect(page).toContain('const totalHitl = queue.length + decidedItems.length + selfOnly.length')
 })

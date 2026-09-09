@@ -129,6 +129,10 @@ def test_repeated_assess_click_reuses_the_exact_discovery_snapshot(isolated_stor
     assert first["reused"] is False and second["reused"] is True
     payload = isolated_store.get_job(first["job_id"])["payload"]
     assert payload["snapshot_id"] == first["snapshot_id"]
+    assert first["execution_id"] == second["execution_id"] == payload["stage_execution_id"]
+    canonical = isolated_store.stage_execution_snapshot(first["execution_id"])
+    assert canonical["stage"] == "assess"
+    assert canonical["execution_id"] == first["execution_id"]
 
     with isolated_store._db.cursor() as cur:
         isolated_store._db.execute(cur, "UPDATE jobs SET status='done' WHERE id=%s",
@@ -138,6 +142,7 @@ def test_repeated_assess_click_reuses_the_exact_discovery_snapshot(isolated_stor
     completed_retry = client.post("/scans/s-assess-idem/assess?level=AA").json()
     assert completed_retry["reused"] is True
     assert completed_retry["job_id"] == first["job_id"]
+    assert completed_retry["execution_id"] == first["execution_id"]
 
 
 # ── metadata-only discovery is the DEFAULT, including the monolithic 'scan' job ──────────────────

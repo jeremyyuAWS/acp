@@ -10,14 +10,14 @@ export default function RemediationAutoApproval({ policy, onChange, disabled, su
   const reviewed = policy.ai_review?.enabled === true
   const available = supported && policy.ai > 0 && Number(policy.ai_budget_usd) > 0 && reviewed
   return <fieldset className="remediation-auto-approval" disabled={disabled}>
-    <label htmlFor={id}><input id={id} type="checkbox" checked={checked}
-      disabled={!checked && !available} onChange={event => onChange('auto_approve_ai', event.target.checked)} />
-      <strong>Automatically approve eligible AI suggestions</strong></label>
-    <p>{checked ? 'Auto-approval on for this plan. Approve plan and start authorizes eligible suggestions throughout this run, including fallbacks, without more approval dialogs.'
-      : 'Off by default. Turn on to give advance approval for eligible AI suggestions in this run.'}</p>
+    <label htmlFor={id}><input id={id} type="checkbox" checked={!checked}
+      disabled={!checked && !available} onChange={event => onChange('auto_approve_ai', !event.target.checked)} />
+      <strong>Review before applying</strong></label>
+    <p>{checked ? 'Eligible generated fixes are automatically approved by default. Approve plan and start authorizes eligible suggestions throughout this run, including fallbacks, without more approval dialogs.'
+      : 'Review before applying is on. Generated AI suggestions wait for your approval. Turn it off to automatically approve eligible suggestions after the AI reviewer accepts them.'}</p>
     {!available && <p>{!supported ? (reason || 'Automatic approval is unavailable on this server.')
       : !(policy.ai > 0 && Number(policy.ai_budget_usd) > 0) ? 'Choose Rules + AI and a positive run spending limit to enable this option.'
-      : 'Turn on the AI review below first. Nobody reads an automatically approved suggestion before it is applied, so the reviewer is required for this option.'}</p>}
+      : 'Turn on AI review in the AI options first. Nobody reads an automatically approved suggestion before it is applied, so the reviewer is required for this option.'}</p>}
     <details><summary>Which suggestions can proceed?</summary>
       <p>Complete, current AI suggestions with a supported writer and a tracked Google Drive or SharePoint source are approved and applied to the working copy. This includes supported alternative text, link text, labels, slide titles, sensory-text changes and language tags in supported Office and PDF formats.</p>
       <p>Missing drafts, partial coverage, changed sources, unresolved AI reviews, unsupported changes and manual judgments still need you. A suggestion the AI reviewer has not accepted is never approved this way. Approval is not proof of correctness: the reviewer checks the draft, not the finished document, and the normal writer and verification checks remain. Publishing is a separate action.</p>

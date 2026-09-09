@@ -122,8 +122,17 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     ...(reviewDefault ? { ai_review: { enabled: true, mode: 'review_all', minimum_reliability: null,
       max_review_attempts: 1, review_model: 'strong', permitted_families: [], evaluation_versions: {} } } : {}),
   }
+  // Loading a plan offers this default; only starting it authorizes the run.
+  // Refresh the forecast with the exact policy before enabling the start action.
+  const automaticDefault = selected.auto_approve_ai === undefined
+    && data?.capabilities?.ai_standing_approval?.supported === true
+    && selected.ai === 1 && Number(selected.ai_budget_usd) > 0
+    && selected.ai_review?.enabled === true
+  useEffect(() => {
+    if (automaticDefault) setPolicy({ ...selected, auto_approve_ai: true })
+  }, [automaticDefault, runId])
   const chainProblem = generationChainProblem(selected, data?.capabilities?.generation_chain, data?.capabilities?.ai_budget === true)
-  const ready = !chainProblem && !!data && !loading && !error && data.integrity?.complete === true
+  const ready = !automaticDefault && !chainProblem && !!data && !loading && !error && data.integrity?.complete === true
   const countDeltas = useForecastDeltas({
     identity: JSON.stringify([runId, scopeKey]), ready,
     policyKey: JSON.stringify([data?.policy?.rule_based, data?.policy?.ai, data?.policy?.ai_budget_usd, data?.policy?.ai_review, data?.policy?.generation_chain, data?.policy?.auto_approve_ai]),
@@ -131,7 +140,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     human: Number.isFinite(data?.lanes?.review?.findings) && Number.isFinite(data?.lanes?.manual?.findings)
       ? data.lanes.review.findings + data.lanes.manual.findings : undefined,
   })
-  const change = (key, value) => { setNotice(''); setFilter(null); setImpactDetails(null); setPolicy(current => ({ ...(current || selected), [key]: value, ...(key === 'ai' && value === 0 && Object.hasOwn(current || selected, 'auto_approve_ai') ? { auto_approve_ai: false } : {}) })) }
+  const change = (key, value) => { setNotice(''); setFilter(null); setImpactDetails(null); setPolicy(current => ({ ...(current || selected), [key]: value, ...(((key === 'ai' && value !== 1) || (key === 'ai_review' && value?.enabled !== true) || (key === 'ai_budget_usd' && !(Number(value) > 0))) && Object.hasOwn(current || selected, 'auto_approve_ai') ? { auto_approve_ai: false } : {}) })) }
   const categoryFiles = (data?.files || []).filter(file => !filter || filter.type === 'all' || (filter.type === 'human' ? file.review > 0 || file.manual > 0 : filter.type === 'outlook' ? file.outlook === filter.key : file[filter.key] > 0))
   const fileTypes = [...new Set(categoryFiles.map(file => fileType(file.file)))].sort()
   const searchText = fileSearch.trim().toLowerCase()
