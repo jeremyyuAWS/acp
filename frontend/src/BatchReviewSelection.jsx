@@ -65,6 +65,12 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
   return <section className="batch-review" aria-label="Select findings for approval">
     <h3 ref={heading} tabIndex={-1}>{confirming ? 'Confirm selected proposals' : 'Select findings for approval'}</h3>
     <p>Select only proposals you have reviewed. Approval records your decision; writing and verification remain separate.</p>
+    <div className="batch-review-sticky">
+      <span><b>{findingCount} findings selected</b> ({entries.length} review items) · {entries.reduce((n, e) => n + proposalValues(e.finding).length, 0)} proposals · {new Set(entries.map(e => e.finding.file)).size} files</span>
+      {confirming ? <><button type="button" disabled={busy} onClick={() => setConfirming(false)}>Back to selection</button>
+        <button type="button" className="primary" disabled={busy || disabled || problems.some(Boolean) || !entries.length} onClick={approve}>{busy ? 'Recording decisions…' : `Confirm approval of ${findingCount} findings`}</button></>
+        : <button type="button" className="primary" disabled={busy || disabled || !entries.length || problems.some(Boolean) || !onDecide} onClick={() => { setConfirming(true); setPage(0) }}>Approve selected</button>}
+    </div>
     <div className="batch-review-controls">
       <label>Group batch by <select value={groupBy} onChange={e => { setGroupBy(e.target.value); setPage(0) }}><option value="file">File</option><option value="change">Change type</option></select></label>
       <button type="button" disabled={busy || disabled || confirming || !eligible.some(selectable)} onClick={() => setEntries(old => [...old, ...eligible.filter(f => selectable(f) && !old.some(e => e.finding.id === f.id)).map(snapshotFinding)])}>Select eligible in this view ({eligible.filter(selectable).length})</button>
@@ -94,11 +100,6 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
     {results.length > 0 && <div role="status"><b>{results.filter(r => r.state === 'recorded').length} recorded · {results.filter(r => r.state === 'failed').length} not recorded · {results.filter(r => r.state === 'uncertain').length} uncertain</b>
       {results.filter(r => r.state !== 'recorded').map(r => <p key={r.id}>Finding {r.id}: {r.message}{r.state === 'uncertain' ? ' — refresh and check the recorded decision before retrying.' : ''}</p>)}
     </div>}
-    <div className="batch-review-sticky">
-      <span><b>{findingCount} findings selected</b> ({entries.length} review items) · {entries.reduce((n, e) => n + proposalValues(e.finding).length, 0)} proposals · {new Set(entries.map(e => e.finding.file)).size} files</span>
-      {confirming ? <><button type="button" disabled={busy} onClick={() => setConfirming(false)}>Back to selection</button>
-        <button type="button" className="primary" disabled={busy || disabled || problems.some(Boolean) || !entries.length} onClick={approve}>{busy ? 'Recording decisions…' : `Confirm approval of ${findingCount} findings`}</button></>
-        : <button type="button" className="primary" disabled={busy || disabled || !entries.length || problems.some(Boolean) || !onDecide} onClick={() => { setConfirming(true); setPage(0) }}>Approve selected</button>}
-    </div>
+
   </section>
 }
