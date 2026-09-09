@@ -36,6 +36,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
       try {
         const result = await getReleaseContinuation(runId)
         if (!live) return
+        if (result && (!result.id || !result.intent)) throw new Error('Release status is incomplete')
         setActive(result)
         if (result) progressRef.current?.(result)
       } catch { /* Keep the last durable state while reconnecting. */ }
@@ -54,6 +55,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     const frozen = plan
     try {
       const result = await authorizeReleaseContinuation(runId, frozen.id)
+      if (!result?.id || !result?.intent) throw new Error('Authorization status is incomplete. Refresh status before retrying.')
       if (currentKey.current === frozen.key) { setActive(result); setRefresh(n => n + 1) }
     } catch (e) {
       setError(e?.message || 'Authorization was not confirmed. Refresh status before retrying.')
@@ -81,7 +83,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
         {busy ? 'Authorizing…' : 'Approve eligible changes and publish when ready'}
       </button>}
     </div>
-    {eligible > 0 && <p>{eligible} proposed changes across {eligibleFiles} files. This action authorizes the current proposals, applies them, verifies the result, and publishes qualifying files to the destination above. Individual inspection is optional.</p>}
+    {eligible > 0 && <p>{eligible} proposed {eligible === 1 ? 'change' : 'changes'} across {eligibleFiles} {eligibleFiles === 1 ? 'file' : 'files'}. This action authorizes the current proposals, applies them, verifies the result, and publishes qualifying files to the destination above. Individual inspection is optional.</p>}
     {!eligible && plan && !activeRunning && <p>{ready.length ? 'Other files do not hold eligible proposals for this action.' : 'No eligible proposals can be applied automatically yet.'} Manual work and verification blockers remain separate.</p>}
     {entries.length > 0 && <details><summary>Inspect proposed changes and remaining blockers</summary>
       {entries.map(([file, data]) => <div key={file}><b>{file}</b>

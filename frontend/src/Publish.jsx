@@ -620,9 +620,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
           <div className="release-overview__actions">
             <button className="ghost" onClick={() => run?.id && openReport(run.id)}>Download report</button>
-            <button className="qbtn approve" disabled={!selectableReady.length}
-                    title={!selectableReady.length ? `${pendingReview.files || 'No'} files still need review before Release` : 'Choose files and delivery'}
-                    onClick={startRelease}>Start a release</button>
+            <button className="ghost" title="Inspect individual files or choose package options"
+                    onClick={startRelease}>More delivery options</button>
           </div>
         </div>
         <p aria-label="Release status overview" className="release-clarity-counts">
@@ -665,9 +664,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
         </details>
       </section>
-      <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={selectableReady} destination={releaseDestination}
+      <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
         folderName={releaseFolderName} readOnly={readOnly} publishing={publishing}
-        destinationLabel={releaseDestination?.folder_name || releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}
+        destinationLabel={releaseDestination ? `${releaseDestination.folder_name} / Remediated` : releaseProvider === 'drive' ? 'Remediated folder in Google Drive' : releaseProvider === 'sharepoint' ? 'Remediated folder in each source library' : 'ACP managed storage'}
         destinationPicker={['drive', 'sharepoint'].includes(releaseProvider) ? <ReleaseDestinationPicker provider={releaseProvider} value={releaseDestination}
           onChange={value => { setReleaseDestination(value); setReleasePreview(null) }}
           onError={error => setReleaseError({ summary: 'Destination unavailable', details: error?.message })} /> : <p>Verified copies remain in ACP’s managed storage.</p>}
@@ -759,51 +758,6 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </div>
       </details>
 
-      {/* W5 — conditional-release → full-certification graduation. Shown only once a release has
-          started (setStatus is NONE before that, and this renders nothing). */}
-      {setStatus.status === SET_STATUS.CONDITIONAL && (
-        <section className="panel" style={{ borderLeft: '4px solid var(--warn-fg)' }} aria-label="Conditional release status">
-          <b style={{ fontSize: 13.5, color: 'var(--warn-fg)' }}>◐ Conditionally released</b>
-          <p>{setStatus.released} of {setStatus.total} in-scope files delivered · {setStatus.heldOpen} need verification · {setStatus.verifiedUnreleased} corrected copies await Release.</p>
-          <div hidden data-retired="release-graduation-explanation">
-          <p style={{ fontSize: 13, lineHeight: 1.6, margin: '8px 0 0', maxWidth: 680 }}>
-            <b>{setStatus.released}</b> of <b>{setStatus.total}</b> in-scope documents are released.
-            {setStatus.heldOpen > 0 && <> <b>{setStatus.heldOpen}</b> {setStatus.heldOpen === 1 ? 'document is' : 'documents are'} still <b>held</b> pending remediation.</>}
-            {setStatus.verifiedUnreleased > 0 && <> <b>{setStatus.verifiedUnreleased}</b> previously-held {setStatus.verifiedUnreleased === 1 ? 'document has' : 'documents have'} been remediated and can be graduated in below.</>}
-          </p>
-          <p className="muted" style={{ fontSize: 12.5, marginTop: 8, maxWidth: 680 }}>
-            Remediate the held documents (each is re-validated on its own remediation path). This release becomes <b>complete within the selected scope</b> once every held document is verified and released — <b>no whole-estate re-scan required</b>.
-          </p>
-          </div>
-          {setStatus.verifiedUnreleased > 0 && (
-            <button className="qbtn approve" style={{ marginTop: 10 }} disabled={readOnly || publishing}
-                    title={readOnly ? 'Scan History replay — switch to the latest scan to release' : 'Release the remediated formerly-held documents'}
-                    onClick={() => { setSelectedFiles(new Set(setStatus.graduatable)); setBuilderStep(2); setReleasePreview(null); builderRef.current?.focus() }}>
-              {publishing ? 'Releasing…' : `↑ Release ${setStatus.verifiedUnreleased} remediated document${setStatus.verifiedUnreleased === 1 ? '' : 's'}`}
-            </button>
-          )}
-        </section>
-      )}
-      {setStatus.status === SET_STATUS.GRADUATABLE && (
-        <section className="panel" style={{ borderLeft: '4px solid var(--success-fg)', background: '#F3F8EC' }} aria-label="Ready to release remaining documents">
-          <b style={{ fontSize: 13.5, color: 'var(--success-fg)' }}>✓ Ready to release remaining documents</b>
-          <p style={{ fontSize: 13, lineHeight: 1.6, margin: '8px 0 0', maxWidth: 680 }}>
-            Every previously-held document has been remediated and re-validated. Release the remaining <b>{setStatus.verifiedUnreleased}</b> {setStatus.verifiedUnreleased === 1 ? 'document' : 'documents'} to complete this release within the selected scope — <b>no whole-estate re-scan required</b>.
-          </p>
-          <button className="qbtn approve" style={{ marginTop: 10 }} disabled={readOnly || publishing}
-                  title={readOnly ? 'Scan History replay — switch to the latest scan to release' : undefined}
-                  onClick={() => { setSelectedFiles(new Set(setStatus.graduatable)); setBuilderStep(2); setReleasePreview(null); builderRef.current?.focus() }}>
-            {publishing ? 'Graduating…' : `Review delivery for ${setStatus.verifiedUnreleased} documents`}
-          </button>
-        </section>
-      )}
-      {setStatus.status === SET_STATUS.FULL && setStatus.total > 0 && (
-        <section className="panel" style={{ borderLeft: '4px solid var(--success-fg)' }} aria-label="Release complete">
-          <b style={{ fontSize: 13.5, color: 'var(--success-fg)' }}>Release complete</b>
-          <span className="muted" style={{ fontSize: 13, marginLeft: 8 }}>all {setStatus.total} in-scope documents released. Verification covers the selected checks, not overall accessibility conformance.</span>
-        </section>
-      )}
-
       {/* Release policy — an HONEST description of what the platform actually does, read from the
           real settings, not a selector for a behaviour ACP can't perform. There is one policy:
           write a corrected COPY; the original is never overwritten. The explainer says plainly why
@@ -849,6 +803,52 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
 
       <details className="release-advanced"><summary>Choose individual files, package options, and full delivery details</summary>
       <section className="panel release-workspace" ref={builderRef} tabIndex={-1} aria-labelledby="release-workspace-title">
+      {/* W5 — conditional-release → full-certification graduation. Shown only once a release has
+          started (setStatus is NONE before that, and this renders nothing). */}
+      {setStatus.status === SET_STATUS.CONDITIONAL && (
+        <section className="panel" style={{ borderLeft: '4px solid var(--warn-fg)' }} aria-label="Conditional release status">
+          <b style={{ fontSize: 13.5, color: 'var(--warn-fg)' }}>◐ Conditionally released</b>
+          <p>{setStatus.released} of {setStatus.total} in-scope files delivered · {setStatus.heldOpen} need verification · {setStatus.verifiedUnreleased} corrected copies await Release.</p>
+          <div hidden data-retired="release-graduation-explanation">
+          <p style={{ fontSize: 13, lineHeight: 1.6, margin: '8px 0 0', maxWidth: 680 }}>
+            <b>{setStatus.released}</b> of <b>{setStatus.total}</b> in-scope documents are released.
+            {setStatus.heldOpen > 0 && <> <b>{setStatus.heldOpen}</b> {setStatus.heldOpen === 1 ? 'document is' : 'documents are'} still <b>held</b> pending remediation.</>}
+            {setStatus.verifiedUnreleased > 0 && <> <b>{setStatus.verifiedUnreleased}</b> previously-held {setStatus.verifiedUnreleased === 1 ? 'document has' : 'documents have'} been remediated and can be graduated in below.</>}
+          </p>
+          <p className="muted" style={{ fontSize: 12.5, marginTop: 8, maxWidth: 680 }}>
+            Remediate the held documents (each is re-validated on its own remediation path). This release becomes <b>complete within the selected scope</b> once every held document is verified and released — <b>no whole-estate re-scan required</b>.
+          </p>
+          </div>
+          {setStatus.verifiedUnreleased > 0 && (
+            <button className="qbtn approve" style={{ marginTop: 10 }} disabled={readOnly || publishing}
+                    title={readOnly ? 'Scan History replay — switch to the latest scan to release' : 'Release the remediated formerly-held documents'}
+                    onClick={() => { setSelectedFiles(new Set(setStatus.graduatable)); setBuilderStep(2); setReleasePreview(null); builderRef.current?.focus() }}>
+              {publishing ? 'Releasing…' : `↑ Release ${setStatus.verifiedUnreleased} remediated document${setStatus.verifiedUnreleased === 1 ? '' : 's'}`}
+            </button>
+          )}
+        </section>
+      )}
+      {setStatus.status === SET_STATUS.GRADUATABLE && (
+        <section className="panel" style={{ borderLeft: '4px solid var(--success-fg)', background: '#F3F8EC' }} aria-label="Ready to release remaining documents">
+          <b style={{ fontSize: 13.5, color: 'var(--success-fg)' }}>✓ Ready to release remaining documents</b>
+          <p style={{ fontSize: 13, lineHeight: 1.6, margin: '8px 0 0', maxWidth: 680 }}>
+            Every previously-held document has been remediated and re-validated. Release the remaining <b>{setStatus.verifiedUnreleased}</b> {setStatus.verifiedUnreleased === 1 ? 'document' : 'documents'} to complete this release within the selected scope — <b>no whole-estate re-scan required</b>.
+          </p>
+          <button className="qbtn approve" style={{ marginTop: 10 }} disabled={readOnly || publishing}
+                  title={readOnly ? 'Scan History replay — switch to the latest scan to release' : undefined}
+                  onClick={() => { setSelectedFiles(new Set(setStatus.graduatable)); setBuilderStep(2); setReleasePreview(null); builderRef.current?.focus() }}>
+            {publishing ? 'Graduating…' : `Review delivery for ${setStatus.verifiedUnreleased} documents`}
+          </button>
+        </section>
+      )}
+      {setStatus.status === SET_STATUS.FULL && setStatus.total > 0 && (
+        <section className="panel" style={{ borderLeft: '4px solid var(--success-fg)' }} aria-label="Release complete">
+          <b style={{ fontSize: 13.5, color: 'var(--success-fg)' }}>Release complete</b>
+          <span className="muted" style={{ fontSize: 13, marginLeft: 8 }}>all {setStatus.total} in-scope documents released. Verification covers the selected checks, not overall accessibility conformance.</span>
+        </section>
+      )}
+
+
         <div className="rubrichdr">
           <h2 id="release-workspace-title" style={{ margin: 0 }}>Choose files <span className="muted">· {selectedReady.length} selected · {releaseFiles.length} in scope</span></h2>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -867,7 +867,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         {ready.length === 0 ? (
           pendingReview.items > 0 ? (
             <div className="muted" style={{ marginTop: 10, padding: '12px 14px', borderRadius: 9, background: '#FBF1DF', border: '1px solid #EAD9BF', color: '#7A5A12' }}>
-              <b>No files are ready for release.</b> {pendingReview.items} finding{pendingReview.items !== 1 ? 's' : ''} await{pendingReview.items === 1 ? 's' : ''} human review across {pendingReview.files} document{pendingReview.files !== 1 ? 's' : ''}. Review these items in <b>Remediate → Review</b>. Approved changes must be applied and verified before their documents become ready.
+              <b>No files are ready for release.</b> {pendingReview.items} finding{pendingReview.items !== 1 ? 's' : ''} await{pendingReview.items === 1 ? 's' : ''} human review across {pendingReview.files} document{pendingReview.files !== 1 ? 's' : ''}. Eligible proposals can be authorized above. Remaining manual work is available in <b>Remediate → Review</b>. Only applied and verified changes make a document ready.
               <div style={{ marginTop: 9 }}><a className="qbtn approve" href="?tab=remediate&mode=review">Review {pendingReview.files} {pendingReview.files === 1 ? 'file' : 'files'}</a></div>
             </div>
           ) : (
