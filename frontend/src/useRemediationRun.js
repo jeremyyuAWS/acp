@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getRemediationSnapshot, openRemediationStream } from './api.js'
+import { getRemediationSnapshot, openRemediationStream, getRecentRemediationActivity } from './api.js'
 import { isNewer } from './remediationSnapshot.js'
 import { addRemediationEvent } from './remediationEventFeed.js'
 
@@ -43,6 +43,7 @@ export function useRemediationRun(runId) {
   // these rows answer the different question "what just happened?" and survive tab changes with
   // the stream because this hook lives at App level.
   const [events, setEvents] = useState([])
+  const [activityStatus, setActivityStatus] = useState('loading')
 
   const snapRef = useRef(null)
   const streamRef = useRef(null)
@@ -69,7 +70,7 @@ export function useRemediationRun(runId) {
     // the log — a reconcile on every first connect.
     snapRef.current = null
     cursorRef.current = null
-    setSnapshot(null); setReceivedAt(null); setStatus(null); setConnected(false); setEvents([])
+    setSnapshot(null); setReceivedAt(null); setStatus(null); setConnected(false); setEvents([]); setActivityStatus('loading')
     if (!runId) return undefined
 
     let live = true
@@ -91,13 +92,31 @@ export function useRemediationRun(runId) {
       .then((next) => { if (live) accept(next) })
       .catch(() => { /* transient: the last confirmed snapshot and its age stay on screen */ })
 
+    let historyPending = false, historyAgain = false
+    const loadHistory = async () => {
+      if (!live) return
+      if (historyPending) { historyAgain = true; return }
+      historyPending = true
+      try {
+        const result = await getRecentRemediationActivity(runId)
+        if (!live) return
+        if (result?.available !== true || !Array.isArray(result.events)) throw new Error('History unavailable')
+        setEvents(previous => result.events.reduce((rows, event) => addRemediationEvent(rows, event, event.seq), previous))
+        setActivityStatus('ready')
+      } catch { if (live) setActivityStatus('unavailable') }
+      finally {
+        historyPending = false
+        if (live && historyAgain) { historyAgain = false; loadHistory() }
+      }
+    }
+
     const startPoll = () => {
       if (!live || pollRef.current) return
       pollRef.current = setInterval(() => {
         // Terminality is read off the REF: this closure captures state from the render that
         // created it, so `snapshot` here would be null forever and the stop-when-terminal it
         // expresses would never once be true.
-        if (!snapRef.current?.terminal) loadSnapshot()
+        if (!snapRef.current?.terminal) { loadSnapshot(); loadHistory() }
       }, IDLE_POLL_MS)
     }
 
@@ -115,6 +134,7 @@ export function useRemediationRun(runId) {
           accept(frame?.snapshot)
         },
         onEvent: (event, id) => {
+          if (!live) return
           // The FRAME's id is the authority, not a field inside the payload: the cursor must only
           // ever advance to something this client actually rendered.
           if (id != null) cursorRef.current = id
@@ -126,11 +146,13 @@ export function useRemediationRun(runId) {
           // cursor the server has rejected would fail identically on every later reconnect.
           cursorRef.current = null
           loadSnapshot()
+          loadHistory()
         },
         onDone: () => {
           if (!live) return
           setConnected(false)
           setEndedAt(Date.now())
+          loadHistory()
           // `done` is stronger than it was — the server holds the stream through delivery now —
           // and the poll still starts, deliberately: review and evidence can outlive delivery,
           // and the reconciled snapshot, not one frame, is what says the run is terminal.
@@ -139,6 +161,7 @@ export function useRemediationRun(runId) {
         onError: () => {
           if (!live) return
           streamRef.current = null
+          loadHistory()
           setConnected(false)
           startPoll()
           // A stream error is a transport interruption, not a terminal run state. Keep the
@@ -152,6 +175,7 @@ export function useRemediationRun(runId) {
     }
 
     loadSnapshot()   // so an idle or finished run has state even with no stream to open
+    loadHistory() // A first stream starts at the latest cursor; restore saved narration separately.
     connect()
     return () => {
       live = false
@@ -163,5 +187,5 @@ export function useRemediationRun(runId) {
     }
   }, [runId, accept])
 
-  return { snapshot, receivedAt, connected, status, endedAt, events }
+  return { snapshot, receivedAt, connected, status, endedAt, events, activityStatus }
 }

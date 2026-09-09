@@ -2589,3 +2589,9 @@ export const authorizeReleaseContinuation = (scanId, intentId) => fetch(
 export const resumeReleaseContinuation = (scanId, intentId) => fetch(
   `${BASE}/scans/${encodeURIComponent(scanId)}/release/continuation/${encodeURIComponent(intentId)}/resume`,
   { method: 'POST', headers: headers() }).then(j)
+
+
+export const getRecentRemediationActivity = (scanId) => {
+  if (SIM || !scanId) return sim({ available: false, events: [] })
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/activity`, { headers: headers() }).then(j)
+}

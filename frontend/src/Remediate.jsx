@@ -1,3 +1,4 @@
+import RemediationReleaseAccess from './RemediationReleaseAccess.jsx'
 import { remediationReviewCounts, remediationDiffPage } from './remediationCountSummary.js'
 import { selectionFingerprint } from './batchReviewSelection.js'
 import AssessSummary from './AssessSummary.jsx'
@@ -1615,9 +1616,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               <span><b>{acted.deferred || 0}</b> manual or deferred</span>
               <span><b>{blockedCount || 0}</b> blocked</span>
             </div>
-            {verifyState === 'complete' || revalidated.length > 0
-              ? <button className="primary" onClick={() => onNavigate?.('publish')}>Continue to Release</button>
-              : <p className="muted remediation-release-blocked">Release is not available yet because no corrected copy has completed verification.</p>}
+            {!files.some(file => file.compliant && file.remediated_at && file.corrected_sha256) && <p className="muted remediation-release-blocked">No verified corrected copy is available for Release yet.</p>}
           </div>
         ) : (
           // R4, R7 and R10 ride in the detail pane, beside the finding they describe. `sel` is
@@ -1726,6 +1725,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         primary={primary}
         readOnly={readOnly}
         onOpenRunDetails={() => { setRunDetailsOpen((v) => !v); setWorkspaceRequest({ mode: 'live' }) }} />
+      <RemediationReleaseAccess files={impactScope} readOnly={readOnly} onNavigate={onNavigate} />
       <RemediationWorkspaceTabs
         runId={runId}
         workspaceRequest={workspaceRequest}
@@ -1750,6 +1750,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                                connected={!!runStream?.connected}
                                receivedAt={runStream?.receivedAt || null}
                                events={runStream?.events || []}
+                               activityStatus={runStream?.activityStatus || 'loading'}
                                updateMode={remUpdates} />
           <RemediationRunDetails sections={runDetailSections}
                                  open={runDetailsOpen} onToggle={setRunDetailsOpen} />
