@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createTestRoot, unmountAll } from './testRoots.js'
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
-afterEach(unmountAll)
+afterEach(async () => { await unmountAll(); vi.unstubAllGlobals() })
 import RemediationWorkspaceTabs from './RemediationWorkspaceTabs.jsx'
 
 const snapshot = {
@@ -125,6 +125,62 @@ describe('the three-mode remediation workspace', () => {
     history.replaceState({}, '', '/?tab=remediate&mode=plan')
     await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
     expect(host.querySelector('#rem-panel-plan').hidden).toBe(false)
+  })
+
+  function holdAnimationFrames() {
+    const callbacks = []
+    vi.stubGlobal('requestAnimationFrame', vi.fn(callback => { callbacks.push(callback); return callbacks.length }))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    // Deliberately invoke saved callbacks even after cancellation, to exercise stale work.
+    return async () => act(async () => { callbacks.splice(0).forEach(callback => callback(0)) })
+  }
+
+  it('does not focus a replacement workspace from an unmounted request', async () => {
+    const flushFrames = holdAnimationFrames()
+    const first = await mount()
+    await act(async () => first.root.render(createElement(RemediationWorkspaceTabs, {
+      runId: 'scan-1', workspaceRequest: { mode: 'review' }, snapshot,
+    })))
+    await unmountAll()
+    const { host } = await mount()
+    const tab = host.querySelector('#rem-mode-plan')
+    await act(async () => tab.click())
+    tab.focus()
+    await flushFrames()
+    expect(document.activeElement).toBe(tab)
+    expect(cancelAnimationFrame).toHaveBeenCalled()
+  })
+
+  it.each(['keyboard', 'history', 'new run'])('cancels pending panel focus after %s navigation', async navigation => {
+    const flushFrames = holdAnimationFrames()
+    const { root, host } = await mount()
+    const workspaceRequest = { mode: 'review' }
+    await act(async () => root.render(createElement(RemediationWorkspaceTabs, { runId: 'scan-1', workspaceRequest, snapshot })))
+    const tab = host.querySelector('#rem-mode-plan')
+    if (navigation === 'keyboard') {
+      await act(async () => host.querySelector('#rem-mode-review').dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })))
+    } else if (navigation === 'history') {
+      history.replaceState({}, '', '/?tab=remediate&mode=plan')
+      await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+      tab.focus()
+    } else {
+      history.replaceState({}, '', '/?tab=remediate&mode=plan')
+      await act(async () => root.render(createElement(RemediationWorkspaceTabs, { runId: 'scan-2', workspaceRequest, snapshot })))
+      tab.focus()
+    }
+    await flushFrames()
+    expect(document.activeElement).toBe(tab)
+    expect(cancelAnimationFrame).toHaveBeenCalled()
+  })
+
+  it('focuses only the latest requested panel', async () => {
+    const flushFrames = holdAnimationFrames()
+    const { root, host } = await mount()
+    for (const mode of ['live', 'plan']) await act(async () => root.render(createElement(RemediationWorkspaceTabs, {
+      runId: 'scan-1', workspaceRequest: { mode }, snapshot,
+    })))
+    await flushFrames()
+    expect(document.activeElement).toBe(host.querySelector('#rem-panel-plan'))
   })
 
   it('restores an explicit choice for the run', async () => {
