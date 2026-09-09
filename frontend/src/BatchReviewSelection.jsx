@@ -15,7 +15,7 @@ const EXCLUSION_HELP = {
 }
 
 const PAGE_SIZE = 10
-export default function BatchReviewSelection({ visible = [], decisions = {}, drafts = {}, scopeKey, scopeLabel = 'Current approval scope', onDecide, onResult, onBusy, onReviewExcluded, onShowAllReady, readyOutsideScope = 0, confirmRequest = 0, onConfirmRequestHandled, preparingProposals = false, onOpenPlan, disabled = false }) {
+export default function BatchReviewSelection({ visible = [], decisions = {}, drafts = {}, scopeKey, scopeLabel = 'Current approval scope', onDecide, onResult, onBusy, onReviewExcluded, onShowAllReady, readyOutsideScope = 0, confirmRequest = 0, onConfirmRequestHandled, preparingProposals = false, onOpenPlan, disabled = false, open = true }) {
   const [entries, setEntries] = useState([])
   const [page, setPage] = useState(0)
   const [confirming, setConfirming] = useState(false)
@@ -32,7 +32,13 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
   const heading = useRef(null)
   const latest = useRef({ visible, decisions, drafts, scopeKey })
   latest.current = { visible, decisions, drafts, scopeKey }
+  // A real scope change invalidates the selection — different findings, different proposals.
   useEffect(() => { setEntries([]); setConfirming(false); setPage(0); setAnnouncement('') }, [scopeKey])
+  // Closing the panel does not. It disarms the CONFIRMATION — reopening must never land on a
+  // confirm step nobody asked for this time — and leaves the chosen proposals alone, so coming back
+  // finds the work where it was left. Each entry is still revalidated at approve time
+  // (selectionProblem), so a selection that sat through a change is refused, not silently applied.
+  useEffect(() => { if (!open) { setConfirming(false); setPage(0) } }, [open])
   useEffect(() => { if (confirming) heading.current?.focus() }, [confirming])
   const findingCount = entries.reduce((n, e) => n + (e.finding._raw?.finding_count || 1), 0)
   const problems = entries.map(e => selectionProblem(e, visible, decisions, drafts))
@@ -55,7 +61,17 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
     if (reason) out[reason] = (out[reason] || 0) + 1
     return out
   }, {})
-  const excludedTotal = Object.values(exclusions).reduce((a, b) => a + b, 0)
+  // Work that is FINISHED is not work this approval is skipping. Rolling both into one headline made
+  // it read as a warning — "17 review items outside this approval" on a screen whose own header
+  // counted 9 — when most of that 17 was already-decided work that was never a candidate. Split, so
+  // the headline number is the one a reviewer might actually need to go and do something about.
+  const settledCount = Object.entries(exclusions)
+    .filter(([reason]) => reason === 'Already reviewed' || reason === 'Approval recorded')
+    .reduce((n, [, count]) => n + count, 0)
+  const notIncludedCount = Object.values(exclusions).reduce((a, b) => a + b, 0) - settledCount
+  // Derived from that split rather than recomputed, so the empty-state breakdown below and the
+  // collapsed summary can never disagree about how many items are in scope.
+  const excludedTotal = settledCount + notIncludedCount
   const confirmAllReady = () => {
     // This explicit action freezes the complete eligible scope, independent of inspection pages.
     // Reuse retained request identities on retries; never substitute a refreshed proposal.
@@ -165,7 +181,7 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
         : <><b>{readyCount} findings ready</b> · {eligible.length} review items · {eligible.reduce((n, f) => n + proposalValues(f).length, 0)} proposals · {new Set(eligible.map(f => f.file)).size} files</>}</p>
     </details>}
     {Object.keys(exclusions).length > 0 && <details className="batch-review-exclusions">
-      <summary>{excludedTotal} review items outside this approval</summary>
+      <summary>{notIncludedCount} pending review item{notIncludedCount === 1 ? '' : 's'} not included{settledCount > 0 ? ` · ${settledCount} already resolved` : ''}</summary>
       <ul>{Object.entries(exclusions).map(([reason, count]) => <li key={reason}>{count} {reason.toLowerCase()}</li>)}</ul>
       <p>These items will not be approved by this action.</p>
     </details>}

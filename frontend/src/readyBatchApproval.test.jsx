@@ -148,7 +148,9 @@ it('includes ready HITL rows beyond the separate 2000 applied-inspection cap', a
   const v = await mount(RemediationInbox, { queue: [...inspections, ready('last')], decisions: {}, initialTab: 'manual', scanId: 'capped-inspection', onDecide: vi.fn() })
   await click(v.button('Approve all ready in this run (1)'))
   expect(v.button('Confirm approval of 1 findings')).toBeTruthy()
-  expect(v.container.querySelector('.batch-review').textContent).toContain('2000 review items outside this approval')
+  // Still 2000, now said as what they are: pending work this batch does not cover. Finished work is
+  // counted apart from it, so the headline is not padded with rows that were never candidates.
+  expect(v.container.querySelector('.batch-review').textContent).toContain('2000 pending review items not included')
 })
 
 it('preserves server proposal lineage through the completion-refresh mapper without inventing missing evidence', () => {

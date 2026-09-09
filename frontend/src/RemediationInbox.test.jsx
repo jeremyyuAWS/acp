@@ -301,8 +301,11 @@ describe('RemediationInbox — workflow-status queue', () => {
     // Needs review holds the unconfirmed auto-fix (id1) and the AI draft (id2); the manual finding
     // (id3) is in Manual fixes. Document sort → id1 first.
     expect(detailHeading()).toBe('Heading contrast is too low')
-    expect(container.textContent).toContain('Approve AI suggestions')
-    expect(container.textContent).not.toContain('Approve AI suggestions 2') // Applied inspection and unversioned drafts are not ready batch approvals.
+    // The badge counts the rows the tab LISTS — both of them, the unconfirmed auto-fix included.
+    // It used to show the bulk-approvable count instead (1 here), so the tab read one number and
+    // opened onto another. The ready/inspection separation #1888 introduced is still made, in the
+    // run-approval ledger and on the approve button; see hitlPanelCounts.test.jsx.
+    expect(container.textContent).toContain('Approve AI suggestions 2')
     expect(container.textContent).toContain('Fix manually 1')
     expect(container.textContent).toContain('0 of 3 reviewed')        // progress is a separate lens
   })

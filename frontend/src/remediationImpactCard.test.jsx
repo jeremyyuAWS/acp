@@ -374,8 +374,10 @@ it('labels recorded spending separately from the selected plan', async () => {
   expect(container.textContent).toContain('7 unresolved findings across 3 files')
 })
 
+// Three default_steps, because chain_options appends fallback_2 and only THEN sets
+// supported:true -- a supported catalog never comes back with two.
 const generationCatalog = () => ({ version: 1, supported: true, max_steps: 3,
-  default_steps: ['primary', 'fallback_1'].map((step_id, position) => ({ step_id, position, provider: 'fixture', model: `model-${position}`, enabled: true, capabilities: ['text'] })),
+  default_steps: ['primary', 'fallback_1', 'fallback_2'].map((step_id, position) => ({ step_id, position, provider: 'fixture', model: `model-${position}`, enabled: true, capabilities: ['text'] })),
   models: [0, 1, 2].map(position => ({ provider: 'fixture', model: `model-${position}`, capabilities: ['text'], allowed: true, available: true })),
 })
 it('previews the exact selected chain and only submits it after explicit plan approval', async () => {
@@ -385,10 +387,11 @@ it('previews the exact selected chain and only submits it after explicit plan ap
   expect(onRun).not.toHaveBeenCalled()
   expect(getRemediationImpact.mock.calls[0][1]).toBeNull()
   await act(async () => container.querySelector('.remediation-generation-chain input').click())
+  await act(async () => container.querySelector('.remediation-generation-chain input').click())
   const selected = getRemediationImpact.mock.calls.at(-1)[1]
-  expect(selected.generation_chain.steps).toEqual([...options.default_steps, { step_id: 'fallback_2', position: 2, provider: 'fixture', model: 'model-2', enabled: true, capabilities: ['text'] }])
+  expect(selected.generation_chain.steps).toEqual(options.default_steps)
   expect(onRun).not.toHaveBeenCalled()
-  expect(container.querySelector('.remediation-impact__startbar').textContent).toContain('Up to 3 generation models')
+  expect(container.querySelector('.remediation-impact__startbar').textContent).toContain('Up to 3 models')
   await act(async () => button(container, 'Approve plan and start').click())
   expect(onRun).toHaveBeenCalledWith(selected, expect.objectContaining({ policy: selected }))
   expect(saveRemediationImpactPolicy).not.toHaveBeenCalled()

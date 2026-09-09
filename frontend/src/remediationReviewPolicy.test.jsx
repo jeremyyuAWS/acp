@@ -5,12 +5,12 @@ import Policy from './RemediationReviewPolicy.jsx'
 afterEach(unmountAll)
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-it('requires explicit opt-in and emits a bounded review-all preference', async () => {
+it('defaults to review and emits a bounded preference when turned off', async () => {
   const onChange = vi.fn(); const { root, container } = createTestRoot()
   await act(async () => root.render(createElement(Policy, { supported: true, onChange })))
-  expect(container.querySelector('input').checked).toBe(false)
+  expect(container.querySelector('input').checked).toBe(true)
   await act(async () => container.querySelector('input').click())
-  expect(onChange).toHaveBeenCalledWith({ enabled:true, mode:'review_all', minimum_reliability:null, max_review_attempts:1, review_model:'strong', permitted_families:[], evaluation_versions:{} })
+  expect(onChange).toHaveBeenCalledWith({ enabled:false, mode:'review_all', minimum_reliability:null, max_review_attempts:1, review_model:'strong', permitted_families:[], evaluation_versions:{} })
 })
 
 it('makes unsupported controls unavailable and explains human approval is retained', async () => {

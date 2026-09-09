@@ -584,8 +584,21 @@ def readyz():
         queue = {
             "queued": int(_queue_stats.get("queued") or 0),
             "running": int(_queue_stats.get("running") or 0),
+            # Of those queued rows, the ones a worker could actually claim now — run_after due,
+            # attempts below max_attempts, the same predicate claim_job uses. `queued` stays the
+            # raw row count because it is the true state of the table and the number an operator
+            # investigating a backlog wants.
+            "claimable": int(core.store.claimable_job_count()),
         }
-        queue["active"] = queue["queued"] + queue["running"]
+        # `active` is the DEPLOY GATE's number (redeploy.sh reads exactly this field), so it must
+        # mean "work a worker cutover would disturb", not "rows in the table". It counted every
+        # queued row, including rows no worker can ever claim — a retry past max_attempts, or one
+        # deferred behind a future run_after. Such a row is permanent in job_stats, so it blocked
+        # every deploy indefinitely while representing nothing: production sat at queued 1 /
+        # running 0 for forty minutes on 2026-09-09 with healthy workers, failing four deploys in
+        # a row. Counting claimable work keeps the protection (a claimable job is about to be
+        # picked up; a running one already has been) without the wedge.
+        queue["active"] = queue["running"] + queue["claimable"]
         queue["available"] = True
     except Exception as exc:  # fail closed in deploy automation; keep readiness diagnostic alive
         queue = {"queued": None, "running": None, "active": None, "available": False,
