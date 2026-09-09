@@ -134,9 +134,26 @@ def test_delete_scan_erases_authorization(scope):
     assert a.get(store,row['id'],'owner') is None
 
 
-def test_schema_50_is_pinned():
+def test_the_automatic_release_schema_ships_and_its_version_is_current():
+    """These tables are in _SCHEMA, and the version that carries them is declared.
+
+    This asserted `_SCHEMA_VERSION == 50` — the value at the moment #1908 landed. That is a
+    snapshot of a global counter, not an invariant of automatic release: EVERY later schema
+    change anywhere in the tree fails it, in a file about release authorizations, with a message
+    naming neither the schema that moved nor what to do. hitl_events.decision_primary was the
+    first, and the equality would have to be edited by each migration after it.
+
+    The forget-guard those migrations actually need already exists and is version-agnostic:
+    test_schema_boot_locks.test_the_schema_version_was_bumped_with_the_schema compares the
+    computed checksum against the pinned one and fails with the exact values to record. So the
+    checksum assertion below is kept — it is that same invariant, and cheap to hold here — while
+    the version check becomes what this file can honestly claim: the automatic-release DDL is in
+    the schema, and the version has not gone backwards past the release that introduced it.
+    """
     import store
-    assert store._PgAdapter._SCHEMA_VERSION==50
+    from automatic_release_store import SCHEMA as AUTOMATIC_RELEASE_SCHEMA
+    assert store._PgAdapter._SCHEMA_VERSION>=50
+    assert all(stmt in store._SCHEMA for stmt in AUTOMATIC_RELEASE_SCHEMA)
     assert store._PgAdapter._schema_checksum()==store._PgAdapter._SCHEMA_CHECKSUM_AT_VERSION
 
 
