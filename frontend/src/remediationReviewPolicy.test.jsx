@@ -27,7 +27,35 @@ it('bounds review attempts and labels threshold as a saved preference, not autom
   await act(async () => root.render(createElement(Policy, { onChange, supported:true, value:{enabled:true} })))
   expect([...container.querySelector('select').options].map(o=>o.value)).toEqual(['1','2'])
   expect(container.textContent).toContain('Every AI suggestion still requires your approval')
-  expect(container.textContent).toContain('This saves a preference only')
+  expect(container.textContent).toContain('preference is ready for a future validated-auto policy')
   expect(container.querySelector('input[type=number]').min).toBe('90')
   expect(container.querySelector('input[type=number]').max).toBe('100')
+})
+
+it('lets a calibrated execution path choose validated automatic approval and threshold', async () => {
+  const onChange = vi.fn(); const { root, container } = createTestRoot()
+  await act(async () => root.render(createElement(Policy, { onChange, supported:true,
+    automaticSupported:true, administratorFloor:97, value:{enabled:true} })))
+  const threshold = container.querySelector('input[value="threshold"]')
+  await act(async () => threshold.click())
+  expect(onChange).toHaveBeenCalledWith({ enabled:true, mode:'threshold', minimum_reliability:95, max_review_attempts:1 })
+  expect(container.querySelector('input[type=number]').disabled).toBe(false)
+})
+
+it('keeps the validated automatic option unavailable until calibration and independent checks exist', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(createElement(Policy, { onChange: vi.fn(), supported:true, value:{enabled:true} })))
+  expect(container.querySelector('input[value="threshold"]').closest('fieldset').disabled).toBe(true)
+  expect(container.textContent).toContain('current calibration data')
+  expect(container.textContent).toContain('Suggestions will continue to come to you for approval')
+})
+
+it('shows the server readiness reason when automatic approval is unavailable', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(createElement(Policy, {
+    onChange: vi.fn(), supported: true, automaticSupported: false,
+    automaticReason: 'Automatic application is disabled until a supported writer is configured.',
+    value: { enabled: true },
+  })))
+  expect(container.textContent).toContain('Automatic application is disabled until a supported writer is configured.')
 })

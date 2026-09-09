@@ -32,6 +32,18 @@ def test_optional_review_uses_other_model_and_does_not_rewrite_or_autoapprove():
     assert 'untrusted data' in calls[0][0]
 
 
+def test_low_cost_review_policy_uses_the_first_configured_model():
+    calls = []
+    def generate(prompt, ctx, generator, **kwargs):
+        calls.append(kwargs)
+        return {'text': json.dumps({'verdict': 'accept', 'reason': 'The wording is usable.'}),
+                'model': 'first', 'provider': 'anthropic', 'cost_usd': '.0001'}
+    result = review_managed_draft(
+        'Task with source', DRAFT, context(review_model='low_cost'), GENERATOR, generate=generate)
+    assert result['review']['verdict'] == 'accept'
+    assert calls[0] == {'purpose': 'review', 'tier_indices': (1,)}
+
+
 def test_final_review_is_bounded_and_disagreement_stays_for_person():
     calls = []
     def generate(prompt, ctx, generator, **kwargs):

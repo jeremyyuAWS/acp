@@ -148,20 +148,70 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
         for row in db.fetchall(cur):
             counts[row['tier']] = row['n']
         complete = sum(counts.values()) == totals['total_proposals']
+        # Versions and retries are not additional findings. Count unique queue items with exact
+        # attempt lineage so fallback contribution can be shown without double-counting revisions.
+        db.execute(cur, '''SELECT DISTINCT p.item_id,
+                CASE WHEN h.purpose IN ('draft','fallback') AND t.trace_call_id IS NOT NULL
+                     THEN h.purpose ELSE 'unattributed' END AS purpose
+            FROM ai_proposal_snapshots p
+            LEFT JOIN ai_attempt_history h
+              ON h.owner_id=p.owner_id AND h.scan_id=p.scan_id AND h.run_id=p.run_id
+             AND h.file=p.file AND h.attempt_id=p.attempt_id
+            LEFT JOIN ai_attempt_trace_links t
+              ON t.owner_id=p.owner_id AND t.run_id=p.run_id
+             AND t.attempt_id=p.attempt_id AND t.trace_call_id=p.model_call_id
+            WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s''', scope)
+        item_purposes = {}
+        for row in db.fetchall(cur):
+            item_purposes.setdefault(str(row['item_id']), set()).add(str(row['purpose']))
+        draft_items = {item for item, purposes in item_purposes.items() if 'draft' in purposes}
+        fallback_items = {item for item, purposes in item_purposes.items() if 'fallback' in purposes}
+        db.execute(cur, '''SELECT DISTINCT p.item_id
+            FROM ai_proposal_snapshots p
+            JOIN ai_review_receipts r
+              ON r.owner_id=p.owner_id AND r.scan_id=p.scan_id AND r.run_id=p.run_id
+             AND r.proposal_sha256=p.proposal_sha256
+            WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s''', scope)
+        reviewed_items = {str(row['item_id']) for row in db.fetchall(cur)}
+        measured_contribution = {
+            'available': False,
+            'first_model_findings': None, 'fallback_additional_findings': None,
+            'reviewed_findings': None, 'baseline_findings': None,
+            'queue_items': {'first_model':len(draft_items),
+                            'fallback_only':len(fallback_items - draft_items),
+                            'reviewed':len(reviewed_items)},
+            'reason': 'immutable_baseline_finding_membership_unavailable',
+        }
+
         events = {}
         event_details_complete = True
         if proposals:
             marks = ','.join(['%s'] * len(proposals))
             for table, fields, key in (
                 ('hitl_events', 'e.id,e.action,e.edited,e.created_at', 'human_reviews'),
-                ('ai_validation_outcomes', 'e.id,e.outcome,e.detail,e.regressions,e.created_at', 'validation_events'),
+                ('ai_validation_outcomes', 'e.id,e.outcome,e.detail,e.regressions,e.proposal_snapshot_id,e.source_revision,e.approved_value_sha256,e.created_at', 'validation_events'),
             ):
-                db.execute(cur, f'''SELECT p.snapshot_id,{fields} FROM ai_proposal_snapshots p
+                query = f'''SELECT p.snapshot_id,{fields} FROM ai_proposal_snapshots p
                     JOIN {table} e ON e.model_call_id=p.model_call_id AND e.scan_id=p.scan_id
                     AND e.file=p.file AND e.item_id=p.item_id AND e.rule_id=p.rule_id
                     WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s AND p.attempt_id IS NOT NULL
-                    AND p.snapshot_id IN ({marks}) ORDER BY e.created_at DESC,e.id,p.snapshot_id LIMIT 1001''',
-                    (*scope, *(row['snapshot_id'] for row in proposals)))
+                    AND p.snapshot_id IN ({marks}) ORDER BY e.created_at DESC,e.id,p.snapshot_id LIMIT 1001'''
+                try:
+                    db.execute(cur, query, (*scope, *(row['snapshot_id'] for row in proposals)))
+                except Exception:
+                    # Older isolated databases and pre-lineage replicas may not have the
+                    # additive verification columns yet. Preserve their historical events, but
+                    # deliberately leave exact-version verification unavailable.
+                    if table != 'ai_validation_outcomes':
+                        raise
+                    db.execute(cur, f'''SELECT p.snapshot_id,e.id,e.outcome,e.detail,e.regressions,
+                        NULL AS proposal_snapshot_id,NULL AS source_revision,
+                        NULL AS approved_value_sha256,e.created_at FROM ai_proposal_snapshots p
+                        JOIN {table} e ON e.model_call_id=p.model_call_id AND e.scan_id=p.scan_id
+                        AND e.file=p.file AND e.item_id=p.item_id AND e.rule_id=p.rule_id
+                        WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s AND p.attempt_id IS NOT NULL
+                        AND p.snapshot_id IN ({marks}) ORDER BY e.created_at DESC,e.id,p.snapshot_id LIMIT 1001''',
+                        (*scope, *(row['snapshot_id'] for row in proposals)))
                 rows = db.fetchall(cur)
                 if len(rows) > 1000:
                     event_details_complete = False
@@ -172,8 +222,12 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
     for proposal in proposals:
         proposal['proposal'] = json.loads(proposal.pop('proposal_json') or 'null')
         proposal.update(events.get(proposal['snapshot_id'], {}))
+        # Approval metadata copied to a result is not actual writer evidence. Until
+        # the writer records the bytes/value it used, even a cleared event cannot
+        # prove this exact version. Keep historical evidence inspectable only.
         proposal['version_verified'] = False
-        proposal['verification_reason'] = 'Recorded events do not identify this exact proposal version and source revision.'
+        proposal['verification_reason'] = 'Actual writer source and approved-value proof unavailable.'
+
     return {
         'contract_version': 'remediation-run-insights.v1', 'scan_id': scan_id, 'run_id': run_id, 'batch_id': run_id,
         'attempts': attempts, 'proposals': proposals, 'review_receipts': reviews,
@@ -183,6 +237,7 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
         'contribution': {'unit': 'proposal_versions', **counts, 'total': totals['total_proposals'],
                          'complete': complete,
                          'note': 'Saved proposal versions, not unique findings or verified fixes. Revisions may cover the same issue.'},
-        'outcomes': {'verified_fix_count': None, 'reason': 'proposal_version_verification_unavailable'},
+        'measured_contribution': measured_contribution,
+        'outcomes': {'verified_fix_count': None, 'reason': 'actual_writer_proof_unavailable'},
         'estimate': build_impact_estimate([], config_id='unavailable', change_family='unavailable'),
     }

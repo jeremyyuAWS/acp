@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 DEFAULT = {"enabled": False, "mode": "review_all", "minimum_reliability": 95,
-           "max_review_attempts": 1}
+           "max_review_attempts": 1, "review_model": "strong"}
 
 
 def normalize_review_policy(value):
@@ -17,6 +17,8 @@ def normalize_review_policy(value):
         raise ValueError("Minimum validated reliability must be an integer from 90 to 100")
     if type(result['max_review_attempts']) is not int or result['max_review_attempts'] not in (1, 2):
         raise ValueError("Allow one review, or one review and one final review")
+    if result['review_model'] not in ('strong', 'low_cost'):
+        raise ValueError("Choose the strongest reviewer or the low-cost reviewer")
     if result['mode'] == 'threshold' and not result['enabled']:
         raise ValueError("An AI reviewer is required for a threshold policy")
     return result
@@ -57,5 +59,6 @@ def approval_gate(policy, *, review, estimate, validation, proposal_sha256,
 
 def capabilities():
     return {'review_supported': True, 'automatic_application_supported': False,
+            'review_models': ['strong', 'low_cost'],
             'threshold_minimum': 90, 'administrator_floor': 95,
-            'reason': 'AI review can check a suggestion. Automatic application still requires a supported writer, independent checks and current calibration.'}
+            'reason': 'AI review can check a suggestion. Low-cost review is available; automatic application still requires a supported writer, independent checks and current calibration.'}

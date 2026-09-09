@@ -63,6 +63,9 @@ def test_real_enqueue_captures_exact_context_and_update_keeps_original_version(i
     assert first['proposals'][0]['item_id'] == item
     assert first['proposals'][0]['attempt_id'] == 'attempt'
     assert first['contribution']['draft'] == 1
+    assert first['measured_contribution']['available'] is False
+    assert first['measured_contribution']['first_model_findings'] is None
+    assert first['measured_contribution']['fallback_additional_findings'] is None
     assert first['review_receipts'][0]['review']['verdict'] == 'accept'
     original = first['proposals'][0]['proposal']['proposed_value']
     # The queue's replacement seam also captures an immutable version.
@@ -74,6 +77,24 @@ def test_real_enqueue_captures_exact_context_and_update_keeps_original_version(i
         }]) == item
     values = [row['proposal']['proposed_value'] for row in read_insights(store, 'owner', 'scan', result['batch_id'])['proposals']]
     assert values == [original, 'An edited description']
+
+
+def test_exact_proposal_lineage_marks_only_the_verified_snapshot(isolated_store):
+    store = isolated_store
+    result, job = managed_run(store)
+    item = retain(store, job)
+    queue = store.get_hitl_item(item)
+    snapshot_id = queue['proposal_snapshot_ids'][0]
+    store.record_hitl_event(
+        'scan', 'a.html', '1.1.1', item, 'approve', model_call_id=queue['proposals'][0]['model_call_id'],
+        proposal_snapshot_ids=[snapshot_id], source_revision=store.stage_snapshot_id('scan'),
+        approved_value_sha256='approved-digest')
+    assert store.record_ai_validation_outcomes(
+        'scan', 'a.html', '1.1.1', [item], 'verified_cleared') == 1
+    proposal = read_insights(store, 'owner', 'scan', result['batch_id'])['proposals'][0]
+    assert proposal['version_verified'] is False
+    assert proposal['validation_events'][0]['proposal_snapshot_id'] == snapshot_id
+    assert read_insights(store, 'owner', 'scan', result['batch_id'])['outcomes']['verified_fix_count'] is None
 
 
 def test_enqueue_outside_matching_worker_context_cannot_claim_execution(isolated_store):
@@ -132,3 +153,23 @@ def test_insights_route_checks_scan_and_execution_owner_and_disables_caching(iso
     with pytest.raises(HTTPException) as exc:
         run_insights('scan', first['batch_id'], SimpleNamespace(state=SimpleNamespace(user_email='owner')), Response(), offset=0, limit=100)
     assert exc.value.status_code == 404
+
+
+@pytest.mark.parametrize('later_outcome', [None, 'verified_still_failing', 'could_not_verify'])
+def test_approval_metadata_without_actual_writer_proof_never_verifies(isolated_store, later_outcome):
+    store = isolated_store
+    result, job = managed_run(store)
+    item = retain(store, job)
+    queue = store.get_hitl_item(item)
+    store.record_hitl_event('scan', 'a.html', '1.1.1', item, 'approve',
+        model_call_id=queue['proposals'][0]['model_call_id'],
+        proposal_snapshot_ids=queue['proposal_snapshot_ids'], source_revision='stale-revision',
+        approved_value_sha256='an-arbitrary-nonmatching-digest')
+    store.record_ai_validation_outcomes('scan', 'a.html', '1.1.1', [item], 'verified_cleared',
+                                       regressions=None)
+    if later_outcome:
+        store.record_ai_validation_outcomes('scan', 'a.html', '1.1.1', [item], later_outcome)
+    data = read_insights(store, 'owner', 'scan', result['batch_id'])
+    assert data['proposals'][0]['version_verified'] is False
+    assert data['outcomes']['verified_fix_count'] is None
+    assert data['measured_contribution']['baseline_findings'] is None

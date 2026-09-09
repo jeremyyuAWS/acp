@@ -65,7 +65,7 @@ it('removes the duplicate summary while retaining its code and optional AI revie
   const { root, container } = createTestRoot()
   await act(async () => root.render(createElement(Choices, { policy: { rule_based: 2, ai: 1 }, budgetSupported: true, reviewSupported: true, onChange: vi.fn() })))
   expect(container.textContent).not.toContain('Plan you are approving')
-  expect([...container.querySelectorAll('summary')].some(node => node.textContent === 'Optional AI review')).toBe(true)
+  expect([...container.querySelectorAll('summary')].some(node => node.textContent.includes('Optional AI review'))).toBe(true)
   const source = readFileSync('src/RemediationPlanChoices.jsx', 'utf8')
   expect(source).toContain('export function RetiredRemediationPlanSummary')
   expect(source).not.toContain('<RetiredRemediationPlanSummary')

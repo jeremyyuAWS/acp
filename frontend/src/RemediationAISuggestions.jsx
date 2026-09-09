@@ -17,6 +17,49 @@ function decision(item) {
   return 'Decision details unavailable'
 }
 
+const eventRows = value => records(value)
+const eventLabel = value => String(value || 'Recorded step').replaceAll('_', ' ')
+
+function FindingTimeline({ item, proposals, calls, runId }) {
+  const steps = []
+  proposals.forEach((proposal, index) => {
+    const call = calls.find(candidate => candidate.id === proposal.model_call_id && candidate.scan_id === runId && candidate.file === item.file)
+    const reviews = eventRows(proposal.human_reviews).concat(eventRows(proposal.review_events))
+    const validations = eventRows(proposal.validation_events)
+    steps.push({
+      key: proposal.snapshot_id || `${item.id || item.file}-proposal-${index}`,
+      title: `Proposal version ${index + 1}`,
+      detail: proposal.version_verified ? 'Exact proposal version verified after the change.' : proposal.superseded ? 'Historical proposal version — no longer current.' : 'Proposal only — exact verification is not recorded.',
+      model: call ? `${call.provider ? `${call.provider} · ` : ''}${call.model || 'Model unavailable'}` : proposal.model || 'Model call details unavailable',
+      time: call?.ts || proposal.created_at,
+      reviews,
+      validations,
+      snapshot: proposal.snapshot_id,
+    })
+  })
+  const itemReviews = eventRows(item.review_events || item.human_reviews)
+  if (itemReviews.length) itemReviews.forEach((event, index) => steps.push({ key: `review-${event.id || index}`, title: 'Decision', detail: eventLabel(event.action || event.verdict), model: null, time: event.created_at, reviews: [], validations: [] }))
+  const itemValidations = eventRows(item.validation_events)
+  if (itemValidations.length) itemValidations.forEach((event, index) => steps.push({ key: `validation-${event.id || index}`, title: 'Post-change check', detail: eventLabel(event.outcome), model: null, time: event.created_at, reviews: [], validations: [] }))
+  steps.sort((left, right) => {
+    const leftTime = left.time ? Date.parse(left.time) : Number.POSITIVE_INFINITY
+    const rightTime = right.time ? Date.parse(right.time) : Number.POSITIVE_INFINITY
+    return (Number.isFinite(leftTime) ? leftTime : Number.POSITIVE_INFINITY) - (Number.isFinite(rightTime) ? rightTime : Number.POSITIVE_INFINITY)
+  })
+  return <details className="remediation-ai-suggestions__timeline">
+    <summary>Show the AI steps for this finding</summary>
+    <p>Saved records for this finding, in order. Reading this does not request another model or approve a change.</p>
+    {steps.length ? <ol>{steps.map(step => <li key={step.key}>
+      <strong>{step.title}</strong>{step.time && <span className="remediation-ai-suggestions__timeline-time"> · {step.time}</span>}
+      <p>{step.detail}</p>
+      {step.model && <p><strong>Model:</strong> {step.model}</p>}
+      {step.snapshot && <p><strong>Saved version:</strong> {step.snapshot}</p>}
+      {step.reviews.length > 0 && <ul>{step.reviews.map((event, index) => <li key={event.id || index}>Review: {eventLabel(event.action || event.verdict)}{event.detail ? ` · ${text(event.detail)}` : ''}</li>)}</ul>}
+      {step.validations.length > 0 && <ul>{step.validations.map((event, index) => <li key={event.id || index}>Check: {eventLabel(event.outcome)}{event.detail ? ` · ${text(event.detail)}` : ''}</li>)}</ul>}
+    </li>)}</ol> : <p>Exact AI steps are unavailable for this finding. The saved proposal below is still shown without guessing which model produced it.</p>}
+  </details>
+}
+
 function Proposal({ proposal, item, calls, runId }) {
   // An adjacent call for the same file is not evidence that it produced this value.
   const call = calls.find(call => call.id === proposal.model_call_id && call.scan_id === runId && call.file === item.file)
@@ -82,6 +125,7 @@ export default function RemediationAISuggestions({ runId, scopeFiles, rows = [],
         <p><strong>{item.rule_name || item.rule_id || 'Accessibility finding'}</strong> · Rule {item.rule_id || 'unavailable'}</p>
         <p><strong>Current decision:</strong> {decision(item)}</p>
         {item.reviewer_note && <p><strong>Reviewer note:</strong> {text(item.reviewer_note)}</p>}
+        <FindingTimeline item={item} proposals={records(item.proposals)} calls={records(visible.calls)} runId={runId} />
         {records(item.proposals).length ? records(item.proposals).map((proposal, index) => <Proposal key={index} proposal={proposal} item={item} calls={records(visible.calls)} runId={runId} />) : <p>Generated content unavailable for this review item.</p>}
       </article>)}
       {aiRows.filter(row => !items.some(item => item.file === row.file && criterion(item.rule_id) === criterion(row.rule_id || row.criterion))).map((row, index) => <article key={row.id || index} className="remediation-ai-suggestions__item">

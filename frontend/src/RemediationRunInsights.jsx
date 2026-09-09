@@ -39,6 +39,12 @@ export default function RemediationRunInsights({ scanId, batchId }) {
         <table><caption>Saved proposal versions in this run</caption><thead><tr><th>Source</th><th>Versions</th></tr></thead><tbody>
           {[['draft', 'First AI'], ['fallback', 'Next AI'], ['unattributed', 'Model linkage unavailable']].map(([key, label]) => <tr key={key}><th scope="row">{label}</th><td>{count(data.contribution?.[key])}</td></tr>)}
         </tbody></table>
+        <h4>Measured contribution by finding</h4>
+        {data.measured_contribution?.available ? <table><caption>Unique baseline findings with exact lineage</caption><thead><tr><th>AI step</th><th>Findings</th></tr></thead><tbody>
+          <tr><th scope="row">First AI: suggestions ready</th><td>{count(data.measured_contribution.first_model_findings)}</td></tr>
+          <tr><th scope="row">Next AI: additional suggestions</th><td>{count(data.measured_contribution.fallback_additional_findings)}</td></tr>
+          <tr><th scope="row">AI reviewer: checked suggestions</th><td>{count(data.measured_contribution.reviewed_findings)}</td></tr>
+        </tbody></table> : <p>AI step contribution is not yet known for this run. Exact finding lineage is incomplete, so proposal versions are shown separately and are not counted as extra fixes.</p>}
         <p>These counts do not measure extra issues fixed. Exact proposal-version verification is {data.outcomes?.verified_fix_count == null ? 'not available yet' : 'reported separately'}.</p>
         <h4>What each model generated</h4>
         {rows(data.attempts).length === 0 && <p>No retained model attempts for this run. Older runs may not have recorded this history.</p>}
