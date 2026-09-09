@@ -22,7 +22,7 @@ export function recordedRunGraphGroups(runGraph) {
       role: position === 0 ? 'Initial AI' : `Fallback ${position}`,
       title: named(step.model) ? step.model : 'Model not recorded', provider: step.provider,
       model: step.model, stepId, attemptIds: linked.map(attempt => attempt.attempt_id), purpose: 'generation', identityKind: 'configured',
-      detail: linked.length ? ({ suggestions_ready: 'Usable proposals recorded', failed: 'No usable result recorded', stopped: 'Attempt stopped' })[step.state] || 'Outcome not established' : 'Configured · dispatch not recorded',
+      detail: step.state === 'not_needed' ? 'Not needed' : linked.length ? ({ suggestions_ready: 'Usable proposals recorded', failed: 'No usable result recorded', stopped: 'Attempt stopped' })[step.state] || 'Outcome not established' : 'Configured · dispatch not recorded',
       explanation: named(step.reason) ? step.reason : 'Recorded outcome unknown.',
       value: linked.length, metric: 'recorded attempts', canAnimate: false, in_flight: false,
     }])

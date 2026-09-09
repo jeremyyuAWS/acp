@@ -61,3 +61,11 @@ describe('recorded run graph presentation', () => {
     expect(updated).toHaveLength(2)
   })
 })
+
+it('shows not needed only when the complete projection records that decision', () => {
+  const unused = recordedRunGraphGroups(graph({ steps: [step(2, { state: 'not_needed', reason: 'Earlier usable output explicitly skipped this position.' })] }))[0][0]
+  expect(unused.detail).toBe('Not needed')
+  const unknown = recordedRunGraphGroups(graph({ steps: [step(2)] }))[0][0]
+  expect(unknown.detail).toContain('dispatch not recorded')
+  expect(unknown.detail).not.toBe('Not needed')
+})
