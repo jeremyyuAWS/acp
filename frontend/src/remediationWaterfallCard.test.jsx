@@ -165,3 +165,13 @@ it('opens a stage drawer and keeps history polling when animation is paused', as
   await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
   expect(getRunInsights.mock.calls.length).toBeGreaterThan(reads)
 })
+
+it('keeps confirmed activity on the selected model after stable model IDs replace tier IDs', async () => {
+  const { root, container } = createTestRoot()
+  const stamp = new Date().toISOString()
+  const view = { ...activity.view, generated_at: stamp, stages: activity.view.stages.map(stage => ({ ...stage, models: [{ provider: 'recorded', model: `model-${stage.tier}` }] })) }
+  await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot({ state: 'running', generated_at: stamp, progress: { lease_healthy: true } })} activity={{ view }} />))
+  await act(async () => container.querySelector('[data-stage=next]').click())
+  expect(container.querySelector('[data-stage=next]').classList.contains('wf-graph-node-active')).toBe(true)
+  expect(container.querySelector('[data-stage=first]').classList.contains('wf-graph-node-active')).toBe(false)
+})

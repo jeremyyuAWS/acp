@@ -90,7 +90,7 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
   const closeStageDrawer = useCallback(() => setStageDrawer(false), [])
   const storyLive = !snapshot.terminal && (snapshot.state === 'running' || (snapshot.state === 'needs_attention' && snapshot.also?.includes('running')))
   const [motionPaused, setMotionPaused] = useState(false)
-  const motion = useWaterfallMotion(snapshot, data, { paused: paused || motionPaused, error: state.error, selected: selection })
+  const motion = useWaterfallMotion(snapshot, data, { paused: paused || motionPaused, error: state.error, selected: selectedRole })
   const visualsPaused = paused || motionPaused || motion.hidden
   const [drawer, setDrawer] = useState(null)
   const requestId = useRef(0)
