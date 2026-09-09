@@ -36,7 +36,7 @@ STATUSES = frozenset({'drafted', 'unusable_response', 'empty_response', 'refused
                      'provider_limit_exceeded', 'accepted', 'revision_requested', 'unable_to_judge'})
 RESULT_KEYS = frozenset({'text', 'response_issue', 'cost_usd', 'call_id', 'model',
                          'provider', 'zone', 'prompt_tokens', 'completion_tokens', 'bounds_exceeded',
-                         'execution', 'validation_outcome'})
+                         'execution', 'validation_outcome', 'skipped_step_ids'})
 
 
 def _hash(value):
@@ -124,9 +124,9 @@ class AttemptHistory:
             if result is not None and (result.get('model') != row['model'] or result.get('provider') != row['provider']):
                 raise AttemptConflict('recorded model identity differs from the actual result')
             execution = (json.loads(row['result_json'] or '{}') or {}).get('execution')
+            if result is not None and result.get('execution', execution) != execution:
+                raise AttemptConflict('attempt execution lineage is immutable')
             if execution is not None:
-                if result is not None and result.get('execution', execution) != execution:
-                    raise AttemptConflict('attempt execution lineage is immutable')
                 result = {**(result or {}), 'execution': execution}
             encoded, digest, retention = _result(result)
             values = dict(status=status,result_json=encoded,output_sha256=digest,output_retention=retention,reason=reason)

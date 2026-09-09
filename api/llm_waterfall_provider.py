@@ -345,7 +345,9 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
                 and (row.get('result') or {}).get('bounds_exceeded') is False
                 and ((row['status'] == 'empty_response'
                       and not (row.get('result') or {}).get('response_issue')
-                      and (row.get('result') or {}).get('text') == '')
+                      and ((row.get('result') or {}).get('text') == ''
+                           or (adapter and isinstance((row.get('result') or {}).get('text'), str)
+                               and not row['result']['text'].strip())))
                      or (row['status'] == 'unusable_response'
                          and (row.get('result') or {}).get('response_issue') in (ELIGIBLE if adapter else {'truncated'})))
                 and (not adapter or all(((row.get('result') or {}).get('execution') or {}).get(k) == v for k,v in binding.items()))]
@@ -367,7 +369,7 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
                         WHERE execution_id=%s AND scan_id=%s AND owner_email=%s''',
                         (ctx.run_id, ctx.scan_id, ctx.owner_id))
                     execution = ctx.ledger.db.fetchone(cur)
-                if execution is None or execution['cancel_requested_at'] or execution['state'] in ('cancelled','failed','interrupted','superseded'):
+                if execution is None or execution['cancel_requested_at'] or execution['state'] not in ('accepted', 'queued', 'processing'):
                     return defer_managed('run_stopped_or_unavailable', attempts=attempts)
             except Exception:
                 return defer_managed('run_dispatch_permission_unavailable', attempts=attempts)
@@ -452,6 +454,8 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
                   'refused' if issue == 'refused' else 'unusable_response' if issue else
                   'drafted' if result['text'].strip() else 'empty_response')
         attempt['status'] = status
+        if adapter and status == 'drafted':
+            result['skipped_step_ids'] = [STEP_IDS[i-1] for i in tier_indices if i > index]
         if issue:
             attempt['reason'] = issue
         if not retain(attempt, status, result, issue):

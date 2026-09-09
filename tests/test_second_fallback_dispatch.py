@@ -100,8 +100,9 @@ def test_unsafe_response_does_not_fallback(dispatch,response,reason):
     assert len(dispatch.history())==1
 
 
-def test_retry_resumes_two_settled_failures_after_budget_interruption(dispatch):
-    dispatch.responses=['','',TITLE]
+@pytest.mark.parametrize('empty',['','   '])
+def test_retry_resumes_two_settled_failures_after_budget_interruption(dispatch,empty):
+    dispatch.responses=[empty,empty,TITLE]
     ledger=dispatch.ctx.ledger
     def reserve_competing_work(state,execution):
         if execution['generation_position']==1:
@@ -191,3 +192,11 @@ def test_unknown_charge_retry_never_rebuys_or_falls_back(dispatch):
     assert len(dispatch.calls)==1
     assert dispatch.ctx.ledger.snapshot('owner',dispatch.ctx.run_id)['blocked'] is True
     assert dispatch.history()[0]['spending_state']=='uncertain'
+
+
+def test_completed_or_paused_run_cannot_dispatch_new_operation(dispatch):
+    for stage_state in ('completed','paused'):
+        with dispatch.store._db.cursor() as cur:
+            dispatch.store._db.execute(cur,'UPDATE stage_executions SET state=%s WHERE execution_id=%s',(stage_state,dispatch.ctx.run_id))
+        assert dispatch.invoke()['reason']=='run_stopped_or_unavailable'
+    assert dispatch.calls==[]
