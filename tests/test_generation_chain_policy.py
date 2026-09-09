@@ -80,13 +80,13 @@ def specs(size=3):
     return tuple(TextModelSpec('openai', f'fixture-model-{n}', 'synthetic-price', '1', '2', 8192, 128, int(time.time()) + 3600) for n in range(size))
 
 
-def test_catalog_is_read_only_defaults_to_two_and_requires_supported_finding(monkeypatch):
+def test_catalog_is_read_only_defaults_to_three_and_requires_supported_finding(monkeypatch):
     generator = StrictTextGenerator(specs(), provider_module=FakeProviders,
         post=lambda *a, **kw: pytest.fail('capability read dispatched a paid request'))
     monkeypatch.setattr('llm_waterfall_provider.configured_generator', lambda: generator)
     result = chain_options([{'file': 'a.pptx', 'criterion': '2.4.6', 'finding_count': 1}])
     assert result['supported'] is True
-    assert result['default_steps'] == chain(2)['steps']
+    assert result['default_steps'] == chain(3)['steps']
     assert len(result['models']) == 3
     assert 'synthetic-price' not in json.dumps(result)
     assert chain_options([])['supported'] is False

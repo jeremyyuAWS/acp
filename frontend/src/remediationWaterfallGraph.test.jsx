@@ -25,6 +25,16 @@ async function mount(props = {}) {
 }
 
 describe('the connected remediation waterfall', () => {
+  it('keeps the second fallback visible when an older run has no saved position for it', () => {
+    const runGraph = { contract_version: 'remediation-run-graph.v1', coverage: 'complete', chain_version: 1,
+      steps: [{ step_id: 'primary', position: 0, configured: true, enabled: true, provider: 'anthropic', model: 'claude-haiku' }],
+      attempts: [], edges: [] }
+    const graph = waterfallGraphModel({ stages, runGraph, aiEnabled: true })
+    const node = graph.nodes.find(item => item.data.stage === 'next2')
+    expect(node?.data.title).toBe('Second fallback')
+    expect(node?.data.detail).toContain('Not configured for this saved run')
+  })
+
   it('shows recorded model names and providers, with attempt units distinct from changes', async () => {
     const { container } = await mount({ reviewCount: 8, verifiedCount: 404 })
     expect(container.querySelectorAll('[data-stage]')).toHaveLength(5)
