@@ -12,6 +12,7 @@ import { scanFailureDetail, hasFallbackInventory } from './scanFailureMessage.js
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
 import RemediationRunCard from './RemediationRunCard.jsx'
 import { useRemediationRun } from './useRemediationRun.js'
+import useReleaseReadinessRefresh from './useReleaseReadinessRefresh.js'
 import WorkflowStageStack from './WorkflowStageStack.jsx'
 import { currentCanonicalStage } from './canonicalStageCard.js'
 import { useCanonicalStageLineage } from './useCanonicalStageLineage.js'
@@ -542,6 +543,10 @@ export default function App() {
   const activeRemediationScanId = primaryWorkflow?.stage === 'remediate'
     ? primaryWorkflow.scan_id : null
   const remRun = useRemediationRun(activeRemediationScanId || scan?.run?.id || null)
+  useReleaseReadinessRefresh({ runId: scan?.run?.id, surface: view,
+    enabled: Boolean(me && ['remediate', 'publish'].includes(view) && !isHistoricalScan(scanList, scan?.run?.id)),
+    snapshot: remRun.snapshot, events: remRun.events,
+    onScan: next => setScan(current => current?.run?.id === next.run.id ? next : current) })
   const canonicalRun = useCanonicalStageLineage(primaryWorkflow?.scan_id || scan?.run?.id || null,
     getStageLineage)
   const canonicalStage = currentCanonicalStage(canonicalRun.lineage)
