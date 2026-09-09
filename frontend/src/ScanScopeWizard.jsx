@@ -14,6 +14,7 @@ import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
 import { ASSESSMENT_FALLBACK, assessmentFor } from './capability.js'
 import { reusableScopes, describeScope, whenLabel } from './recentScopes.js'
 import { lastRunOfScope, coverageSentence } from './scopeHistory.js'
+import InfoTip from './InfoTip.jsx'
 
 // ── Scan-scope WIZARD (Phase 1) ─────────────────────────────────────────────────────────────────
 //
@@ -696,7 +697,10 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
             {locKey === 'drive' ? 'GOOGLE DRIVE LOCATIONS' : 'SHAREPOINT LOCATIONS'}
           </div>
           <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>
-            Choose which locations ACP should inventory. Subfolders are included unless you exclude them.
+            Choose which locations ACP should inventory.
+            <InfoTip label="subfolders">
+              Subfolders are included unless you exclude them.
+            </InfoTip>
           </div>
 
 

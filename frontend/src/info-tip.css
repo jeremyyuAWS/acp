@@ -1,0 +1,25 @@
+/* Inline circled "i". Sits in the text flow next to the line it qualifies, unlike
+   remediation-option-help which is absolutely positioned into a card corner. Colours come from
+   the app's own tokens so it holds in both themes rather than the hardcoded plum of that one. */
+.info-tip { position: relative; display: inline-flex; vertical-align: baseline; }
+.info-tip > button {
+  display: grid; place-items: center; width: 18px; height: 18px; margin: 0 0 0 4px; padding: 0;
+  border: 0; background: none; cursor: help; color: var(--muted);
+}
+.info-tip > button > span {
+  display: grid; place-items: center; box-sizing: border-box; width: 14px; height: 14px;
+  border: 1px solid currentColor; border-radius: 50%;
+  font: 600 10px/1 Georgia, "Times New Roman", serif;
+}
+.info-tip > button:hover, .info-tip > button:focus-visible { color: var(--ink, #222); }
+.info-tip > button:focus-visible { outline: 2px solid var(--focus, #76518c); outline-offset: 2px; border-radius: 50%; }
+.info-tip__text {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; width: 260px;
+  max-width: calc(100vw - 64px); padding: 10px 12px; box-sizing: border-box;
+  border: 1px solid var(--line, #d9d9e0); border-radius: 8px;
+  background: var(--card, #fff); color: var(--ink, #222);
+  box-shadow: 0 4px 16px rgba(48, 33, 59, .15);
+  font-size: 12.5px; line-height: 1.5; font-weight: 400; text-align: left; white-space: normal;
+}
+/* Near the right edge the panel would overflow the modal; flip it to hang from the right. */
+.info-tip--end .info-tip__text { left: auto; right: 0; }
