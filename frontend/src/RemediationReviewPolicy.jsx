@@ -46,7 +46,7 @@ export default function RemediationReviewPolicy({ value, onChange, disabled, sup
         <label><input type="radio" name={`${id}-mode`} value="threshold" checked={policy.mode === 'threshold'} disabled={!available}
           onChange={() => change({ mode: 'threshold' })} /> Automatically apply eligible, checked changes</label>
       </fieldset>
-      {!available && <p className="remediation-review-policy__calibration-note">Available after validation is configured. {automaticReason || 'No change family has a supported objective writer, exact-version independent review and current evaluated reliability configured.'} Suggestions will continue to come to you for approval.</p>}
+      {!available && <p className="remediation-review-policy__calibration-note">Automatic application is not available for this run. {automaticReason || 'No change family has a supported objective writer, exact-version independent review and current evaluated reliability configured.'} AI suggestions will remain drafts for your approval.</p>}
       <details open={policy.mode === 'threshold'}><summary>Minimum validated reliability</summary>
         <p>This is based on evaluated results for this type of change. It is not the AI's own confidence and does not guarantee each change is correct.</p>
         <p>Choose eligible change types and an explicit threshold. Approve plan and start authorizes this bounded run policy; later settings changes cannot broaden an approved run.</p>
