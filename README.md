@@ -59,9 +59,13 @@ it automatically, at scale, and — crucially — **keeps a record an auditor wi
 - **A complete paper trail.** Every check on every document is recorded — pass,
   fail, error, or not-applicable — so you can answer "how do we know rule X was
   checked on this file?" for any document, at any time.
-- **Your data stays yours.** ACP runs inside your own cloud. It reads documents
-  into temporary memory, never stores copies, and (in deterministic mode) sends
-  nothing to any outside AI service.
+- **Your data stays in your deployment.** ACP runs inside your own cloud and
+  reads source documents into temporary memory while processing them. It also
+  stores structured findings and, when AI remediation is enabled, may retain
+  proposal evidence for review and audit (such as the before/proposed values,
+  rationale, model metadata, and call IDs). Deterministic mode makes no calls
+  to outside AI services; configure your deployment's storage, access, and
+  retention controls for the evidence it keeps.
 - **You stay in control.** Nothing is deleted, moved, or published without an
   approval step you configure.
 

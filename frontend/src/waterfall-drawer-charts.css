@@ -1,0 +1,27 @@
+.wd-charts { display:grid; gap:12px; min-width:0; }
+.wd-chart { border:1px solid var(--line,#e6dfed); border-radius:12px; padding:14px; min-width:0; background:var(--card,#fff); font-size:13px; line-height:1.5; }
+.wd-chart h3 { font-size:13px; font-weight:600; margin:0 0 8px; }
+.wd-chart p { font-size:13px; margin:6px 0; }
+.wd-chart-empty,.wd-chart-meta { color:var(--muted,#63586b); }
+.wd-chart strong,.wd-chart text,.wd-chart time,.wd-chart td { font-family:var(--font-mono,ui-monospace,monospace); font-variant-numeric:tabular-nums; }
+.wd-chart text { font-size:12px; fill:currentColor; }
+.wd-chart ul { list-style:none; margin:0; padding:0; }
+.wd-bars li { margin-top:12px; }
+.wd-bar-button,.wd-bar-label { display:flex; justify-content:space-between; align-items:baseline; gap:12px; width:100%; font:inherit; text-align:left; }
+.wd-bar-button { background:transparent; color:inherit; border:0; padding:2px 0; cursor:pointer; }
+.wd-bar-button:hover { text-decoration:underline; }
+.wd-bar-button:focus-visible { outline:2px solid #3966bf; outline-offset:4px; border-radius:3px; }
+.wd-bar-label span,.wd-bar-button span { overflow-wrap:anywhere; min-width:0; }
+.wd-bar-track { margin-top:5px; height:8px; border-radius:8px; background:#eee8f2; overflow:hidden; }
+.wd-bar-track i { display:block; height:100%; border-radius:8px; }
+.wd-trend { display:block; width:100%; max-height:170px; }
+.wd-gauge { display:block; width:220px; max-width:100%; margin:auto; }
+.wd-pace-number { display:block; font-size:28px; color:#3966bf; }
+.wd-chart summary { font-size:13px; cursor:pointer; }
+.wd-chart table { width:100%; table-layout:fixed; border-collapse:collapse; font-size:12px; }
+.wd-chart th,.wd-chart td { padding:6px; text-align:left; overflow-wrap:anywhere; }
+.wd-donut { width:140px; display:block; margin:0 auto 12px; }
+.wd-spend-list li { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 12px; margin:8px 0; overflow-wrap:anywhere; }
+.wd-spend-list i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; }
+
+.wd-chart-axis { font-family:var(--font-mono,ui-monospace,monospace); font-size:12px; font-variant-numeric:tabular-nums; margin-left:5%; }
