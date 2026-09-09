@@ -12,6 +12,7 @@ import WorkspaceProgress from './WorkspaceProgress.jsx'
 import WorkspaceFooter from './WorkspaceFooter.jsx'
 import { confirm as confirmAction } from './ConfirmDialog.jsx'
 import './RemediationInbox.css'
+import MatchingReviewPreview from './MatchingReviewPreview.jsx'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is a TWO-column split: a 35% work queue on the left to find and
@@ -511,14 +512,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             <div>
               <button type="button" className="linklike" aria-expanded={matchingPreviewOpen}
                       onClick={() => setMatchingPreviewOpen((open) => !open)}>Review matching items</button>
-              {matchingPreviewOpen && <>
-              <ul className="remediation-match-preview">
-                {matchingFindings.slice(0, 5).map((item) => (
-                  <li key={item.id}><b>{displayText(item.file)}</b><span>{displayText(item.after || item.observed || 'No proposed value recorded')}</span></li>
-                ))}
-              </ul>
-              {matchingCount > 5 && <p className="muted" style={{ margin: '4px 0 0' }}>And {matchingCount - 5} more matching findings.</p>}
-              </>}
+              {matchingPreviewOpen && <MatchingReviewPreview findings={matchingFindings} />}
             </div>
             <div style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
                           padding: '10px 12px', border: '1px solid var(--line,#e2dce4)', borderRadius: 9,
