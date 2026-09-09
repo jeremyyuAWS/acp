@@ -5,7 +5,7 @@ export default function useReleaseReadinessRefresh({ runId, enabled, surface, sn
   const onScanRef = useRef(onScan)
   onScanRef.current = onScan
   const requestRef = useRef(null)
-  const matching = (snapshot?.scan_id || snapshot?.run_id) === runId
+  const matching = Boolean(runId && snapshot && (snapshot.scan_id || snapshot.run_id) === runId)
   // Heartbeats/revision timestamps are deliberately excluded: only recorded material work
   // can change which corrected files are releasable. The read still checks actual file rows.
   const signal = JSON.stringify(matching ? [snapshot.documents, snapshot.fixes, snapshot.delivery,
@@ -22,7 +22,10 @@ export default function useReleaseReadinessRefresh({ runId, enabled, surface, sn
         try {
           const scan = await getScan(runId)
           if (live && scan?.run?.id === runId) onScanRef.current(scan)
-        } catch { if (live) queued = true }
+        } catch (error) {
+          if ([401, 403, 404].includes(error?.status)) { live = false; queued = false }
+          else if (live) queued = true
+        }
         finally { pending = false; if (live && queued) request() }
       }, Math.max(0, 5000 - (Date.now() - lastRead)))
     }

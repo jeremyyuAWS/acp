@@ -52,3 +52,19 @@ it('refreshes on opening and material changes, coalesces bursts, and ignores hea
   received.mockClear();await act(async()=>old({run:{id:'s'},files:[file('late.pdf')]}))
   expect(received).not.toHaveBeenCalled()
 })
+
+it('waits safely while no account or scan snapshot has loaded', async () => {
+  const { root } = createTestRoot()
+  function Empty() { useReleaseReadinessRefresh({ runId: undefined, enabled: false, snapshot: null, onScan: vi.fn() }); return null }
+  await act(async () => root.render(<Empty />))
+  expect(getScan).not.toHaveBeenCalled()
+})
+
+it.each([401, 403, 404])('stops automatic reads after access/run rejection %s', async status => {
+  vi.useFakeTimers(); const { root } = createTestRoot()
+  getScan.mockRejectedValue(Object.assign(new Error('Unavailable'), { status }))
+  function Denied() { useReleaseReadinessRefresh({ runId: 's', enabled: true, snapshot: { scan_id: 's' }, onScan: vi.fn() }); return null }
+  await act(async () => root.render(<Denied />))
+  await act(async () => vi.advanceTimersByTimeAsync(30000))
+  expect(getScan).toHaveBeenCalledTimes(1)
+})
