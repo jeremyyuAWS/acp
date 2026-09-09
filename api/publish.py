@@ -275,7 +275,8 @@ def archive_copy_publish_sharepoint(token: str, drive_id: str | None, folder_id:
     if not data:
         return None
     if expected_digest and hashlib.sha256(data).hexdigest() != expected_digest:
-        raise ValueError("Corrected content changed before delivery; review the new copy.")
+        from release_artifacts import ReleaseArtifactError
+        raise ReleaseArtifactError("Corrected content changed before delivery; review the new copy.")
     folders, safe_name = sharepoint_relative_path(relative_path, source_filename or filename)
     cache = folder_cache if folder_cache is not None else {}
     parent = folder_id
@@ -386,7 +387,8 @@ def archive_copy_publish(svc, folder_id: str | None, owner: str | None,
     if not data:
         return None
     if expected_digest and hashlib.sha256(data).hexdigest() != expected_digest:
-        raise ValueError("Corrected content changed before delivery; review the new copy.")
+        from release_artifacts import ReleaseArtifactError
+        raise ReleaseArtifactError("Corrected content changed before delivery; review the new copy.")
     destination, safe_name = ensure_relative_folders(
         svc, folder_id, relative_path, filename, folder_cache)
     key = publication_key(scan_id, source_id or filename, hashlib.sha256(data).hexdigest())

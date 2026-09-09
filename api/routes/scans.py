@@ -3547,7 +3547,7 @@ def publish_files(sid: str, request: Request, body: dict):
         })
     owner_email = scan.get("run", {}).get("owner_email") or owner
     import publish as _publish
-    from release_artifacts import artifact_tag, reuse_state, require_current_record, require_current_source
+    from release_artifacts import ReleaseArtifactError, artifact_tag, reuse_state, require_current_record, require_current_source
     source = scan.get("run", {}).get("source") or "local"
     destination = _release_destination(source, body.get("destination"))
     if destination:
@@ -3650,7 +3650,7 @@ def publish_files(sid: str, request: Request, body: dict):
             if state == "reuse":
                 try:
                     actual_digest = _publish.remediated_content_digest(owner, sid, f)
-                    require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"))
+                    require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner)
                     require_current_source(source, record, sp_token=sp_token)
                     if not actual_digest or reuse_state(saved, actual_digest) != "reuse":
                         raise ValueError("Corrected bytes changed; verify the new copy before Release.")
@@ -3720,12 +3720,12 @@ def publish_files(sid: str, request: Request, body: dict):
             content_digest = _publish.remediated_content_digest(owner, sid, f)
             if not content_digest:
                 raise IOError("corrected content was unavailable")
-            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"))
+            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner)
             require_current_source(source, record, drive_service=drive_svc, sp_token=sp_token)
-            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"))
+            record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner)
             state = reuse_state(saved, content_digest)
             if state == "unresolved":
-                raise ValueError("Prior delivery has no exact artifact digest. Reconcile that delivery before retrying.")
+                raise ReleaseArtifactError("Prior delivery has no exact artifact digest. Reconcile that delivery before retrying.")
             if state == "reuse":
                 results.append({"file": f, "source_document_id": saved.get("source_document_id"),
                                 "original_relative_path": saved.get("source_relative_path"),
@@ -3846,6 +3846,12 @@ def publish_files(sid: str, request: Request, body: dict):
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
             finish_synchronous(f, "completed", result)
+        except ReleaseArtifactError as exc:
+            result = {"file": f, "status": "failed", "original_relative_path": source_path,
+                      "failure_category": "release_evidence_changed", "explanation": str(exc), "created": False}
+            core.store.record_release_document(release_id, owner, result)
+            results.append(result)
+            finish_synchronous(f, "failed", result)
         except _publish.UnsafeReleasePath as exc:
             result = {"file": f, "source_document_id": record.get("drive_file_id") or f,
                             "original_relative_path": source_path,
