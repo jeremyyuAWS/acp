@@ -12,7 +12,7 @@ const rows = [...pending, ...manual, ...applied], counts = remediationReviewCoun
 window.fixtureWrites = 0
 createRoot(document.getElementById('root')).render(<main style={{ maxWidth: 1200, margin: '20px auto' }}>
   <p title={reviewBadgeTitle(counts.pendingItems)}>{counts.pendingItems} review items requiring attention · {counts.documents} documents</p>
-  <Header counts={{ autoFixed: 2400, documents: 177, needsApproval: counts.ready, manual: counts.manual, inspection: counts.inspection }} />
+  <Header counts={{ automaticOnly: false, autoFixed: 2400, documents: 177, needsApproval: counts.ready, manual: counts.manual, inspection: counts.inspection }} />
   <p>2,000 of 2,400 applied-change records loaded. Inspection does not approve a new change.</p>
   <Inbox queue={rows} decisions={{}} scanId="fixture" onDecide={async () => { window.fixtureWrites++; throw new Error('No writes expected') }} />
 </main>)

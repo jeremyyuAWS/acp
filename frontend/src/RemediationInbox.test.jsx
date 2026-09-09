@@ -149,7 +149,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     await render({ queue: QUEUE, decisions: {},
       onDecide: (f, d) => { seen.push([f.id, d.state]); return Promise.reject(new Error('The server rejected it.')) } })
     expect(detailHeading()).toBe('Heading contrast is too low')     // id1
-    await click(btnByText('Save and continue \u2192'))
+    await click(btnByText('Mark inspected \u2192'))
     expect(seen).toEqual([[1, 'accepted']])
     // Still on the SAME finding — the queue did not move on.
     expect(detailHeading()).toBe('Heading contrast is too low')
@@ -160,19 +160,19 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(alert.textContent).toContain('The server rejected it.')
     expect(alert.textContent).toContain('still waiting for your decision')
     // The decision controls are live again so the reviewer can retry.
-    expect(btnByText('Save and continue \u2192').disabled).toBe(false)
+    expect(btnByText('Mark inspected \u2192').disabled).toBe(false)
   })
 
   it('advances and shows no error when the decision saves', async () => {
     await render({ queue: QUEUE, decisions: {}, onDecide: () => Promise.resolve() })
-    await click(btnByText('Save and continue \u2192'))
+    await click(btnByText('Mark inspected \u2192'))
     expect(detailHeading()).toBe('Image needs alt text')            // moved to id2
     expect(container.querySelector('[role=alert]')).toBeNull()
   })
 
   it('clears a failed decision\u2019s error when the reviewer moves to another finding', async () => {
     await render({ queue: QUEUE, decisions: {}, onDecide: () => Promise.reject(new Error('nope')) })
-    await click(btnByText('Save and continue \u2192'))
+    await click(btnByText('Mark inspected \u2192'))
     expect(container.querySelector('[role=alert]')).toBeTruthy()
     await click(btnByText('Image needs alt text'))
     // The message belonged to that decision, not to the page.

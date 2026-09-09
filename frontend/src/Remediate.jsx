@@ -1716,7 +1716,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       <RemediationRunHeader
         assessedAt={assessedAt}
         docScope={documentScopeSentence(documentSelection(files, triage))}
-        counts={{ autoFixed: fixTotal ?? undefined, autoFixedLoaded: fixSource.length, documents: fixDocumentTotal ?? undefined,
+        counts={{ automaticOnly: false, autoFixed: fixTotal ?? undefined, autoFixedLoaded: fixSource.length, documents: fixDocumentTotal ?? undefined,
           needsApproval: reviewCounts.ready, individualReview: reviewCounts.individual, inspection: reviewCounts.inspection,
                   manual: reviewCounts.manual, revalidating: revalidatingCount, blocked: blockedCount }}
         primary={primary}
