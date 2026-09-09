@@ -57,6 +57,8 @@ def remediation_impact_preview(sid: str, body: ImpactPreviewRequest, request: Re
         result['providers'] = provider_summary(result['capabilities']['ai_enabled'])
         from ai_review_policy import capabilities
         result['capabilities']['ai_review'] = capabilities()
+        from remediation_cohort_estimates import read_plan_estimate
+        result['estimated_impact'] = read_plan_estimate(core.store, _impact_owner(request), result)
         return result
     except LookupError as exc:
         raise HTTPException(404, 'scan not found') from exc
@@ -126,3 +128,12 @@ def assign_remediation_impact_work(sid: str, body: ImpactAssignmentRequest, requ
         raise HTTPException(404, 'scan not found') from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@router.post('/scans/{sid}/remediation/impact-estimate')
+def remediation_plan_estimate(sid: str, body: ImpactPreviewRequest, request: Request, response: Response):
+    """Identical owner/scope checks to routing preview; no paid inference or writes."""
+    import core
+    from remediation_cohort_estimates import read_plan_estimate
+    preview = remediation_impact_preview(sid, body, request, response)
+    return read_plan_estimate(core.store, _impact_owner(request), preview)
