@@ -10,6 +10,11 @@ def test_readyz_exposes_only_aggregate_durable_queue_activity():
     text = (ROOT / "api/routes/system.py").read_text()
     assert "core.store.job_stats(owner=None)" in text
     assert '"active"' in text and '"available"' in text
+    # The gate's number counts work a worker can take, not rows in the table — a queued job that
+    # is past max_attempts or deferred behind a future run_after can never be claimed and used to
+    # block every deploy forever (tests/test_deploy_queue_gate_counts_claimable.py).
+    assert "core.store.claimable_job_count()" in text
+    assert 'queue["active"] = queue["running"] + queue["claimable"]' in text
     assert '"payload"' not in text[text.index("_queue_stats ="):text.index("except Exception as exc", text.index("_queue_stats ="))]
 
 
