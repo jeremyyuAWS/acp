@@ -38,3 +38,19 @@ def recent_activity(sid: str, request: Request, response: Response):
     from remediation_activity_history import read_recent_activity
     response.headers['Cache-Control'] = 'no-store'
     return read_recent_activity(core.store, sid, _owner(request))
+
+
+@router.get('/scans/{sid}/remediation/waterfall/{batch_id}/metrics')
+def drawer_metrics(sid: str, batch_id: str, request: Request, response: Response,
+                   stage: str | None = Query(default=None), provider: str | None = Query(default=None, max_length=256),
+                   model: str | None = Query(default=None, max_length=256)):
+    import core
+    from waterfall_drawer_metrics import read_metrics
+    from routes.scans import _owner
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        return read_metrics(core.store, _owner(request), sid, batch_id, stage=stage, provider=provider, model=model)
+    except LookupError as exc:
+        raise HTTPException(404, 'remediation run not found') from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
