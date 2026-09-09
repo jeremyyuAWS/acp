@@ -59,6 +59,7 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
     && OUTCOMES.reduce((sum, [key]) => sum + rec[key], 0) === rec.assessed
   const [selection, setSelection] = useState('rules')
   const [stageDrawer, setStageDrawer] = useState(false)
+  const closeStageDrawer = useCallback(() => setStageDrawer(false), [])
   const storyLive = !snapshot.terminal && (snapshot.state === 'running' || (snapshot.state === 'needs_attention' && snapshot.also?.includes('running')))
   const [motionPaused, setMotionPaused] = useState(false)
   const motion = useWaterfallMotion(snapshot, data, { paused: paused || motionPaused, error: state.error, selected: selection })
@@ -122,12 +123,12 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
         snapshot={snapshot} viewAvailable={data?.available}
         paused={visualsPaused} error={state.error} identity={identity}
         reviewCount={snapshot.review?.items} verifiedCount={snapshot.fixes?.verified} />
-      <div className="wf-inspection"><RemediationAttemptStory scanId={scanId} batchId={batchId} defaultOpen={true} live={storyLive} paused={paused || motion.hidden} reviewHref={`${reviewUrl.pathname}${reviewUrl.search}${reviewUrl.hash}`} />
+      <div className="wf-inspection"><RemediationAttemptStory scanId={scanId} batchId={batchId} defaultOpen={true} live={storyLive} paused={paused || motion.hidden || stageDrawer} reviewHref={`${reviewUrl.pathname}${reviewUrl.search}${reviewUrl.hash}`} />
       <details className="wf-detail wf-stage-evidence"><summary>Stage evidence and costs</summary>{stageEvidence}
     </details></div></div>
     <RemediationRunInsights scanId={scanId} batchId={batchId} />
     <footer className="wf-footer"><span>{state.error ? data ? 'Refresh delayed · showing the last recorded AI activity' : 'AI activity unavailable · retrying' : visualsPaused ? 'Animation paused · recorded totals remain available' : 'Updates follow recorded activity'}</span><span>{data?.generated_at ? `AI snapshot ${new Date(data.generated_at).toLocaleTimeString()}` : data?.available === false ? 'No managed waterfall records for this run' : 'Waiting for AI activity records'}</span></footer>
-    {stageDrawer && createPortal(<Drawer title="Stage evidence and costs" onClose={() => setStageDrawer(false)}><div className="wf-detail">{stageEvidence}</div><RemediationAttemptStory scanId={scanId} batchId={batchId} defaultOpen={true} live={storyLive} paused={paused || motion.hidden} reviewHref={`${reviewUrl.pathname}${reviewUrl.search}${reviewUrl.hash}`} /></Drawer>, document.body)}
+    {stageDrawer && createPortal(<Drawer title="Stage evidence and costs" onClose={closeStageDrawer}><div className="wf-detail">{stageEvidence}</div><RemediationAttemptStory scanId={scanId} batchId={batchId} defaultOpen={true} live={storyLive} paused={paused || motion.hidden} reviewHref={`${reviewUrl.pathname}${reviewUrl.search}${reviewUrl.hash}`} /></Drawer>, document.body)}
     {drawer?.identity === identity && createPortal(<Drawer title={drawer.label} subtitle={drawer.detail} onClose={close}><div className="wf-drawer-content">{drawer.loading && <p role="status">Loading findings…</p>}{drawer.error && <p role="alert">{drawer.error}</p>}{drawer.items && <><p>{drawer.items.length} findings in this outcome.</p>{drawer.items.length === 0 && <p>No findings in this outcome.</p>}<ul>{drawer.items.map(item => <li key={item.finding_id}><strong>{item.file}</strong><span>WCAG {item.rule_id} · {item.instance_key}</span>{item.verified_at && <span>Verified {new Date(item.verified_at).toLocaleString()}</span>}</li>)}</ul></>}</div></Drawer>, document.body)}
   </section>
 }
