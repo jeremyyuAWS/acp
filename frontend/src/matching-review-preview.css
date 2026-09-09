@@ -1,0 +1,11 @@
+.matching-review-preview { margin-top:12px; width:100%; font-size:13px; }
+.matching-review-preview h4 { margin:0 0 6px; font-size:13px; }
+.matching-review-preview p { margin:6px 0; line-height:1.5; }
+.matching-review-preview ol { margin:12px 0; padding-left:22px; }
+.matching-review-preview li { padding:10px 0; border-bottom:1px solid var(--line,#e2dce4); overflow-wrap:anywhere; }
+.matching-review-priority { display:block; color:var(--muted); font-size:12px; margin-top:3px; }
+.matching-review-preview dl { display:grid; gap:8px; margin:10px 0 0; }
+.matching-review-preview dt { font-size:12px; font-weight:600; }
+.matching-review-preview dd { margin:3px 0 0; white-space:pre-wrap; }
+.matching-review-preview nav { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.matching-review-preview nav span { font-size:12px; }

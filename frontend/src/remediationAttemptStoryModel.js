@@ -4,6 +4,19 @@ export const attemptPurpose = value => ({ draft: 'First AI attempt', fallback: '
 export const attemptStatus = value => ({ started: 'Final response not recorded', drafted: 'Output saved for consideration', unusable_response: 'Response could not be used', empty_response: 'No response content', refused: 'Provider declined the request', usage_unknown: 'Usage or charge is uncertain', rejected_before_dispatch: 'Stopped before dispatch', settlement_failed_or_breached: 'Charge needs reconciliation', provider_limit_exceeded: 'Provider limit reached', accepted: 'AI review accepted the suggestion', revision_requested: 'AI review requested changes', unable_to_judge: 'AI could not judge' })[value] || 'Status not recorded'
 export const reviewVerdict = value => ({ accept: 'AI review accepted the suggestion', revise: 'AI review requested changes', unable: 'AI could not judge' })[value] || 'Review result not recorded'
 
+export const attemptReason = value => ({
+  truncated: 'The response was cut short.',
+  empty_response: 'The response contained no usable text.',
+  budget_admission_denied: 'The remaining budget could not cover another request.',
+  provider_usage_unknown: 'The provider charge is uncertain; further requests were stopped.',
+  provider_refused: 'The provider declined the request; no further model was tried.',
+  provider_limit_exceeded: 'The provider limit was reached.',
+  attempts_exhausted: 'All permitted model attempts were used.',
+  existing_draft_attempt_requires_reconciliation: 'An earlier draft request needs reconciliation before another can start.',
+  automatic_application_not_supported_for_this_change: 'This kind of change still needs human approval.',
+  review_all_selected: 'The selected plan requires your approval.',
+})[value] || (typeof value === 'string' ? value.replaceAll('_', ' ') : 'Explanation not retained')
+
 export function attemptStory(data, file, { live = false } = {}) {
   const attempts = rows(data?.attempts).filter(item => text(item.file) && text(item.attempt_id))
   const proposals = rows(data?.proposals)
@@ -37,4 +50,21 @@ export function attemptStory(data, file, { live = false } = {}) {
   }
   const linkedIds = new Set(groups.flatMap(group => group.proposals.map(item => item.snapshot_id)))
   return { files, groups, unlinkedProposals: proposals.filter(item => item.file === file && !linkedIds.has(item.snapshot_id)) }
+}
+
+// Comparisons use outputs retained under the same operation, with exact review fingerprints.
+// A later model name, later timestamp, or an accepted review alone is not an improvement claim.
+export function fallbackEvidence(group, attempt) {
+  const index = group.attempts.findIndex(item => item.attempt_id === attempt.attempt_id)
+  const previous = group.operationId && index > 0 ? group.attempts.slice(0, index).filter(item => ['draft', 'fallback'].includes(item.purpose)).at(-1) : null
+  const reviewFor = item => item?.output_sha256 ? group.receipts.find(receipt => receipt.operation_id === group.operationId && receipt.proposal_sha256 === item.output_sha256)?.review : null
+  const beforeReview = reviewFor(previous)
+  const afterReview = reviewFor(attempt)
+  return {
+    previous,
+    earlierResult: previous ? attemptStatus(previous.status) : 'Earlier attempt not linked in this page',
+    earlierReason: text(previous?.reason) || text(previous?.result?.response_issue),
+    beforeReview, afterReview,
+    comparable: !!beforeReview && !!afterReview && previous.output_sha256 !== attempt.output_sha256,
+  }
 }

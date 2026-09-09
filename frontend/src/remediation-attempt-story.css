@@ -24,3 +24,14 @@
 .attempt-story-pages { padding-top:14px; border-top:1px solid var(--line,#e4dce9); font-size:12px; }
 .attempt-story button:focus-visible,.attempt-story select:focus-visible,.attempt-story summary:focus-visible { outline:3px solid #76518c; outline-offset:3px; }
 @media(max-width:600px) { .attempt-story { margin:16px; } .attempt-story > summary span { display:block; margin:6px 0 0; } .attempt-story-selectors,.attempt-story-toolbar,.attempt-story-step-heading { flex-direction:column; align-items:stretch; } .attempt-story-comparison { grid-template-columns:1fr; } .attempt-story-pages { flex-wrap:wrap; } }
+.attempt-story-preview { margin-block:14px; padding:12px; border:1px solid var(--line,#e4dce9); border-radius:10px; }
+.attempt-story-preview-heading { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:8px; }
+.attempt-story-preview-heading h5 { margin:0; }
+.attempt-story-preview-heading span,.attempt-story-checks { color:var(--muted,#74657e); font-size:11px; }
+.attempt-story-preview > .attempt-story-comparison { padding:12px 0 0; }
+.attempt-story-preview .attempt-story-comparison > div { min-width:0; }
+.attempt-story-preview .attempt-story-comparison p { margin:0; }
+.attempt-story-version { display:grid; gap:6px; font-size:12px; }
+.attempt-story-fallback { margin-top:10px; padding:10px; border-left:2px solid var(--line,#e4dce9); }
+.attempt-story-fallback summary { cursor:pointer; font-size:12px; }
+.attempt-story-fallback p { font-size:12px; }

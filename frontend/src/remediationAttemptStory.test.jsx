@@ -2,7 +2,7 @@ import { act, createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import RemediationAttemptStory from './RemediationAttemptStory.jsx'
-import { attemptStory } from './remediationAttemptStoryModel.js'
+import { attemptStory, fallbackEvidence, attemptReason } from './remediationAttemptStoryModel.js'
 import { getRunInsights } from './remediationRunInsightsClient.js'
 vi.mock('./remediationRunInsightsClient.js', () => ({ getRunInsights: vi.fn() }))
 vi.mock('./apiIdentity.js', () => ({ authEpoch: () => 1 }))
@@ -98,4 +98,66 @@ describe('Follow an attempt', () => {
     const data = { ...record, attempts: [...record.attempts, review], review_receipts: [{ ...record.review_receipts[0], review: { steps: [{ attempt_id: 'review-a' }] } }] }
     expect(attemptStory(data, 'Report.docx').groups[0].reviewAttempts).toEqual([review])
   })
+})
+
+it('previews only an exactly linked proposal and keeps long before/after evidence collapsed', async () => {
+  const longBefore = 'before '.repeat(100)
+  const longAfter = 'after '.repeat(100)
+  getRunInsights.mockResolvedValue({ ...record, proposals: [{ ...record.proposals[0], proposal: { before: longBefore, proposed_value: longAfter }, version_verified: true, validation_events: [{ outcome: 'passed' }] }, { snapshot_id: 'unlinked', file: 'Report.docx', attempt_id: 'different', proposal: { before: 'Other source', proposed_value: 'Other proposal' } }] })
+  const { container } = await mount()
+  const select = container.querySelector('select')
+  await act(async () => { select.value = 'Report.docx'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+  const preview = container.querySelector('.attempt-story-preview')
+  const compact = preview.querySelector('.attempt-story-comparison')
+  expect(compact.textContent).not.toContain(longBefore)
+  expect(compact.textContent).not.toContain('Other source')
+  expect(preview.querySelector('.attempt-story-proposal').open).toBe(false)
+  expect(preview.querySelector('.attempt-story-proposal').textContent).toContain(longBefore)
+  expect(preview.querySelector('.attempt-story-proposal').textContent).toContain(longAfter)
+  expect(preview.textContent).toContain('Exact-version checks: unavailable')
+  expect(preview.textContent).toContain('Proposal only · not verified')
+})
+
+it('selects saved proposal versions without mixing their original excerpts', async () => {
+  getRunInsights.mockResolvedValue({ ...record, proposals: [record.proposals[0], { ...record.proposals[0], snapshot_id: 'p2', proposal: { before: 'Second original', proposed_value: 'Second proposed' } }] })
+  const { container } = await mount()
+  const file = container.querySelector('select')
+  await act(async () => { file.value = 'Report.docx'; file.dispatchEvent(new Event('change', { bubbles: true })) })
+  const select = container.querySelector('.attempt-story-version select')
+  await act(async () => { select.value = 'p2'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+  expect(container.querySelector('.attempt-story-preview').textContent).toContain('Second original')
+  expect(container.querySelector('.attempt-story-preview').textContent).toContain('Second proposed')
+})
+
+it('compares AI review verdicts only when both exact saved output fingerprints differ and match', () => {
+  const first = { ...record.attempts[0], output_sha256: 'first-hash' }
+  const fallback = record.attempts[1]
+  const data = { ...record, attempts: [first, fallback], review_receipts: [
+    { operation_id: 'op', proposal_sha256: 'first-hash', review: { verdict: 'revise' } },
+    { operation_id: 'op', proposal_sha256: 'digest', review: { verdict: 'accept' } },
+  ] }
+  const group = attemptStory(data, 'Report.docx').groups[0]
+  expect(fallbackEvidence(group, fallback).comparable).toBe(true)
+  const missing = { ...group, receipts: group.receipts.slice(1) }
+  expect(fallbackEvidence(missing, fallback).comparable).toBe(false)
+  expect(fallbackEvidence({ ...group, operationId: null }, fallback).previous).toBeNull()
+  expect(fallbackEvidence({ ...group, receipts: [{ ...group.receipts[0], operation_id: 'wrong' }] }, fallback).comparable).toBe(false)
+})
+
+it('calls a predecessor result context rather than an invented fallback trigger or improvement', async () => {
+  const { container } = await mount()
+  const file = container.querySelector('select')
+  await act(async () => { file.value = 'Report.docx'; file.dispatchEvent(new Event('change', { bubbles: true })) })
+  const evidence = container.querySelector('.attempt-story-fallback')
+  expect(evidence.textContent).toContain('Earlier recorded result: No response content')
+  expect(evidence.textContent).toContain('context, not a recorded fallback decision')
+  expect(evidence.textContent).toContain('Improvement: Not measured')
+  expect(evidence.textContent).toContain('Review of this fallback: AI review requested changes')
+})
+
+it('explains recorded stopping reasons without claiming the next model ran', () => {
+  expect(attemptReason('budget_admission_denied')).toBe('The remaining budget could not cover another request.')
+  expect(attemptReason('provider_usage_unknown')).toContain('charge is uncertain')
+  expect(attemptReason('provider_refused')).toContain('no further model was tried')
+  expect(attemptReason('unrecognized_reason')).toBe('unrecognized reason')
 })

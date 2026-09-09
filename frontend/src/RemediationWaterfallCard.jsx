@@ -10,6 +10,7 @@ import useWaterfallMotion from './useWaterfallMotion.js'
 import RemediationThroughput from './RemediationThroughput.jsx'
 import RemediationWaterfallGraph from './RemediationWaterfallGraph.jsx'
 import RemediationAttemptStory from './RemediationAttemptStory.jsx'
+import RemediationCompletionSummary from './RemediationCompletionSummary.jsx'
 import WaterfallRunNotice from './WaterfallRunNotice.jsx'
 import './remediation-waterfall-card.css'
 
@@ -112,6 +113,10 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
   const reviewUrl = new URL(typeof window !== 'undefined' ? window.location.href : 'http://localhost/')
   reviewUrl.searchParams.set('tab', 'remediate')
   reviewUrl.searchParams.set('mode', 'review')
+  const releaseUrl = new URL(reviewUrl)
+  releaseUrl.searchParams.set('tab', 'publish')
+  releaseUrl.searchParams.delete('mode')
+  const outcomesRef = useRef(null)
   const spending = data?.spending
   const selectedStage = stages.find(stage => stage.tier === (selection === 'first' ? 1 : selection === 'next' ? 2 : null))
   const descriptions = {
@@ -129,12 +134,13 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
     <header className="wf-header"><div><span className="wf-eyebrow">Results · live remediation</span><h3>Watch the work move forward</h3><p>Rules first. AI where permitted. Your approval, then verification.</p></div><div className="wf-header-status"><span className="wf-tag">AI suggestions require your approval</span><RemediationThroughput mini data={snapshot.throughput} identity={identity} paused={visualsPaused || state.error} /></div></header>
     <div className="wf-motion-status"><span>{motion.documents > 0 ? <><i className="wf-processing-dot" aria-hidden="true" />{motion.documents} documents processing · counts update as results arrive</> : snapshot.terminal ? 'Recorded run results' : 'Motion follows confirmed activity'}</span><button type="button" aria-pressed={motionPaused} disabled={paused} onClick={() => setMotionPaused(value => !value)}>{motionPaused ? 'Resume animation' : 'Pause animation'}</button></div>
     <WaterfallRunNotice snapshot={snapshot} view={data} error={state.error} paused={visualsPaused} />
-    <div className="wf-metrics">
+    <RemediationCompletionSummary snapshot={snapshot} view={data} exact={exact} reviewHref={`${reviewUrl.pathname}${reviewUrl.search}`} releaseHref={`${releaseUrl.pathname}${releaseUrl.search}`} onInspect={() => outcomesRef.current?.focus()} />
+    {!snapshot.terminal && <div className="wf-metrics">
       <div><span>{exact ? 'Fixed and checked · findings' : 'Verified changes · all origins'}</span><strong>{displayCount(exact ? rec.resolved_verified : snapshot.fixes?.verified)}</strong></div>
       <div><span>{exact ? 'Awaiting your review · findings' : 'Review items · not findings'}</span><strong>{displayCount(exact ? rec.awaiting_review : snapshot.review?.items)}</strong></div>
       <div><span>Documents processing</span><strong>{displayCount(snapshot.documents?.processing)}</strong></div>
-    </div>
-    <section className="wf-outcomes" aria-label="Finding outcomes">
+    </div>}
+    <section ref={outcomesRef} tabIndex={-1} className="wf-outcomes" aria-label="Finding outcomes">
       <div className="wf-section-head"><h4>Where your findings stand</h4><span>{count(rec.assessed) ? `${rec.assessed.toLocaleString()} assessed findings` : 'Finding baseline unavailable'}</span></div>
       {exact ? <><div className="wf-results-summary"><div className="wf-section-head"><h4>Results against the assessed baseline</h4><span>{rec.assessed.toLocaleString()} findings · fixed baseline</span></div><div className="wf-outcome-bar" aria-hidden="true">{resultBuckets(rec).map(([key,,, value], index) => <span key={key} className={`wf-tone-${index}`} style={{ width: `${rec.assessed ? (count(value) ? value : 0) / rec.assessed * 100 : 0}%` }} />)}</div><div className="wf-results-legend">{resultBuckets(rec).map(([key, label, detail, value], index) => <div key={key}><i className={`wf-tone-${index}`} aria-hidden="true" /><span><strong>{label}</strong><small>{count(value) ? value.toLocaleString() : 'Unavailable'}</small><em>{detail}</em></span></div>)}</div><details><summary>View result counts as a table</summary><table><caption className="sr-only">Results against the assessed baseline</caption><thead><tr><th scope="col">Result</th><th scope="col">Findings</th><th scope="col">Meaning</th></tr></thead><tbody>{resultBuckets(rec).map(([key, label, detail, value]) => <tr key={key}><th scope="row">{label}</th><td>{count(value) ? value.toLocaleString() : 'Unavailable'}</td><td>{detail}</td></tr>)}</tbody></table></details></div><div className="wf-outcome-bar" aria-hidden="true">{OUTCOMES.map(([key], index) => <span key={key} className={`wf-tone-${index}`} style={{ width: `${rec.assessed ? rec[key] / rec.assessed * 100 : 0}%` }} />)}</div>
         <div className="wf-legend">{OUTCOMES.map((row, index) => <button key={row[0]} type="button" onClick={() => openOutcome(row)}><i className={`wf-tone-${index}`} aria-hidden="true" />{row[1]} {displayCount(rec[row[0]])}<span className="sr-only">. View finding details.</span></button>)}</div>
