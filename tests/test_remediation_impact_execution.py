@@ -73,11 +73,17 @@ def test_ai_off_blocks_media_transcription_before_download(worker, monkeypatch):
     assert "AI drafting disabled" in worker["decisions"][-1]["detail"]
 
 
-@pytest.mark.parametrize("ai", [2, 3])
+@pytest.mark.parametrize("ai", [3])
 def test_unsupported_ai_automatic_policy_fails_before_any_draft(worker, ai):
-    with pytest.raises(FatalJobError, match="Automatic AI application"):
+    with pytest.raises(FatalJobError, match="independent validation"):
         handlers._remediate_file(payload(ai=ai), {})
     assert worker["drafts"] == []
+
+
+def test_validated_ai_policy_allows_drafting_and_marks_auto_lane():
+    controls = execution_controls(payload(ai=2), True)
+    assert controls["draft_ai"] is True
+    assert controls["validated_ai"] is True
 
 
 def test_global_ai_kill_switch_overrides_sealed_drafting_permission():

@@ -47,9 +47,9 @@ def normalize_policy(policy):
 
 def require_executable(policy):
     result = normalize_policy(policy)
-    if result["ai"] > 1:
-        raise ValueError("Automatic AI application is not supported by this execution service. "
-                         "Choose Off or Draft for review.")
+    if result["ai"] > 2:
+        raise ValueError("Unattended AI application without independent validation is not supported. "
+                         "Choose Draft or Validated automation.")
     return result
 
 

@@ -709,10 +709,18 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
         swallowed("_enqueue_proposals: store.enqueue_proposals failed — EVERY proposal for this (file, "
                    "criterion) is lost, and the reviewer sees a document with no suggested fixes", scan_id)
         return
-    # ADR 0041 auto-apply gate: skip human review for Group A SCs whose fix was already written
-    # inline AND confirmed by structural re-scan (validated=True). The gate is at this choke
-    # point because every proposal for every SC passes through here — one gate, not one per caller.
-    if validated and sc in {"2.4.4", "2.4.9", "4.1.2"}:
+    # ADR 0041 auto-apply gate: skip human review for fixes confirmed by an independent
+    # validator. The default Group A lane is always eligible. A managed run at AI level 2 may
+    # also auto-approve language-of-parts proposals for Word/PowerPoint: langdetect verifies the
+    # proposed language before enqueue, and the writer plus post-write scan verify the bytes.
+    # Level 2 is explicit in the sealed run policy; level 1 remains draft-for-review.
+    from ai_run_policy import optional_current_run_context
+    _ctx = optional_current_run_context()
+    _validated_language_auto = (
+        validated and sc == "3.1.2" and _ctx is not None
+        and int(_ctx.policy.get("ai", 0)) == 2
+        and filename.lower().endswith((".docx", ".pptx")))
+    if validated and (sc in {"2.4.4", "2.4.9", "4.1.2"} or _validated_language_auto):
         try:
             item_id = core.store.auto_approve_proposals(scan_id, filename, sc)
             if item_id:
