@@ -14703,7 +14703,10 @@ class Store:
                 selected = sorted({p.get("file") for p in payloads if p.get("file")})
                 self._db.execute(cur, "SELECT DISTINCT file FROM scan_rule_traces WHERE scan_id=%s", (scan_id,))
                 assessed = {r["file"] for r in self._db.fetchall(cur)}
-                if selected and set(selected) <= assessed:
+                self._db.execute(cur, "SELECT file,finding_count FROM scan_rule_traces WHERE scan_id=%s AND outcome='FAIL'", (scan_id,))
+                unknown = {r["file"] for r in self._db.fetchall(cur)
+                           if r.get("finding_count") is None or int(r["finding_count"]) <= 0}
+                if selected and set(selected) <= assessed and not set(selected) & unknown:
                     findings = self.seed_finding_dispositions(scan_id, batch_id, snapshot_id=snapshot_id, _cursor=cur)
                     freeze_baseline(self._db, cur, owner, scan_id, batch_id, snapshot_id, findings, selected)
         self._record_stage_started(scan_id, stage, batch_id, job_type, len(job_ids))

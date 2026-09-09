@@ -124,6 +124,8 @@ def test_capture_requires_explicit_multi_finding_membership_and_exact_source(sto
 
 def seed_exact_writer(store):
     run=admitted(store, count=1)
+    store.save_file_result('scan', {'file':'a.docx','engine':'office','status':'pass','score':0,'compliant':0,'skipped_rules':0,'issues':[]}, '2026-09-08T00:00:00Z')
+    store.record_remediation('scan','a.docx',blob_url='fixture',corrected_sha256='b'*64)
     ctx=SimpleNamespace(owner_id='owner',run_id=run,scan_id='scan',file='a.docx')
     p=dict(locator='image',before='',proposed_value='A tree',source='rules')
     token=c.SOURCE.set(('scan','a.docx','a'*64))
@@ -210,3 +212,17 @@ def test_later_lane_regression_cannot_credit_earlier_lane_against_final_artifact
     rows=store.list_ai_validation_outcomes('scan')
     assert rows[-1]['outcome']=='verified_still_failing'
     assert c.read_contribution(store,'owner','scan',run)['outcomes']['fixed']==0
+
+
+def test_artifact_mismatch_does_not_receive_verified_credit(store):
+    run,item=seed_exact_writer(store)
+    tickets=c.writer_tickets(store,'scan','a.docx',[item],'a'*64,actual_values={'image':'A tree'})
+    c.record_writer_result(store,tickets,outcome='verified_cleared',artifact_sha256='wrong-artifact',reference='mismatch',writer_attempt_id='one')
+    assert c.read_contribution(store,'owner','scan',run)['outcomes']['fixed']==0
+
+
+def test_missing_assessment_count_is_not_an_empty_measured_baseline(store):
+    run=admitted(store,count=None)
+    result=c.read_contribution(store,'owner','scan',run)
+    assert result['baseline_total'] is None
+    assert result['coverage']=='unavailable'

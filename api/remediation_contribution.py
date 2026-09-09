@@ -277,13 +277,18 @@ def record_writer_result(store, tickets, *, outcome, artifact_sha256, reference,
     """Append actual writer evidence to the shared feed; never copy proof from approval."""
     with store._db.cursor() as cur:
         for t in tickets:
-            identity = digest([t['proposal_id'], t['approval_event_id'], t['actual_source_sha256'], artifact_sha256, outcome, reference, writer_attempt_id])
+            store._db.execute(cur, "SELECT corrected_sha256 FROM file_records WHERE scan_id=%s AND file=%s", (t['scan_id'],t['file']))
+            stored_artifact = store._db.fetchone(cur) or {}
+            qualified_outcome = outcome
+            if outcome == 'verified_cleared' and (not artifact_sha256 or stored_artifact.get('corrected_sha256') != artifact_sha256):
+                qualified_outcome = 'could_not_verify'
+            identity = digest([t['proposal_id'], t['approval_event_id'], t['actual_source_sha256'], artifact_sha256, qualified_outcome, reference, writer_attempt_id])
             store._db.execute(cur, """INSERT INTO ai_validation_outcomes
                 (id,model_call_id,scan_id,file,rule_id,item_id,outcome,detail,created_at,regressions,
                  proposal_snapshot_id,source_revision,approved_value_sha256,actual_source_sha256,
                  actual_approved_value_sha256,artifact_sha256,approval_event_id)
                 VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING""",
-                (identity, t['model_call_id'],t['scan_id'],t['file'],t['rule_id'],t['item_id'],outcome,
-                 reference,now(),'[]' if outcome == 'verified_cleared' else None,t['proposal_id'],
+                (identity, t['model_call_id'],t['scan_id'],t['file'],t['rule_id'],t['item_id'],qualified_outcome,
+                 reference,now(),'[]' if qualified_outcome == 'verified_cleared' else None,t['proposal_id'],
                  t['source_revision'],t['approved_value_sha256'],t['actual_source_sha256'],
                  t['approved_value_sha256'],artifact_sha256,t['approval_event_id']))
