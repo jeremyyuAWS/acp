@@ -9,7 +9,7 @@ const count = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocal
 const purpose = value => ({ draft: 'First AI draft', fallback: 'Fallback draft', review: 'AI review', final_review: 'Final AI review' })[value] || 'Recorded attempt'
 const display = value => value == null ? 'Unavailable' : typeof value === 'string' ? value : JSON.stringify(value, null, 2)
 
-export default function RemediationRunInsights({ scanId, batchId }) {
+export default function RemediationRunInsights({ scanId, batchId, inlineDrilldown = false }) {
   const [open, setOpen] = useState(false)
   const [reload, setReload] = useState(0)
   const [state, setState] = useState(null)
@@ -36,7 +36,7 @@ export default function RemediationRunInsights({ scanId, batchId }) {
       {current?.error && data && <p role="alert">Refresh failed. Showing the last saved snapshot for this run.</p>}
       {current?.loading && data && <p role="status">Refreshing saved history; showing the last saved snapshot.</p>}
       {!scanId || !batchId ? <p>Select a remediation run.</p> : current?.error && !data ? <p role="alert">Saved history could not be loaded. Try refreshing.</p> : !current || (current.loading && !data) ? <p role="status">Loading saved model history…</p> : !data ? <p>Saved model history is unavailable in this environment.</p> : <>
-        <RemediationContribution key={identity} snapshot={data.measured_contribution} />
+        <RemediationContribution key={identity} snapshot={data.measured_contribution} inlineDrilldown={inlineDrilldown} />
         <h4>Saved suggestions by AI step</h4>
         <p>{data.contribution?.note || 'Proposal versions are not findings or verified fixes.'}</p>
         {data.coverage !== 'complete' && <p>History is partial. Counts include only retained records.</p>}
@@ -47,6 +47,7 @@ export default function RemediationRunInsights({ scanId, batchId }) {
         {data.measured_contribution?.available ? <table><caption>Unique baseline findings with exact lineage</caption><thead><tr><th>AI step</th><th>Findings</th></tr></thead><tbody>
           <tr><th scope="row">First AI: suggestions ready</th><td>{count(data.measured_contribution.first_model_findings)}</td></tr>
           <tr><th scope="row">Next AI: additional suggestions</th><td>{count(data.measured_contribution.fallback_additional_findings)}</td></tr>
+          {Object.hasOwn(data.measured_contribution, 'fallback_2_additional_findings') && <tr><th scope="row">Second fallback: additional suggestions</th><td>{count(data.measured_contribution.fallback_2_additional_findings)}</td></tr>}
           <tr><th scope="row">AI reviewer: checked suggestions</th><td>{count(data.measured_contribution.reviewed_findings)}</td></tr>
         </tbody></table> : <p>AI step contribution is not yet known for this run. Exact finding lineage is incomplete, so proposal versions are shown separately and are not counted as extra fixes.</p>}
         <p>These counts do not measure extra issues fixed. Exact proposal-version verification is {data.outcomes?.verified_fix_count == null ? 'not available yet' : 'reported separately'}.</p>

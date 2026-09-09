@@ -143,7 +143,11 @@ def test_the_step_8_updates_are_the_ones_wrapped():
     m = re.search(r'say "updating \$APP.*?\ndone', _CODE, re.S)
     assert m, "could not find step 8's concurrent update block"
     block = m.group(0)
-    assert block.count("_aca_retry az containerapp update") == 2, block
+    assert block.count("_aca_retry az containerapp update") == 1, block
+    assert '_update_lane_worker "$a"' in block
+    helper = (ROOT / "deploy/public" / "remediation_scaler.sh").read_text()
+    assert '_aca_retry az containerapp update' in helper
+    assert '_aca_retry az rest --method patch' in helper
 
 
 def test_the_readiness_probe_still_has_its_own_name():

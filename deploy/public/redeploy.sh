@@ -231,6 +231,7 @@ trap 'rm -rf "$WORK"' EXIT
 git clone -q --local "$SRC_ROOT" "$WORK/acp"
 cd "$WORK/acp"
 git checkout -q "$PIN"
+source "$SRC_ROOT/deploy/public/remediation_scaler.sh"
 
 # ── 3. compiled engines ────────────────────────────────────────────────────────────────────
 say "building the .NET Office analyser"
@@ -477,6 +478,9 @@ fi
 # Making the worker genuinely blue-green needs queue partitioning — green consumes its own queue,
 # promotion swaps which queue the app enqueues to. That is an application change (worker_main.py
 # plus the job table), not a deploy-script change, and it is deliberately out of scope here.
+# Validate and prepare before the first service mutation in either rollout path.
+_prepare_remediation_worker_patch
+
 if [ "$BG" = 1 ]; then
   ENV_DOMAIN="$(az containerapp env list "${AZ[@]}" -g "$RG" --query '[0].properties.defaultDomain' -o tsv)"
 
@@ -537,9 +541,7 @@ if [ "$BG" = 1 ]; then
 
   say "cutting ${LANE_WORKERS[*]} over to the same image (NOT blue-green — see header)"
   for a in "${LANE_WORKERS[@]}"; do
-    _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" \
-      --termination-grace-period "$WORKER_TERMINATION_GRACE_SECONDS" \
-      --set-env-vars "ACP_SHUTDOWN_DRAIN_SECONDS=$WORKER_DRAIN_SECONDS" --no-wait -o none
+    _update_lane_worker "$a"
   done
   for a in "${LANE_WORKERS[@]}"; do
     printf '  %s ' "$a"
@@ -549,6 +551,8 @@ if [ "$BG" = 1 ]; then
       printf '.'; sleep 5
     done
   done
+
+  _verify_remediation_scaler
 
   # Verified through the PUBLIC url, not green's. Green being healthy proves green is healthy;
   # only the public url proves traffic actually moved.
@@ -605,9 +609,7 @@ say "updating $APP + ${LANE_WORKERS[*]} concurrently"
 _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$IMG" \
   --set-env-vars "${API_ENV_VARS[@]}" --no-wait -o none
 for a in "${LANE_WORKERS[@]}"; do
-  _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" \
-    --termination-grace-period "$WORKER_TERMINATION_GRACE_SECONDS" \
-    --set-env-vars "ACP_SHUTDOWN_DRAIN_SECONDS=$WORKER_DRAIN_SECONDS" --no-wait -o none
+  _update_lane_worker "$a"
 done
 
 for a in "$APP" "${LANE_WORKERS[@]}"; do
@@ -618,6 +620,8 @@ for a in "$APP" "${LANE_WORKERS[@]}"; do
     printf '.'; sleep 5
   done
 done
+
+_verify_remediation_scaler
 
 # ── 8b. single-revision mode, so the new revision actually holds traffic ──────────────────────
 # The whole normal path assumes Single mode — where the update above makes its new revision the

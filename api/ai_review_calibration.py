@@ -41,6 +41,16 @@ def config_id(record):
         if not isinstance(value, str) or not value.strip() or len(value) > 200:
             raise ValueError('Missing or invalid evaluation configuration: ' + field)
         values[field] = value
+    if 'generation_chain' in record:
+        from ai_generation_chain import normalize_chain
+        chain = normalize_chain(record['generation_chain'])
+        primary = chain['steps'][0]
+        if (primary['provider'] != values['generator_provider']
+                or primary['model'] != values['generator_model']):
+            raise ValueError('Evaluation generator must match the primary chain position')
+        values['generation_chain'] = chain
+    # Preserve sealed historical IDs only when no explicit chain was recorded.
+    # Explicit chains bind version and every ordered provider/model position.
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
 
@@ -72,6 +82,9 @@ def normalize_evaluation(value):
             raise ValueError('Samples require unique identities, independent judgments and evidence')
         ids.add(row['sample_id'])
     result['config_id'] = config_id(value)
+    if 'generation_chain' in value:
+        from ai_generation_chain import normalize_chain
+        result['generation_chain'] = normalize_chain(value['generation_chain'])
     result['sample_size'] = len(samples)
     result['successes'] = sum(row['passed'] for row in samples)
     result['statistical_method'] = METHOD
