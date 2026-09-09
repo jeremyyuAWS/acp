@@ -666,6 +666,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       </section>
       <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
         folderName={releaseFolderName} readOnly={readOnly} publishing={publishing}
+        readyReasons={[...new Set(states.filter(state => state.status !== 'ready').map(state => state.reason))]}
         destinationLabel={releaseDestination ? `${releaseDestination.folder_name} / Remediated` : releaseProvider === 'drive' ? 'Remediated folder in Google Drive' : releaseProvider === 'sharepoint' ? 'Remediated folder in each source library' : 'ACP managed storage'}
         destinationPicker={['drive', 'sharepoint'].includes(releaseProvider) ? <ReleaseDestinationPicker provider={releaseProvider} value={releaseDestination}
           onChange={value => { setReleaseDestination(value); setReleasePreview(null) }}

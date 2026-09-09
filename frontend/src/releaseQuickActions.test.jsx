@@ -40,7 +40,7 @@ it('authorizes the exact server plan once with optional inspection', async () =>
 it('invalidates the plan when destination changes', async () => {
   const v = await mount(); api.planReleaseContinuation.mockImplementation(() => new Promise(() => {}))
   await v.render({ destination: { folder_id: 'changed', folder_name: 'New folder' } })
-  expect(v.button('Approve eligible changes')).toBeUndefined()
+  expect(v.button('Approve eligible changes').disabled).toBe(true)
   expect(api.authorizeReleaseContinuation).not.toHaveBeenCalled()
 })
 it('keeps ready-only publishing available while the continuation runs', async () => {
@@ -90,7 +90,7 @@ it('bounds a stalled check, aborts it, retries explicitly, and ignores its late 
   await click(v.button('Refresh eligibility and status'))
   expect(v.container.textContent).toContain('Other files do not hold eligible')
   await act(async () => resolve(plan))
-  expect(v.button('Approve eligible changes')).toBeUndefined()
+  expect(v.button('Approve eligible changes').disabled).toBe(true)
   expect(api.authorizeReleaseContinuation).not.toHaveBeenCalled()
 })
 
@@ -102,4 +102,31 @@ it('shows failed eligibility as unknown with a retry instead of a known zero', a
   expect(v.container.textContent).not.toContain('Other files do not hold eligible')
   expect(v.button('Refresh eligibility and status')).toBeDefined()
   expect(v.button('Publish ready files').disabled).toBe(false)
+})
+
+
+it('keeps both actions visible outside disclosure panels at zero readiness with linked reasons', async () => {
+  const v = await mount({ ready: [], readyReasons: ['Verification incomplete. Resolve findings in Remediate.'] }, { ...plan, intent: { files: {} } })
+  expect(v.container.querySelector('h3').textContent).toBe('Release actions')
+  for (const label of ['Publish ready files (0)', 'Approve eligible changes']) {
+    const button = v.button(label)
+    expect(button.disabled).toBe(true)
+    expect(button.closest('details')).toBeNull()
+    expect(v.container.querySelector(`[id="${button.getAttribute('aria-describedby')}"]`).textContent).toBeTruthy()
+    await click(button)
+  }
+  expect(v.container.textContent).toContain('Verification incomplete')
+  expect(v.container.textContent).toContain('No complete, versioned proposals are ready')
+  expect(v.props.onReady).not.toHaveBeenCalled()
+  expect(api.authorizeReleaseContinuation).not.toHaveBeenCalled()
+})
+
+it('keeps both unavailable actions visible during loading and empty scope', async () => {
+  const v = await mount({ ready: [] }, new Promise(() => {}))
+  expect(v.button('Approve eligible changes').disabled).toBe(true)
+  expect(v.container.textContent).toContain('Checking which proposals')
+  await v.render({ files: [], ready: [] })
+  expect(v.button('Publish ready files').disabled).toBe(true)
+  expect(v.button('Approve eligible changes').disabled).toBe(true)
+  expect(v.container.textContent).toContain('No files are selected in this scope')
 })

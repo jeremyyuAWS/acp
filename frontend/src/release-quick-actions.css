@@ -8,3 +8,10 @@
 .release-quick-buttons button { white-space:normal; }
 .release-advanced > summary { padding:16px; font-weight:600; cursor:pointer; }
 @media(max-width:480px) { .release-quick-buttons button { width:100%; } }
+
+.release-quick-title { margin:0; font-size:20px; }
+.release-quick-buttons { align-items:flex-start; }
+.release-quick-action { flex:1 1 260px; display:grid; gap:8px; min-width:0; }
+.release-quick-action button { width:100%; min-height:44px; }
+.release-quick-action button:disabled { opacity:1; background:var(--bg-subtle, #f1f3f5); color:var(--text-muted, #4b5563); border:1px solid var(--line, #9ca3af); cursor:not-allowed; }
+.release-quick-action p { font-size:13px; line-height:1.5; }

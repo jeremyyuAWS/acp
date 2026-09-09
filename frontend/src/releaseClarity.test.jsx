@@ -242,3 +242,16 @@ it('ready-only action excludes recorded deliveries and binds exact corrected art
     destination: null, expectedArtifacts: { 'ready.pdf': 'current' },
   })
 })
+
+
+it('mounts both top-level Release actions for a run with no ready copies', async () => {
+  const c = await mount({ run, files: [held('review.pdf')] })
+  const quick = c.querySelector('.release-quick')
+  expect(quick).not.toBeNull()
+  expect(quick.closest('details')).toBeNull()
+  expect(quick.textContent).toContain('Verification incomplete')
+  for (const name of ['Publish ready files (0)', 'Approve eligible changes and publish when ready']) {
+    expect(button(quick, name).disabled).toBe(true)
+  }
+  expect(publishAllFiles).not.toHaveBeenCalled()
+})

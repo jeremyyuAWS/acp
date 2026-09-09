@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { planReleaseContinuation, authorizeReleaseContinuation, getReleaseContinuation, resumeReleaseContinuation } from './api.js'
 import './release-quick-actions.css'
 
 export default function ReleaseQuickActions({ runId, files = [], ready = [], destination, folderName = '', destinationLabel,
-  destinationPicker, readOnly, publishing, onReady, onProgress }) {
+  destinationPicker, readOnly, publishing, readyReasons = [], onReady, onProgress }) {
+  const reasonId = useId()
   const [plan, setPlan] = useState(null)
   const [active, setActive] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -82,19 +83,38 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     catch (e) { setError(e?.message || 'The same authorized delivery could not be resumed.') }
     finally { lock.current = false; setBusy(false) }
   }
+  const readyReason = readOnly ? 'History is read-only. Switch to the latest scan to publish.'
+    : publishing ? 'Publishing is in progress.' : !runId ? 'Choose a scan before releasing files.'
+    : !files.length ? 'No files are selected in this scope.'
+    : !ready.length ? 'No files are currently eligible for publishing.' : ''
+  const approveReason = readOnly ? 'History is read-only. Switch to the latest scan to approve changes.'
+    : busy ? 'Authorization is in progress.' : activeRunning ? 'An authorized batch is already applying, verifying, and publishing. Follow its progress below.'
+    : !runId ? 'Choose a scan before approving changes.' : !files.length ? 'No files are selected in this scope.'
+    : checking ? 'Checking which proposals can be approved and published.'
+    : !plan || plan.key !== key ? 'Eligibility is not confirmed. Refresh eligibility before approving changes.'
+    : !eligible ? 'No complete, versioned proposals are ready for this action. See remaining requirements below.' : ''
   const outcomes = Object.entries(active?.progress || {}).filter(([file]) => file !== '_deadline')
   const count = state => outcomes.filter(([, result]) => result.state === state).length
   return <section className="panel release-quick" aria-label="Publish ready files and approved changes">
+    <h3 className="release-quick-title">Release actions</h3>
     <div className="release-quick-summary"><strong>{ready.length} ready to publish</strong><span>{files.length} files in this scope</span></div>
     <p><b>Destination:</b> {plan?.intent?.destination?.folder_name ? `${plan.intent.destination.folder_name} / Remediated` : destinationLabel}. Originals stay unchanged.</p>
     {!readOnly && <details><summary>Change destination</summary>{destinationPicker}</details>}
     <div className="release-quick-buttons">
-      <button className="qbtn approve" disabled={readOnly || publishing || !ready.length} onClick={() => onReady(ready.map(f => f.file))}>
-        {publishing ? 'Publishing ready files…' : `Publish ready files (${ready.length})`}
-      </button>
-      {eligible > 0 && <button className="qbtn approve" disabled={readOnly || busy || activeRunning || plan.key !== key} onClick={approve}>
-        {busy ? 'Authorizing…' : 'Approve eligible changes and publish when ready'}
-      </button>}
+      <div className="release-quick-action">
+        <button className="qbtn approve" disabled={Boolean(readyReason)} aria-describedby={readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(ready.map(f => f.file))}>
+          {publishing ? 'Publishing ready files…' : `Publish ready files (${ready.length})`}
+        </button>
+        {readyReason && <div id={`${reasonId}-ready`}><p>{readyReason}</p>
+          {!readOnly && !ready.length && readyReasons.slice(0, 3).map(reason => <p key={reason}>{reason}</p>)}
+        </div>}
+      </div>
+      <div className="release-quick-action">
+        <button className="qbtn approve" disabled={Boolean(approveReason)} aria-describedby={approveReason ? `${reasonId}-approve` : undefined} onClick={approve}>
+          {busy ? 'Authorizing…' : 'Approve eligible changes and publish when ready'}
+        </button>
+        {approveReason && <p id={`${reasonId}-approve`}>{approveReason}</p>}
+      </div>
     </div>
     {checking && <p role="status">Checking which proposals can be approved and published… Ready files can still be published while this check runs.</p>}
     {eligible > 0 && <p>{eligible} proposed {eligible === 1 ? 'change' : 'changes'} across {eligibleFiles} {eligibleFiles === 1 ? 'file' : 'files'}. This action authorizes the current proposals, applies them, verifies the result, and publishes qualifying files to the destination above. Individual inspection is optional.</p>}
