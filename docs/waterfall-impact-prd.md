@@ -1,9 +1,17 @@
 # PRD: Show what the AI waterfall contributes to remediation
 
 Date: 2026-09-08
-Status: Proposed follow-up to the approved remediation plan UI. This document does not change execution permissions or delay PR #1851.
+Status: Approved design, partially implemented. The checkpoint below describes the current implementation; the remaining sections retain the target requirements. Deployment is tracked separately.
 
-Implementation checkpoint: the first delivery implements the plan chart and a saved-suggestion drawer in `RemediationImpactCard`, with `RemediationWaterfallImpact` and `RemediationAISuggestions`. It reuses owner-scoped review records and exact linked model-call metadata. It does not implement a measured results chart, persist missing attempt histories, add reviewer models, or enable calibrated HITL thresholds. Those delivery stages below remain outstanding; the UI labels missing history and measured impact explicitly. Existing human approval and spending enforcement remain in effect.
+## Implementation checkpoint — 2026-09-08
+
+- The plan chart and saved-suggestion drawer are implemented in `RemediationImpactCard`, `RemediationWaterfallImpact` and `RemediationAISuggestions`. They distinguish projected work from saved outputs and show actual original/proposed content with exact recorded model attribution when available.
+- Managed text generation now retains bounded, owner/scan/run-scoped attempt records: actual output, input/output hashes, model, provider, purpose, status and spending evidence. Completed settled drafts replay without another paid call; retained settled empty/truncated first attempts can resume at fallback. Refusal or unknown usage cannot authorize another model. Oversized or missing content remains explicitly unavailable. Trace replay does not book the same model charge again.
+- Immutable proposal snapshots preserve stored versions and source-excerpt hashes. Exact trace IDs connect them to producing attempts. These excerpt hashes are not full document revisions. Existing human-review and verification events remain distinct from proof that an exact proposal version was successfully applied.
+- Optional review by a different configured model, followed by at most one optional final review, is implemented within the approved run's existing spending limit. Review comments do not replace the generated draft. The configured models currently share the selected provider; cross-provider review remains future work. Every resulting AI suggestion still requires a person’s approval.
+- `RemediationRunInsights` loads retained history only when opened and provides paginated records. Its contribution counts are **saved proposal versions**, including revisions, not unique findings, additional verified fixes or a reconciled fixed-findings total. Draft, fallback and reviewer activity remain distinguishable; opening or paging history makes no paid requests.
+
+**Remaining prerequisites:** collect and validate representative, versioned reliability data for each supported model/reviewer configuration and change family, and establish exact proposal-version/source-revision verification lineage. These are required before calibrated impact estimates or threshold-based automatic application can be enabled. A threshold preference can be captured with the run; it is not an operational automatic-approval permission. Current generic text proposals remain human-reviewed, and unavailable estimates or verified-fix counts are not reported as zero. The target reconciled results chart and unique-finding contribution measures below remain outstanding.
 
 ## Purpose
 

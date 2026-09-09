@@ -1,6 +1,7 @@
 import './simple-remediation-questions.css'
 import { useId } from 'react'
 import RemediationOptionHelp from './RemediationOptionHelp.jsx'
+import RemediationReviewPolicy from './RemediationReviewPolicy.jsx'
 
 const MODES = [
   ['Review every change', 'Prepare proposed fixes. A person approves each change before application.'],
@@ -55,7 +56,7 @@ export function RetiredRemediationPlanChoices({ policy, providers, disabled, onC
 }
 
 // The previous detailed panel is retained above for restoration, but is no longer mounted.
-export default function RemediationPlanChoices({ policy, disabled, onChange, budgetSupported = false }) {
+export default function RemediationPlanChoices({ policy, disabled, onChange, budgetSupported = false, reviewSupported = false }) {
   const id = useId()
   return <div className="remediation-plan-choices">
     <fieldset disabled={disabled}>
@@ -106,11 +107,14 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, bud
           : 'Spending limits are not available on this server. Choose Rules only if you need a firm cap.'}</p>
       </div>}
     </fieldset>
+    {policy.ai > 0 && reviewSupported && <details><summary>Optional AI review</summary><RemediationReviewPolicy value={policy.ai_review} onChange={value => onChange('ai_review', value)}
+      disabled={disabled || !budgetSupported} supported={reviewSupported} /></details>}
     <section className="remediation-waterfall-plan" aria-labelledby={`${id}-plan`}>
       <h3 id={`${id}-plan`}>Plan you are approving</h3>
       <ol>
         <li>{policy.rule_based === 0 ? 'Prepare rule-based changes for your approval.' : 'Apply eligible rule-based fixes and check the results.'}</li>
         {policy.ai > 0 && <li>For supported issues needing more help, prepare an AI suggestion. If the response is incomplete, try one more model when the budget allows.</li>}
+        {policy.ai > 0 && policy.ai_review?.enabled && <li>Ask a different configured model to review the suggestion{policy.ai_review.max_review_attempts === 2 ? ', with at most one final review if needed' : ''}, within the same spending limit. Send the result to you for approval.</li>}
         <li>{policy.ai > 0 ? 'Review and edit AI suggestions. Handle remaining issues yourself.' : 'Review remaining issues. No new AI suggestions will be requested.'}</li>
       </ol>
       {policy.ai > 0 && <p>{budgetSupported

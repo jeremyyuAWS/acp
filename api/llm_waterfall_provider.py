@@ -216,12 +216,90 @@ def managed_text_generate(prompt: str) -> dict:
         budget = BudgetAdapter(ctx.ledger, ctx.owner_id, ctx.run_id, generator.pricing_refs)
     except Exception:
         return defer_managed('verified_model_pricing_unavailable')
+    result = managed_generate_attempts(prompt, ctx, generator)
+    if result.get('text') and not result.get('deferred') and getattr(ctx, 'policy', {}).get('ai_review', {}).get('enabled'):
+        from ai_review_chain import review_managed_draft
+        from ai_attempt_history import AttemptHistory
+        history = AttemptHistory(ctx.ledger.db)
+        return review_managed_draft(prompt, result, ctx, generator, history)
+    return result
+
+
+def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
+                              tier_indices=(1, 2), operation_id=None):
+    """One bounded generation operation, also usable for explicit review stages.
+
+    The caller supplies a trusted configured generator and immutable run context.
+    Distinct purposes have separate spending identities; legacy draft keys stay
+    unchanged so a rollout cannot buy an old paid attempt again.
+    """
+    from ai_attempt_history import AttemptHistory, PURPOSES
+    from llm_remediation_waterfall import BudgetAdapter
+    if purpose not in PURPOSES or not tier_indices or any(i not in (1, 2) for i in tier_indices) or len(set(tier_indices)) != len(tier_indices):
+        raise ValueError('supported purpose and unique model tiers required')
+    if not ctx.enabled:
+        return defer_managed('ai_disabled_or_budget_zero')
+    budget = BudgetAdapter(ctx.ledger, ctx.owner_id, ctx.run_id, generator.pricing_refs)
+    input_hash = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
+    operation = operation_id or (input_hash if purpose == 'draft' else
+        hashlib.sha256((purpose + ':' + prompt).encode('utf-8')).hexdigest())
     attempts = []
-    # Durable run scope + prompt identity prevents a worker retry from buying the
-    # same draft again after a later upload failure. A completed attempt without
-    # a reusable result requires reconciliation, not an automatic new purchase.
-    operation = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
-    for index, model in enumerate(generator.models, 1):
+    history = None
+    previous = []
+    # Production RunContext always supplies canonical scan/file identity. Small
+    # pre-existing isolated transport callers without a scan remain ledger-only.
+    if getattr(ctx, 'scan_id', None):
+        if not getattr(ctx, 'file', None):
+            return defer_managed('attempt_history_source_unavailable')
+        history = AttemptHistory(ctx.ledger.db)
+        try:
+            previous = history.list_operation(ctx.owner_id, ctx.scan_id, ctx.run_id, operation, file=ctx.file)
+        except Exception:
+            return defer_managed('attempt_history_unavailable')
+        for row in previous:
+            result = row.get('result') or {}
+            if (row['status'] == 'drafted' and row['spending_state'] == 'settled'
+                    and row['output_retention'] == 'full' and row['input_sha256'] == input_hash
+                    and row['model'] in {generator.models[i - 1].name for i in tier_indices}
+                    and row['provider'] == generator.specs[row['model']].provider
+                    and row['purpose'] in ({'draft', 'fallback'} if purpose == 'draft' else {purpose}) and isinstance(result.get('text'), str)
+                    and result['text'].strip() and not result.get('response_issue')
+                    and result.get('bounds_exceeded') is False):
+                return {**result, 'attempts': [_history_attempt(r) for r in previous],
+                        'approval_required': True, 'replayed': True, 'operation_id': operation,
+                        'input_sha256': input_hash, 'history_attempt_id': row['attempt_id']}
+
+    def retain(attempt, status, result=None, reason=None):
+        if history is None:
+            return True
+        try:
+            history.finish(ctx.owner_id, ctx.scan_id, ctx.run_id, attempt['attempt_id'],
+                           status=status, result=result, reason=reason)
+            return True
+        except Exception:
+            return False
+
+    for index in tier_indices:
+        model = generator.models[index - 1]
+        # A worker can stop after committing an unusable first response but
+        # before reserving fallback. Reuse that completed step, not its charge.
+        # The second tier still passes normal current budget/dispatch admission.
+        if purpose == 'draft' and index == 1 and 2 in tier_indices:
+            completed = [row for row in previous
+                if row['purpose'] == 'draft' and row['model'] == model.name
+                and row['provider'] == generator.specs[model.name].provider
+                and row['input_sha256'] == input_hash and row['spending_state'] == 'settled'
+                and row['output_retention'] == 'full'
+                and row['attempt_id'].startswith(f'text:{operation}:1:')
+                and (row.get('result') or {}).get('bounds_exceeded') is False
+                and ((row['status'] == 'empty_response'
+                      and not (row.get('result') or {}).get('response_issue')
+                      and (row.get('result') or {}).get('text') == '')
+                     or (row['status'] == 'unusable_response'
+                         and (row.get('result') or {}).get('response_issue') == 'truncated'))]
+            if len(completed) == 1:
+                attempts.append(_history_attempt(completed[0]))
+                continue
         attempt_id = f'text:{operation}:{index}:0'
         attempt = {'attempt_id': attempt_id, 'model': model.name,
                    'max_cost_usd': model.max_cost_usd, 'status': 'reserving'}
@@ -238,6 +316,16 @@ def managed_text_generate(prompt: str) -> dict:
                 raise ValueError('pre-dispatch retry limit reached')
             token = attempt_id
             attempt['attempt_id'] = attempt_id
+            if history is not None:
+                try:
+                    history.begin(ctx.owner_id, ctx.scan_id, ctx.run_id, operation, attempt_id,
+                        file=ctx.file, input_sha256=input_hash, model=model.name,
+                        provider=generator.specs[model.name].provider,
+                        purpose='fallback' if purpose == 'draft' and index == 2 else purpose)
+                except Exception:
+                    if row['state'] == 'reserved':
+                        ctx.ledger.release(ctx.owner_id, ctx.run_id, token, confirmed_not_charged=True)
+                    return defer_managed('attempt_history_unavailable', attempts=attempts)
             if budget.claim_dispatch(token) is not True:
                 attempt['status'] = 'existing_attempt_requires_reconciliation'
                 return defer_managed('existing_draft_attempt_requires_reconciliation', attempts=attempts)
@@ -253,6 +341,7 @@ def managed_text_generate(prompt: str) -> dict:
             except Exception:
                 attempt['reconciliation_required'] = True
                 return defer_managed('budget_release_failed', attempts=attempts)
+            retain(attempt, 'rejected_before_dispatch')
             return defer_managed('request_rejected_before_dispatch', attempts=attempts)
         except Exception:
             attempt['status'] = 'usage_unknown'
@@ -260,28 +349,40 @@ def managed_text_generate(prompt: str) -> dict:
                 budget.mark_uncertain(token, 'provider_failure_or_unknown_usage')
             except Exception:
                 attempt['reconciliation_required'] = True
+            retain(attempt, 'usage_unknown')
             return defer_managed('provider_usage_unknown', attempts=attempts)
         attempt.update(cost_usd=result['cost_usd'], call_id=result['call_id'], status='settling')
         try:
             budget.settle(token, result['cost_usd'])
         except Exception:
             attempt['status'] = 'settlement_failed_or_breached'
+            retain(attempt, attempt['status'], result)
             return defer_managed('budget_settlement_failed_or_breached', attempts=attempts)
-        if result['bounds_exceeded']:
-            attempt['status'] = 'provider_limit_exceeded'
+        issue = result.get('response_issue')
+        status = ('provider_limit_exceeded' if result['bounds_exceeded'] else
+                  'refused' if issue == 'refused' else 'unusable_response' if issue else
+                  'drafted' if result['text'].strip() else 'empty_response')
+        attempt['status'] = status
+        if issue:
+            attempt['reason'] = issue
+        if not retain(attempt, status, result, issue):
+            return defer_managed('attempt_output_retention_failed', attempts=attempts)
+        if status == 'provider_limit_exceeded':
             return defer_managed('provider_limit_exceeded', attempts=attempts)
-        if result.get('response_issue') == 'refused':
-            attempt['status'] = 'refused'
+        if status == 'refused':
             return defer_managed('provider_refused', attempts=attempts)
-        if result.get('response_issue'):
-            attempt['status'] = 'unusable_response'
-            attempt['reason'] = result['response_issue']
-            continue
-        if result['text'].strip():
-            attempt['status'] = 'drafted'
-            return {**result, 'attempts': attempts, 'approval_required': True}
-        attempt['status'] = 'empty_response'
+        if status == 'drafted':
+            return {**result, 'attempts': attempts, 'approval_required': True,
+                    'operation_id': operation, 'input_sha256': input_hash,
+                    'history_attempt_id': attempt_id if history else None}
     return defer_managed('attempts_exhausted', attempts=attempts)
+
+
+def _history_attempt(row):
+    result = row.get('result') or {}
+    return {'attempt_id': row['attempt_id'], 'model': row['model'], 'status': row['status'],
+            'cost_usd': result.get('cost_usd'), 'call_id': result.get('call_id'),
+            'reason': row.get('reason')}
 
 
 def configured_generator() -> StrictTextGenerator:

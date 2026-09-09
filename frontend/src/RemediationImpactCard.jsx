@@ -175,7 +175,8 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     </div>
     <div className="remediation-impact__split"><div className="remediation-impact__settings">
     <RemediationPlanChoices policy={selected} providers={data?.providers}
-      disabled={!runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true} />
+      disabled={!runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true}
+      reviewSupported={data?.capabilities?.ai_review?.review_supported === true} />
     {ready && data?.capabilities?.execute !== true && <p>Execution unavailable: {data?.capabilities?.execute_reason || data?.capabilities?.reason || 'This preview cannot currently be executed.'}</p>}
 
     <div className="remediation-impact__actions">
