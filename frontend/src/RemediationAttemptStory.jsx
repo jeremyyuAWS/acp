@@ -1,28 +1,48 @@
 import { useId, useState } from 'react'
 import { authEpoch } from './apiIdentity.js'
 import useRemediationAttemptStory from './useRemediationAttemptStory.js'
-import { attemptPurpose, attemptStatus, attemptStory, reviewVerdict } from './remediationAttemptStoryModel.js'
+import { attemptPurpose, attemptStatus, attemptStory, reviewVerdict, fallbackEvidence, attemptReason } from './remediationAttemptStoryModel.js'
 import './remediation-attempt-story.css'
 
 const rows = value => Array.isArray(value) ? value : []
 const money = value => Number.isSafeInteger(value) && value >= 0 ? `$${(value / 1000000).toFixed(6)} USD` : 'Charge unavailable'
-const savedText = value => typeof value === 'string' ? value : value == null ? 'Not retained' : 'Structured content is available in the saved record.'
+const savedText = value => typeof value === 'string' ? value || 'Empty recorded value' : value == null ? 'Not retained' : JSON.stringify(value, null, 2)
+const excerpt = value => typeof value === 'string' ? value.length > 180 ? `${value.slice(0, 180)}…` : value || 'Empty recorded value' : value == null ? 'Not retained' : 'Structured value · expand the full evidence to read it'
 const date = value => Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : 'Time not recorded'
 function Output({ attempt }) {
   return <details className="attempt-story-output"><summary>Read saved output</summary>
     <p>{attempt.output_retention === 'full' && typeof attempt.result?.text === 'string' ? attempt.result.text : 'Generated content was not retained or exceeded the retention limit.'}</p>
   </details>
 }
-function Attempt({ attempt }) {
+function Attempt({ attempt, group }) {
   return <li className="attempt-story-step">
     <div className="attempt-story-step-heading"><strong>{attemptPurpose(attempt.purpose)}</strong><span>{date(attempt.created_at)}</span></div>
     <p className="attempt-story-model">{attempt.provider || 'Provider not recorded'} · {attempt.model || 'Model not recorded'}</p>
     <p>{attemptStatus(attempt.status)}</p>
-    {typeof attempt.reason === 'string' && attempt.reason && <p><strong>Recorded reason:</strong> {attempt.reason.replaceAll('_', ' ')}</p>}
-    {attempt.purpose === 'fallback' && !(typeof attempt.reason === 'string' && attempt.reason) && <p>Why this fallback was requested is not recorded on this attempt.</p>}
+    {typeof attempt.reason === 'string' && attempt.reason && <p><strong>Recorded reason:</strong> {attemptReason(attempt.reason)}</p>}
+    {attempt.purpose === 'fallback' && <FallbackEvidence attempt={attempt} group={group} />}
     <p className="attempt-story-cost">Recorded charge: {money(attempt.actual_cost_units)}{attempt.spending_state ? ` · ${String(attempt.spending_state).replaceAll('_', ' ')}` : ''}. A call may cover multiple findings.</p>
     <Output attempt={attempt} />
   </li>
+}
+function FallbackEvidence({ attempt, group }) {
+  const evidence = fallbackEvidence(group, attempt)
+  return <details className="attempt-story-fallback"><summary>Fallback evidence · {evidence.earlierResult}</summary>
+    <p><strong>Earlier recorded result:</strong> {evidence.earlierResult}{evidence.earlierReason ? ` · ${attemptReason(evidence.earlierReason)}` : ''}</p>
+    <p>Why this fallback was requested is not recorded on this attempt. The earlier result is context, not a recorded fallback decision.</p>
+    {evidence.comparable ? <p><strong>AI review comparison:</strong> {reviewVerdict(evidence.beforeReview.verdict)} → {reviewVerdict(evidence.afterReview.verdict)}. Both reviews identify their exact saved outputs.</p>
+      : <p><strong>Improvement:</strong> Not measured. Comparable reviews of both outputs are not available in this page.</p>}
+    {evidence.afterReview && <p><strong>Review of this fallback:</strong> {reviewVerdict(evidence.afterReview.verdict)}{evidence.afterReview.reason ? ` · ${attemptReason(evidence.afterReview.reason)}` : ''}</p>}
+    <p>An AI review is not an independent accessibility check or human approval.</p>
+  </details>
+}
+function ProposalPreview({ proposal }) {
+  return <section className="attempt-story-preview" aria-label="Before and proposed change">
+    <div className="attempt-story-preview-heading"><h5>Before → proposed</h5><span>Proposal only · not verified</span></div>
+    <div className="attempt-story-comparison"><div><h5>Original excerpt</h5><p>{excerpt(proposal.proposal?.before)}</p></div><div><h5>Proposed change</h5><p>{excerpt(proposal.proposal?.proposed_value)}</p></div></div>
+    <p className="attempt-story-checks">Exact-version checks: unavailable. {rows(proposal.validation_events).length > 0 ? `${proposal.validation_events.length} related check record(s) are available in the full evidence below.` : 'No related check records in this page.'}</p>
+    <Proposal proposal={proposal} />
+  </section>
 }
 function Proposal({ proposal }) {
   return <details className="attempt-story-proposal"><summary>Saved proposal · {proposal.rule_id ? `Rule ${proposal.rule_id}` : 'Rule not recorded'} · {date(proposal.created_at)}</summary>
@@ -45,6 +65,7 @@ export default function RemediationAttemptStory({ scanId, batchId, live = false,
   const file = availableFiles.includes(current.file) ? current.file : availableFiles[0] || ''
   const story = attemptStory(data, file, { live })
   const group = story.groups.find(item => item.key === current.operation) || story.groups[0]
+  const proposal = group?.proposals.find(item => item.snapshot_id === current.proposal) || group?.proposals[0]
   const choose = changes => setChoice({ ...current, identity, ...changes })
   const limit = Number.isSafeInteger(data?.pagination?.limit) && data.pagination.limit > 0 ? data.pagination.limit : 100
   return <details className="attempt-story" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
@@ -64,15 +85,18 @@ export default function RemediationAttemptStory({ scanId, batchId, live = false,
         <p className="attempt-story-coverage">This page contains up to {limit} attempts, {limit} proposal snapshots, and {limit} AI reviews. A file’s sequence can continue on another page.{data.coverage !== 'complete' ? ' Some historical records are missing.' : ''}</p>
         {group ? <>
           <h4>{file}</h4>
-          <ol className="attempt-story-timeline">{group.attempts.map(attempt => <Attempt key={attempt.attempt_id} attempt={attempt} />)}
-            {group.reviewAttempts.map(attempt => <Attempt key={attempt.attempt_id} attempt={attempt} />)}
+          {group.proposals.length > 1 && <label className="attempt-story-version" htmlFor={`${id}-proposal`}>Saved proposal<select id={`${id}-proposal`} value={proposal?.snapshot_id || ''} onChange={event => choose({ proposal: event.target.value })}>
+            {group.proposals.map((item, index) => <option key={item.snapshot_id} value={item.snapshot_id}>Proposal {index + 1} · {item.rule_id ? `Rule ${item.rule_id}` : 'Rule not recorded'} · {date(item.created_at)}</option>)}
+          </select></label>}
+          {proposal && <ProposalPreview proposal={proposal} />}
+          <ol className="attempt-story-timeline">{group.attempts.map(attempt => <Attempt key={attempt.attempt_id} attempt={attempt} group={group} />)}
+            {group.reviewAttempts.map(attempt => <Attempt key={attempt.attempt_id} attempt={attempt} group={group} />)}
           </ol>
           {group.receipts.map((receipt, index) => <section className="attempt-story-review" key={`${receipt.operation_id}:${receipt.proposal_sha256}:${index}`}>
-            <h5>{reviewVerdict(receipt.review?.verdict)}</h5><p>{receipt.review?.reason || 'No review explanation was retained.'}</p>
+            <h5>{reviewVerdict(receipt.review?.verdict)}</h5><p>{receipt.review?.reason ? attemptReason(receipt.review.reason) : 'No review explanation was retained.'}</p>
             <p>This review is linked to the saved output by its operation and content fingerprint. An AI review does not replace human approval.</p>
-            <ul>{rows(receipt.review?.steps).map((step, i) => <li key={step.attempt_id || i}>{attemptPurpose(step.purpose)} · {step.provider || 'Provider not recorded'} · {step.model || 'Model not recorded'}: {step.reason || 'Explanation not retained'}</li>)}</ul>
+            <ul>{rows(receipt.review?.steps).map((step, i) => <li key={step.attempt_id || i}>{attemptPurpose(step.purpose)} · {step.provider || 'Provider not recorded'} · {step.model || 'Model not recorded'}: {attemptReason(step.reason)}</li>)}</ul>
           </section>)}
-          {group.proposals.map(proposal => <Proposal key={proposal.snapshot_id} proposal={proposal} />)}
           <div className="attempt-story-next"><strong>Next action</strong><p>{group.next}</p>{reviewHref && <a href={reviewHref}>Open Review</a>}</div>
         </> : <p>No linked model attempts for this file in the current page.</p>}
         {story.unlinkedProposals.length > 0 && <section><h4>Other saved proposals for this file</h4><p>Their model attempt is not linked in this page. No model attribution is inferred.</p>{story.unlinkedProposals.map(proposal => <Proposal key={proposal.snapshot_id} proposal={proposal} />)}</section>}

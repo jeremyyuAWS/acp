@@ -223,6 +223,23 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(calls).toEqual([[30, 'A chart'], [31, 'Annual report']])
   })
 
+  it('lets reviewers page through matching proposals without approving or narrowing the group', async () => {
+    const calls = []
+    const queue = Array.from({ length: 8 }, (_, index) => ({
+      id: 800 + index, file: `file-${index}.docx`, title: 'Image needs alt text',
+      rule_id: '1.1.1', hasProposal: true, after: `Own proposal ${index}`, rationale: `Own reason ${index}`,
+    }))
+    await render({ queue, decisions: {}, onDecide: (...args) => calls.push(args) })
+    await click(btnByText('Review matching items'))
+    await click(btnByText('Next proposals'))
+    const preview = container.querySelector('.matching-review-preview')
+    expect(preview.textContent).toContain('Own proposal 7')
+    expect(preview.textContent).toContain('Own reason 7')
+    expect(preview.textContent).toContain('6–7 of 7')
+    expect(btnByText('Approve & apply to all 8')).toBeTruthy()
+    expect(calls).toEqual([])
+  })
+
   it('reports a partial batch failure instead of claiming the whole cluster landed', async () => {
     const q = [
       { id: 20, file: 'a.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', hasProposal: true, after: 'A chart' },

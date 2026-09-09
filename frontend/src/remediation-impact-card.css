@@ -43,6 +43,8 @@
 @media(max-width:600px){.remediation-plan-choices__grid{grid-template-columns:1fr}.remediation-impact__routes{grid-template-columns:1fr}.remediation-impact__results .assesssummary{padding:12px}}
 
 .remediation-forecast-delta{display:inline-block;vertical-align:middle;margin-left:10px;padding:4px 7px;border-radius:6px;background:#eee6f4;color:#513c5e;font-size:13px;font-weight:700;line-height:1.2;animation:remediation-forecast-pop 2.6s ease-out both}
+.remediation-forecast-delta--increase{background:#e8f5e9;color:#216e2b}
+.remediation-forecast-delta--decrease{background:#fdecea;color:#a42620}
 @keyframes remediation-forecast-pop{0%{opacity:0;transform:translateY(7px) scale(.9)}12%,78%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-5px)}}
 @media(prefers-reduced-motion:reduce){.remediation-forecast-delta{animation:none}}
 

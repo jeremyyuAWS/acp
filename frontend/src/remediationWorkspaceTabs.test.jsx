@@ -3,6 +3,7 @@ import { act, createElement } from 'react'
 import { createTestRoot, unmountAll } from './testRoots.js'
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 afterEach(async () => { await unmountAll(); vi.unstubAllGlobals() })
+import { prepareWorkflowEntry } from './workflowEntry.js'
 import RemediationWorkspaceTabs from './RemediationWorkspaceTabs.jsx'
 
 const snapshot = {
@@ -30,6 +31,17 @@ describe('the three-mode remediation workspace', () => {
     })))
     return { root, host }
   }
+
+  it('opens Plan on workflow entry even when an earlier visit left mode=live', async () => {
+    history.replaceState({}, '', '/?tab=remediate&mode=live')
+    const { host } = await mount()
+    expect(host.querySelector('#rem-panel-live').hidden).toBe(false)
+    await act(async () => prepareWorkflowEntry('remediate'))
+    expect(host.querySelector('#rem-panel-plan').hidden).toBe(false)
+    expect(new URLSearchParams(location.search).get('mode')).toBe('plan')
+    await act(async () => host.querySelector('#rem-mode-live').click())
+    expect(host.querySelector('#rem-panel-live').hidden).toBe(false)
+  })
 
   it('defaults to Plan even when decisions exist and keeps all panels mounted', async () => {
     const { host } = await mount()

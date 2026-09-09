@@ -291,6 +291,17 @@ describe('RemediationImpactCard', () => {
     expect(tile('Can be fixed automatically').querySelector('.remediation-forecast-delta').textContent).toBe('−4')
     expect(historicTotal()).toBe(before)
   })
+  it('compares settled budget selections even when automation levels stay the same', async () => {
+    const renderAssessment = forecast => createElement('output', { 'data-forecast': true }, JSON.stringify(forecast))
+    getRemediationImpact.mockResolvedValue({ ...result({ rule_based: 2, ai: 1, ai_budget_usd: '0.00' }) })
+    const { container, root } = await mount({ renderAssessment })
+    getRemediationImpact.mockResolvedValue({ ...result({ rule_based: 2, ai: 1, ai_budget_usd: '5.00' }),
+      lanes: { automatic: { findings: 5 }, review: { findings: 1 }, manual: { findings: 1 } } })
+    await act(async () => root.render(createElement(RemediationImpactCard, { runId: 'run-1', renderAssessment, refreshKey: 1 })))
+    const forecast = JSON.parse(container.querySelector('[data-forecast]').textContent)
+    expect(forecast.automaticDelta).toBe(1)
+    expect(forecast.humanDelta).toBe(-1)
+  })
   it('opens every manual rule immediately and returns to the filtered file list with focus restored', async () => {
     getRemediationImpact.mockResolvedValue({ ...result(), files: [
       { file: 'A.docx', findings: 40, automatic: 0, review: 3, manual: 37, blocked: 0 },
