@@ -111,7 +111,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const ready = !!data && !loading && !error && data.integrity?.complete === true
   const countDeltas = useForecastDeltas({
     identity: JSON.stringify([runId, scopeKey]), ready,
-    policyKey: `${data?.policy?.rule_based}:${data?.policy?.ai}`,
+    policyKey: JSON.stringify([data?.policy?.rule_based, data?.policy?.ai, data?.policy?.ai_budget_usd, data?.policy?.ai_review]),
     automatic: data?.lanes?.automatic?.findings,
     human: Number.isFinite(data?.lanes?.review?.findings) && Number.isFinite(data?.lanes?.manual?.findings)
       ? data.lanes.review.findings + data.lanes.manual.findings : undefined,
