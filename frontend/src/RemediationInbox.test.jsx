@@ -189,7 +189,7 @@ describe('RemediationInbox — workflow-status queue', () => {
       { id: 12, file: 'c.pdf', title: 'PDF \u00b7 Scanned page, no text', rule_id: '1.1.1' },   // manual — excluded
     ]
     await render({ queue: q, decisions: {} })
-    const batch = btnByText('Approve & apply to all 2')
+    const batch = btnByText('Select matching proposals (2)')
     expect(batch).toBeTruthy()
     expect(batch.disabled).toBe(false)
     // ONE other actionable finding, not two — the manual one is not batchable.
@@ -215,11 +215,15 @@ describe('RemediationInbox — workflow-status queue', () => {
       { id: 32, file: 'c.pdf', title: 'PDF · Scanned page, no text', rule_id: '1.1.1' },
     ]
     const calls = []
-    await render({ queue: q, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.value]) })
-    await click(btnByText('Bulk actions · 2 visible fixes'))
-    expect(container.querySelector('[aria-label="Bulk approval summary"]').textContent).toContain('2 fixes · 2 files · 2 WCAG criteria')
-    expect(container.textContent).toContain('Manual, blocked, handed-off, and decided work is excluded')
-    await click(btnByText('Approve & apply all 2'))
+    await render({ queue: q.map(f => ({ ...f, _raw: { decision_version: 0, proposal_snapshot_ids: [String(f.id)], source_revision: 'source' } })), decisions: {}, onDecide: (f, d) => calls.push([f.id, d.value]) })
+    await click(btnByText('Select findings for batch approval'))
+    const panel = container.querySelector('[aria-label="Select findings for approval"]')
+    expect(panel.textContent).toContain('0 findings selected')
+    await click(btnByText('Select eligible'))
+    expect(panel.textContent).toContain('2 findings selected (2 review items) · 2 proposals · 2 files')
+    await click(btnByText('Approve selected'))
+    expect(calls).toEqual([])
+    await click(btnByText('Confirm approval'))
     expect(calls).toEqual([[30, 'A chart'], [31, 'Annual report']])
   })
 
@@ -236,7 +240,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(preview.textContent).toContain('Own proposal 7')
     expect(preview.textContent).toContain('Own reason 7')
     expect(preview.textContent).toContain('6–7 of 7')
-    expect(btnByText('Approve & apply to all 8')).toBeTruthy()
+    expect(btnByText('Select matching proposals (8)')).toBeTruthy()
     expect(calls).toEqual([])
   })
 
@@ -246,13 +250,13 @@ describe('RemediationInbox — workflow-status queue', () => {
       { id: 21, file: 'b.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', hasProposal: true, after: 'A photo' },
     ]
     // The second write is refused; the first succeeds.
-    await render({ queue: q, decisions: {},
-      onDecide: (f) => (f.id === 21 ? Promise.reject(new Error('conflict')) : Promise.resolve()) })
-    await click(btnByText('Approve & apply to all 2'))
-    const alert = container.querySelector('[role=alert]')
-    expect(alert).toBeTruthy()
-    expect(alert.textContent).toContain('1 of 2 saved')
-    expect(alert.textContent).toContain('1 could not be saved')
+    await render({ queue: q.map(f => ({ ...f, _raw: { decision_version: 0, proposal_snapshot_ids: [String(f.id)], source_revision: 'source' } })), decisions: {},
+      onDecide: (f) => (f.id === 21 ? Promise.reject(Object.assign(new Error('conflict'), { status: 409 })) : Promise.resolve()) })
+    await click(btnByText('Select matching proposals (2)'))
+    await click(btnByText('Select eligible'))
+    await click(btnByText('Approve selected'))
+    await click(btnByText('Confirm approval'))
+    expect(container.textContent).toContain('1 recorded · 1 not recorded · 0 uncertain')
     // Selection sits on the finding that failed, not past the whole cluster.
     expect(detailHeading()).toBe('Image needs alt text')
   })

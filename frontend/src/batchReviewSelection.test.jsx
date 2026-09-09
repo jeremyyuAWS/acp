@@ -5,7 +5,7 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 import BatchReviewSelection from './BatchReviewSelection.jsx'
 import { batchDecision, exclusionReason, snapshotFinding, selectionProblem } from './batchReviewSelection.js'
 afterEach(unmountAll)
-const finding = (id, overrides = {}) => ({ id, file: `${id}.docx`, scanId: 'scan', ruleId: '1.1.1', hasProposal: true,
+const finding = (id, overrides = {}) => ({ id, file: `${String(id).padStart(3, '0')}.docx`, scanId: 'scan', ruleId: '1.1.1', hasProposal: true,
   after: `draft ${id}`, proposals: [{ proposed_value: `draft ${id}`, before: 'old' }],
   _raw: { decision_version: 2, proposal_snapshot_ids: [`snapshot-${id}`], source_revision: 'source-1' }, ...overrides })
 const click = async el => act(async () => el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
@@ -24,7 +24,7 @@ describe('explicit batch selection', () => {
     await click(view.container.querySelector('input'))
     await click(view.button('Approve selected'))
     expect(onDecide).not.toHaveBeenCalled()
-    expect(view.container.textContent).toContain('1 findings selected · 1 proposals · 1 files')
+    expect(view.container.textContent).toContain('1 findings selected (1 review items) · 1 proposals · 1 files')
     expect(view.container.textContent).toContain('old')
     await click(view.button('Confirm approval'))
     expect(onDecide).toHaveBeenCalledTimes(1)
@@ -47,11 +47,11 @@ describe('explicit batch selection', () => {
     expect(v.container.textContent).toContain('0 findings selected')
   })
   it('counts every proposal and excludes manual, missing, applied and edited work', async () => {
-    const multi = finding(1, { proposals: [{ proposed_value: 'A' }, { proposed_value: 'B' }], _raw: { ...finding(1)._raw, proposal_snapshot_ids: ['a', 'b'] } })
+    const multi = finding(1, { proposals: [{ proposed_value: 'A' }, { proposed_value: 'B' }], _raw: { ...finding(1)._raw, finding_count: 2, proposal_snapshot_ids: ['a', 'b'] } })
     const missing = finding(2, { proposals: [{ proposed_value: 'A' }, {}] })
     const v = await mount({ visible: [multi, missing, finding(3, { autoApplied: true }), finding(4)], drafts: { 4: 'unsaved' }, onDecide: vi.fn() })
     await click(v.button('Select eligible'))
-    expect(v.container.textContent).toContain('1 findings selected · 2 proposals · 1 files')
+    expect(v.container.textContent).toContain('2 findings selected (1 review items) · 2 proposals · 1 files')
     expect(v.container.textContent).toContain('missing proposal')
     expect(exclusionReason(finding(9, { hasProposal: false, after: null, proposals: [] }))).toBe('Manual work')
   })

@@ -1,3 +1,4 @@
+import { selectionFingerprint } from './batchReviewSelection.js'
 import AssessSummary from './AssessSummary.jsx'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import AssessmentScopeCard from './AssessmentScopeCard.jsx'
@@ -754,8 +755,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // it awaits this, and a rejection keeps the reviewer on the finding with the error stated inline
   // instead of advancing them past it behind a banner they have already scrolled away from.
   // `undoAct` still performs the local rollback; the re-throw is what makes the failure visible.
-  const act = (id, kind, editedValue, approvedValues, resolution = null) => {
-    const item = queue.find((x) => x.id === id)
+  const act = (id, kind, editedValue, approvedValues, resolution = null, frozen = null) => {
+    const current = queue.find((x) => x.id === id)
+    if (frozen && (!current || selectionFingerprint(current) !== frozen.decision.selectionFingerprint)) {
+      return Promise.reject(Object.assign(new Error('Proposal or source changed — review and select again.'), { status: 409 }))
+    }
+    const item = frozen?.finding || current
     setActError(null)
     setQueue((q) => q.filter((x) => x.id !== id))
     setSelItem(null)
@@ -791,7 +796,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       const p = updateHitlItem(item.id, apiStatus, null,
                                apiStatus === 'approved' ? (editedValue || null) : null,
                                { approvedValues: apiStatus === 'approved' ? (approvedValues || null) : null,
-                                 expectedVersion: item._raw?.decision_version ?? 0,
+                                 expectedVersion: frozen?.decision.expectedVersion ?? item._raw?.decision_version ?? 0,
+                                 requestId: frozen?.decision.requestId,
+                                 expectedProposalSnapshotIds: frozen?.decision.expectedProposalSnapshotIds,
+                                 expectedSourceRevision: frozen?.decision.expectedSourceRevision,
                                  // A WCAG-exception / out-of-scope resolution: status stays 'approved'
                                  // but it writes NO value — the reason is persisted on the row.
                                  resolution: apiStatus === 'approved' ? (resolution || null) : null })
@@ -1640,7 +1648,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               // back to the AI's proposal when they didn't touch it. act() writes it to the document.
               // Every branch RETURNS act()'s promise. The review pane awaits it and only advances to
               // the next finding once the write has actually landed — see act() above.
-              if (d.state === 'accepted') return act(f.id, 'approved', d.value ?? f.after ?? null)
+              if (d.state === 'accepted') return act(f.id, 'approved', d.value ?? f.after ?? null, d.approvedValues, null, d.selectionFingerprint ? { finding: f, decision: d } : null)
               if (d.state === 'rejected') return act(f.id, 'rejected')
               if (d.state === 'assigned') return act(f.id, 'deferred')
               // Not applicable / out of scope: resolved as approved-with-no-value + an out_of_scope

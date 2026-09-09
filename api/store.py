@@ -11123,7 +11123,9 @@ class Store:
                                approved_values: list[str | None] | None,
                                actor: str, detail: str | None,
                                request_id: str | None = None,
-                               expected_version: int | None = None) -> tuple[dict | None, bool]:
+                               expected_version: int | None = None,
+                               expected_proposal_snapshot_ids: list[str] | None = None,
+                               expected_source_revision: str | None = None) -> tuple[dict | None, bool]:
         """Persist one reviewer decision atomically and make exact PUT replays a no-op.
 
         These writes collectively make the decision true.  Keeping them behind the adapter's
@@ -11133,11 +11135,17 @@ class Store:
         """
         draft_fallback = resolution != self.DESCRIBED_RESOLUTION
         import hashlib
-        fingerprint = hashlib.sha256(json.dumps({
+        payload = {
             "status": status, "reviewer_note": reviewer_note,
             "approved_value": approved_value, "approved_values": approved_values,
             "resolution": resolution,
-        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        }
+        # Preserve historical fingerprints for callers that omit exact batch expectations.
+        if expected_proposal_snapshot_ids is not None or expected_source_revision is not None:
+            payload.update(expected_proposal_snapshot_ids=expected_proposal_snapshot_ids,
+                           expected_source_revision=expected_source_revision)
+        fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True,
+                                    separators=(",", ":")).encode()).hexdigest()
 
         def _values_match(current: dict) -> bool:
             if approved_values is None:
@@ -11169,6 +11177,42 @@ class Store:
             current_version = int(current.get("decision_version") or 0)
             if expected_version is not None and int(expected_version) != current_version:
                 raise ValueError("stale decision version")
+            if expected_proposal_snapshot_ids is not None or expected_source_revision is not None:
+                # Guard frozen selections under the same row lock as the decision. Omission is
+                # legacy single-item behavior; a batch must supply a complete aligned identity.
+                proposals = current.get("proposals") or []
+                snapshots = current.get("proposal_snapshot_ids") or []
+                values = [p.get("proposed_value") if isinstance(p, dict) else None for p in proposals]
+                if (not expected_proposal_snapshot_ids or not proposals or expected_version is None or not request_id
+                        or current.get("status") not in {"pending", "in_review"}
+                        or (current.get("finding_count") or 0) > len(proposals)
+                        or len(snapshots) != len(proposals) or not all(snapshots)
+                        or expected_proposal_snapshot_ids != snapshots
+                        or approved_values != values
+                        or not all(isinstance(v, str) and v.strip() for v in values)):
+                    raise ValueError("stale proposal selection")
+                # Snapshot IDs alone cannot excuse an in-place locator/value mutation.
+                from remediation_run_insights import PROPOSAL_KEYS
+                with self._db.cursor() as cur:
+                    if self._superseded_items(cur, [current]):
+                        raise ValueError("stale proposal selection")
+                    for index, (snapshot_id, proposal) in enumerate(zip(snapshots, proposals)):
+                        self._db.execute(cur, "SELECT * FROM ai_proposal_snapshots WHERE snapshot_id=%s",
+                                         (snapshot_id,))
+                        snapshot = self._db.fetchone(cur)
+                        content = {k: proposal[k] for k in PROPOSAL_KEYS if k in proposal}
+                        digest = hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True,
+                            separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+                        if (not snapshot or snapshot["owner_id"] != actor or snapshot["item_id"] != item_id
+                                or snapshot["scan_id"] != current.get("scan_id")
+                                or snapshot["file"] != current.get("file")
+                                or snapshot["rule_id"] != current.get("rule_id")
+                                or snapshot["proposal_index"] != index
+                                or snapshot["proposal_sha256"] != digest):
+                            raise ValueError("stale proposal selection")
+                if (not expected_source_revision or not current.get("scan_id")
+                        or expected_source_revision != self.stage_snapshot_id(current["scan_id"])):
+                    raise ValueError("stale source revision")
             replay = (current.get("status") == status
                       and (current.get("reviewer_note") or None) == (reviewer_note or None)
                       and (current.get("resolution") or None) == (resolution or None)
