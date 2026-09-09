@@ -128,6 +128,33 @@ def offending_fstrings(source: str) -> list[tuple[int, str]]:
     return sorted(set(found))
 
 
+# THE DETECTOR NEEDS 3.12 TO RUN, AND EVERY TEST THAT CALLS IT HAS TO SAY SO.
+#
+# `offending_fstrings` walks FSTRING_START/FSTRING_END, which the tokenizer only emits from 3.12.
+# Below that an f-string is ONE STRING token and the early return above hands back [] for every
+# input — including every input 3.11 rejects. So a test that calls it while running on 3.11 is not
+# measuring the detector at all; it is measuring the absence of those tokens, and it reads the
+# answer as though the detector had spoken.
+#
+# Only the parametrized table declared that precondition. The other three did not, and each was
+# wrong in its own direction on a developer machine running the declared floor:
+#
+#   - the agreement check reported ALL SEVEN rejected forms as detector drift, when what had
+#     happened is that the detector had not run,
+#   - the regression check for the very line this file was written about failed on its own
+#     fixture, and
+#   - the tree sweep PASSED, over 500+ files, having examined none of them — the shape this
+#     repo calls a check that cannot fail.
+#
+# The first two are why the guard is red on 3.11 today. The third is worse for being green.
+# Skipping the sweep there loses nothing real: a 3.11 interpreter refuses to import a module
+# carrying these constructs, so on that machine the defect surfaces as the import error this
+# file exists to predict.
+_NEEDS_FSTRING_TOKENS = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="f-strings are one STRING token before 3.12; offending_fstrings has nothing to walk")
+
+
 # ── the guard ─────────────────────────────────────────────────────────────────
 
 def _tracked_python_files() -> list[Path]:
@@ -136,6 +163,7 @@ def _tracked_python_files() -> list[Path]:
     return [ROOT / rel for rel in out]
 
 
+@_NEEDS_FSTRING_TOKENS
 def test_every_tracked_module_parses_on_the_oldest_supported_python():
     floor = declared_floor()
     assert floor is not None, "see test_setup_cfg_declares_the_python_floor"
@@ -187,8 +215,7 @@ _FORMS = {
 }
 
 
-@pytest.mark.skipif(sys.version_info < (3, 12),
-                    reason="f-strings are one STRING token before 3.12; nothing to walk")
+@_NEEDS_FSTRING_TOKENS
 @pytest.mark.parametrize("name", sorted(_FORMS))
 def test_the_detector_matches_the_measured_grammar(name):
     source, rejected = _FORMS[name]
@@ -217,10 +244,16 @@ def test_a_missing_floor_interpreter_is_reported_not_raised():
     assert _floor_interpreter("python3.11-definitely-not-installed") is None
 
 
+@_NEEDS_FSTRING_TOKENS
 def test_the_detector_agrees_with_the_real_floor_interpreter():
     """The reimplementation is held to the interpreter it models. Skips where no interpreter for
     the declared floor exists — including CI, which pins 3.12 — so this is a developer-machine
-    check, and the parametrized table above is what actually runs everywhere."""
+    check, and the parametrized table above is what actually runs everywhere.
+
+    It needs BOTH interpreters, and the marker above is the half that was missing: the detector
+    has to RUN (3.12+) and a real floor interpreter has to be there to answer (python3.11). The
+    machine with only 3.11 satisfies the second and not the first, and reported the shortfall as
+    drift in the thing it could not execute."""
     floor = declared_floor()
     assert floor is not None, "see test_setup_cfg_declares_the_python_floor"
     if floor >= (3, 12):
@@ -248,6 +281,7 @@ def test_the_detector_agrees_with_the_real_floor_interpreter():
         + "\n  ".join(disagreed))
 
 
+@_NEEDS_FSTRING_TOKENS
 def test_the_construct_this_guard_was_written_for_is_caught():
     """The exact line that shipped, verbatim."""
     shipped = ('filename = f\'{package_name or f"acp-release-'
