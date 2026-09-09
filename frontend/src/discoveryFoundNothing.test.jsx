@@ -24,7 +24,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import DiscoveryResults from './DiscoveryResults.jsx'
 
 const render = (props) => renderToStaticMarkup(createElement(DiscoveryResults, {
-  source: 'drive', inventory: { discovered: 0 }, invRows: [], policies: [], ...props,
+  runStatus: 'discovered', source: 'drive', inventory: { discovered: 0 }, invRows: [], policies: [], ...props,
 })).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
 
 const FILE = { file: 'a.docx', name: 'a.docx', status: 'analysed', issues: [] }
@@ -63,7 +63,7 @@ describe('a scan that found nothing', () => {
     // An empty folder is a finding, not an error, and it is on screen from first paint — an
     // assertive region would interrupt a screen reader for something nothing went wrong in.
     const html = renderToStaticMarkup(createElement(DiscoveryResults, {
-      source: 'drive', files: [], inventory: { discovered: 0 }, invRows: [], policies: [],
+      runStatus: 'discovered', source: 'drive', files: [], inventory: { discovered: 0 }, invRows: [], policies: [],
     }))
     expect(html).toMatch(/role="status"/)
     expect(html).not.toMatch(/role="alert"[^>]*>\s*<h2>NOTHING WAS FOUND/)
@@ -91,5 +91,19 @@ describe('the panel does not claim anything about a scan that never ran', () => 
       source: 'drive', files: null, inventory: null, invRows: [], policies: [],
     }))
     expect(html).toBe('')
+  })
+})
+
+
+describe('zero counts require a completed discovery before claiming an empty result', () => {
+  it.each([null, 'queued', 'running', 'failed', 'cancelled', 'paused'])(
+    'does not claim completion for status %s', (runStatus) => {
+      const text = render({ files: [], runStatus })
+      expect(text).not.toContain('NOTHING WAS FOUND')
+      expect(text).not.toContain('This scan completed')
+    },
+  )
+  it.each(['discovered', 'done'])('preserves a completed empty result: %s', (runStatus) => {
+    expect(render({ files: [], runStatus })).toContain('This scan completed and found no files')
   })
 })

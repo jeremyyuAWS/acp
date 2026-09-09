@@ -17,7 +17,7 @@ semantics: this never creates state, so calling it twice in a row is free.
 from __future__ import annotations
 import os
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 
 import core
 
@@ -48,7 +48,7 @@ def inline_discover_enabled() -> bool:
 
 @router.post("/discovery/preflight")
 def discovery_preflight(request: Request, source: str, folder: str | None = None,
-                        folders: list[str] | None = None):
+                        folders: list[str] | None = Query(None)):
     """Ready / degraded / blocked verdict for starting a Discover scan of this source + scope.
 
     - blocked: the scan would fail immediately or return nothing — bad credential, an unreachable

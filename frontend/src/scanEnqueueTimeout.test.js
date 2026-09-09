@@ -62,11 +62,11 @@ describe('an unconfirmed submit is reported as unconfirmed, not as a failure', (
   const app = read('App.jsx')
 
   it('records the uncertainty instead of only throwing', () => {
-    expect(app).toMatch(/else setSubmitUncertain\(\{ source, folder, runScope, timedOut:/)
+    expect(app).toMatch(/else \{\s*submissionUncertain = true\s*setSubmitUncertain\(\{ source, folder, runScope, timedOut:/)
   })
 
   it('does NOT also claim "scan failed" for it — the two would contradict each other', () => {
-    expect(app).toMatch(/if \(!outcomeIsUncertain\(e\?\.status\)\) setErr\(`scan failed:/)
+    expect(app).toMatch(/if \(!submissionUncertain\) setErr\(`scan failed:/)
   })
 
   it('says the scan may exist, and that retrying is safe rather than duplicating', () => {

@@ -259,15 +259,9 @@ export default function DiscoveryResults({
         </>
       )}
 
-      {/* A scan that found nothing renders, today, as a wall of zeros and the sentence "Every one
-          of the 0 files on this screen was read." True, useless, and it reads as a bug. Say the
-          result instead.
-
-          The claim it can honestly make is narrow, and it is narrow because of #1104: a folder ACP
-          cannot list now FAILS the scan rather than returning an empty list, so a rendered zero
-          means the source was read and had nothing in it. Before that fix this sentence could not
-          have been written — "empty" and "unreadable" were the same screen. */}
-      {summary.discovered === 0 && (
+      {/* A zero count also occurs before submission and after a blocked preflight. Only a
+          finished run can establish that discovery actually found no files. */}
+      {summary.discovered === 0 && ['discovered', 'done'].includes(runStatus) && (
         <div className="panel" style={{ marginTop: 16 }} role="status">
           <h2>NOTHING WAS FOUND</h2>
           <p style={{ fontSize: 13, margin: '0 0 8px', lineHeight: 1.55 }}>

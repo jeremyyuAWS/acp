@@ -329,3 +329,30 @@ def test_a_broken_source_still_blocks_an_inline_discover(gated_client, monkeypat
     body = gated_client("owner@example.com").post("/discovery/preflight?source=drive").json()
     assert body["verdict"] == "blocked"
     assert body["source"]["ready"] is False
+
+
+@pytest.mark.parametrize("exists", [True, False])
+def test_preflight_checks_selected_sharepoint_query_folders(gated_client, monkeypatch, exists):
+    """Use the browser's actual HTTP shape, not a direct Python handler call."""
+    import scanner
+    monkeypatch.setattr(core, "WORKERS", 1)
+    checked = []
+
+    def item(token, drive, folder):
+        checked.append((drive, folder))
+        return {"exists": exists}
+
+    def wrong_default(*args):
+        pytest.fail("Selected SharePoint folders must not fall back to personal OneDrive")
+
+    monkeypatch.setattr(scanner, "_sp_item_exists", item)
+    monkeypatch.setattr(scanner, "_sp_default_drive", wrong_default)
+    response = gated_client("owner@example.com").post(
+        "/discovery/preflight",
+        params=[("source", "sharepoint"), ("folders", "drive1/item1"),
+                ("folders", "drive2/item2")],
+        headers={"X-SP-Token": "test-token"},
+    )
+    assert response.status_code == 200
+    assert checked == [("drive1", "item1"), ("drive2", "item2")]
+    assert response.json()["verdict"] == ("ready" if exists else "blocked")
