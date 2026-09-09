@@ -1,5 +1,5 @@
 import { act } from 'react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createTestRoot, unmountAll } from './testRoots.js'
@@ -9,7 +9,8 @@ import { getFindingDispositions } from './api.js'
 vi.mock('./api.js', () => ({ getFindingDispositions: vi.fn() }))
 vi.mock('./useWaterfallActivity.js', () => ({ default: () => ({ view: null, error: false }) }))
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
-afterEach(async () => { await unmountAll(); vi.useRealTimers(); vi.clearAllMocks() })
+beforeEach(() => vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }))
+afterEach(async () => { await unmountAll(); vi.unstubAllGlobals(); vi.useRealTimers(); vi.clearAllMocks() })
 const snapshot = (extra = {}) => ({ run_id: 'scan', scan_id: 'scan', batch_id: 'batch', fixes: { verified: 30 }, review: { items: 8 }, documents: { processing: 3 },
   finding_reconciliation: { exact: true, assessed: 100, resolved_verified: 30, awaiting_review: 20,
     approved_pending_verification: 5, unchanged_no_fix: 35, failed: 8, excluded: 2, superseded: 0 }, ...extra })
@@ -22,7 +23,7 @@ it('shows durable units, costs, honest missing contribution, and accessible outc
   const { root, container } = createTestRoot()
   await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot()} activity={activity} />))
   expect(container.querySelector('.remediation-run-insights summary').textContent).toContain('Saved model history')
-  expect(container.textContent).toContain('First attempt · Recorded model identity unavailable')
+  expect(container.querySelector('[data-stage=first]').textContent).toContain('Recorded identity unavailable')
   expect(container.textContent).toContain('15 recorded operations')
   expect(container.textContent).not.toContain('15 suggestions')
   expect(container.textContent).toContain('$1.18')
@@ -109,4 +110,16 @@ it('places a subtle measured processing chart beside the waterfall approval stat
   expect(chart.getAttribute('height')).toBe('20')
   expect(chart.getAttribute('aria-label')).toContain('Document processing · last 5 minutes')
   expect(container.querySelector('.wf-tag').textContent).toContain('require your approval')
+})
+
+it('uses the connected graph and deliberately leaves the old vertical Stage unmounted', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot()} activity={activity} />))
+  expect(container.querySelectorAll('.wf-graph-node')).toHaveLength(5)
+  expect(container.querySelector('.wf-stage')).toBeNull()
+  const source = readFileSync(join(import.meta.dirname, 'RemediationWaterfallCard.jsx'), 'utf8')
+  expect(source).toContain('function Stage(')
+  expect(source).not.toContain('<Stage ')
+  await act(async () => container.querySelector('[data-stage=next]').click())
+  expect(container.querySelector('.wf-detail h4').textContent).toBe('What the next AI did')
 })

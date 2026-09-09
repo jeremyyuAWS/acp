@@ -49,7 +49,7 @@ export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules
       role: tier === 1 ? 'First AI attempt' : 'Fallback · if needed',
       title: models.length ? [...new Set(models.map(item => item.model))].join(' + ') : stage?.operations === 0 ? 'Not used yet' : 'Model not recorded',
       provider: models.length ? [...new Set(models.map(item => item.provider || 'Provider not recorded'))].join(' · ') : aiEnabled === false ? 'AI disabled for this run' : 'Recorded identity unavailable',
-      value: stage?.operations, metric: 'recorded attempts',
+      value: stage?.operations, metric: 'recorded operations',
       detail: aiEnabled === false ? 'Not requested by this plan' : 'AI suggestions need approval',
     }
   }

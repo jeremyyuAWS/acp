@@ -1,17 +1,18 @@
 import { act } from 'react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import { waterfallMotion } from './waterfallMotion.js'
 import RemediationWaterfallCard from './RemediationWaterfallCard.jsx'
 vi.mock('./api.js', () => ({ getFindingDispositions: vi.fn() }))
 vi.mock('./useWaterfallActivity.js', () => ({ default: () => ({ view: null, error: false }) }))
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
+beforeEach(() => vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }))
 const now = Date.parse('2026-09-09T00:00:00Z')
 const at = offset => new Date(now + offset).toISOString()
 const snapshot = extra => ({ scan_id: 'scan', run_id: 'scan', batch_id: 'batch', state: 'running', terminal: false,
   generated_at: at(0), progress: { lease_healthy: true }, documents: { processing: 3 }, fixes: { verified: 5 }, ...extra })
 const view = extra => ({ available: true, ai_enabled: true, generated_at: at(0), stages: [{ tier: 1, active: 2 }, { tier: 2, active: 1 }], ...extra })
-afterEach(async () => { await unmountAll(); vi.useRealTimers(); vi.restoreAllMocks() })
+afterEach(async () => { await unmountAll(); vi.unstubAllGlobals(); vi.useRealTimers(); vi.restoreAllMocks() })
 it('chooses just one confirmed AI stage; selection can move its highlight', () => {
   expect(waterfallMotion(snapshot(), view(), { now })).toEqual({ documents: 3, stage: 'first' })
   expect(waterfallMotion(snapshot(), view(), { now, selected: 'next' }).stage).toBe('next')
@@ -45,16 +46,16 @@ it('renders one active stage, pauses locally, and expires without another server
   vi.useFakeTimers(); vi.setSystemTime(now)
   const { root, container } = createTestRoot()
   await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot()} activity={{ view: view() }} />))
-  expect(container.querySelectorAll('.wf-stage-active')).toHaveLength(1)
+  expect(container.querySelectorAll('.wf-graph-node-active')).toHaveLength(1)
   expect(container.textContent).toContain('3 documents processing')
   expect(container.querySelector('.wf-delta')).toBeNull()
   const pause = [...container.querySelectorAll('button')].find(button => button.textContent === 'Pause animation')
   await act(async () => pause.click())
-  expect(container.querySelector('.wf-stage-active')).toBeNull()
+  expect(container.querySelector('.wf-graph-node-active')).toBeNull()
   await act(async () => pause.click())
-  expect(container.querySelectorAll('.wf-stage-active')).toHaveLength(1)
+  expect(container.querySelectorAll('.wf-graph-node-active')).toHaveLength(1)
   await act(async () => vi.advanceTimersByTime(65_000))
-  expect(container.querySelector('.wf-stage-active')).toBeNull()
+  expect(container.querySelector('.wf-graph-node-active')).toBeNull()
   expect(container.querySelector('.wf-processing-dot')).toBeNull()
 })
 it('shows signed deltas for actual results, and stops when the document is hidden', async () => {
@@ -65,7 +66,7 @@ it('shows signed deltas for actual results, and stops when the document is hidde
   expect(container.querySelector('.wf-delta').textContent).toBe('+3')
   vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
   await act(async () => document.dispatchEvent(new Event('visibilitychange')))
-  expect(container.querySelector('.wf-stage-active')).toBeNull()
+  expect(container.querySelector('.wf-graph-node-active')).toBeNull()
   expect(container.querySelector('.wf-delta')).toBeNull()
 })
 it('titles stages with actual recorded models and keeps activity independent of their names', async () => {
@@ -75,8 +76,8 @@ it('titles stages with actual recorded models and keeps activity independent of 
     { tier: 1, active: 1, operations: 2, models: [{ provider: 'openai', model: 'recorded-model' }] },
     { tier: 2, active: 0, operations: 0, models: [] },
   ] }) }} />))
-  expect(container.textContent).toContain('02 · recorded-model')
-  expect(container.textContent).toContain('First attempt · openai')
-  expect(container.textContent).toContain('03 · Not used yet')
-  expect(container.querySelector('.wf-working').textContent).toContain('Request dispatched')
+  expect(container.querySelector('[data-stage=first] strong').textContent).toBe('recorded-model')
+  expect(container.querySelector('[data-stage=first] .wf-graph-node-provider').textContent).toBe('openai')
+  expect(container.querySelector('[data-stage=next] strong').textContent).toBe('Not used yet')
+  expect(container.querySelector('.wf-graph-node-working').textContent).toContain('Request dispatched')
 })

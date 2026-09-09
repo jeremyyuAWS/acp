@@ -4,7 +4,7 @@
 .wf-graph-heading > span,.wf-graph-caption { color:var(--muted,#706476); font-size:12px; }
 .wf-graph-canvas { border:1px solid var(--line,#e7dfeb); border-radius:14px; background:var(--card,#fff); overflow:hidden; }
 .wf-graph .react-flow__handle { width:5px; height:5px; background:#b39bc7; border:0; }
-.wf-graph .wf-graph-node { appearance:none; box-sizing:border-box; display:flex; flex-direction:column; gap:8px; width:100%; padding:13px; border:1px solid #ded3e7; border-radius:12px; background:var(--card,#fff); color:var(--ink,#332b3a); text-align:left; font:inherit; cursor:pointer; box-shadow:0 3px 9px #49345908; transition:border-color .18s,box-shadow .18s; }
+.wf-graph .wf-graph-node { pointer-events:auto; appearance:none; box-sizing:border-box; display:flex; flex-direction:column; gap:8px; width:100%; padding:13px; border:1px solid #ded3e7; border-radius:12px; background:var(--card,#fff); color:var(--ink,#332b3a); text-align:left; font:inherit; cursor:pointer; box-shadow:0 3px 9px #49345908; transition:border-color .18s,box-shadow .18s; }
 .wf-graph .wf-graph-node:hover,.wf-graph .wf-graph-node-selected { border-color:#9874b5; box-shadow:0 0 0 2px #8d63ac17,0 4px 12px #4934590e; }
 .wf-graph .wf-graph-node:focus-visible { outline:3px solid #76518c; outline-offset:3px; }
 .wf-graph-node-role { display:flex; align-items:baseline; gap:7px; font-size:10px; font-weight:650; color:#806393; }
@@ -22,3 +22,6 @@
 .wf-graph-caption { margin:8px 0 0; line-height:1.5; }
 @media(max-width:600px) { .wf-graph-heading { align-items:flex-start; flex-direction:column; gap:4px; } }
 @media(prefers-reduced-motion:reduce) { .wf-graph .react-flow__edge path { animation:none !important; } .wf-graph .wf-graph-node { transition:none; } }
+
+.wf-card .wf-layout-graph { display:block; }
+.wf-layout-graph > .wf-graph { margin-top:0; }

@@ -32,7 +32,7 @@ describe('the connected remediation waterfall', () => {
     expect(container.querySelector('[data-stage=first]').textContent).toContain('OpenAI')
     expect(container.querySelector('[data-stage=next]').textContent).toContain('claude-sonnet-4-20250514')
     expect(container.querySelector('[data-stage=next]').textContent).toContain('Anthropic')
-    expect(container.querySelector('[data-stage=next]').textContent).toContain('2 recorded attempts')
+    expect(container.querySelector('[data-stage=next]').textContent).toContain('2 recorded operations')
     expect(container.querySelector('[data-stage=approval]').textContent).toContain('8 review items')
     expect(container.querySelector('[data-stage=verify]').textContent).toContain('404 verified changes')
   })
