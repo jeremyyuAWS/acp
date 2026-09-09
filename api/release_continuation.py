@@ -75,22 +75,29 @@ def plan(store, sid, owner, files, destination, folder_name):
     if not folder_name:
         import publish
         folder_name = publish.release_folder_name()
+    # The previous per-file helper decoded the entire review queue again for
+    # every document (177 full queue reads on the observed legacy run).
+    records = store.get_file_records(sid, owner=owner)
+    rows_by_file = {}
+    for row in store.list_hitl_queue(scan_id=sid, owner=owner, include_superseded=True):
+        rows_by_file.setdefault(row['file'], []).append(row)
     planned = {}
     for file in sorted(set(files)):
-        record = store.get_file_record(sid, file) or {}
-        rows = queue_rows(store, sid, owner, file)
-        candidates = [r for r in rows if not eligibility(r, file)]
+        record = records.get(file) or {}
+        rows = rows_by_file.get(file, [])
+        classified = [(r, eligibility(r, file)) for r in rows]
+        candidates = {r['id'] for r, reason in classified if not reason}
         ready = bool(record.get('compliant') and record.get('remediated_at') and record.get('corrected_sha256'))
-        blockers = [eligibility(r, file) for r in rows if r.get('status') in {'pending', 'in_review'}
-                    and not r.get('superseded') and eligibility(r, file)]
+        blockers = [reason for r, reason in classified if r.get('status') in {'pending', 'in_review'}
+                    and not r.get('superseded') and reason]
         if not record.get('remediated_at') or not record.get('corrected_sha256'):
-            candidates = []
+            candidates = set()
             blockers.append('No verified corrected artifact is available')
         planned[file] = {'record': record_identity(record), 'artifact': record.get('corrected_sha256'),
                          'ready': ready, 'blockers': sorted(set(blockers)),
                          'rows': [{**proposal_identity(r), 'status': r.get('status'),
                                    'version': r.get('decision_version'),
-                                   'authorize': r in candidates} for r in rows]}
+                                   'authorize': r['id'] in candidates} for r in rows]}
     return persistence.create(store, owner, sid, {'source': scan['run'].get('source') or 'local',
         'source_revision': revision, 'files': planned, 'destination': destination,
         'release_folder_name': folder_name})
