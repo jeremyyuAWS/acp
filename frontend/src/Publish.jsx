@@ -442,6 +442,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   // files. `files` refreshes after a remediation (App refetches on acp:file-remediated), so this
   // recomputes and the graduation offer appears without a reload.
   const setStatus = releaseSetStatus(certificationUniverse(releaseFiles), done, certified)
+  // Retired direct-publish shortcut: retained for reversibility. The controls below now use
+  // the standard delivery preview and confirmation before any external copy is written.
   const graduate = async () => {
     if (publishing || setStatus.status !== SET_STATUS.GRADUATABLE || !setStatus.graduatable.length) return
     setPublishing(true)
@@ -706,34 +708,34 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             {setStatus.verifiedUnreleased > 0 && <> <b>{setStatus.verifiedUnreleased}</b> previously-held {setStatus.verifiedUnreleased === 1 ? 'document has' : 'documents have'} been remediated and can be graduated in below.</>}
           </p>
           <p className="muted" style={{ fontSize: 12.5, marginTop: 8, maxWidth: 680 }}>
-            Remediate the held documents (each is re-validated on its own remediation path). This release graduates to <b>fully certified</b> once every held document passes — <b>no whole-estate re-scan required</b>.
+            Remediate the held documents (each is re-validated on its own remediation path). This release becomes <b>complete within the selected scope</b> once every held document is verified and released — <b>no whole-estate re-scan required</b>.
           </p>
           {setStatus.verifiedUnreleased > 0 && (
             <button className="qbtn approve" style={{ marginTop: 10 }} disabled={readOnly || publishing}
                     title={readOnly ? 'Scan History replay — switch to the latest scan to release' : 'Release the remediated formerly-held documents'}
-                    onClick={graduate}>
+                    onClick={() => { setSelectedFiles(new Set(setStatus.graduatable)); setBuilderStep(2); setReleasePreview(null); builderRef.current?.focus() }}>
               {publishing ? 'Releasing…' : `↑ Release ${setStatus.verifiedUnreleased} remediated document${setStatus.verifiedUnreleased === 1 ? '' : 's'}`}
             </button>
           )}
         </section>
       )}
       {setStatus.status === SET_STATUS.GRADUATABLE && (
-        <section className="panel" style={{ borderLeft: '4px solid var(--success-fg)', background: '#F3F8EC' }} aria-label="Ready to graduate to full certification">
-          <b style={{ fontSize: 13.5, color: 'var(--success-fg)' }}>✓ Ready to graduate to full certification</b>
+        <section className="panel" style={{ borderLeft: '4px solid var(--success-fg)', background: '#F3F8EC' }} aria-label="Ready to release remaining documents">
+          <b style={{ fontSize: 13.5, color: 'var(--success-fg)' }}>✓ Ready to release remaining documents</b>
           <p style={{ fontSize: 13, lineHeight: 1.6, margin: '8px 0 0', maxWidth: 680 }}>
-            Every previously-held document has been remediated and re-validated. Release the remaining <b>{setStatus.verifiedUnreleased}</b> {setStatus.verifiedUnreleased === 1 ? 'document' : 'documents'} to promote this conditional release to <b>fully certified</b> — <b>no whole-estate re-scan required</b>.
+            Every previously-held document has been remediated and re-validated. Release the remaining <b>{setStatus.verifiedUnreleased}</b> {setStatus.verifiedUnreleased === 1 ? 'document' : 'documents'} to complete this release within the selected scope — <b>no whole-estate re-scan required</b>.
           </p>
           <button className="qbtn approve" style={{ marginTop: 10 }} disabled={readOnly || publishing}
                   title={readOnly ? 'Scan History replay — switch to the latest scan to release' : undefined}
-                  onClick={graduate}>
-            {publishing ? 'Graduating…' : `🎓 Graduate to full certification (release ${setStatus.verifiedUnreleased})`}
+                  onClick={() => { setSelectedFiles(new Set(setStatus.graduatable)); setBuilderStep(2); setReleasePreview(null); builderRef.current?.focus() }}>
+            {publishing ? 'Graduating…' : `Review delivery for ${setStatus.verifiedUnreleased} documents`}
           </button>
         </section>
       )}
       {setStatus.status === SET_STATUS.FULL && setStatus.total > 0 && (
-        <section className="panel" style={{ borderLeft: '4px solid var(--success-fg)' }} aria-label="Fully certified">
-          <b style={{ fontSize: 13.5, color: 'var(--success-fg)' }}>🎓 Fully certified</b>
-          <span className="muted" style={{ fontSize: 13, marginLeft: 8 }}>all {setStatus.total} in-scope documents released.</span>
+        <section className="panel" style={{ borderLeft: '4px solid var(--success-fg)' }} aria-label="Release complete">
+          <b style={{ fontSize: 13.5, color: 'var(--success-fg)' }}>Release complete</b>
+          <span className="muted" style={{ fontSize: 13, marginLeft: 8 }}>all {setStatus.total} in-scope documents released. Verification covers the selected checks, not overall accessibility conformance.</span>
         </section>
       )}
 
@@ -799,8 +801,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         {ready.length === 0 ? (
           pendingReview.items > 0 ? (
             <div className="muted" style={{ marginTop: 10, padding: '12px 14px', borderRadius: 9, background: '#FBF1DF', border: '1px solid #EAD9BF', color: '#7A5A12' }}>
-              <b>No files are ready for release.</b> {pendingReview.items} finding{pendingReview.items !== 1 ? 's' : ''} await{pendingReview.items === 1 ? 's' : ''} human review across {pendingReview.files} document{pendingReview.files !== 1 ? 's' : ''}. A document appears here after all its items are approved in <b>Remediate → step 3 · Review queue</b>.
-              <div style={{ marginTop: 9 }}><button className="qbtn approve" onClick={() => document.getElementById('workflow-tab-remediate')?.click()}>Review {pendingReview.files} files</button></div>
+              <b>No files are ready for release.</b> {pendingReview.items} finding{pendingReview.items !== 1 ? 's' : ''} await{pendingReview.items === 1 ? 's' : ''} human review across {pendingReview.files} document{pendingReview.files !== 1 ? 's' : ''}. Review these items in <b>Remediate → Review</b>. Approved changes must be applied and verified before their documents become ready.
+              <div style={{ marginTop: 9 }}><a className="qbtn approve" href="?tab=remediate&mode=review">Review {pendingReview.files} {pendingReview.files === 1 ? 'file' : 'files'}</a></div>
             </div>
           ) : (
             <p className="muted" style={{ marginTop: 10 }}>Nothing verified yet — remediate documents and approve their review items in Remediate first.</p>
