@@ -3,6 +3,17 @@ import { batchDecision, exclusionReason, proposalValues, selectionProblem, snaps
 import LiveCounter from './LiveCounter.jsx'
 import './batch-review-selection.css'
 
+const EXCLUSION_HELP = {
+  'Missing proposal': 'no drafted value yet, or fewer drafts than findings',
+  'Version unavailable — review individually': 'no recorded proposal version to approve against',
+  'Manual work': 'needs an edit you make in the source document',
+  'Already reviewed': 'already decided; no further approval needed',
+  'Already applied — review individually': 'already written; check its verification instead',
+  'Stale — refresh and review': 'the source changed after the draft was made',
+  'Unsaved edit — review individually': 'you edited this value; save or discard it first',
+  'Blocked or unavailable': 'no supported automatic route for this issue',
+}
+
 const PAGE_SIZE = 10
 export default function BatchReviewSelection({ visible = [], decisions = {}, drafts = {}, scopeKey, scopeLabel = 'Current approval scope', onDecide, onResult, onBusy, onReviewExcluded, onShowAllReady, readyOutsideScope = 0, confirmRequest = 0, onConfirmRequestHandled, preparingProposals = false, onOpenPlan, disabled = false }) {
   const [entries, setEntries] = useState([])
@@ -35,12 +46,16 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
   const pages = Math.max(1, Math.ceil(shown.length / PAGE_SIZE))
   const currentPage = Math.min(page, pages - 1)
   const pageItems = shown.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE)
+  // Plain-language "so what do I do about it" for each reason exclusionReason can return.
+  // Keep in sync with batchReviewSelection.js::exclusionReason -- a reason with no entry
+  // still renders, it just carries no advice.
   const exclusions = visible.reduce((out, f) => {
     const reason = exclusionReason(f, decisions, drafts)
       || (uncertainIds.has(f.id) ? 'Decision uncertain — refresh before retrying' : successfulIds.has(f.id) ? 'Approval recorded' : null)
     if (reason) out[reason] = (out[reason] || 0) + 1
     return out
   }, {})
+  const excludedTotal = Object.values(exclusions).reduce((a, b) => a + b, 0)
   const confirmAllReady = () => {
     // This explicit action freezes the complete eligible scope, independent of inspection pages.
     // Reuse retained request identities on retries; never substitute a refreshed proposal.
@@ -126,11 +141,19 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
             ? 'These issues need your input in the source document. Open individual review for the required edits and instructions.'
             : 'Open individual review to inspect these issues and their available actions. See the status reasons below.'
         : 'There are no pending proposals in this scope. Choose another category to see completed changes, verification, or manual work.'}</p>
-      {!preparingProposals && (exclusions['Version unavailable — review individually'] || exclusions['Missing proposal']) && <p>
-        {exclusions['Version unavailable — review individually'] > 0 && <span>{exclusions['Version unavailable — review individually']} review {exclusions['Version unavailable — review individually'] === 1 ? 'item has' : 'items have'} no verifiable proposal version. </span>}
-        {exclusions['Missing proposal'] > 0 && <span>{exclusions['Missing proposal']} review {exclusions['Missing proposal'] === 1 ? 'item has' : 'items have'} no complete proposal. </span>}
-        Bulk approval requires valid proposals with recorded versions. Generating fresh proposals requires a separately approved run.
-      </p>}
+      {/* Every reason, always, and summing to the scope. This used to name two of the eight
+          reasons in prose and hide the rest in a collapsed disclosure, so a screen reading
+          "0 ready" explained a fraction of the items and the visible numbers did not
+          reconcile: the count above this panel is the whole RUN, these are the current
+          SCOPE, and nothing said so. */}
+      {!preparingProposals && excludedTotal > 0 && <div className="batch-review-why">
+        <p><b>Why nothing can be approved here</b> — all {excludedTotal} review {excludedTotal === 1 ? 'item' : 'items'} in {scopeLabel.toLowerCase()}:</p>
+        <ul>{Object.entries(exclusions).sort((a, b) => b[1] - a[1]).map(([reason, count]) =>
+          <li key={reason}><b>{count}</b> {reason.toLowerCase()}{EXCLUSION_HELP[reason] ? ` — ${EXCLUSION_HELP[reason]}` : ''}</li>)}</ul>
+        {(exclusions['Missing proposal'] || exclusions['Version unavailable — review individually']) > 0
+          && <p>Bulk approval requires valid proposals with recorded versions. Generating fresh proposals requires a separately approved run.</p>}
+        <p>Counts above this panel cover the whole run, so they will be larger than this scope.</p>
+      </div>}
       {readyOutsideScope > 0 && onShowAllReady && <button type="button" className="primary" onClick={onShowAllReady}>Show all ready in this scan ({readyOutsideScope})</button>}
       {!preparingProposals && (exclusions['Version unavailable — review individually'] || exclusions['Missing proposal']) && onOpenPlan && <button type="button" onClick={onOpenPlan}>Open remediation plan</button>}
       {!preparingProposals && onReviewExcluded && <button type="button" onClick={onReviewExcluded}>Open individual review</button>}
@@ -142,7 +165,7 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
         : <><b>{readyCount} findings ready</b> · {eligible.length} review items · {eligible.reduce((n, f) => n + proposalValues(f).length, 0)} proposals · {new Set(eligible.map(f => f.file)).size} files</>}</p>
     </details>}
     {Object.keys(exclusions).length > 0 && <details className="batch-review-exclusions">
-      <summary>{Object.values(exclusions).reduce((a, b) => a + b, 0)} review items outside this approval</summary>
+      <summary>{excludedTotal} review items outside this approval</summary>
       <ul>{Object.entries(exclusions).map(([reason, count]) => <li key={reason}>{count} {reason.toLowerCase()}</li>)}</ul>
       <p>These items will not be approved by this action.</p>
     </details>}

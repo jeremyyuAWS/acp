@@ -82,9 +82,17 @@ it('explains dynamic missing proposal information and opens focused individual r
   const v = await mount(RemediationInbox, { queue: [...unversioned, missing], decisions: {}, initialTab: 'needs-review', scanId: 'scan', onDecide })
   await click(v.button('Bulk approve ready proposals'))
   const empty = v.container.querySelector('.batch-review-empty')
-  expect(empty.textContent).toContain('2 review items have no verifiable proposal version.')
-  expect(empty.textContent).toContain('1 review item has no complete proposal.')
+  // Every reason is named and the counts sum to the scope, so "0 ready" is fully explained
+  // rather than partly explained. Two of the eight reasons used to be named in prose and
+  // the rest hidden in a collapsed disclosure.
+  expect(empty.textContent).toContain('Why nothing can be approved here')
+  expect(empty.textContent).toContain('all 3 review items')
+  expect(empty.textContent).toContain('2 version unavailable')
+  expect(empty.textContent).toContain('no recorded proposal version to approve against')
+  expect(empty.textContent).toContain('1 missing proposal')
+  expect(empty.textContent).toContain('no drafted value yet')
   expect(empty.textContent).toContain('Generating fresh proposals requires a separately approved run.')
+  expect(empty.textContent).toContain('cover the whole run')
   expect(empty.textContent).not.toContain('refresh outdated proposals')
   await click(v.button('Open individual review'))
   expect(v.container.querySelector('[aria-label="Select findings for approval"]').closest('[hidden]')).toBeTruthy()
