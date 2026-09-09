@@ -1,4 +1,5 @@
 import ScanScopeWizard from './ScanScopeWizard.jsx'
+import InfoTip from './InfoTip.jsx'
 
 // ── The single, app-level scan-scope REVIEW modal ────────────────────────────────────────────────
 //
@@ -113,9 +114,9 @@ export default function ScanReviewModal({
               wizard's own stepper says which step this is, and says it correctly. */}
           <div className="scanmodal-est muted">
             Document count is determined when the scan starts.
-            <span style={{ display: 'block', fontSize: 11 }}>
+            <InfoTip label="how the count is reached">
               Discovery counts files within the scope selected below, including subfolders unless excluded.
-            </span>
+            </InfoTip>
           </div>
           {/* source/hasDrive/hasSP so the wizard can seed its folder step from the SAME source the
               scan will resolve to; the run scope comes back out through onConfirm. */}
