@@ -1,4 +1,6 @@
 import RemediationAutoRelease from './RemediationAutoRelease.jsx'
+import RemediationReleasePlan from './RemediationReleasePlan.jsx'
+import { authorizeAcceptedRelease } from './releasePlanIntent.js'
 import RemediationReleaseAccess from './RemediationReleaseAccess.jsx'
 import { remediationReviewCounts, remediationDiffPage } from './remediationCountSummary.js'
 import { selectionFingerprint } from './batchReviewSelection.js'
@@ -411,6 +413,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // with no AI call at all stays absent (deterministic fix — no badge, nothing to claim).
   const [aiZoneByFile, setAiZoneByFile] = useState({})
   const runId = run?.id
+  const [releasePlanIntent, setReleasePlanIntent] = useState(null)
+  const [releasePlanNotice, setReleasePlanNotice] = useState('')
+  const releasePlanScan = useRef(runId)
+  releasePlanScan.current = runId
+  useEffect(() => { setReleasePlanIntent(null); setReleasePlanNotice('') }, [runId])
   const fixRequest = useRef(0)
   const fetchFixes = () => {
     const request = ++fixRequest.current
@@ -683,7 +690,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     if (SIM) setQueue(buildHumanQueue(files, triage))
   }, [triage]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const runServerRemediation = async (scopeFiles, remediationPolicy) => {
+  const runServerRemediation = async (scopeFiles, remediationPolicy, releaseIntent = null) => {
     if (!runId || readOnly || remBusy || remStartRef.current) return
     // The page-level controls pass file records; RemediationWork's deterministic batch passes
     // filenames because it partitions findings rather than owning the scan records. Normalize
@@ -699,7 +706,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       return
     }
     remStartRef.current = true
-    setRemBusy(true); setRemMsg(''); setRemProg(null)
+    setRemBusy(true); setRemMsg(''); setRemProg(null); setReleasePlanNotice('')
     try {
       const r = await remediateScan(runId, scope, remediationPolicy)
       if (!r.enqueued) {
@@ -712,6 +719,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         setRemBusy(false); return
       }
       setWorkspaceRequest({ mode: 'live' })
+      if (releaseIntent) {
+        const notice = await authorizeAcceptedRelease(runId, scope, r, releaseIntent)
+        if (releasePlanScan.current === runId) setReleasePlanNotice(notice)
+      }
       // In-process pool OR the standalone worker container's heartbeat (#113) counts as manned.
       if (!r.workers && !r.worker_tier_alive) { setRemMsg(`Enqueued ${r.enqueued}, but no workers are available — the worker service looks down; check Monitor.`); setRemBusy(false); return }
       setRemMsg(stageExecutionNotice('Remediation', r))
@@ -1727,7 +1738,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         readOnly={readOnly}
         onOpenRunDetails={() => { setRunDetailsOpen((v) => !v); setWorkspaceRequest({ mode: 'live' }) }} />
       <RemediationReleaseAccess files={impactScope} readOnly={readOnly} onNavigate={onNavigate} />
-      <RemediationAutoRelease scanId={runId} files={impactScope} readOnly={readOnly} />
       <RemediationWorkspaceTabs
         runId={runId}
         workspaceRequest={workspaceRequest}
@@ -1739,13 +1749,22 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             renderAssessment={forecast => <AssessSummary files={files} cap={cap} assessment={assessment}
               assessedAt={assessedAt} run={run} notStarted={run?.not_assessed?.count}
               remediationForecast={forecast} />}
-            onRun={readOnly ? undefined : (policy) => runServerRemediation(impactScope, policy)} />
+            releaseOption={<RemediationReleasePlan scanId={runId} files={impactScope.map(file => file.file)}
+              intent={releasePlanIntent} onChange={setReleasePlanIntent} disabled={readOnly || remBusy} />}
+            onRun={readOnly ? undefined : (policy) => {
+              const intent = releasePlanIntent
+              setReleasePlanIntent(null)
+              return runServerRemediation(impactScope, policy, intent)
+            }} />
           {remMsg && <div role="status">{remMsg}</div>}
+          {releasePlanNotice && <div role="status">{releasePlanNotice}</div>}
         </>}
         reviewCount={reviewCounts.pendingItems}
         snapshot={runStream?.snapshot || null}
         review={reviewWorkspace}
         live={<>
+          {releasePlanNotice && <div role="status">{releasePlanNotice}</div>}
+          <RemediationAutoRelease scanId={runId} files={impactScope} readOnly={readOnly} />
           {/* The large panel consumes the App-owned controller. Mounting this view opens no
               stream of its own, so the compact card, global card and panel stay on one cursor. */}
           <RemediationOpsPanel snapshot={runStream?.snapshot || null}
