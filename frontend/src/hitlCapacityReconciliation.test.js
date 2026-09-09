@@ -35,6 +35,14 @@ describe('an uncertain HITL decision response', () => {
     expect(result.outcome).toBe('not_saved')
   })
 
+  it('requires the exact batch request identity before reporting a lost response as recorded', async () => {
+    const wanted = { status: 'approved', requestId: 'selected-request' }
+    const read = async () => [{ ...ITEM, status: 'approved', last_decision_request_id: 'different-request' }]
+    expect((await reconcileHitlPutFailure(ITEM.id, wanted, busy(), read)).outcome).toBe('unknown')
+    const exact = async () => [{ ...ITEM, status: 'approved', last_decision_request_id: 'selected-request' }]
+    expect((await reconcileHitlPutFailure(ITEM.id, wanted, busy(), exact)).outcome).toBe('saved')
+  })
+
   it('keeps the outcome unknown when the authoritative read cannot settle it', async () => {
     await expect(reconcileHitlPutFailure(ITEM.id, 'approved', busy(), () => Promise.resolve([])))
       .resolves.toMatchObject({ outcome: 'unknown' })

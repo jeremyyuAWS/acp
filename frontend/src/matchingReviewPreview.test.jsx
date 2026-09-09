@@ -28,7 +28,7 @@ it('lets a reviewer inspect every matching proposal and rationale without changi
   expect(container.querySelectorAll('li')).toHaveLength(2)
   expect(container.textContent).toContain('Proposal 11')
   expect(button(container, 'Next proposals').disabled).toBe(true)
-  expect(container.textContent).toContain('group action still covers all matching findings and the selected item')
+  expect(container.textContent).toContain('select proposals separately for batch approval')
   expect([...container.querySelectorAll('button')].map(item => item.textContent)).toEqual(['Previous proposals', 'Next proposals'])
 })
 it('starts at the first page when the group membership changes', async () => {

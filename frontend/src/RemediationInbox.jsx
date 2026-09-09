@@ -10,9 +10,9 @@ import { scOf } from './fixSummary.js'
 import { changeSentence, isContrastFinding } from './remediationEvidence.js'
 import WorkspaceProgress from './WorkspaceProgress.jsx'
 import WorkspaceFooter from './WorkspaceFooter.jsx'
-import { confirm as confirmAction } from './ConfirmDialog.jsx'
 import './RemediationInbox.css'
 import MatchingReviewPreview from './MatchingReviewPreview.jsx'
+import BatchReviewSelection from './BatchReviewSelection.jsx'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is a TWO-column split: a 35% work queue on the left to find and
@@ -28,7 +28,6 @@ const fmtOf = (file) => String(file || '').split('.').pop().toLowerCase()
 // The success-criterion key a finding shares with its siblings, used to batch a decision across
 // every other queued finding of the same rule (W8). Normalised so 'SC_1_1_1' / 'WCAG 1.1.1' / '1.1.1' all match.
 const scKeyOf = (f) => scOf(f?.rule_id || f?.ruleId || f?.wcag)
-const LARGE_BATCH_THRESHOLD = 10
 
 const WHY_BY_SC = {
   '1.1.1': 'Text alternatives let screen-reader users understand images and other non-text content.',
@@ -384,21 +383,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
     setCopiedValue(kind)
   }
   const why = whyOf(f)
-  const decideForGroup = async (decision) => {
-    if (matchingCount > LARGE_BATCH_THRESHOLD) {
-      const findingCount = matchingCount + 1
-      const documentCount = new Set([f.file, ...matchingFindings.map((x) => x.file)]).size
-      const ok = await confirmAction({
-        title: 'Apply decision to matching findings?',
-        message: `This will apply the same decision to ${findingCount} findings across ${documentCount} documents.`,
-        presentation: 'toast',
-        confirmLabel: 'Apply to all',
-        cancelLabel: 'Cancel',
-      })
-      if (!ok) return
-    }
-    return onApplyToMatching?.(f, decision)
-  }
+
   return (
     <div className="remediation-detail" style={{ display: 'flex', flexDirection: 'column' }}>
       {/* Keep this content-sized. The workspace owns scrolling; making this child 100% tall
@@ -535,16 +520,14 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
                           padding: '10px 12px', border: '1px solid var(--line,#e2dce4)', borderRadius: 9,
                           background: 'var(--bg,#fff)' }}>
               <span style={{ lineHeight: 1.4 }}>
-                <b style={{ display: 'block', color: 'var(--ink)', fontSize: 13 }}>Confident this pattern is right?</b>
-                Apply the same decision to this item and {matchingCount} similar finding{matchingCount === 1 ? '' : 's'}
+                <b style={{ display: 'block', color: 'var(--ink)', fontSize: 13 }}>Review a batch of matching proposals</b>
+                Select from this item and {matchingCount} similar finding{matchingCount === 1 ? '' : 's'}
                 {' '}across {new Set([f.file, ...matchingFindings.map((x) => x.file)]).size} files.
               </span>
               <button type="button" className="primary" disabled={saving}
-                      onClick={() => decideForGroup({ state: 'accepted', value: canEdit ? draftValue : undefined })}
+                      onClick={() => onApplyToMatching?.(f)}
                       style={{ flex: '0 0 auto', fontWeight: 750, padding: '9px 14px' }}>
-                {saving ? 'Applying…' : isAutoFix
-                  ? `Approve all ${matchingCount + 1} similar fixes`
-                  : `Approve & apply to all ${matchingCount + 1}`}
+                {`Select matching proposals (${matchingCount + 1})`}
               </button>
             </div>
           </div>
@@ -690,7 +673,9 @@ export default function RemediationInbox({
   const [expandedClusters, setExpandedClusters] = useState({})  // cluster key -> true
   const toggleCluster = (key) => setExpandedClusters((e) => ({ ...e, [key]: !e[key] }))
   const [bulkPreviewOpen, setBulkPreviewOpen] = useState(false)
-  const [bulkError, setBulkError] = useState('')
+  const [batchScopeIds, setBatchScopeIds] = useState(null)
+  const batchPanelRef = useRef(null)
+  useEffect(() => { if (bulkPreviewOpen) batchPanelRef.current?.focus() }, [bulkPreviewOpen, batchScopeIds])
 
   const [leftW, setLeftW] = useState(() => clamp(readNum('leftW', 33), 28, 40))
   useEffect(() => { writeLS('leftW', leftW) }, [leftW])
@@ -745,13 +730,6 @@ export default function RemediationInbox({
     return sortQueue(filtered, sort)
   }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail, priorityFilter, formatFilter, sourceFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Bold bulk work is scoped to what the reviewer can currently see and explain. It never reaches
-  // manual, blocked, handed-off or already-decided findings, and every target keeps its own proposal.
-  const visibleBulkTargets = useMemo(() => visible.filter((f) => {
-    const key = laneOf(f).key
-    return !isResolved(f, decisions) && (key === 'apply' || key === 'review') && f.after != null && f.after !== ''
-  }), [visible, decisions])
-
   // Keep a valid selection: default to the first unresolved visible row.
   useEffect(() => {
     if (selectedId != null && visible.some((f) => f.id === selectedId)) return
@@ -780,7 +758,7 @@ export default function RemediationInbox({
     if (!focusReviewRef.current) return
     focusReviewRef.current = false
     reviewHeadingRef.current?.focus()
-  }, [selectedId, narrowPane])
+  }, [selectedId, narrowPane, bulkPreviewOpen])
   const groups = useMemo(() => groupByDocument(visible), [visible])
   const clusters = useMemo(() => clusterRows(visible, decisions), [visible, decisions])
 
@@ -867,57 +845,19 @@ export default function RemediationInbox({
     setSelectedId(nextUnresolvedId(visible, f.id, nextDecisions))
   }
 
-  // W8 — apply one decision to the current finding AND every matching one, in a single click. Each
-  // target routes through the same onDecide as an individual action, so approvals still re-validate
-  // and rejections still hand off; then advance past everything just decided.
-  //
-  // Partial failure is reported rather than hidden (PRD §6): the writes are awaited together, and if
-  // some are refused the batch says how many landed and how many are still unresolved, and the
-  // selection stays on the first finding that failed instead of advancing past the whole cluster.
-  async function applyToMatching(f, decision) {
+  function applyToMatching(f) {
     if (!f || savingId != null) return
-    const targets = [f, ...matchingOf(f)]
-    targets.forEach((t) => heldRef.current.set(t.id, t))
-    setSavingId(f.id)
-    setSaveError(null)
-    const results = await Promise.allSettled(targets.map((t) => onDecide?.(t, decision)))
-    setSavingId(null)
-    const failed = targets.filter((_, i) => results[i].status === 'rejected')
+    setBatchScopeIds([f.id, ...matchingOf(f).map(item => item.id)])
+    setBulkPreviewOpen(true)
+  }
+  function batchResult(results) {
+    const failed = results.find(r => r.state !== 'recorded')
     const nextDecisions = { ...decisions }
-    targets.forEach((t, i) => { if (results[i].status === 'fulfilled') { nextDecisions[t.id] = decision; heldRef.current.delete(t.id) } })
-    if (failed.length) {
-      setSaveError({ id: failed[0].id, batch: { saved: targets.length - failed.length, failed: failed.length },
-                     message: `${targets.length - failed.length} of ${targets.length} saved. ${failed.length} could not be saved and ${failed.length === 1 ? 'is' : 'are'} still unresolved.` })
-      setSelectedId(failed[0].id)
-      return
-    }
-    setSavedMessage(`${targets.length} matching findings saved. Moving to the next finding.`)
-    clearTimeout(savedTimerRef.current)
-    savedTimerRef.current = setTimeout(() => setSavedMessage(''), 2400)
+    results.filter(r => r.state === 'recorded').forEach(r => { nextDecisions[r.id] = { state: 'accepted' } })
+    setSavedMessage(`${results.filter(r => r.state === 'recorded').length} approval decisions recorded. Writing and verification remain separate.`)
     focusReviewRef.current = true
-    setSelectedId(nextUnresolvedId(visible, f.id, nextDecisions))
+    setSelectedId(failed?.id ?? nextUnresolvedId(visible, selectedId, nextDecisions))
   }
-
-  async function applyVisibleBulk() {
-    if (savingId != null || visibleBulkTargets.length === 0) return
-    setSavingId('visible-bulk'); setBulkError('')
-    const results = await Promise.allSettled(visibleBulkTargets.map((f) =>
-      onDecide?.(f, { state: 'accepted', value: f.after })))
-    const failed = visibleBulkTargets.filter((_, i) => results[i].status === 'rejected')
-    setSavingId(null)
-    if (failed.length) {
-      setBulkError(`${visibleBulkTargets.length - failed.length} of ${visibleBulkTargets.length} fixes saved. ${failed.length} still need attention.`)
-      setSelectedId(failed[0].id)
-      return
-    }
-    setBulkPreviewOpen(false)
-    setSavedMessage(`${visibleBulkTargets.length} visible fixes approved and applied.`)
-    clearTimeout(savedTimerRef.current)
-    savedTimerRef.current = setTimeout(() => setSavedMessage(''), 2400)
-  }
-
-  const visibleBulkFiles = new Set(visibleBulkTargets.map((f) => f.file)).size
-  const visibleBulkCriteria = new Set(visibleBulkTargets.map(scKeyOf).filter(Boolean)).size
 
   // Explicit linear navigation through the visible queue — Previous / Next step the SELECTION without
   // acting, so a reviewer can look before deciding and always sees their place ("N of M").
@@ -1013,7 +953,7 @@ export default function RemediationInbox({
       </div>
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       <WorkspaceProgress queue={queue} decisions={decisions} selected={selected} />
-      <div className="rinbox" data-layout="two-column" data-narrow={narrow ? narrowPane : undefined} ref={rowRef} style={{ display: 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: '0 0 12px 12px', overflow: 'hidden', minHeight: 480 }}>
+      <div className="rinbox" data-layout="two-column" data-narrow={narrow ? narrowPane : undefined} ref={rowRef} style={{ display: bulkPreviewOpen ? 'none' : 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: '0 0 12px 12px', overflow: 'hidden', minHeight: 480 }}>
       {/* ── Left: the work queue — find and select the next finding (resizable) ── */}
       <div className="rinbox-queuepane" hidden={narrow && narrowPane !== 'queue'}
            style={{ ...(narrow ? { flex: '1 1 auto', maxWidth: 'none' } : { flex: `0 0 ${leftW}%`, maxWidth: `${leftW}%` }),
@@ -1057,13 +997,12 @@ export default function RemediationInbox({
               <span>↑/↓ or J/K: move · Home/End: first/last · Enter: open selected item</span>
             </details>
           </div>
-          {visibleBulkTargets.length > 1 && (
-            <button type="button" className="ghost" aria-expanded={bulkPreviewOpen}
-                    onClick={() => { setBulkPreviewOpen((open) => !open); setBulkError('') }}
-                    style={{ marginTop: 8, fontWeight: 700 }}>
-              Bulk actions · {visibleBulkTargets.length} visible fixes
-            </button>
-          )}
+          <button type="button" className="ghost" aria-expanded={bulkPreviewOpen}
+                  disabled={savingId != null}
+                  onClick={() => { setBatchScopeIds(null); setBulkPreviewOpen(open => !open) }}
+                  style={{ marginTop: 8, fontWeight: 700 }}>
+            Select findings for batch approval
+          </button>
           {/* "Assigned to me" filter + a context assign chip for the selected document. Mirrors the
               #417 backend (files_assigned_to); shown only for a signed-in reviewer with an assign
               action, so it is never a dead control. Assigning is per-DOCUMENT (a file's whole set of
@@ -1170,25 +1109,17 @@ export default function RemediationInbox({
 
       </div>
       </div>
-      {bulkPreviewOpen && visibleBulkTargets.length > 1 && (
-        <div role="region" aria-label="Bulk approval summary"
-             style={{ position: 'sticky', bottom: 0, zIndex: 5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14,
-                      padding: '12px 16px', border: '1px solid var(--accent,#3b6fd6)', background: 'var(--bg,#fff)', boxShadow: '0 -5px 18px rgba(31,43,58,.14)' }}>
-          <span style={{ fontSize: 13, lineHeight: 1.45 }}>
-            <b>Apply every actionable fix in this view</b>
-            <span style={{ display: 'block' }}>{visibleBulkTargets.length} fixes · {visibleBulkFiles} file{visibleBulkFiles === 1 ? '' : 's'} · {visibleBulkCriteria} WCAG {visibleBulkCriteria === 1 ? 'criterion' : 'criteria'}</span>
-            <span className="muted" style={{ display: 'block' }}>Each file keeps its own proposal. Manual, blocked, handed-off, and decided work is excluded.</span>
-            {bulkError && <span role="alert" style={{ display: 'block', color: 'var(--error-fg-strong,#9f221c)', marginTop: 3 }}>{bulkError}</span>}
-          </span>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: '0 0 auto' }}>
-            <button type="button" className="ghost" onClick={() => setBulkPreviewOpen(false)}>Cancel</button>
-            <button type="button" className="primary" disabled={savingId != null} onClick={applyVisibleBulk}
-                    style={{ fontWeight: 750, padding: '10px 16px' }}>
-              {savingId === 'visible-bulk' ? 'Applying visible fixes…' : `Approve & apply all ${visibleBulkTargets.length}`}
-            </button>
-          </div>
-        </div>
-      )}
+      <div hidden={!bulkPreviewOpen} ref={batchPanelRef} tabIndex={-1}>
+        <button type="button" className="ghost" disabled={savingId != null}
+                onClick={() => { setBulkPreviewOpen(false); focusReviewRef.current = true; setNarrowPane('detail') }}>Return to individual review</button>
+        <BatchReviewSelection
+          visible={batchScopeIds ? visible.filter(f => batchScopeIds.includes(f.id)) : visible}
+          decisions={decisions} drafts={drafts}
+          scopeKey={JSON.stringify([scanId, batchScopeIds])}
+          disabled={savingId != null && savingId !== 'selected-batch'}
+          onBusy={busy => setSavingId(busy ? 'selected-batch' : null)}
+          onDecide={onDecide} onResult={batchResult} />
+      </div>
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
       <WorkspaceFooter position={position} total={visIds.length} onPrev={goPrev} onNext={goNext}
                        activeStep={selected ? workflowStepIndex(selected, decisions) : null} />
