@@ -3084,14 +3084,14 @@ def file_remediation_diffs(sid: str, filename: str, request: Request):
 
 
 @router.get("/scans/{sid}/remediation-diffs")
-def scan_remediation_diffs(sid: str, request: Request):
+def scan_remediation_diffs(sid: str, request: Request, include_summary: bool = False):
     """Scan-wide before→after evidence — every verified-cleared fix across all files, so the
     Remediation view can group REAL applied fixes by rule/category (image descriptions,
     reading order, titles, headings, tables) without inventing counts. Covers all fix types,
     unlike applied-fixes (image alt text only). Owner-scoped."""
     if core.store.get_scan(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
-    return core.store.list_remediation_diffs(sid)
+    return core.store.remediation_diff_page(sid) if include_summary else core.store.list_remediation_diffs(sid)
 
 
 @router.get("/scans/{sid}/diff")

@@ -1,3 +1,4 @@
+import { remediationReviewCounts, remediationDiffPage } from './remediationCountSummary.js'
 import { selectionFingerprint } from './batchReviewSelection.js'
 import AssessSummary from './AssessSummary.jsx'
 import { useState, useEffect, useMemo, useRef } from 'react'
@@ -394,6 +395,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // the concrete AI-written values/thumbnails. Every hero/impact/recent-fix count is a
   // straight count of these rows — never a fabricated number (see fixSummary.js).
   const [scanDiffs, setScanDiffs] = useState([])
+  const [diffTotals, setDiffTotals] = useState(null)
   const [appliedFixes, setAppliedFixes] = useState([])
   // Reviewer acknowledgements of the auto-applied (green) fixes shown in the inbox, keyed by their
   // `af:…` id. Local: an auto fix is already applied and re-scanned, so "Approve" is a confidence
@@ -406,11 +408,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // with no AI call at all stays absent (deterministic fix — no badge, nothing to claim).
   const [aiZoneByFile, setAiZoneByFile] = useState({})
   const runId = run?.id
+  const fixRequest = useRef(0)
   const fetchFixes = () => {
-    if (!runId) { setScanDiffs([]); setAppliedFixes([]); setAiZoneByFile({}); return }
-    Promise.all([getScanRemediationDiffs(runId), getAppliedFixes(runId), getScanAiCalls(runId)])
+    const request = ++fixRequest.current
+    if (!runId) { setScanDiffs([]); setDiffTotals(null); setAppliedFixes([]); setAiZoneByFile({}); return }
+    Promise.all([getScanRemediationDiffs(runId, true), getAppliedFixes(runId), getScanAiCalls(runId)])
       .then(([d, a, calls]) => {
-        setScanDiffs(Array.isArray(d) ? d : []); setAppliedFixes(Array.isArray(a) ? a : [])
+        if (request !== fixRequest.current) return
+        const page = remediationDiffPage(d)
+        setScanDiffs(page.items); setDiffTotals(page); setAppliedFixes(Array.isArray(a) ? a : [])
         const byFile = {}
         ;(Array.isArray(calls) ? calls : []).forEach((c) => {
           if (!c || !c.file) return
@@ -423,7 +429,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   }
   useEffect(() => {
     setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([]); setRejectedItems([]); setAckd({})
-    clearInterval(pollRef.current); setRemProg(null); setRemBusy(false); setServerFixed(0); setRemMsg('')
+    clearInterval(pollRef.current); setRemProg(null); setRemBusy(false); setServerFixed(0); setRemMsg(''); setDiffTotals(null); setScanDiffs([]); setAppliedFixes([])
     fetchFixes()
     if (!runId) { setQueue(SIM ? buildHumanQueue(files, {}) : []); return }
     if (SIM) { setQueue(buildHumanQueue(files, {})); return }
@@ -925,12 +931,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // count is the distinct documents among exactly those findings.
   const reviewNeeds = inboxQueue.filter((f) => matchesWorkflow(f, 'needs-review', inboxDecisions))
   const reviewCount = reviewNeeds.length
+  const reviewCounts = remediationReviewCounts(inboxQueue, inboxDecisions)
   const reviewDocCount = new Set(reviewNeeds.map((f) => f.file).filter(Boolean)).size
-  // The top-nav badge (App.jsx hitlCount) reports the SAME needs-review count as the hero and the
-  // "Needs review" tab, so all three review-count surfaces agree. Uses reviewCount, not the raw human
-  // queue.length that excluded unconfirmed auto-fixes; keyed on reviewCount so the badge refreshes when
-  // a decision or an auto-fix acknowledgement changes the needs-review population.
-  useEffect(() => { onHitlCount?.(reviewCount) }, [reviewCount, onHitlCount])
+  // Navigation counts pending human review items, excluding already-applied inspection rows.
+  useEffect(() => { onHitlCount?.(reviewCounts.pendingItems) }, [reviewCounts.pendingItems, onHitlCount])
   // The automation-first summary's numbers. Every one counts something the run actually produced —
   // applied-fix evidence, the live HITL queue, the workflow partition — computed from the same
   // sources the panels below use, so the header can never advertise a different total than they do.
@@ -946,7 +950,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   const fixGroups = groupFixesByRule(fixSource)
   const impact = summarizeImpact(fixSource)
-  const fixedCount = totalFixes(fixSource)
+  const fixTotal = scanDiffs.length || !appliedFixes.length ? diffTotals?.total : null
+  const fixDocumentTotal = fixTotal != null ? diffTotals?.documents : null
+  const fixedCount = fixTotal ?? totalFixes(fixSource)
   const fixesByFile = {}; fixSource.forEach((r) => { fixesByFile[r.file] = (fixesByFile[r.file] || 0) + 1 })
   const reviewByFile = {}; queue.forEach((q) => { reviewByFile[q.file] = (reviewByFile[q.file] || 0) + 1 })
   // Reviewer time, MEASURED (hitl_events.review_ms). Replaces "est. savings", which was one
@@ -1110,7 +1116,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     <div className="rem-hero-main">
           <div className="rem-hero-line">
             <b>{files.length}</b> document{files.length === 1 ? '' : 's'} processed
-            {fixedCount > 0 && <> · <b className="rh-fixed">{fixedCount}</b> issue{fixedCount === 1 ? '' : 's'} fixed automatically</>}
+            {fixedCount > 0 && <> · <b className="rh-fixed">{fixedCount}</b> {fixTotal == null ? 'applied-change records loaded (total unavailable)' : `issue${fixedCount === 1 ? '' : 's'} fixed automatically`}</>}
             {/* Redesign R4: "N need your review" removed here — the Review queue section below is the
                 single dominant place that count lives, so the hero no longer repeats it. */}
             {measured && (
@@ -1253,7 +1259,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         </p>
         <div className="doclist">
           <div className="docrow dochead">
-            <span>Document</span><span>Progress</span><span style={{ textAlign: 'center' }}>Fixes</span><span style={{ textAlign: 'center' }}>Review</span><span>Scope</span><span />
+            <span>Document</span><span>Progress</span><span style={{ textAlign: 'center' }}>Loaded fixes</span><span style={{ textAlign: 'center' }}>Review</span><span>Scope</span><span />
           </div>
           {docList.map((f) => {
             const done = !!(f.remediated_at || f.drive_write_url)
@@ -1301,6 +1307,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       </RemSection>
 
       {/* ── Recent AI fixes, grouped (§6) + Accessibility improvements impact (§7) ── */}
+      <p className="muted">{fixSource.length} applied-change records loaded{fixTotal != null ? ` of ${fixTotal} total` : ' · total unavailable'}. Detailed groups and document counts below describe these loaded records.</p>
       <GroupedFixes fixGroups={fixGroups} appliedFixes={appliedFixes} impact={impact} />
 
       {/* Self-remediation — you're fixing these yourself; visible whenever active. */}
@@ -1511,14 +1518,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               badges. The numeric pill is gone — the count lives in the sentence, said once. */}
           <div>
             <h2 style={{ margin: 0 }}>Review queue</h2>
-            {reviewCount > 0
+            {reviewCounts.pendingItems > 0
               ? <p className="rem-review-lead" style={{ margin: '2px 0 0', fontSize: 13 }}>
-                  <b>{reviewCount}</b> finding{reviewCount === 1 ? '' : 's'} need review across{' '}
-                  <b>{reviewDocCount}</b> document{reviewDocCount === 1 ? '' : 's'}
+                  <b>{reviewCounts.pendingItems}</b> review item{reviewCounts.pendingItems === 1 ? '' : 's'} require attention across{' '}
+                  <b>{reviewCounts.documents}</b> document{reviewCounts.documents === 1 ? '' : 's'}
                 </p>
               // NOT unconditionally "All clear": an unreadable document is not a clear one, and
               // the reader who sees "All clear" stops reading (reviewQueueCopy.js).
-              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>{reviewLeadLine(files, reviewCount)}</p>}
+              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>{reviewLeadLine(files, reviewCounts.pendingItems)}</p>}
           </div>
           {totalHitl > 0 && (
             <div className="rem-sec-prog">
@@ -1709,8 +1716,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       <RemediationRunHeader
         assessedAt={assessedAt}
         docScope={documentScopeSentence(documentSelection(files, triage))}
-        counts={{ autoFixed: fixedCount, documents: files.length, needsApproval: reviewCount,
-                  manual: manualCount, revalidating: revalidatingCount, blocked: blockedCount }}
+        counts={{ automaticOnly: false, autoFixed: fixTotal ?? undefined, autoFixedLoaded: fixSource.length, documents: fixDocumentTotal ?? undefined,
+          needsApproval: reviewCounts.ready, individualReview: reviewCounts.individual, inspection: reviewCounts.inspection,
+                  manual: reviewCounts.manual, revalidating: revalidatingCount, blocked: blockedCount }}
         primary={primary}
         readOnly={readOnly}
         onOpenRunDetails={() => { setRunDetailsOpen((v) => !v); setWorkspaceRequest({ mode: 'live' }) }} />
@@ -1728,7 +1736,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             onRun={readOnly ? undefined : (policy) => runServerRemediation(impactScope, policy)} />
           {remMsg && <div role="status">{remMsg}</div>}
         </>}
-        reviewCount={reviewCount}
+        reviewCount={reviewCounts.pendingItems}
         snapshot={runStream?.snapshot || null}
         review={reviewWorkspace}
         live={<>
