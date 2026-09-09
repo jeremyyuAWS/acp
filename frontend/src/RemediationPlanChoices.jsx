@@ -2,6 +2,7 @@ import './simple-remediation-questions.css'
 import { useId } from 'react'
 import RemediationOptionHelp from './RemediationOptionHelp.jsx'
 import RemediationReviewPolicy from './RemediationReviewPolicy.jsx'
+import RemediationGenerationChain from './RemediationGenerationChain.jsx'
 
 const MODES = [
   ['Review every change', 'Prepare proposed fixes. A person approves each change before application.'],
@@ -56,7 +57,7 @@ export function RetiredRemediationPlanChoices({ policy, providers, disabled, onC
 }
 
 // The previous detailed panel is retained above for restoration, but is no longer mounted.
-export default function RemediationPlanChoices({ policy, disabled, onChange, budgetSupported = false, reviewSupported = false, automaticReviewSupported = false, automaticReviewReason = '', reviewAdministratorFloor = null, reviewEligibleFamilies = [] }) {
+export default function RemediationPlanChoices({ policy, disabled, onChange, generationChainOptions, budgetSupported = false, reviewSupported = false, automaticReviewSupported = false, automaticReviewReason = '', reviewAdministratorFloor = null, reviewEligibleFamilies = [] }) {
   const id = useId()
   return <div className="remediation-plan-choices">
     <fieldset disabled={disabled}>
@@ -93,7 +94,7 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, bud
             <input type="radio" name={`${id}-ai`} checked={policy.ai > 0} onChange={() => onChange('ai', 1)} />
             <span><strong>Rules + AI waterfall</strong><span>Draft suggestions; try a fallback if needed. You approve AI changes.</span></span>
           </label>
-          <RemediationOptionHelp label="AI waterfall">A waterfall tries AI in stages, with at most two model attempts for a supported text suggestion. A second model is tried only if the first response is empty or cut short. Spending limits and availability still apply. You approve AI suggestions. Document text or images may be sent to the configured providers; choose Rules only if those destinations are unsuitable for the content.</RemediationOptionHelp>
+          <RemediationOptionHelp label="AI waterfall">A waterfall tries AI in stages, with up to {policy.generation_chain?.steps?.length === 3 ? 'three' : 'two'} generation models for a supported text suggestion. Later models run only after an empty or incomplete suggestion. Spending limits and availability still apply. You approve AI suggestions. Document text or images may be sent to the configured providers; choose Rules only if those destinations are unsuitable for the content.</RemediationOptionHelp>
         </div>
       </div>
       {policy.ai > 0 && <div className="simple-remediation-budget">
@@ -107,6 +108,7 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, bud
           : 'Spending limits are not available on this server. Choose Rules only if you need a firm cap.'}</p>
       </div>}
     </fieldset>
+    {policy.ai > 0 && <RemediationGenerationChain policy={policy} options={generationChainOptions} disabled={disabled} budgetSupported={budgetSupported} onChange={onChange} />}
     {policy.ai > 0 && reviewSupported && <details><summary>Optional AI review and approval threshold</summary><RemediationReviewPolicy value={policy.ai_review} onChange={value => onChange('ai_review', value)}
       disabled={disabled || !budgetSupported} supported={reviewSupported} automaticSupported={automaticReviewSupported}
       automaticReason={automaticReviewReason} administratorFloor={reviewAdministratorFloor} eligibleFamilies={reviewEligibleFamilies} /></details>}
