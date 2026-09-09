@@ -1,3 +1,4 @@
+import { prepareWorkflowEntry } from './workflowEntry.js'
 import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
 import HitlBell from './HitlBell.jsx'
 import { assessmentLine, outcomeChips } from './assessmentProgress.js'
@@ -354,7 +355,11 @@ export default function App() {
   // Stop press is a wrong account of what happened, and the red treatment sends them looking for a
   // fault that does not exist.
   const [stopped, setStopped] = useState(null)
-  const [view, setView] = useState('overview')
+  const [view, setViewState] = useState('overview')
+  const setView = (next) => {
+    prepareWorkflowEntry(next)
+    setViewState(next)
+  }
   // Whether the user has CHOSEN the tab they are on. 'overview' is the app's own default, so a
   // role that hides it must move them rather than showing an Access restricted screen for a place
   // they never asked to be — see AccessRestricted.jsx for why an explicit navigation gets the

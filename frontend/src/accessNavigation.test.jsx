@@ -239,3 +239,10 @@ describe('a role changed by an administrator reaches an open session', () => {
     expect(tabLabels(c)).toContain('Release')
   })
 })
+
+it('main Remediate entry clears the Live mode left by a previous visit', async () => {
+  const c = await signIn()
+  history.replaceState({}, '', '/?tab=remediate&mode=live')
+  await click(tabNamed(c, 'Remediate'))
+  expect(new URLSearchParams(location.search).get('mode')).toBe('plan')
+})
