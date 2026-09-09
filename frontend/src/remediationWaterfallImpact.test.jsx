@@ -83,3 +83,33 @@ it('uses the server rules-only route and describes a zero paid budget honestly',
   await act(async () => root.render(createElement(Impact, { data: zero })))
   expect(container.textContent).toContain('No paid AI requests are allowed')
 })
+
+it('counts auto-approved AI rows in the AI segment instead of dropping the chart', () => {
+  // Under standing approval the backend forecasts eligible AI rows into the
+  // `automatic` lane. Before this was handled they matched no branch, fell out of
+  // every group, and broke the counted === total invariant that gates the chart --
+  // so the panel degraded to "Not yet known" exactly when AI was most active.
+  const data = preview()
+  data.findings = [
+    { id: 'rules', file: 'first.pdf', origin: 'rule_based', lane: 'review', finding_count: 3 },
+    { id: 'ai-auto', file: 'first.pdf', origin: 'ai', lane: 'automatic', finding_count: 4 },
+    { id: 'manual', file: 'second.pdf', origin: 'human', lane: 'manual', finding_count: 2 },
+    { id: 'blocked', file: 'second.pdf', origin: 'ai', lane: 'blocked', finding_count: 1 },
+  ]
+  const { groups, complete, total } = deriveWaterfallImpact(data)
+  expect(complete).toBe(true)
+  expect(total).toBe(10)
+  expect(groups.ai.count).toBe(4)
+  expect(groups.rule_based.count).toBe(3)
+  // The segments still sum to the baseline, which is the chart's whole contract.
+  expect(Object.values(groups).reduce((s, g) => s + g.count, 0)).toBe(10)
+})
+
+it('still refuses to draw when a row genuinely fits no segment', () => {
+  // Bite check for the test above: widening the AI branch must not make the
+  // completeness gate unfalsifiable.
+  const data = preview()
+  data.findings = [...data.findings,
+    { id: 'odd', file: 'third.pdf', origin: 'rule_based', lane: 'unknown_lane', finding_count: 1 }]
+  expect(deriveWaterfallImpact(data).complete).toBe(false)
+})

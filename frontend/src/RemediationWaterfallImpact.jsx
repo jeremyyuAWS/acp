@@ -24,7 +24,12 @@ export function deriveWaterfallImpact(data) {
     if (row.lane === 'blocked') key = 'blocked'
     else if (row.lane === 'manual') key = 'person'
     else if (row.origin === 'rule_based' && ['automatic', 'review'].includes(row.lane)) key = 'rule_based'
-    else if (row.origin === 'ai' && row.lane === 'review' && data?.policy?.ai > 0) key = 'ai'
+    // `automatic` as well as `review`: under standing approval the backend forecasts
+    // eligible AI rows into the automatic lane. They are still AI work and belong in
+    // this segment; without the extra lane they match no branch, drop out of every
+    // group, and break the counted === total invariant that gates the whole chart --
+    // so the panel would silently degrade to "Not yet known" exactly when AI is most active.
+    else if (row.origin === 'ai' && ['automatic', 'review'].includes(row.lane) && data?.policy?.ai > 0) key = 'ai'
     if (!key) { rowsComplete = false; continue }
     groups[key].count += row.finding_count
     groups[key].rows.push(row)
