@@ -22,9 +22,15 @@ class FakeProviders:
     _ANTHROPIC_MESSAGES_URL = 'https://fixture.invalid/messages'
     _ANTHROPIC_API_VERSION = 'fixture'
     selected = 'openai'
+    # Vendors the owner has NAMED as permitted fallbacks. Empty by default, so every existing
+    # case keeps exercising the single-provider chain it was written for.
+    fallbacks = ()
     @classmethod
     def active_text_provider(cls):
         return cls.selected
+    @classmethod
+    def permitted_text_providers(cls):
+        return frozenset({cls.selected, *cls.fallbacks}) if cls.selected else frozenset()
     @staticmethod
     def _text_key_for(provider):
         return 'fixture-not-a-secret'

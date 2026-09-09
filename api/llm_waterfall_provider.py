@@ -114,13 +114,23 @@ class StrictTextGenerator:
             raise ValueError('two or three distinct model IDs required')
         for spec in specs:
             spec.validate(clock())
-        # Reuse existing owner opt-in; mere credential presence never activates
-        # a second provider or changes the global selection.
+        # Reuse existing owner opt-in; mere credential presence never activates a second
+        # provider or changes the global selection. The PRIMARY is still the owner-selected
+        # text provider — nothing may displace the vendor the deployment chose. A later step
+        # may use a different vendor only where the owner named it as a permitted fallback
+        # (providers.permitted_text_providers), so a chain spans vendors by authorisation and
+        # never by a key that merely happens to be present.
         active = self.providers.active_text_provider()
-        if any(spec.provider != active for spec in specs):
-            raise ValueError('all models must use the owner-selected text provider')
-        if not self.providers._text_key_for(active):
-            raise ValueError('selected provider credential unavailable')
+        if specs[0].provider != active:
+            raise ValueError('the primary model must use the owner-selected text provider')
+        permitted = self.providers.permitted_text_providers()
+        unauthorised = sorted({spec.provider for spec in specs} - set(permitted))
+        if unauthorised:
+            raise ValueError('fallback provider not authorised for text: ' + ', '.join(unauthorised))
+        # Every vendor in the chain needs its own resolvable credential, not just the primary.
+        for provider in sorted({spec.provider for spec in specs}):
+            if not self.providers._text_key_for(provider):
+                raise ValueError('selected provider credential unavailable')
         self.specs = {spec.model: spec for spec in specs}
         self.models = tuple(Model(spec.model, spec.maximum_cost()) for spec in specs)
         self.pricing_refs = {spec.model: spec.pricing_ref for spec in specs}
@@ -135,7 +145,10 @@ class StrictTextGenerator:
     def __call__(self, model: str, request: Request) -> Generation:
         spec = self.specs[model]
         spec.validate(self.clock())
-        if self.providers.active_text_provider() != spec.provider:
+        # Re-read authorisation at dispatch, not just at construction: governance can be
+        # withdrawn mid-run, and a chain built when a fallback was permitted must stop using it
+        # the moment it is not.
+        if spec.provider not in self.providers.permitted_text_providers():
             raise ValueError('provider governance changed; dispatch blocked')
         if request.family != 'html-root-language' or not request.authority_ref or not request.expected_language:
             raise ValueError('supported family and authoritative language required')
@@ -156,7 +169,9 @@ class StrictTextGenerator:
         try:
             spec = self.specs[model]
             spec.validate(self.clock())
-            if self.providers.active_text_provider() != spec.provider:
+            # The real egress point. Authorisation is re-read here too — construction-time
+            # approval is not a licence that outlives the setting that granted it.
+            if spec.provider not in self.providers.permitted_text_providers():
                 raise ValueError('provider governance changed; dispatch blocked')
             # A conservative payload bound prevents unbounded prompt construction
             # reaching transport. Reservation still uses the full context ceiling.

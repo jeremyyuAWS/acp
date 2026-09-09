@@ -24,13 +24,14 @@ RUN_POLICY_SCHEMA = """CREATE TABLE IF NOT EXISTS ai_spending_run_policies (
 # stored snapshot, which must keep normalizing to exactly the dict it did before, byte for
 # byte, or persist_run_policy's immutability comparison rejects its own accepted run.
 #
-# This is a DECLARATION, not an enforcement point. Nothing in the dispatch path reads
-# `ai_zone` yet, so `local` does not by itself keep a call off the cloud waterfall. What
-# does the keeping here is the cap: every managed generation seam
-# (llm_waterfall_provider.managed_text_generate / managed_generate_attempts /
-# managed_text_ready, ai.run_verified_remediation) refuses on `not ctx.enabled`, and
-# RunContext.enabled is false whenever cap_units == 0. So the zero-cap local run this
-# module now accepts can buy nothing at all, cloud or otherwise.
+# `local` is now READ in the dispatch path, and the split matters. `RunContext.enabled`
+# still gates the CLOUD waterfall and still requires cap_units > 0, so a zero-cap run can
+# buy nothing from a vendor no matter what its zone says — that gate is untouched. What
+# `local` adds is `RunContext.local_drafting`, which ai.suggest_fix reads to reach the
+# keyless Ollama floor instead of deferring. Two separate permissions, deliberately: making
+# `enabled` true for a zero-cap local run would have opened every cloud seam that reads it
+# (managed_text_generate, managed_generate_attempts, managed_text_ready,
+# ai.run_verified_remediation) to a run with no budget to answer for it.
 AI_ZONES = ("local", "any")
 
 
@@ -154,7 +155,20 @@ class RunContext:
 
     @property
     def enabled(self):
+        """May this run spend on the CLOUD waterfall. Unchanged: AI on, and a positive cap."""
         return self.policy["ai"] > 0 and self.policy["cap_units"] > 0
+
+    @property
+    def local_drafting(self):
+        """May this run draft on the keyless local floor.
+
+        True only for an explicitly local-zone run. There is nothing to meter — providers.py
+        records the Ollama call's cost as a real measured 0 — so the cap that guards cloud
+        spending has nothing to guard here, and requiring one demanded a spending limit the
+        run could never spend. Deliberately NOT true for a zone-absent run: absent is the
+        pre-field meaning of an already-stored snapshot, and reading it as consent to a
+        different dispatch path would change what an accepted run agreed to."""
+        return self.policy["ai"] > 0 and self.policy.get("ai_zone") == "local"
 
 
 _CURRENT = ContextVar("managed_ai_run", default=None)
