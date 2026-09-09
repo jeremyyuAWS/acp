@@ -868,7 +868,23 @@ def scan_job(job_id: str, request: Request):
     # request lands on, which is the whole point of removing session affinity.
     j = core.get_job_state(job_id)
     if j is None:
-        raise HTTPException(404, "job not found")
+        # Stage batches persist jobs without creating a Redis progress entry.
+        # Poll the durable identity returned by assess/remediate, including before
+        # a worker claims it. Never expose the queue payload or raw worker errors.
+        durable = core.store.get_job(job_id)
+        if durable is None:
+            raise HTTPException(404, "job not found")
+        payload = durable.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        scan_id = durable.get("scan_id") or payload.get("scan_id")
+        _require_job_owner(job_id, {"scan_id": scan_id}, request)
+        status = durable.get("status") or "queued"
+        failed = status == "dead"
+        return {"job_id": job_id, "scan_id": scan_id,
+                "status": "failed" if failed else status,
+                "phase": {"done": "complete", "dead": "error"}.get(status, status),
+                "done": status in ("done", "dead", "cancelled"),
+                "error": "The job failed. Check the scan for details." if failed else None}
     _require_job_owner(job_id, j, request)
     return j
 
