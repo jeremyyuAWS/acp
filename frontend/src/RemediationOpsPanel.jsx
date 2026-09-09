@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import LiveCounter from './LiveCounter.jsx'
 import RemediationWaterfallCard from './RemediationWaterfallCard.jsx'
+import RemediationThroughput from './RemediationThroughput.jsx'
 import { counterRows, secondaryRows, freshness, headline, integrityAffects, partitionSums } from './remediationSnapshot.js'
 import { attemptStage, milestoneCrossings, retrySeconds } from './remediationLivePanel.js'
 import ActivityPulse from './ActivityPulse.jsx'
@@ -135,16 +136,14 @@ function Throughput({ snapshot, frozen = false }) {
   const latestRef = useRef(latest)
   latestRef.current = latest
   const [data, setData] = useState(latest)
-  useEffect(() => setData(latestRef.current), [snapshot.run_id])
+  useEffect(() => setData(latestRef.current), [snapshot.run_id, snapshot.batch_id])
   useEffect(() => {
     if (frozen) return undefined
     const timer = setInterval(() => setData(latestRef.current), 12_000)
     return () => clearInterval(timer)
   }, [frozen])
-  const bars = Array.isArray(data.buckets) ? data.buckets.slice(-10) : []
-  const max = Math.max(1, ...bars.map((v) => Number(v) || 0))
   const processing = snapshot.documents?.processing || 0
-  return <section className="remops-throughput"><h3>Throughput <span>· last 5 minutes</span></h3>{typeof data.documents_per_minute === 'number' ? <>{bars.length > 0 && <div className="remops-bars" aria-label={`${data.documents_per_minute} documents per minute`}>{bars.map((v, i) => <span key={i} style={{ height: `${Math.max(8, Number(v) / max * 100)}%` }} />)}</div>}<p><strong>{data.documents_per_minute.toLocaleString()} documents/min</strong>{data.change_percent != null && data.sample_documents >= 5 && <span className="remops-rate"> {data.change_percent >= 0 ? '↑' : '↓'} {Math.abs(data.change_percent)}% over previous 5 minutes</span>}</p></> : <p className="muted">No document was processed in the last five minutes.{processing ? ` ${processing} ${processing === 1 ? 'is' : 'are'} actively processing; rate and ETA will appear after terminal outcomes.` : ' Rate and ETA will appear after terminal outcomes.'}</p>}</section>
+  return <section className="remops-throughput"><h3>Throughput <span>· last 5 minutes</span></h3>{typeof data.documents_per_minute === 'number' ? <><RemediationThroughput data={data} identity={`${snapshot.run_id}:${snapshot.batch_id}`} paused={frozen} /><p>{data.change_percent != null && data.sample_documents >= 5 && <span className="remops-rate"> {data.change_percent >= 0 ? '↑' : '↓'} {Math.abs(data.change_percent)}% over previous 5 minutes</span>}</p></> : <p className="muted">No document was processed in the last five minutes.{processing ? ` ${processing} ${processing === 1 ? 'is' : 'are'} actively processing; rate and ETA will appear after terminal outcomes.` : ' Rate and ETA will appear after terminal outcomes.'}</p>}</section>
 }
 
 function Secondary({ snapshot }) {

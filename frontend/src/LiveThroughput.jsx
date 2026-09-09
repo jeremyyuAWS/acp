@@ -1,7 +1,7 @@
 // Small, dependency-free progress history for the live stage cards. Values are cumulative
 // completed-document counts sampled by useThroughput; the line therefore shows measured movement,
 // not a decorative animation or a model-generated estimate.
-export default function LiveThroughput({ points = [], ratePerMin = null, label = 'Throughput', unitLabel = 'completed', compact = false, mini = false }) {
+export default function LiveThroughput({ points = [], ratePerMin = null, label = 'Throughput', unitLabel = 'completed', compact = false, mini = false, sampleLabel = 'live updates' }) {
   // The mini variant lives in a compact card's status corner. With fewer than two samples there
   // is no trend to draw, so it stays absent rather than replacing a tiny chart with a wide
   // "calibrating" sentence above the live badge.
@@ -33,7 +33,7 @@ export default function LiveThroughput({ points = [], ratePerMin = null, label =
   })
   const chart = (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img"
-         aria-label={`${label}: ${rate}; ${unitLabel} count moved from ${lo} to ${hi} across ${points.length} live updates`}>
+         aria-label={`${label}: ${rate}; ${unitLabel} count moved from ${lo} to ${hi} across ${points.length} ${sampleLabel}`}>
       {!compact && !mini && <><line x1={plot.left} y1={plot.top} x2={plot.left} y2={height - plot.bottom}
             stroke="var(--line,#d9dde3)" />
       <line x1={plot.left} y1={height - plot.bottom} x2={width - plot.right} y2={height - plot.bottom}
@@ -56,7 +56,7 @@ export default function LiveThroughput({ points = [], ratePerMin = null, label =
         <div className="muted" style={{ fontSize: 12.5 }}>{label}</div>
         <strong style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>{rate}</strong>
         {!compact && <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-          {lo.toLocaleString()} → {hi.toLocaleString()} {unitLabel} · {points.length} live updates
+          {lo.toLocaleString()} → {hi.toLocaleString()} {unitLabel} · {points.length} {sampleLabel}
         </div>}
       </div>
       {chart}

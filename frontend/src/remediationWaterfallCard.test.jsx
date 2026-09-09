@@ -96,3 +96,14 @@ it('shows the recorded provider and exact model and preserves unknown costs', as
   expect(container.querySelector('.wf-models').textContent).toContain('Recorded call cost: Unavailable')
   expect(container.textContent).toContain('not a model breakdown for the selected run')
 })
+
+it('places a subtle measured processing chart beside the waterfall approval status', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(<RemediationWaterfallCard activity={activity}
+    snapshot={snapshot({ throughput: { buckets: [0, 2, 0], documents_per_minute: 0.4 } })} />))
+  const chart = container.querySelector('.wf-header-status svg')
+  expect(chart.getAttribute('width')).toBe('92')
+  expect(chart.getAttribute('height')).toBe('20')
+  expect(chart.getAttribute('aria-label')).toContain('Document processing · last 5 minutes')
+  expect(container.querySelector('.wf-tag').textContent).toContain('require your approval')
+})
