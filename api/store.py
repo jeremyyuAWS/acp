@@ -2497,8 +2497,12 @@ class _PgAdapter:
     # snapshot tables. All are additive and ignored by older replicas during rolling deploys.
     # v44 adds durable owner/run provider reservations and immutable spending policy.
     # v49 adds explicit durable approval-to-Release intents after exact artifact identity.
-    _SCHEMA_VERSION = 50
-    _SCHEMA_CHECKSUM_AT_VERSION = "81084e00e249a06e9d8d7be8e0203be6"
+    # v51 adds hitl_events.decision_primary, which marks the one row per human review decision
+    # in a card's per-draft fan-out. Additive and nullable: a replica still running v50 keeps
+    # writing rows without it, and _decision_rows reads NULL as a legacy row rather than as a
+    # decision, so a rolling deploy under-counts nothing and double-counts nothing.
+    _SCHEMA_VERSION = 51
+    _SCHEMA_CHECKSUM_AT_VERSION = "850f4e05a0c06d5cb43211185b0d8900"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
