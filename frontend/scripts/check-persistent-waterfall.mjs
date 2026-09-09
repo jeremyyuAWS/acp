@@ -68,6 +68,18 @@ try {
       await page.getByRole('button', { name: 'Retry diagram' }).click()
       await expect(graph).toBeVisible()
       await expect(stage).toBeVisible()
+      await page.getByLabel('Saved run', { exact: true }).selectOption('multiple')
+      await expect(graph.locator('[data-stage]')).toHaveCount(6)
+      const second = graph.locator('[data-stage=next]').last()
+      await second.click()
+      await expect(page.getByRole('dialog').locator('h3')).toContainText('fallback-model-two')
+      await expect(page.getByRole('dialog').locator('.attempt-story-model-context')).toContainText('second-provider · fallback-model-two')
+      await page.keyboard.press('Escape')
+      await expect(second).toBeFocused()
+      await page.getByRole('button', { name: 'Zoom out', exact: true }).click()
+      await page.getByRole('button', { name: 'Reset view', exact: true }).click()
+      await expect(graph).toBeVisible()
+      if (process.env.ACP_PERSISTENT_SCREENSHOT) await page.locator('.wf-card').screenshot({ path: `${process.env.ACP_PERSISTENT_SCREENSHOT}-${engine.name()}-multiple.png` })
       await page.getByLabel('Saved run', { exact: true }).selectOption('legacy')
       await expect(page.locator('.wf-graph-caption')).toContainText('Activity history unavailable')
       await expect(stage).not.toContainText('recorded-model-v1')
@@ -75,6 +87,20 @@ try {
       await page.getByRole('button', { name: 'View activity', exact: true }).click()
       await expect(page.getByRole('dialog')).toBeVisible()
       await page.keyboard.press('Escape')
+      const unmeasured = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+      await unmeasured.addInitScript(() => {
+        const Native = window.ResizeObserver
+        window.ResizeObserver = class extends Native {
+          constructor(callback) { super((entries, observer) => {
+            const delivered = entries.filter(entry => !entry.target.classList.contains('react-flow__node'))
+            if (delivered.length) callback(delivered, observer)
+          }) }
+        }
+      })
+      await unmeasured.goto(`${server.resolvedUrls.local[0]}fixtures/persistent-waterfall.html?mode=live`)
+      await expect(unmeasured.locator('.wf-graph-canvas [data-stage=first]')).toBeVisible()
+      await expect(unmeasured.locator('.react-flow__edge')).toHaveCount(4)
+      await unmeasured.close()
       expect(errors).toEqual([])
       console.log(`${engine.name()}: hidden mount/reveal, terminal transitions, saved reload, drawer/focus, 320/768/1280, rendering fault/retry, legacy scope passed`)
     } finally { await browser.close() }

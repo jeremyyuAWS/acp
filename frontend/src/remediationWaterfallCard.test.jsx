@@ -53,7 +53,7 @@ it('never builds a bar or equates changes with findings when reconciliation is i
   expect(container.querySelector('.wf-outcome-bar')).toBeNull()
   expect(container.textContent).toContain('Verified changes · all origins')
   expect(container.textContent).toContain('Review items · not findings')
-  expect(container.textContent).toContain('Unavailable')
+  expect(container.textContent).toContain('Activity count unavailable')
 })
 it('opens the matching drawer and rejects a changed batch', async () => {
   const { root, container } = createTestRoot()

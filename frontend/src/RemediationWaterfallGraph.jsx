@@ -1,5 +1,5 @@
 import { Component, useEffect, useRef, useState } from 'react'
-import { Background, Controls, Handle, MarkerType, Position, ReactFlow } from '@xyflow/react'
+import { Background, Handle, MarkerType, Position, ReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import WaterfallCount from './WaterfallCount.jsx'
 import { waterfallStageStatus } from './WaterfallRunNotice.jsx'
@@ -25,10 +25,10 @@ function StageButton({ data }) {
   return <button type="button" className={`wf-graph-node nodrag nopan${data.selected ? ' wf-graph-node-selected' : ''}${data.active ? ' wf-graph-node-active' : ''}`}
       aria-pressed={data.selected} data-stage={data.stage} data-node-id={data.id} onClick={() => data.onSelect?.(data.id, { tier: data.tier, model: data.model, provider: data.provider, stage: data.stage })}
       onKeyDown={event => data.onKeyDown(event, data.id)} style={{ minHeight: data.height, '--stage-color': COLORS[data.stage] }}>
-      <span className="wf-graph-node-role"><span>{String(data.index + 1).padStart(2, '0')}</span>{data.role}</span>
+      <span className="wf-graph-node-role"><span>{String(ORDER.indexOf(data.stage) + 1).padStart(2, '0')}</span>{data.role}</span>
       <strong>{data.title}</strong>
       <span className="wf-graph-node-provider">{data.provider}</span>
-      {data.metric && <span className="wf-graph-node-metric"><WaterfallCount value={data.value} identity={`${data.identity}:${data.id}`} paused={data.paused} /> {data.metric}</span>}
+      {data.metric && <span className="wf-graph-node-metric">{data.tier && !count(data.value) ? 'Activity count unavailable' : <><WaterfallCount value={data.value} identity={`${data.identity}:${data.id}`} paused={data.paused} /> {data.metric}</>}</span>}
       <span className={`wf-graph-node-state${data.active ? ' wf-graph-node-working' : ''}`}>{data.active ? <><i aria-hidden="true" />{data.id === 'verify' ? 'Verification in progress' : 'Request dispatched'}</> : data.detail}</span>
     </button>
 }
@@ -102,6 +102,12 @@ export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules
   const nodes = facts.map((fact, index) => ({
     id: fact.id, type: 'waterfall', position: { x: 16 + coords[index][0] * (nodeWidth + 26), y: 16 + coords[index][1] * (height + 36) },
     initialWidth: nodeWidth, initialHeight: height,
+    // Supplying known handle geometry keeps connectors present even if a browser drops
+    // node ResizeObserver deliveries. Native measurements replace these when available.
+    handles: [
+      ...(fact.stage === 'rules' ? [] : [{ type: 'target', position: narrow ? Position.Top : Position.Left, x: narrow ? nodeWidth / 2 - 2.5 : -2.5, y: narrow ? -2.5 : height / 2 - 2.5, width: 5, height: 5 }]),
+      ...(fact.stage === 'verify' ? [] : [{ type: 'source', position: narrow ? Position.Bottom : Position.Right, x: narrow ? nodeWidth / 2 - 2.5 : nodeWidth - 2.5, y: narrow ? height - 2.5 : height / 2 - 2.5, width: 5, height: 5 }]),
+    ],
     style: { width: nodeWidth }, draggable: false, selectable: false, focusable: false,
     data: { ...fact, index, identity, height, selected: selection === fact.id,
       active: !paused && fact.canAnimate !== false && motion.stage === fact.stage,
@@ -122,7 +128,7 @@ export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules
     }
   })))
   const rowCount = Math.max(...coords.map(coord => coord[1])) + 1
-  return { nodes, edges, height: height * rowCount + (rowCount - 1) * 36 + 80 }
+  return { nodes, edges, height: height * rowCount + (rowCount - 1) * 36 + 32 }
 
 }
 
@@ -214,10 +220,11 @@ export default function RemediationWaterfallGraph({ stages, aiEnabled, selection
         panActivationKeyCode={null} selectionKeyCode={null} zoomActivationKeyCode={null}
         elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} zoomOnPinch={false}
         zoomOnDoubleClick={false} preventScrolling={false} proOptions={{ hideAttribution: true }}>
-        <Controls showInteractive={false} onFitView={() => flow.current?.setViewport({ x: 0, y: 0, zoom: 1 })} />
         <Background gap={20} size={1} color="#d9cee4" />
       </ReactFlow>
-    </div></GraphBoundary>}
-    <p className="wf-graph-caption">{viewAvailable === false ? 'Activity history unavailable for this run. Select a stage for the evidence that remains.' : 'Rules → AI when needed → your approval → verification.'} {stopped ? 'Recorded results remain available.' : 'Motion marks confirmed activity.'}</p>
+    </div>
+    <div className="wf-graph-controls" aria-label="Diagram controls"><button type="button" aria-label="Zoom in" onClick={() => flow.current?.zoomIn()}>+</button><button type="button" aria-label="Zoom out" onClick={() => flow.current?.zoomOut()}>−</button><button type="button" onClick={() => flow.current?.setViewport({ x: 0, y: 0, zoom: 1 })}>Reset view</button></div>
+    </GraphBoundary>}
+    <p className="wf-graph-caption">{viewAvailable === false ? 'Activity history unavailable for this run. Select a stage for the evidence that remains.' : 'Available paths: rules → AI when needed → approval → verification. Fallback is conditional.'} {stopped ? 'Recorded results remain available.' : 'Motion marks confirmed activity.'}</p>
   </section>
 }

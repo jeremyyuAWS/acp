@@ -27,7 +27,7 @@ async function mount(props = {}) {
 describe('the connected remediation waterfall', () => {
   it('shows recorded model names and providers, with attempt units distinct from changes', async () => {
     const { container } = await mount({ reviewCount: 8, verifiedCount: 404 })
-    expect(container.querySelectorAll('button')).toHaveLength(5)
+    expect(container.querySelectorAll('[data-stage]')).toHaveLength(5)
     expect(container.querySelector('[data-stage=first]').textContent).toContain('recorded-first-v2')
     expect(container.querySelector('[data-stage=first]').textContent).toContain('provider-one')
     expect(container.querySelector('[data-stage=next]').textContent).toContain('recorded-fallback-version-20250514')
@@ -122,4 +122,12 @@ describe('the connected remediation waterfall', () => {
    expect(container.querySelectorAll('[data-stage]')).toHaveLength(5)
    expect(container.querySelector('.wf-graph-node-active')).toBeNull()
    expect(container.querySelector('[data-testid=moving-edges]').textContent).toBe('')
+ })
+
+ it('keeps each model identity stable when another recorded model arrives', () => {
+   const model = { provider: 'provider', model: 'model-one' }
+   const single = waterfallGraphModel({ stages: [{ tier: 2, models: [model] }] })
+   const multiple = waterfallGraphModel({ stages: [{ tier: 2, models: [model, { provider: 'other', model: 'model-two' }] }] })
+   expect(single.nodes.find(node => node.data.model === 'model-one').id).toBe(multiple.nodes.find(node => node.data.model === 'model-one').id)
+   expect(single.nodes.every(node => node.initialWidth > 0 && node.initialHeight > 0 && node.handles.length)).toBe(true)
  })

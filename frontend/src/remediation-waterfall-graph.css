@@ -45,3 +45,8 @@
 .wf-graph .wf-graph-node-role { color:var(--stage-color); letter-spacing:.035em; }
 .wf-graph .wf-graph-node-state { padding:5px 7px; border-radius:5px; background:color-mix(in srgb,var(--stage-color) 8%,var(--surface,#fff)); color:var(--ink,#332b3a); }
 .wf-graph .wf-graph-node-active { background:color-mix(in srgb,var(--stage-color) 6%,var(--surface,#fff)); box-shadow:0 0 0 3px color-mix(in srgb,var(--stage-color) 14%,transparent); }
+
+.wf-graph-controls { display:flex; gap:0; margin-top:8px; width:max-content; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+.wf-graph-controls button { min-width:32px; min-height:32px; padding:5px 9px; border:0; border-radius:0; background:var(--surface,#fff); color:var(--ink); font:inherit; cursor:pointer; }
+.wf-graph-controls button + button { border-left:1px solid var(--line); }
+.wf-graph-controls button:focus-visible { outline:2px solid var(--focus-ring); outline-offset:-3px; }
