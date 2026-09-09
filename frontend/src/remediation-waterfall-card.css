@@ -40,3 +40,10 @@
 @media(max-width:850px){.wf-inspection{grid-template-columns:minmax(0,1fr)}}
 
 .wf-inspection > .attempt-story{margin:0;min-width:0}
+
+.wf-completion{padding:18px 20px;border-bottom:1px solid var(--line)}
+.wf-completion .wf-metrics{padding:16px 0}
+.wf-completion p{font-size:13px;line-height:1.5;margin:8px 0}
+.wf-completion-next{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.wf-completion-actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+@media(max-width:650px){.wf-completion-next{align-items:flex-start;flex-direction:column}}
