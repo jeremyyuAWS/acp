@@ -52,7 +52,7 @@ def test_inexact_or_failed_verification_never_fixed(change):
     p=proposal()
     data=c.aggregate(baseline(),[p],[event(p,**change)])
     assert data['outcomes']['fixed']==0
-    assert data['outcomes']['unresolved']==5
+    assert data['outcomes']['unresolved'] + data['outcomes']['unavailable']==5
 
 
 def test_later_failure_supersedes_old_success_and_retry_replay_cannot_inflate():
@@ -218,7 +218,9 @@ def test_artifact_mismatch_does_not_receive_verified_credit(store):
     run,item=seed_exact_writer(store)
     tickets=c.writer_tickets(store,'scan','a.docx',[item],'a'*64,actual_values={'image':'A tree'})
     c.record_writer_result(store,tickets,outcome='verified_cleared',artifact_sha256='wrong-artifact',reference='mismatch',writer_attempt_id='one')
-    assert c.read_contribution(store,'owner','scan',run)['outcomes']['fixed']==0
+    result=c.read_contribution(store,'owner','scan',run)
+    assert result['outcomes']['unavailable']==1
+    assert result['coverage']=='partial'
 
 
 def test_missing_assessment_count_is_not_an_empty_measured_baseline(store):

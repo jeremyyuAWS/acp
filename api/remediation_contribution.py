@@ -197,7 +197,11 @@ def aggregate(baseline, proposals, events, *, dispositions=None, active_files=()
                         and approval.get('human_approval_id') and p['proposal_id'] in json.loads(approval.get('approval_snapshot_ids') or '[]'))
             last = ev[-1] if ev else None
             if last and not exact_verification(p, last):
-                state, reason = 'unresolved', 'Verification failed or exact source/value proof is missing'
+                known_failure = (last.get('outcome') in ('verified_still_failing','verified_regressed','write_unresolved','could_not_verify')
+                    and last.get('actual_source_sha256') == p['source_sha256']
+                    and last.get('approval_event_id') and not str(last.get('detail') or '').startswith('artifact_mismatch:'))
+                state = 'unresolved' if known_failure else 'unavailable'
+                reason = 'Verification failed' if known_failure else 'Exact source, value or artifact evidence is unavailable'
             elif last:
                 state, reason, approval_kind = 'fixed', 'Exact approved version applied and checked', 'human'
             elif approved:
@@ -281,8 +285,10 @@ def record_writer_result(store, tickets, *, outcome, artifact_sha256, reference,
             store._db.execute(cur, "SELECT corrected_sha256 FROM file_records WHERE scan_id=%s AND file=%s", (t['scan_id'],t['file']))
             stored_artifact = store._db.fetchone(cur) or {}
             qualified_outcome = outcome
+            proof_detail = reference
             if outcome == 'verified_cleared' and (not artifact_sha256 or stored_artifact.get('corrected_sha256') != artifact_sha256):
                 qualified_outcome = 'could_not_verify'
+                proof_detail = 'artifact_mismatch: ' + reference
             identity = digest([t['proposal_id'], t['approval_event_id'], t['actual_source_sha256'], artifact_sha256, qualified_outcome, reference, writer_attempt_id])
             store._db.execute(cur, """INSERT INTO ai_validation_outcomes
                 (id,model_call_id,scan_id,file,rule_id,item_id,outcome,detail,created_at,regressions,
@@ -290,6 +296,6 @@ def record_writer_result(store, tickets, *, outcome, artifact_sha256, reference,
                  actual_approved_value_sha256,artifact_sha256,approval_event_id)
                 VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING""",
                 (identity, t['model_call_id'],t['scan_id'],t['file'],t['rule_id'],t['item_id'],qualified_outcome,
-                 reference,now(),'[]' if qualified_outcome == 'verified_cleared' else None,t['proposal_id'],
+                 proof_detail,now(),'[]' if qualified_outcome == 'verified_cleared' else None,t['proposal_id'],
                  t['source_revision'],t['approved_value_sha256'],t['actual_source_sha256'],
                  t['approved_value_sha256'],artifact_sha256,t['approval_event_id']))
