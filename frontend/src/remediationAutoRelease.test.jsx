@@ -29,7 +29,7 @@ it('explicit checkbox authorizes only the displayed run, scope and destination',
  getAutomaticRelease.mockResolvedValue(authorized)
  await click(v.checkbox())
  expect(enableAutomaticRelease).toHaveBeenCalledOnce()
- expect(enableAutomaticRelease).toHaveBeenCalledWith('scan', expect.objectContaining({run_id:'execution-one',files:['a.docx'],destination:preview.destination,request_id:expect.any(String)}))
+ expect(enableAutomaticRelease).toHaveBeenCalledWith('scan', expect.objectContaining({run_id:'execution-one',files:['a.docx'],destination:preview.destination,request_id:expect.any(String),allow_remaining_issues:true,include_reports:true}))
  expect(v.checkbox().checked).toBe(true)
  expect(v.container.textContent).toContain('release continues in the background')
  expect(v.container.textContent).toContain('Automatic release expires')
@@ -81,4 +81,9 @@ it('ignores a delayed read from a previous scan', async()=>{
  await act(async()=>resolveOld(authorized))
  expect(v.checkbox().checked).toBe(false)
  expect(enableAutomaticRelease).not.toHaveBeenCalled()
+})
+
+it('describes saved remaining-issue authorization without claiming reviews block release',async()=>{
+ getAutomaticRelease.mockResolvedValue({...authorized,authorization:{...authorized.authorization,allow_remaining_issues:true,include_reports:true}})
+ const v=await mount();expect(v.container.textContent).toContain('Human inspection is optional');expect(v.container.textContent).toContain('per-file checklist');expect(v.container.textContent).not.toContain('required approvals and verification pass')
 })

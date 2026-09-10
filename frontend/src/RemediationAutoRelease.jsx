@@ -53,7 +53,7 @@ export default function RemediationAutoRelease({ scanId, files = [], readOnly = 
     try {
       if (checked) {
         await client.enable(scanId, { run_id: state.run_id, files: scope,
-          destination: state.destination, request_id: crypto.randomUUID() })
+          destination: state.destination, request_id: crypto.randomUUID(), allow_remaining_issues: true, include_reports: true })
       } else if (authorization?.id) {
         await client.stop(scanId, authorization.id)
       }
@@ -66,10 +66,11 @@ export default function RemediationAutoRelease({ scanId, files = [], readOnly = 
     <label className="rem-auto-release-option">
       <input type="checkbox" checked={enabled} disabled={loading || busy || unconfirmed || readOnly || (!enabled && (!state?.available || !scope.length))}
         aria-describedby={descriptionId} onChange={e => change(e.target.checked)} />
-      <strong>Automatically release files when ready</strong>
+      <strong>Fix and publish automatically</strong>
     </label>
     <div id={descriptionId}>
-      <p>Each file is released after its required approvals and verification pass. Other files can keep processing.</p>
+      <p>{authorization && !authorization.allow_remaining_issues ? 'This saved run releases files after its required approvals and verification pass.' : 'Saved copies publish after automatic processing, even when issues remain. Human inspection is optional; unapproved suggestions are not applied.'} Other files can keep processing.</p>
+      {(!authorization || authorization.include_reports) && <p>A scan summary and per-file checklist accompany the files. Publishing does not certify accessibility.</p>}
       <p><b>Destination:</b> {destination || (loading ? 'Checking destination…' : 'Not available')}</p>
       {enabled ? <p>Enabled for {authorizedCount} file{authorizedCount === 1 ? '' : 's'} in this remediation run. You can leave this page; release continues in the background.</p>
         : authorization ? <p>{authorization.status === 'completed' ? 'Automatic release has finished for this run.' : 'Automatic release is off for this run.'}</p>
@@ -85,7 +86,7 @@ export default function RemediationAutoRelease({ scanId, files = [], readOnly = 
         <div><dt>Needs attention</dt><dd>{(progress.blocked || 0) + (progress.failed || 0)}</dd></div>
       </dl>
       {enabled && <button type="button" className="ghost" disabled={busy || unconfirmed || readOnly} onClick={() => change(false)}>Stop future releases</button>}
-      <p>{authorization.status === 'stopped' ? 'Future releases stopped. Files already delivered remain available.' : enabled ? 'Stopping prevents future releases; a delivery already in progress may finish.' : 'Files needing attention have not been released.'}</p>
+      <p>{authorization.status === 'stopped' ? 'Future releases stopped. Files already delivered remain available.' : enabled ? 'Stopping prevents future releases; a delivery already in progress may finish.' : authorization.status === 'completed' ? 'Automatic publication has finished. Any remaining accessibility work stays in the checklist.' : 'Files needing attention have not been released.'}</p>
     </div>}
     {busy && <p role="status">Saving automatic release…</p>}
     {error && <p role="alert">{error} <button type="button" className="linklike" disabled={busy} onClick={() => setRefresh(n => n + 1)}>Refresh status</button></p>}

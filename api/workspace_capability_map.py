@@ -233,6 +233,7 @@ _map_many([("GET", "/ai/suggest"), ("GET", "/ai/explain"), ("GET", "/ai/validate
 # Publishing is a GRANT (PRD §5), never implied by seeing the Release tab.
 _map_many([("POST", "/scans/{sid}/publish"),
            ("POST", "/scans/{sid}/release/automatic"),
+           ("POST", "/scans/{sid}/release/reports/retry"),
            ("POST", "/scans/{sid}/release/automatic/{authorization_id}/stop")], {"release.publish"})
 _map_many([("POST", "/scans/{sid}/release/continuation/{intent_id}/authorize")],
           {"release.publish", "remediate.review"})
@@ -246,6 +247,8 @@ _map_many([
     ("GET", "/scans/{sid}/release/automatic"),
     ("POST", "/scans/{sid}/release/continuation/plan"),
     ("GET", "/scans/{sid}/release/manifest"),
+    ("GET", "/scans/{sid}/release/reports"),
+    ("GET", "/scans/{sid}/release/reports/{bundle_id}/{asset_index}"),
     # This is a read-only projection despite using POST: the selected filenames are carried in
     # the body so a large release is not constrained by URL length. It does not publish, approve,
     # or persist anything, and therefore belongs to the same release.view boundary as the

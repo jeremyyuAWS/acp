@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import ReleaseQuickActions from './ReleaseQuickActions.jsx'
 import ReleaseCopyDestination from './ReleaseCopyDestination.jsx'
+import ReleaseReports from './ReleaseReports.jsx'
 import { documentSelection, documentScopeSentence, documentsInSelection } from './remediableScope.js'
-import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage, prepareReleasePackage, downloadPreparedReleasePackage, getQueueJob, putMyReleaseTemplates } from './api.js'
+import { openReport, publishFile, publishAllFiles, getReleaseStatus, getAutomaticRelease, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage, prepareReleasePackage, downloadPreparedReleasePackage, getQueueJob, putMyReleaseTemplates } from './api.js'
 import { releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
@@ -31,6 +32,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   // the restriction; this filter enforces it for selection, delivery, packaging and set status.
   const releaseFiles = documentsInSelection(files, triage)
   const [allowRemainingIssues, setAllowRemainingIssues] = useState(false)
+  const releaseScopeKey = JSON.stringify([run?.id, [...new Set(releaseFiles.map(file => file.file))].sort()])
+  const partialChoice = useRef(null)
   const ready = releaseFiles.filter(file => allowRemainingIssues ? hasSavedCorrectedCopy(file) : hasCorrectedCopy(file))
   const [sessionDone, setDone] = useState({})
   const [pubUrls, setPubUrls] = useState({})   // file -> published Drive URL, from POST /publish
@@ -79,6 +82,20 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     setSelectedFiles(new Set()); selectionInitialized.current = false
     setConfirm(null); setSel(null); setBuilderStep(1); setReleaseAnnouncement('')
   }, [run?.id])
+  useEffect(() => {
+    let live = true
+    const controller = new AbortController()
+    partialChoice.current = null
+    setAllowRemainingIssues(false)
+    if (!run?.id || !releaseFiles.length || readOnly) return () => controller.abort()
+    getAutomaticRelease(run.id, releaseFiles.map(file => file.file), { signal: controller.signal }).then(result => {
+      if (!live || partialChoice.current === releaseScopeKey) return
+      const saved = result?.authorization
+      if (saved?.allow_remaining_issues === true && ['active', 'waiting', 'publishing', 'blocked', 'completed'].includes(saved.status)
+        && releaseFiles.every(file => saved.files?.includes(file.file))) setAllowRemainingIssues(true)
+    }).catch(() => { /* Manual choice remains available if saved authorization cannot be read. */ })
+    return () => { live = false; controller.abort() }
+  }, [releaseScopeKey, readOnly])
   useEffect(() => {
     if (!run?.id) { setPackageJob(null); return }
     let stored = null
@@ -653,6 +670,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </dl>
         </div>
         <ReleaseCopyDestination provider={releaseProvider} destination={releaseDestination} folder={releaseFolder} folders={releaseFolders} folderName={releaseFolderName} />
+        <ReleaseReports scanId={run?.id} publishedCount={publishedCount} readOnly={readOnly} />
         <details className="release-safeguards" style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
           <summary style={{ cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>Release safeguards, destination, and evidence</summary>
           <div style={{ marginTop: 8, fontSize: 12.5, lineHeight: 1.6 }}>
@@ -676,7 +694,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         allowRemainingIssues={allowRemainingIssues}
         releaseOptions={<div className="panel" style={{ marginTop: 12, padding: 14 }}>
           <label><input type="checkbox" checked={allowRemainingIssues} disabled={readOnly || publishing}
-            onChange={event => { setAllowRemainingIssues(event.target.checked); setReleasePreview(null); setPackagePreview(null); setReviewedPlanKey(null); setBuilderStep(1); setDeliveryMethod('publish'); setSelectedFiles(new Set()); selectionInitialized.current = false }} /> Publish with remaining issues</label>
+            onChange={event => { partialChoice.current = releaseScopeKey; setAllowRemainingIssues(event.target.checked); setReleasePreview(null); setPackagePreview(null); setReviewedPlanKey(null); setBuilderStep(1); setDeliveryMethod('publish'); setSelectedFiles(new Set()); selectionInitialized.current = false }} /> Publish with remaining issues</label>
           <p className="muted" style={{ margin: '8px 0 0' }}>Optional: publish saved copies even when manual review or accessibility issues remain. Unapproved suggestions are not applied. Remaining issues stay in the audit record; publishing does not certify accessibility.</p>
         </div>}
         readyReasons={[...new Set(states.filter(state => state.status !== 'ready').map(state => state.reason))]}

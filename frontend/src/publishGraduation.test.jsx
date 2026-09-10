@@ -12,6 +12,8 @@ const listHitlQueue = vi.fn(() => Promise.resolve([]))
 const getSettings = vi.fn(() => Promise.resolve({ drive_mirror_enabled: false, drive_mirror_folder: 'Remediated' }))
 const putMyReleaseTemplates = vi.fn((templates) => Promise.resolve({ release_templates: templates }))
 vi.mock('./api.js', () => ({
+  getAutomaticRelease: vi.fn().mockResolvedValue({authorization:null}),
+  getReleaseReports: vi.fn().mockResolvedValue({status:'not_started',reports:[]}), retryReleaseReports: vi.fn(), downloadReleaseReport: vi.fn(),
   openReport: vi.fn(), publishFile: vi.fn(() => Promise.resolve({})),
   publishAllFiles: (...a) => publishAllFiles(...a),
   getReleaseStatus: vi.fn(() => Promise.resolve({ release_id: null })),

@@ -151,3 +151,28 @@ def test_source_changed_between_plan_and_start_cannot_authorize(prepared, monkey
         flow.authorize(prepared.store, SID, OWNER, started, plan['files'], plan['destination'],
                        'stale-plan', plan['source_revision'])
     assert persistence.latest(prepared.store, SID, OWNER) is None
+
+
+def test_actual_partial_automatic_queue_preserves_evidence_and_requires_authorization(prepared, monkeypatch):
+    import core
+    from routes import scans
+    from test_automatic_release_service import partial_authorize
+    monkeypatch.setattr(scans, '_preflight_release_destination', lambda *a: {'ready': True})
+    monkeypatch.setattr(core, 'register_scan_tokens', lambda *a, **kw: None)
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, 'UPDATE file_records SET compliant=0 WHERE scan_id=%s', (SID,))
+    row = partial_authorize(prepared)
+    flow.publish_admission(prepared.store, row['id'], OWNER, SID, FILE, DIGEST)
+    body = dict(files=[FILE], automatic_release_id=row['id'], destination=row['intent']['destination'],
+                expected_destination=row['intent']['destination'], release_folder_name=row['intent']['release_folder_name'],
+                expected_artifacts={FILE: DIGEST}, allow_remaining_issues=True)
+    with pytest.raises(HTTPException):
+        real_publish(SID, request(), {**body, 'allow_remaining_issues': False})
+    result = real_publish(SID, request(), body)
+    assert result['queued'] == 1
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, "SELECT payload FROM jobs WHERE batch_id=%s AND type='publish_file'", (result['batch_id'],))
+        payload = json.loads(prepared.store._db.fetchone(cur)['payload'])
+    assert payload['allow_remaining_issues'] is True
+    assert payload['release_review']['compliant'] is False
+    assert payload['automatic_release_id'] == row['id']

@@ -257,3 +257,101 @@ def test_automatic_release_folder_includes_owner_and_matches_created_execution(p
     tick(prepared, row)
     assert prepared.calls[0]['release_folder_name'] == name
     assert prepared.store.release_for_scan(SID, OWNER)['folder_name'] == name
+
+
+def partial_authorize(f):
+    destination = flow.preview(f.store, SID, OWNER, [FILE])['destination']
+    return flow.authorize(f.store, SID, OWNER, f.run, [FILE], destination, 'partial-plan',
+                          allow_remaining_issues=True, include_reports=True)
+
+
+def test_automatic_partial_plan_publishes_saved_copy_preserves_pending_review(prepared):
+    item = prepared.store.enqueue_proposals(SID, FILE, '2.4.6', [dict(locator='slide 1', proposed_value='Title', source='fixture')])
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, 'UPDATE file_records SET compliant=0 WHERE scan_id=%s', (SID,))
+    row = partial_authorize(prepared)
+    prepared.mode = 'receipt'
+    result = tick(prepared, row)
+    assert result['status'] == 'completed'
+    assert prepared.calls[0]['allow_remaining_issues'] is True
+    assert prepared.store.get_hitl_item(item)['status'] == 'pending'
+    assert not prepared.store.get_file_record(SID, FILE)['compliant']
+    assert flow.public(result)['include_reports'] is True
+    assert flow.public(result)['allow_remaining_issues'] is True
+
+
+@pytest.mark.parametrize('change', ['allow_remaining_issues', 'include_reports'])
+def test_replaying_authorization_cannot_change_report_or_partial_permission(prepared, change):
+    row = partial_authorize(prepared)
+    flags = dict(allow_remaining_issues=True, include_reports=True)
+    flags[change] = False
+    with pytest.raises(ValueError, match='different release permission'):
+        flow.authorize(prepared.store, SID, OWNER, prepared.run, [FILE], row['intent']['destination'], 'partial-plan', **flags)
+
+
+def test_partial_plan_waits_for_active_apply_job(prepared):
+    row = partial_authorize(prepared)
+    prepared.store.enqueue_job('apply_approved_values', dict(owner=OWNER, scan_id=SID, file=FILE), scan_id=SID)
+    result = tick(prepared, row)
+    assert not prepared.calls
+    assert 'active corrections' in result['progress']['files'][FILE]['message']
+
+
+def test_partial_plan_still_requires_saved_artifact(prepared):
+    row = partial_authorize(prepared)
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, 'UPDATE file_records SET corrected_sha256=NULL WHERE scan_id=%s', (SID,))
+    tick(prepared, row)
+    assert not prepared.calls
+
+
+def test_completed_file_without_copy_does_not_hold_other_files_or_reports(prepared, monkeypatch):
+    import release_report_delivery
+    other = 'no-copy.pptx'
+    store = prepared.store
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,drive_file_id,source_modified,checksum) VALUES(%s,%s,'office','analysed',60,0,'other-item','2026-09-01T00:00:00Z','other-hash')", (SID, other))
+        store._db.execute(cur, "INSERT INTO scan_inventory(scan_id,file,drive_file_id,drive_id,source_modified,checksum) VALUES(%s,%s,'other-item','library','2026-09-01T00:00:00Z','other-hash')", (SID, other))
+        store._db.execute(cur, 'UPDATE stage_executions SET is_current=0 WHERE execution_id=%s', (prepared.run,))
+    prepared.run = store.enqueue_stage_batch(SID, 'remediate', 'remediate_file',
+        [dict(owner=OWNER, scan_id=SID, file=f) for f in [FILE, other]],
+        snapshot_id=store.remediation_source_revision(SID), request_fingerprint='two-files')['batch_id']
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "UPDATE jobs SET status='done' WHERE batch_id=%s", (prepared.run,))
+    destination = flow.preview(store, SID, OWNER, [FILE, other])['destination']
+    row = flow.authorize(store, SID, OWNER, prepared.run, [FILE, other], destination, 'both-files', allow_remaining_issues=True, include_reports=True)
+    captured = []
+    def reports(store, sid, owner, release_id):
+        captured.append(store.release_status(release_id, owner))
+    monkeypatch.setattr(release_report_delivery, 'queue_release_reports', reports)
+    prepared.mode = 'receipt'
+    result = tick(prepared, row)
+    assert result['status'] == 'failed'
+    assert result['progress']['files'][FILE]['state'] == 'published'
+    assert result['progress']['files'][other]['failure_category'] == 'no_corrected_copy'
+    assert len(captured) == 1
+    assert captured[0]['published'] == 1 and captured[0]['failed'] == 1
+    assert captured[0]['documents_total'] == 2
+    failure = next(d for d in captured[0]['documents'] if d['file'] == other)
+    assert failure['released_document_id'] is None
+    assert 'original is unchanged' in failure['explanation']
+
+
+@pytest.mark.parametrize('state', ['dead', 'cancelled'])
+def test_terminal_file_job_can_be_reported_without_weakening_run_authority(prepared, state):
+    row = partial_authorize(prepared)
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, 'UPDATE jobs SET status=%s WHERE batch_id=%s', (state, prepared.run))
+    result = tick(prepared, row)
+    assert result['progress']['files'][FILE]['failure_category'] == 'no_corrected_copy'
+    assert not prepared.calls
+
+
+def test_stopped_run_without_copy_is_not_reinterpreted_as_publish_authority(prepared):
+    row = partial_authorize(prepared)
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, "UPDATE stage_executions SET state='cancelled' WHERE execution_id=%s", (prepared.run,))
+        prepared.store._db.execute(cur, 'UPDATE file_records SET corrected_sha256=NULL WHERE scan_id=%s', (SID,))
+    result = tick(prepared, row)
+    assert result['progress']['files'][FILE]['state'] == 'blocked'
+    assert not prepared.calls

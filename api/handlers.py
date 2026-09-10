@@ -28,6 +28,15 @@ from scanner import run_scan
 logger = logging.getLogger(__name__)
 
 
+@handler("publish_release_reports")
+def _publish_release_reports(payload: dict, job: dict) -> None:
+    """Deliver the frozen follow-up report bundle without reopening file approval."""
+    if not payload.get("bundle_id") or not payload.get("owner"):
+        raise FatalJobError("Report delivery job missing bundle or owner")
+    from release_report_delivery import process_release_reports
+    process_release_reports(core.store, payload["bundle_id"], payload["owner"])
+
+
 @handler("prepare_release_package")
 def _prepare_release_package(payload: dict, job: dict) -> None:
     """Build a large release archive off-request and persist it for later download."""
@@ -847,7 +856,10 @@ def _publish_file(payload: dict, job: dict) -> None:
     if payload.get("automatic_release_id"):
         from automatic_release import publish_job
         return publish_job(core.store, payload, job, _publish_file_guarded)
-    return _publish_file_guarded(payload, job)
+    result = _publish_file_guarded(payload, job)
+    from release_report_delivery import queue_if_release_settled
+    queue_if_release_settled(core.store, payload["scan_id"], payload["owner"], payload.get("release_id"))
+    return result
 
 
 def _publish_file_guarded(payload: dict, job: dict) -> None:
