@@ -3,8 +3,12 @@ import { planReleaseContinuation, authorizeReleaseContinuation, getReleaseContin
 import './release-quick-actions.css'
 
 export default function ReleaseQuickActions({ runId, files = [], ready = [], destination, folderName = '', destinationLabel,
-  destinationPicker, readOnly, publishing, releaseOptions, allowRemainingIssues = false, readyReasons = [], onReady, onProgress }) {
+  destinationPicker, destinationContent, destinationLocked = false, destinationPending = false, readOnly, publishing, releaseOptions, allowRemainingIssues = false, readyReasons = [], fileStates = {}, onReady, onProgress }) {
   const reasonId = useId()
+  const [excluded, setExcluded] = useState(new Set())
+  useEffect(() => { setExcluded(new Set()) }, [runId])
+  const selectedReady = ready.filter(file => !excluded.has(file.file))
+  const readyNames = new Set(ready.map(file => file.file))
   const [plan, setPlan] = useState(null)
   const [active, setActive] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -84,11 +88,12 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     finally { lock.current = false; setBusy(false) }
   }
   const readyReason = readOnly ? 'History is read-only. Switch to the latest scan to publish.'
-    : publishing ? 'Publishing is in progress.' : !runId ? 'Choose a scan before releasing files.'
+    : destinationPending ? 'Loading the saved release destination…' : publishing ? 'Publishing is in progress.' : !runId ? 'Choose a scan before releasing files.'
     : !files.length ? 'No files are selected in this scope.'
-    : !ready.length ? 'No files are currently eligible for publishing.' : ''
+    : !ready.length ? 'No files are currently eligible for publishing.'
+    : !selectedReady.length ? 'Select at least one ready file above.' : ''
   const approveReason = readOnly ? 'History is read-only. Switch to the latest scan to approve changes.'
-    : busy ? 'Authorization is in progress.' : activeRunning ? 'An authorized batch is already applying, verifying, and publishing. Follow its progress below.'
+    : destinationPending ? 'Loading the saved release destination…' : busy ? 'Authorization is in progress.' : activeRunning ? 'An authorized batch is already applying, verifying, and publishing. Follow its progress below.'
     : !runId ? 'Choose a scan before approving changes.' : !files.length ? 'No files are selected in this scope.'
     : checking ? 'Checking which proposals can be approved and published.'
     : !plan || plan.key !== key ? 'Eligibility is not confirmed. Refresh eligibility before approving changes.'
@@ -96,27 +101,49 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
   const outcomes = Object.entries(active?.progress || {}).filter(([file]) => file !== '_deadline')
   const count = state => outcomes.filter(([, result]) => result.state === state).length
   return <section className="panel release-quick" aria-label="Publish ready files and approved changes">
-    <h3 className="release-quick-title">Release actions</h3>
-    {releaseOptions}
-    <div className="release-quick-summary"><strong>{ready.length} ready to publish</strong><span>{files.length} files in this scope</span></div>
-    <p><b>Destination:</b> {plan?.intent?.destination?.folder_name ? `${plan.intent.destination.folder_name} / Remediated / ${plan.intent.release_folder_name || folderName || 'Timestamp + user email'}` : destinationLabel}. Originals stay unchanged.</p>
-    {!readOnly && <details><summary>Change destination</summary>{destinationPicker}</details>}
-    <div className="release-quick-buttons">
+    <h3 className="release-quick-title">Publish your documents</h3>
+    <section className="release-quick-step" aria-labelledby={`${reasonId}-files`}>
+      <h4 id={`${reasonId}-files`}><span className="release-step-number">1</span> Choose files</h4>
+      {releaseOptions}
+      <div className="release-quick-summary"><strong>{selectedReady.length} ready to publish</strong><span>{files.length} files in this scope</span></div>
+      <div className="release-quick-file-list" aria-label="Files to publish">
+        {files.map(file => <label key={file.file} className="release-quick-file">
+          <input type="checkbox" aria-label={`Publish ${file.file}`} checked={readyNames.has(file.file) && !excluded.has(file.file)} disabled={readOnly || publishing || !readyNames.has(file.file)}
+            onChange={event => setExcluded(previous => { const next = new Set(previous); event.target.checked ? next.delete(file.file) : next.add(file.file); return next })} />
+          <span>{file.file}</span><small>{readyNames.has(file.file) ? 'Ready to publish' : fileStates[file.file]?.label || 'Not available for a new publish'}</small>
+          {!readyNames.has(file.file) && fileStates[file.file]?.reason && <span className="release-quick-file-reason">{fileStates[file.file].reason}</span>}
+        </label>)}
+        {!files.length && <p>No files are selected in this scope.</p>}
+      </div>
+    </section>
+    <section className="release-quick-step" aria-labelledby={`${reasonId}-destination`}>
+      <h4 id={`${reasonId}-destination`}><span className="release-step-number">2</span> Confirm destination</h4>
+      {destinationContent || <p><b>Destination:</b> {plan?.intent?.destination?.folder_name ? `${plan.intent.destination.folder_name} / Remediated / ${plan.intent.release_folder_name || folderName || 'Timestamp + user email'}` : destinationLabel}. Originals stay unchanged.</p>}
+      {destinationLocked && <p className="muted">This release has started. Further copies and retries use this saved destination.</p>}
+      {!readOnly && !destinationLocked && <details><summary>Change destination</summary>{destinationPicker}</details>}
+    </section>
+    <section className="release-quick-step" aria-labelledby={`${reasonId}-publish`}>
+      <h4 id={`${reasonId}-publish`}><span className="release-step-number">3</span> Publish copies</h4>
+      <p>Saved copies are published with a scan summary and a per-file checklist of remaining work. Publishing does not certify accessibility.</p>
+      <div className="release-quick-buttons">
       <div className="release-quick-action">
-        <button disabled={Boolean(readyReason)} aria-describedby={readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(ready.map(f => f.file))}>
-          {publishing ? 'Publishing copies…' : allowRemainingIssues ? `Publish saved copies (${ready.length})` : `Publish ready files (${ready.length})`}
+        <button disabled={Boolean(readyReason)} aria-describedby={readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(selectedReady.map(f => f.file))}>
+          {publishing ? 'Publishing copies…' : allowRemainingIssues ? `Publish saved copies (${selectedReady.length})` : `Publish ready files (${selectedReady.length})`}
         </button>
         {readyReason && <div id={`${reasonId}-ready`}><p>{readyReason}</p>
           {!readOnly && !ready.length && readyReasons.slice(0, 3).map(reason => <p key={reason}>{reason}</p>)}
         </div>}
       </div>
+      </div>
+    </section>
+    <details className="release-quick-proposals"><summary>Optional: apply more proposed changes before publishing</summary>
+      <p>This separate action applies eligible proposals across the full scope shown above. Your saved-copy selection does not change this proposal batch.</p>
       <div className="release-quick-action">
         <button disabled={Boolean(approveReason)} aria-describedby={approveReason ? `${reasonId}-approve` : undefined} onClick={approve}>
           {busy ? 'Authorizing…' : 'Approve eligible changes and publish when ready'}
         </button>
         {approveReason && <p id={`${reasonId}-approve`}>{approveReason}</p>}
       </div>
-    </div>
     {checking && <p role="status">Checking which proposals can be approved and published… Ready files can still be published while this check runs.</p>}
     {eligible > 0 && <p>{eligible} proposed {eligible === 1 ? 'change' : 'changes'} across {eligibleFiles} {eligibleFiles === 1 ? 'file' : 'files'}. This action authorizes the current proposals, applies them, verifies the result, and publishes qualifying files to the destination above. Individual inspection is optional.</p>}
     {!eligible && plan && !activeRunning && <p>{ready.length ? 'Other files do not hold eligible proposals for this action.' : 'No eligible proposals can be applied automatically yet.'} Manual work and verification blockers remain separate.</p>}
@@ -127,6 +154,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
         {(data.blockers || []).map(reason => <p key={reason}>{reason}</p>)}
       </div>)}
     </details>}
+    </details>
     {active && <div role="status" aria-label="Authorized Release progress">
       <b>{count('published')} delivered · {count('applying') + count('ready') + count('publishing')} in progress · {count('blocked') + count('failed') + count('needs_confirmation')} need attention</b>
       <p>{activeRunning ? 'Progress is saved. You can leave and return while approved changes are applied and verified.' : 'This authorized batch has finished. Files needing attention were not published.'}</p>

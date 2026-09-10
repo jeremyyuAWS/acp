@@ -52,6 +52,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [packageName, setPackageName] = useState('')
   const [releaseFolderName, setReleaseFolderName] = useState('')
   const [releaseDestination, setReleaseDestination] = useState(null)
+  const [destinationLocked, setDestinationLocked] = useState(false)
+  const [destinationPending, setDestinationPending] = useState(true)
+  const [settingsPending, setSettingsPending] = useState(true)
+  const frozenDestination = useRef(undefined)
   const [preserveHierarchy, setPreserveHierarchy] = useState(true)
   const [includeManifest, setIncludeManifest] = useState(true)
   const [includeVerificationReport, setIncludeVerificationReport] = useState(false)
@@ -77,6 +81,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [sel, setSel] = useState(null)
   useEffect(() => {
     continuationReported.current = new Set()
+    frozenDestination.current = undefined
+    setReleaseDestination(null); setDestinationLocked(false); setDestinationPending(true)
     setAllowRemainingIssues(false); setDone({}); setReleaseResults({}); setPubUrls({}); setReleaseId(null)
     setReleaseFolder(null); setReleaseFolders([]); setReleasePreview(null); setPackagePreview(null)
     setSelectedFiles(new Set()); selectionInitialized.current = false
@@ -147,15 +153,16 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [settings, setSettings] = useState(null)
   useEffect(() => {
     let live = true
+    setSettingsPending(true)
     getSettings().then((s) => {
       if (!live || !s) return
       setSettings(s)
       setReleaseTemplates(Array.isArray(s.release_templates) ? s.release_templates : [])
       const preference = s.release_destination?.provider === run?.source ? s.release_destination : null
-      setReleaseDestination((current) => current?.provider === run?.source ? current : preference)
-    }).catch(() => {})
+      setReleaseDestination((current) => frozenDestination.current !== undefined ? frozenDestination.current : current?.provider === run?.source ? current : preference)
+    }).catch(() => {}).finally(() => { if (live) setSettingsPending(false) })
     return () => { live = false }
-  }, [run?.source])
+  }, [run?.id, run?.source])
   const ms = mirrorState(settings)
   const driveMirrorEnabled = ms === MIRROR.ON
   const driveMirrorFolder = settings?.drive_mirror_folder?.trim() || 'Remediated'
@@ -175,13 +182,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }
   const applyDeliveryTemplate = (template) => {
     setDeliveryMethod(template.method || 'publish')
-    setReleaseDestination(template.destination?.provider === releaseProvider ? template.destination : null)
+    if (!destinationLocked) setReleaseDestination(template.destination?.provider === releaseProvider ? template.destination : null)
     setPreserveHierarchy(template.preserve_hierarchy !== false)
     setIncludeManifest(template.include_manifest !== false)
     setIncludeVerificationReport(Boolean(template.include_verification_report))
     setDownloadFormat(template.download_format || 'zip')
     setPackageName(template.package_name || '')
-    setReleaseFolderName(template.release_folder_name || '')
+    if (!destinationLocked) setReleaseFolderName(template.release_folder_name || '')
     setReleasePreview(null); setPackagePreview(null); setKeptInAcp(false)
     setReleaseAnnouncement(`${template.name} delivery template applied.`)
   }
@@ -302,7 +309,14 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     }
   }
   const rememberRelease = (res, expectedFiles = []) => {
-    if (res?.release_id) setReleaseId(res.release_id)
+    if (res?.release_id) {
+      setReleaseId(res.release_id)
+      if ('parent_folder_id' in res) {
+        const fixed = res.parent_folder_id ? { provider: releaseProvider, folder_id: res.parent_folder_id, folder_name: res.parent_folder_name || 'Saved destination' } : null
+        frozenDestination.current = fixed
+        setReleaseDestination(fixed); setDestinationLocked(true)
+      }
+    }
     if (res?.parent_folder_id) setReleaseDestination({
       provider: releaseProvider, folder_id: res.parent_folder_id,
       folder_name: res.parent_folder_name || 'Selected provider folder',
@@ -350,7 +364,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       : `${successful.length} corrected ${successful.length === 1 ? 'copy' : 'copies'} released${failed ? `; ${failed} need attention` : ''}.`)
     return successful
   }
-  const applyReleaseStatus = (status) => rememberRelease({
+  const applyReleaseStatus = (status) => {
+    if (status?.release_id) {
+      const fixed = status.parent_folder_id ? { provider: releaseProvider, folder_id: status.parent_folder_id, folder_name: status.parent_folder_name || 'Saved destination' } : null
+      frozenDestination.current = fixed
+      setReleaseDestination(fixed)
+      setDestinationLocked(true)
+      if (status.release_folder_name) setReleaseFolderName(status.release_folder_name)
+    }
+    return rememberRelease({
     ...status, release_folders: status.roots,
     published: (status.documents || []).map((row) => ({
       file: row.file, status: row.status,
@@ -364,6 +386,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       failure_category: row.failure_category, explanation: row.explanation,
     })),
   })
+  }
   const followSharePointRelease = async (expectedFiles) => {
     // The backend queues one durable job per SharePoint document. Follow the persisted release,
     // not the originating request: navigation, a worker restart, or a replica change cannot erase
@@ -386,7 +409,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     const refresh = async () => {
       try {
         const status = await getReleaseStatus(run.id)
-        if (!live || !status?.release_id) return
+        if (!live) return
+        setDestinationPending(false)
+        if (!status?.release_id) return
         applyReleaseStatus(status)
         setReleaseError(null)
         const pending = (status.documents || []).some((row) => row.status === 'queued' || row.status === 'running')
@@ -432,7 +457,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     }
   }
   const publishAll = async (fileNames = null, preferredFolderName = '', exact = false) => {
-    if (publishing || readOnly) return
+    if (publishing || readOnly || destinationPending || (settingsPending && !destinationLocked)) return
     setPublishing(true)
     const requested = fileNames ? new Set(fileNames) : null
     const pending = selectableReady.filter((f) => !done[f.file] && (!requested || requested.has(f.file))).map((f) => f.file)
@@ -452,7 +477,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       }
       successful.forEach((row) => onPublish?.(row.file))
     } catch (error) {
-      setReleaseError({ summary: 'The selected copies could not be released.', details: error?.message || 'The release service did not complete the request.', retry: () => publishAll(fileNames, preferredFolderName) })
+      setReleaseError({ summary: 'The selected copies could not be released.', details: error?.message || 'The release service did not complete the request.', retry: () => publishAll(fileNames, preferredFolderName, exact) })
     }
     setPublishing(false)
   }
@@ -669,8 +694,6 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           {failedCount > 0 && <div className="stage-live-accounting__exception"><dt>Failed</dt><dd>{failedCount.toLocaleString()}</dd></div>}
         </dl>
         </div>
-        <ReleaseCopyDestination provider={releaseProvider} destination={releaseDestination} folder={releaseFolder} folders={releaseFolders} folderName={releaseFolderName} />
-        <ReleaseReports scanId={run?.id} publishedCount={publishedCount} readOnly={readOnly} />
         <details className="release-safeguards" style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
           <summary style={{ cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>Release safeguards, destination, and evidence</summary>
           <div style={{ marginTop: 8, fontSize: 12.5, lineHeight: 1.6 }}>
@@ -690,8 +713,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </details>
       </section>
       <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
-        folderName={releaseFolderName} readOnly={readOnly} publishing={publishing}
+        folderName={releaseFolderName} readOnly={readOnly} publishing={publishing} destinationLocked={destinationLocked} destinationPending={destinationPending || (settingsPending && !destinationLocked)}
         allowRemainingIssues={allowRemainingIssues}
+        fileStates={Object.fromEntries(releaseFiles.map((file, index) => [file.file, states[index]]))}
         releaseOptions={<div className="panel" style={{ marginTop: 12, padding: 14 }}>
           <label><input type="checkbox" checked={allowRemainingIssues} disabled={readOnly || publishing}
             onChange={event => { partialChoice.current = releaseScopeKey; setAllowRemainingIssues(event.target.checked); setReleasePreview(null); setPackagePreview(null); setReviewedPlanKey(null); setBuilderStep(1); setDeliveryMethod('publish'); setSelectedFiles(new Set()); selectionInitialized.current = false }} /> Publish with remaining issues</label>
@@ -699,6 +723,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </div>}
         readyReasons={[...new Set(states.filter(state => state.status !== 'ready').map(state => state.reason))]}
         destinationLabel={releaseDestination ? `${releaseDestination.folder_name} / Remediated / ${releaseFolder?.name || releaseFolderName || 'Timestamp + user email'}` : releaseProvider === 'drive' ? 'Google Drive / Remediated / Timestamp + user email' : releaseProvider === 'sharepoint' ? 'SharePoint source library / Remediated / Timestamp + user email' : 'ACP managed storage'}
+        destinationContent={['drive', 'sharepoint'].includes(releaseProvider) ? <ReleaseCopyDestination provider={releaseProvider} destination={releaseDestination} folder={releaseFolder} folders={releaseFolders} folderName={releaseFolderName} /> : <p>ACP managed storage</p>}
         destinationPicker={['drive', 'sharepoint'].includes(releaseProvider) ? <ReleaseDestinationPicker provider={releaseProvider} value={releaseDestination}
           onChange={value => { setReleaseDestination(value); setReleasePreview(null) }}
           onError={error => setReleaseError({ summary: 'Destination unavailable', details: error?.message })} /> : <p>Verified copies remain in ACP’s managed storage.</p>}
@@ -718,6 +743,17 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           }
         }} />
 
+        {(releaseId || publishedList.length > 0) && <section className="release-receipt" aria-label="Delivery receipt">
+          <h3>{failedCount ? 'Partial delivery receipt' : deliveringCount ? 'Delivery in progress' : 'Delivery receipt'}</h3>
+          <p><b>{publishedCount} delivered</b> · {failedCount} failed · {deliveringCount} in progress · {releaseFiles.length - publishedCount} in-scope files not delivered.</p>
+          <p className="muted">Recorded delivery within this document scope; changing the checkboxes does not change this receipt. Originals unchanged.</p>
+          {releaseId && <small>Release {releaseId}</small>}
+          {releaseFolders.filter((folder) => folder.url).map((folder) => <p key={folder.id}><a href={folder.url} target="_blank" rel="noopener noreferrer">Open {folder.name || 'delivery folder'} ↗</a></p>)}
+          <button className="ghost small" onClick={downloadReleaseManifest}>Download delivery receipt (manifest)</button>
+          {manifestError && <p role="alert">{manifestError}</p>}
+          {publishedEntries.map((entry) => <div className="release-receipt__file" key={entry.file}><b>{entry.file}</b><span>{fmtPublished(entry)}</span>{pubUrls[entry.file] && <a href={pubUrls[entry.file]} target="_blank" rel="noopener noreferrer">Open delivered copy ↗</a>}</div>)}
+        </section>}
+
       {packageJob && <section className="release-notice release-package-job" role="status" aria-label="Prepared package status">
         <span><b>{packageJob.status === 'done' ? 'Download package ready' : packageJob.status === 'dead' ? 'Download package failed' : 'Download package in progress'}</b><br />
           {packageJob.status === 'done' ? 'Prepared safely and available after navigation or reload.' : packageJob.phase || 'The package continues in the background.'}</span>
@@ -733,7 +769,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             <details><summary>View details</summary><p>Scan {run?.id || 'unknown'} · {sourceProduct}. Completed copies remain safe and original files are unchanged.</p></details>
           </div>
           <div className="release-recovery__actions">
-            <button className="qbtn approve" onClick={() => { const retry = releaseError.retry; setReleaseError(null); retry?.() }}>Retry</button>
+            <button disabled={!releaseError.retry} onClick={() => { const retry = releaseError.retry; setReleaseError(null); retry?.() }}>Retry</button>
             <button className="ghost" onClick={() => document.getElementById('workflow-tab-liveops')?.click()}>Open Live Operations</button>
             <button className="ghost" onClick={() => setReleaseError(null)}>Dismiss</button>
           </div>
@@ -1072,16 +1108,6 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             </button>
           </div>
         )}
-        {(releaseId || publishedList.length > 0) && <section className="release-receipt" aria-label="Delivery receipt">
-          <h3>{failedCount ? 'Partial delivery receipt' : deliveringCount ? 'Delivery in progress' : 'Delivery receipt'}</h3>
-          <p><b>{publishedCount} delivered</b> · {failedCount} failed · {deliveringCount} in progress · {releaseFiles.length - publishedCount} in-scope files not delivered.</p>
-          <p className="muted">Recorded delivery within this document scope; changing the checkboxes does not change this receipt. Originals unchanged.</p>
-          {releaseId && <small>Release {releaseId}</small>}
-          {releaseFolders.filter((folder) => folder.url).map((folder) => <p key={folder.id}><a href={folder.url} target="_blank" rel="noopener noreferrer">Open {folder.name || 'delivery folder'} ↗</a></p>)}
-          <button className="ghost small" onClick={downloadReleaseManifest}>Download delivery receipt (manifest)</button>
-          {manifestError && <p role="alert">{manifestError}</p>}
-          {publishedEntries.map((entry) => <div className="release-receipt__file" key={entry.file}><b>{entry.file}</b><span>{fmtPublished(entry)}</span>{pubUrls[entry.file] && <a href={pubUrls[entry.file]} target="_blank" rel="noopener noreferrer">Open delivered copy ↗</a>}</div>)}
-        </section>}
         {/* Retired audit summary; the durable receipt above replaces its certificate-based totals. */}
         <div hidden data-retired="release-audit-summary">
         {publishedList.length > 0 ? (
@@ -1104,7 +1130,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       </section>
 
       </details>
-      <ReleaseHistory refreshKey={`${run?.id || ''}:${publishedCount}:${failedCount}`} />
+      <section className="panel" aria-label="Reports and delivery history">
+        <h3>Reports and delivery history</h3>
+        <ReleaseReports scanId={run?.id} publishedCount={publishedCount} readOnly={readOnly} />
+        <ReleaseHistory refreshKey={`${run?.id || ''}:${publishedCount}:${failedCount}`} />
+      </section>
 
       {/* Confirmation before a release runs. States, in checkable terms, exactly what will happen —
           destination, that the original is untouched, the audit entry, and that this is not a

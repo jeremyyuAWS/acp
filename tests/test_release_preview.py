@@ -119,6 +119,43 @@ def test_preview_blocks_an_unready_selected_destination(monkeypatch):
     assert result["preflight"]["message"] == "Write access is required."
 
 
+@pytest.mark.parametrize("saved_parent,requested_parent", [
+    ("saved-drive/saved-folder", "other-drive/other-folder"),
+    (None, "other-drive/other-folder"),
+    ("saved-drive/saved-folder", None),
+])
+def test_preview_uses_frozen_release_destination_and_blocks_changed_preference(
+        monkeypatch, saved_parent, requested_parent):
+    store = _Store({"folder_name": "Existing Release", "documents": [],
+                    "parent_folder_id": saved_parent, "parent_folder_name": "Saved parent"})
+    monkeypatch.setattr(scans.core, "store", store)
+    checked = []
+    monkeypatch.setattr(scans, "_preflight_release_destination", lambda request, destination:
+                        checked.append(destination) or {"ready": True})
+    requested = ({"provider": "sharepoint", "folder_id": requested_parent,
+                  "folder_name": "New preference"} if requested_parent else None)
+    result = scans.preview_release_destination("scan-1", _request(),
+        scans.ReleasePreviewRequest(files=["Report.pdf"], destination=requested))
+    frozen = ({"provider": "sharepoint", "folder_id": saved_parent,
+               "folder_name": "Saved parent"} if saved_parent else None)
+    assert result["destination"] == frozen
+    assert checked == [frozen]
+    assert result["can_release"] is False
+    assert result["blockers"][0]["code"] == "release_destination_changed"
+    assert "New preference" not in result["documents"][0]["destination_path"]
+
+
+def test_preview_accepts_existing_destination_despite_changed_display_name(monkeypatch):
+    monkeypatch.setattr(scans.core, "store", _Store({"folder_name": "Existing Release",
+        "parent_folder_id": "lib/saved", "parent_folder_name": "Saved parent", "documents": []}))
+    monkeypatch.setattr(scans, "_preflight_release_destination", lambda *args: {"ready": True})
+    result = scans.preview_release_destination("scan-1", _request(),
+        scans.ReleasePreviewRequest(files=["Report.pdf"], destination={
+            "provider": "sharepoint", "folder_id": "lib/saved", "folder_name": "Renamed parent"}))
+    assert result["can_release"] is True
+    assert result["destination"]["folder_name"] == "Saved parent"
+
+
 def test_drive_preflight_uses_provider_can_add_children_capability(monkeypatch):
     class Files:
         def get(self, **kwargs):

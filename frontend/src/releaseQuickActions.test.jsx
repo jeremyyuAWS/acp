@@ -105,13 +105,14 @@ it('shows failed eligibility as unknown with a retry instead of a known zero', a
 })
 
 
-it('keeps both actions visible outside disclosure panels at zero readiness with linked reasons', async () => {
+it('keeps publishing visible and puts proposal approval in an optional disclosure with linked reasons', async () => {
   const v = await mount({ ready: [], readyReasons: ['Verification incomplete. Resolve findings in Remediate.'] }, { ...plan, intent: { files: {} } })
-  expect(v.container.querySelector('h3').textContent).toBe('Release actions')
+  expect(v.container.querySelector('h3').textContent).toBe('Publish your documents')
   for (const label of ['Publish ready files (0)', 'Approve eligible changes']) {
     const button = v.button(label)
     expect(button.disabled).toBe(true)
-    expect(button.closest('details')).toBeNull()
+    if (label.startsWith('Publish')) expect(button.closest('details')).toBeNull()
+    else expect(button.closest('details').open).toBe(false)
     expect(v.container.querySelector(`[id="${button.getAttribute('aria-describedby')}"]`).textContent).toBeTruthy()
     await click(button)
   }
@@ -134,4 +135,22 @@ it('shows the durable timestamp folder in the destination before authorizing', a
   const v = await mount({ folderName: 'Stale form name' }, { ...plan, intent: { ...plan.intent, release_folder_name: '2026-09-09 15-00 PDT' } })
   expect(v.container.textContent).toContain('Approved folder / Remediated / 2026-09-09 15-00 PDT')
   expect(v.container.textContent).not.toContain('Stale form name')
+})
+
+it('shows three ordered steps and publishes only checked ready copies', async () => {
+  const v = await mount({ ready: [{ file: 'ready.pdf' }, { file: 'changes.pdf' }] })
+  expect([...v.container.querySelectorAll('h4')].map(h => h.textContent)).toEqual(['1 Choose files', '2 Confirm destination', '3 Publish copies'])
+  await click(v.container.querySelector('[aria-label="Publish changes.pdf"]'))
+  await click(v.button('Publish ready files (1)'))
+  expect(v.props.onReady).toHaveBeenCalledWith(['ready.pdf'])
+  expect(v.container.querySelector('[aria-label="Publish manual.pdf"]').disabled).toBe(true)
+  await click(v.container.querySelector('[aria-label="Publish ready.pdf"]'))
+  expect(v.button('Publish ready files (0)').disabled).toBe(true)
+  expect(v.container.textContent).toContain('Select at least one ready file above')
+})
+it('drops old file exclusions when the scan changes', async () => {
+  const v = await mount()
+  await click(v.container.querySelector('[aria-label="Publish ready.pdf"]'))
+  await v.render({ runId: 'another-scan' })
+  expect(v.container.querySelector('[aria-label="Publish ready.pdf"]').checked).toBe(true)
 })

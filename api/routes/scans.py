@@ -4091,11 +4091,24 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
             folder_name = _publish.release_folder_name(timezone_name=release_tz, owner_email=owner)
         folder_state = "proposed"
     destination_config = _release_destination(source, body.destination)
+    destination_changed = False
+    if status:
+        # Publishing reuses the execution's original parent, even when the user's
+        # saved preference has since changed. Preview that same immutable target
+        # so a retry never promises a path the publish endpoint cannot authorize.
+        saved_parent = status.get("parent_folder_id")
+        destination_changed = saved_parent != (destination_config or {}).get("folder_id")
+        destination_config = ({"provider": source, "folder_id": saved_parent,
+                               "folder_name": status.get("parent_folder_name") or "Saved release location"}
+                              if saved_parent else None)
     destination_preflight = _preflight_release_destination(request, destination_config)
     rows = {row.get("file"): row for row in scan.get("files", [])}
     existing = {row.get("file"): row for row in (status or {}).get("documents", [])}
     planned_paths: set[tuple[str, str]] = set()
     documents, blockers = [], []
+    if destination_changed:
+        blockers.append({"code": "release_destination_changed",
+                         "reason": "This release already has a saved destination. Use that destination to publish or retry."})
     for name in selected:
         record = rows.get(name)
         if not release_ready(record, body.allow_remaining_issues):
