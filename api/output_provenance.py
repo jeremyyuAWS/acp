@@ -69,6 +69,8 @@ def stamp_office_entries(entries, applied=None, *, now=None, version=None):
         comments = description.text or ""
         # Only replace our complete first-line stamp; preserve the author's comments.
         comments = re.sub(r"\AMova-io ACP [^\n]+ · \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z(?:\n\n|\n|$)", "", comments, count=1)
+        # Remove only the standalone library boilerplate, never a user's sentence.
+        comments = re.sub(r"(?m)^[ \t]*generated using python-pptx[ \t]*\r?(?:\n|$)", "", comments).strip("\r\n")
         stamp = f"Mova-io ACP {version or _version()} · {timestamp}"
         description.text = stamp + ("\n\n" + comments if comments else "")
         for tag, value in ((f"{{{CP_NS}}}lastModifiedBy", TOOL), (f"{{{DCT_NS}}}modified", timestamp)):
