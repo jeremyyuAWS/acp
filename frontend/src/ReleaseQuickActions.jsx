@@ -103,7 +103,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     {!readOnly && <details><summary>Change destination</summary>{destinationPicker}</details>}
     <div className="release-quick-buttons">
       <div className="release-quick-action">
-        <button className="qbtn approve" disabled={Boolean(readyReason)} aria-describedby={readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(ready.map(f => f.file))}>
+        <button disabled={Boolean(readyReason)} aria-describedby={readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(ready.map(f => f.file))}>
           {publishing ? 'Publishing copies…' : allowRemainingIssues ? `Publish saved copies (${ready.length})` : `Publish ready files (${ready.length})`}
         </button>
         {readyReason && <div id={`${reasonId}-ready`}><p>{readyReason}</p>
@@ -111,7 +111,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
         </div>}
       </div>
       <div className="release-quick-action">
-        <button className="qbtn approve" disabled={Boolean(approveReason)} aria-describedby={approveReason ? `${reasonId}-approve` : undefined} onClick={approve}>
+        <button disabled={Boolean(approveReason)} aria-describedby={approveReason ? `${reasonId}-approve` : undefined} onClick={approve}>
           {busy ? 'Authorizing…' : 'Approve eligible changes and publish when ready'}
         </button>
         {approveReason && <p id={`${reasonId}-approve`}>{approveReason}</p>}
