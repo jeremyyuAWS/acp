@@ -63,7 +63,8 @@ def test_visible_stamp_preserves_summary_and_content_when_restamped(ext, comment
     first_comment, title, author, content = read_properties(ext, first)
     first_line = "Mova-io ACP 2026.9.10.3 · 2026-09-10T10:11:12Z"
     assert first_comment.splitlines()[0] == first_line
-    assert first_comment[len(first_line):].strip() == comments
+    expected_comments = comments.replace("generated using python-pptx\n", "")
+    assert first_comment[len(first_line):].strip() == expected_comments
     assert (title, author, content) == ("Customer title", "Customer author", "Original document text")
 
     monkeypatch.setenv("ACP_BUILD_VERSION", "2026.9.10.4")
@@ -72,6 +73,16 @@ def test_visible_stamp_preserves_summary_and_content_when_restamped(ext, comment
     second_comment, title, author, content = read_properties(ext, second)
     second_line = "Mova-io ACP 2026.9.10.4 · 2026-09-11T12:13:14Z"
     assert second_comment.splitlines()[0] == second_line
-    assert second_comment[len(second_line):].strip() == comments
+    assert second_comment[len(second_line):].strip() == expected_comments
     assert first_line not in second_comment
     assert (title, author, content) == ("Customer title", "Customer author", "Original document text")
+
+@pytest.mark.parametrize("comments,expected", [
+    ("generated using python-pptx", ""),
+    ("generated using python-pptx\r\nCustomer note", "Customer note"),
+    ("Customer note: generated using python-pptx intentionally.", "Customer note: generated using python-pptx intentionally."),
+])
+def test_removes_only_standalone_generator_boilerplate(comments, expected):
+    stamped = stamp_output(office_document("pptx", comments), "output.pptx")
+    text, _, _, _ = read_properties("pptx", stamped)
+    assert text.split("\n\n", 1)[1:] == ([expected] if expected else [])
