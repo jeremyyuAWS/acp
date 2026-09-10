@@ -3,7 +3,7 @@
 .remediation-file-summary { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
 .remediation-file-summary > div { display: grid; gap: 6px; }
 .remediation-file-summary small { text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
-.remediation-file-summary strong { font-size: 22px; }
+.remediation-file-summary > div > strong { font-size: 22px; }
 .remediation-sc-card { border: 1px solid var(--line); border-radius: 12px; margin: 12px 0; overflow: hidden; background: var(--surface, white); }
 .remediation-sc-card header { display: flex; gap: 12px; align-items: center; padding: 12px 15px; flex-wrap: wrap; }
 .remediation-sc-card h4, .remediation-sc-card header p { margin: 0; }
