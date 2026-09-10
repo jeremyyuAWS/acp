@@ -32,7 +32,10 @@ it('authorizes the exact server plan once with optional inspection', async () =>
   const v = await mount(); expect(v.container.textContent).toContain('Destination: Approved folder')
   expect(v.container.textContent).toContain('Manual repair required')
   let resolve; api.authorizeReleaseContinuation.mockImplementation(() => new Promise(r => { resolve = r }))
-  const button = v.button('Approve eligible changes'); await click(button); await click(button)
+  const button = v.button('Approve eligible changes')
+  expect(button.closest('details')).toBeNull()
+  expect(button.closest('.release-quick-step').querySelector('h4').textContent).toContain('3 Publish copies')
+  await click(button); await click(button)
   expect(api.authorizeReleaseContinuation).toHaveBeenCalledTimes(1)
   expect(api.authorizeReleaseContinuation).toHaveBeenCalledWith('run-1', 'fixed-intent')
   await act(async () => resolve({ ...plan, status: 'waiting', progress: {} }))
@@ -105,14 +108,13 @@ it('shows failed eligibility as unknown with a retry instead of a known zero', a
 })
 
 
-it('keeps publishing visible and puts proposal approval in an optional disclosure with linked reasons', async () => {
+it('keeps publishing and approval visible without opening any disclosure, with linked reasons', async () => {
   const v = await mount({ ready: [], readyReasons: ['Verification incomplete. Resolve findings in Remediate.'] }, { ...plan, intent: { files: {} } })
   expect(v.container.querySelector('h3').textContent).toBe('Publish your documents')
   for (const label of ['Publish ready files (0)', 'Approve eligible changes']) {
     const button = v.button(label)
     expect(button.disabled).toBe(true)
-    if (label.startsWith('Publish')) expect(button.closest('details')).toBeNull()
-    else expect(button.closest('details').open).toBe(false)
+    expect(button.closest('details')).toBeNull()
     expect(v.container.querySelector(`[id="${button.getAttribute('aria-describedby')}"]`).textContent).toBeTruthy()
     await click(button)
   }

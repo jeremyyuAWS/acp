@@ -13,18 +13,19 @@ const file = (name, extra = {}) => ({ file: name, compliant: true, corrected_sha
 it('offers Release beside unfinished documents but excludes absent verification and delivered copies', async () => {
   const { root, container } = createTestRoot(); const navigate = vi.fn()
   await act(async () => root.render(<Access files={[file('ready.pdf'), file('processing.pdf',{compliant:false}), file('uncorrected.pdf',{remediated_at:null}), file('unknown.pdf',{corrected_sha256:null}), file('delivered.pdf',{published_at:'2026-09-10'})]} onNavigate={navigate} />))
-  expect(container.textContent).toContain('2 copies')
-  expect(container.textContent).toContain('other documents continue processing or review')
+  expect(container.textContent).toContain('2 saved copies')
+  expect(container.textContent).toContain('You do not need to open the HITL panel')
   await act(async () => container.querySelector('button').click())
   expect(navigate).toHaveBeenCalledWith('publish')
   const source = readFileSync(join(import.meta.dirname, 'Remediate.jsx'), 'utf8')
   expect(source.indexOf('<RemediationReleaseAccess')).toBeLessThan(source.indexOf('<RemediationWorkspaceTabs'))
   expect(source).not.toContain('Continue to Release')
 })
-it('does not offer replay or assessment-only files as ready', async () => {
+it('allows going to Release before a saved copy exists without claiming it is ready', async () => {
   const { root, container } = createTestRoot()
   await act(async () => root.render(<Access files={[{file:'assessed.pdf',compliant:true}]} />))
-  expect(container.textContent).toBe('')
+  expect(container.textContent).toContain('Continue to Release')
+  expect(container.textContent).not.toContain('available to publish')
   await act(async () => root.render(<Access files={[file('ready.pdf')]} readOnly />))
   expect(container.textContent).toBe('')
 })

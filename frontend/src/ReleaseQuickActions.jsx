@@ -134,20 +134,9 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     <section className="release-quick-step" aria-labelledby={`${reasonId}-publish`}>
       <h4 id={`${reasonId}-publish`}><span className="release-step-number">3</span> {allDelivered ? 'Publication complete' : 'Publish copies'}</h4>
       <p>Saved copies are published with a scan summary and a per-file checklist of remaining work. Publishing does not certify accessibility.</p>
-      <div className="release-quick-buttons">
-      <div className="release-quick-action">
-        <button disabled={allDelivered || Boolean(readyReason)} aria-describedby={!allDelivered && readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(selectedReady.map(f => f.file))}>
-          {allDelivered ? 'All files published ✓' : publishing ? 'Publishing copies…' : allowRemainingIssues ? `Publish saved copies (${selectedReady.length})` : `Publish ready files (${selectedReady.length})`}
-        </button>
-        {announcement && <p role="status">{announcement}</p>}
-        {!allDelivered && readyReason && <div id={`${reasonId}-ready`}><p>{readyReason}</p>
-          {!readOnly && !ready.length && readyReasons.slice(0, 3).map(reason => <p key={reason}>{reason}</p>)}
-        </div>}
-      </div>
-      </div>
-    </section>
-    <details className="release-quick-proposals"><summary>Optional: apply more proposed changes before publishing</summary>
-      <p>This separate action applies eligible proposals across the full scope shown above. Your saved-copy selection does not change this proposal batch.</p>
+      {!allDelivered && <section className="release-quick-proposals" aria-label="Approve changes without individual inspection">
+      <strong>Approve changes here — inspection is optional</strong>
+      <p>Approve the eligible proposals for this scope in one action. ACP applies them and publishes qualifying copies. You do not need to open the HITL panel. This covers the full scope above, not only the checked saved copies.</p>
       <div className="release-quick-action">
         <button disabled={Boolean(approveReason)} aria-describedby={approveReason ? `${reasonId}-approve` : undefined} onClick={approve}>
           {busy ? 'Authorizing…' : 'Approve eligible changes and publish when ready'}
@@ -164,7 +153,19 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
         {(data.blockers || []).map(reason => <p key={reason}>{reason}</p>)}
       </div>)}
     </details>}
-    </details>
+    </section>}
+      <div className="release-quick-buttons">
+      <div className="release-quick-action">
+        <button disabled={allDelivered || Boolean(readyReason)} aria-describedby={!allDelivered && readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(selectedReady.map(f => f.file))}>
+          {allDelivered ? 'All files published ✓' : publishing ? 'Publishing copies…' : allowRemainingIssues ? `Publish saved copies (${selectedReady.length})` : `Publish ready files (${selectedReady.length})`}
+        </button>
+        {announcement && <p role="status">{announcement}</p>}
+        {!allDelivered && readyReason && <div id={`${reasonId}-ready`}><p>{readyReason}</p>
+          {!readOnly && !ready.length && readyReasons.slice(0, 3).map(reason => <p key={reason}>{reason}</p>)}
+        </div>}
+      </div>
+      </div>
+    </section>
     {active && <div role="status" aria-label="Authorized Release progress">
       <b>{count('published')} delivered · {count('applying') + count('ready') + count('publishing')} in progress · {count('blocked') + count('failed') + count('needs_confirmation')} need attention</b>
       <p>{activeRunning ? 'Progress is saved. You can leave and return while approved changes are applied and verified.' : 'This authorized batch has finished. Files needing attention were not published.'}</p>
