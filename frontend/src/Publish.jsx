@@ -715,6 +715,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
         folderName={releaseFolderName} readOnly={readOnly} publishing={publishing} destinationLocked={destinationLocked} destinationPending={destinationPending || (settingsPending && !destinationLocked)}
         allowRemainingIssues={allowRemainingIssues}
+        providerLabel={sourceProduct}
+        publishedFolders={releaseFolders.length ? releaseFolders : releaseFolder?.url ? [releaseFolder] : []}
         fileStates={Object.fromEntries(releaseFiles.map((file, index) => [file.file, states[index]]))}
         releaseOptions={<div className="panel" style={{ marginTop: 12, padding: 14 }}>
           <label><input type="checkbox" checked={allowRemainingIssues} disabled={readOnly || publishing}

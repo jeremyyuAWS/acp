@@ -154,3 +154,23 @@ it('drops old file exclusions when the scan changes', async () => {
   await v.render({ runId: 'another-scan' })
   expect(v.container.querySelector('[aria-label="Publish ready.pdf"]').checked).toBe(true)
 })
+
+it('replaces the empty publish action with completion and the recorded folder link', async () => {
+  const v = await mount({ files: [{ file: 'ready.pdf' }], ready: [], fileStates: { 'ready.pdf': { status: 'released', label: 'Delivered' } }, providerLabel: 'SharePoint', publishedFolders: [{ id: 'folder', url: 'https://example.test/published' }] })
+  expect(v.container.querySelector('h3').textContent).toBe('Publishing complete')
+  expect(v.container.textContent).toContain('All files are already published.')
+  expect(v.container.querySelector('.release-published-message a').href).toBe('https://example.test/published')
+  expect(v.container.querySelector('.release-published-message a').textContent).toContain('SharePoint')
+  expect(v.container.querySelector('.release-quick-file--delivered input').disabled).toBe(true)
+  expect(v.button('Publish ready files')).toBeUndefined()
+  expect(v.props.onReady).not.toHaveBeenCalled()
+})
+it('mutes only delivered files and keeps unfinished files selectable', async () => {
+  const v = await mount({ files: [{ file: 'ready.pdf' }, { file: 'sent.pdf' }], fileStates: { 'sent.pdf': { status: 'released', label: 'Delivered' } }, providerLabel: 'Google Drive' })
+  expect(v.container.querySelectorAll('.release-quick-file--delivered')).toHaveLength(1)
+  expect(v.container.textContent).toContain('1 file is already published.')
+  expect(v.container.querySelector('.release-published-message a')).toBeNull()
+  expect(v.container.textContent).toContain('folder link is not available yet')
+  await click(v.button('Publish ready files (1)'))
+  expect(v.props.onReady).toHaveBeenCalledWith(['ready.pdf'])
+})

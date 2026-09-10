@@ -3,12 +3,15 @@ import { planReleaseContinuation, authorizeReleaseContinuation, getReleaseContin
 import './release-quick-actions.css'
 
 export default function ReleaseQuickActions({ runId, files = [], ready = [], destination, folderName = '', destinationLabel,
-  destinationPicker, destinationContent, destinationLocked = false, destinationPending = false, readOnly, publishing, releaseOptions, allowRemainingIssues = false, readyReasons = [], fileStates = {}, onReady, onProgress }) {
+  destinationPicker, destinationContent, destinationLocked = false, destinationPending = false, readOnly, publishing, releaseOptions, allowRemainingIssues = false, readyReasons = [], fileStates = {}, publishedFolders = [], providerLabel = 'the destination', onReady, onProgress }) {
   const reasonId = useId()
   const [excluded, setExcluded] = useState(new Set())
   useEffect(() => { setExcluded(new Set()) }, [runId])
   const selectedReady = ready.filter(file => !excluded.has(file.file))
   const readyNames = new Set(ready.map(file => file.file))
+  const deliveredCount = files.filter(file => fileStates[file.file]?.status === 'released').length
+  const allDelivered = files.length > 0 && deliveredCount === files.length
+  const folderLinks = publishedFolders.filter(folder => folder.url)
   const [plan, setPlan] = useState(null)
   const [active, setActive] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -101,13 +104,19 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
   const outcomes = Object.entries(active?.progress || {}).filter(([file]) => file !== '_deadline')
   const count = state => outcomes.filter(([, result]) => result.state === state).length
   return <section className="panel release-quick" aria-label="Publish ready files and approved changes">
-    <h3 className="release-quick-title">Publish your documents</h3>
+    <h3 className="release-quick-title">{allDelivered ? 'Publishing complete' : 'Publish your documents'}</h3>
+    {deliveredCount > 0 && <div className="release-published-message" role="status">
+      <strong>{allDelivered ? 'All files are already published.' : `${deliveredCount} ${deliveredCount === 1 ? 'file is' : 'files are'} already published.`}</strong>
+      <p>{allDelivered ? 'There is nothing more to select for this release.' : 'Published files are greyed out below.'} Open the saved copies in {providerLabel}. Originals are unchanged.</p>
+      {folderLinks.map((folder, index) => <a key={folder.id || folder.url} href={folder.url} target="_blank" rel="noopener noreferrer">Open published folder{folderLinks.length > 1 ? ` ${index + 1}` : ''} in {providerLabel} ↗</a>)}
+      {!folderLinks.length && <p>The folder link is not available yet. Check the delivery receipt below for recorded file links.</p>}
+    </div>}
     <section className="release-quick-step" aria-labelledby={`${reasonId}-files`}>
-      <h4 id={`${reasonId}-files`}><span className="release-step-number">1</span> Choose files</h4>
-      {releaseOptions}
-      <div className="release-quick-summary"><strong>{selectedReady.length} ready to publish</strong><span>{files.length} files in this scope</span></div>
+      <h4 id={`${reasonId}-files`}><span className="release-step-number">1</span> {allDelivered ? 'Published files' : 'Choose files'}</h4>
+      {!allDelivered && releaseOptions}
+      <div className="release-quick-summary"><strong>{allDelivered ? `${deliveredCount} delivered` : `${selectedReady.length} ready to publish`}</strong><span>{files.length} files in this scope</span></div>
       <div className="release-quick-file-list" aria-label="Files to publish">
-        {files.map(file => <label key={file.file} className="release-quick-file">
+        {files.map(file => <label key={file.file} className={`release-quick-file${fileStates[file.file]?.status === 'released' ? ' release-quick-file--delivered' : ''}`}>
           <input type="checkbox" aria-label={`Publish ${file.file}`} checked={readyNames.has(file.file) && !excluded.has(file.file)} disabled={readOnly || publishing || !readyNames.has(file.file)}
             onChange={event => setExcluded(previous => { const next = new Set(previous); event.target.checked ? next.delete(file.file) : next.add(file.file); return next })} />
           <span>{file.file}</span><small>{readyNames.has(file.file) ? 'Ready to publish' : fileStates[file.file]?.label || 'Not available for a new publish'}</small>
@@ -117,12 +126,12 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
       </div>
     </section>
     <section className="release-quick-step" aria-labelledby={`${reasonId}-destination`}>
-      <h4 id={`${reasonId}-destination`}><span className="release-step-number">2</span> Confirm destination</h4>
+      <h4 id={`${reasonId}-destination`}><span className="release-step-number">2</span> {allDelivered ? 'Published folder' : 'Confirm destination'}</h4>
       {destinationContent || <p><b>Destination:</b> {plan?.intent?.destination?.folder_name ? `${plan.intent.destination.folder_name} / Remediated / ${plan.intent.release_folder_name || folderName || 'Timestamp + user email'}` : destinationLabel}. Originals stay unchanged.</p>}
       {destinationLocked && <p className="muted">This release has started. Further copies and retries use this saved destination.</p>}
       {!readOnly && !destinationLocked && <details><summary>Change destination</summary>{destinationPicker}</details>}
     </section>
-    <section className="release-quick-step" aria-labelledby={`${reasonId}-publish`}>
+    {!allDelivered && <section className="release-quick-step" aria-labelledby={`${reasonId}-publish`}>
       <h4 id={`${reasonId}-publish`}><span className="release-step-number">3</span> Publish copies</h4>
       <p>Saved copies are published with a scan summary and a per-file checklist of remaining work. Publishing does not certify accessibility.</p>
       <div className="release-quick-buttons">
@@ -135,7 +144,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
         </div>}
       </div>
       </div>
-    </section>
+    </section>}
     <details className="release-quick-proposals"><summary>Optional: apply more proposed changes before publishing</summary>
       <p>This separate action applies eligible proposals across the full scope shown above. Your saved-copy selection does not change this proposal batch.</p>
       <div className="release-quick-action">
