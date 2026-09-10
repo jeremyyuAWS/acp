@@ -97,7 +97,7 @@ def build_release_reports(store, scan_id, owner, release_id):
     unfinished = [r for r in traces if selected(r) and str(r.get('outcome') or '').upper() not in ('PASS', 'FAIL', 'REVIEW', 'NA', 'NOT_APPLICABLE')]
     queue = store.list_hitl_queue(scan_id=scan_id, owner=owner)
     verified_keys = {(r['file'], _rule(r['rule_id'])) for r in diffs['items']}
-    open_queue = [r for r in queue if r.get('status') not in ('rejected', 'not_applicable') and not (r.get('status') == 'resolved' and r.get('applied') and (r['file'], _rule(r['rule_id'])) in verified_keys)]
+    open_queue = [r for r in queue if r.get('status') not in ('rejected', 'not_applicable') and not (r.get('status') in ('approved', 'resolved') and r.get('applied') and (r['file'], _rule(r['rule_id'])) in verified_keys)]
     unverified = [r for r in queue if r.get('applied') and (r['file'], _rule(r['rule_id'])) not in verified_keys]
     outcomes = {r['file']: r for r in release['documents']}
     files = {f['file']: f for f in scan['files']}

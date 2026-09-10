@@ -79,3 +79,49 @@ def test_only_release_documents_and_selected_unfinished_checks(isolated_store, m
     assert 'Check not completed: ERROR' in checklist
     assert 'Check not completed: REVIEW' not in checklist
     assert '1.4.3' not in checklist
+
+
+def test_verified_applied_approval_is_not_reported_unverified_but_failures_remain(isolated_store):
+    release = setup(isolated_store)
+    isolated_store.save_file_result('scan', {
+        'file': 'one.pdf', 'engine': 'pdf', 'status': 'fail', 'score': 80,
+        'compliant': False, 'skipped_rules': 0,
+        'issues': [{'ruleId': 'SC_2_4_2', 'wcag': '2.4.2', 'severity': 'serious',
+                    'detail': 'Remaining title issue in another location', 'page': 3}],
+    }, '2026-09-09T10:00:00Z')
+    isolated_store.record_remediation_diffs('scan', 'one.pdf', [
+        {'rule_id': 'SC_2_4_2', 'before': '', 'after': 'Title'},
+        {'rule_id': 'SC_3_1_1', 'before': '', 'after': 'en'},
+    ])
+    with isolated_store._db.cursor() as cur:
+        for item_id, rule_id, name in [('title', '2.4.2', 'Page titled'), ('language', '3.1.1', 'Language corrected')]:
+            isolated_store._db.execute(cur,
+                "INSERT INTO hitl_queue(id,scan_id,file,rule_id,rule_name,status,applied) VALUES(%s,'scan','one.pdf',%s,%s,'approved',1)",
+                (item_id, rule_id, name))
+    assets = build_release_reports(isolated_store, 'scan', OWNER, release)
+    summary = assets[0]['content'].decode()
+    checklist = next(a['content'].decode() for a in assets if a['name'].startswith('checklist-one'))
+    assert 'Applied, verification not recorded' not in checklist
+    assert 'Language corrected' not in checklist
+    assert 'Remaining title issue in another location' in checklist
+    assert 'Remaining issue' in checklist
+    assert 'Applied review records without matching verification evidence (not findings)</td><td>0' in summary
+
+
+@pytest.mark.parametrize('status', ['approved', 'resolved'])
+def test_applied_review_status_without_verification_evidence_remains_in_checklist(isolated_store, status):
+    release = setup(isolated_store)
+    # A different criterion's verified record cannot credit this review item.
+    isolated_store.record_remediation_diffs('scan', 'one.pdf', [
+        {'rule_id': 'SC_3_1_1', 'before': '', 'after': 'en'},
+    ])
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "INSERT INTO hitl_queue(id,scan_id,file,rule_id,rule_name,status,applied) VALUES('unverified','scan','one.pdf','2.4.2','Page title',%s,1)",
+            (status,))
+    assets = build_release_reports(isolated_store, 'scan', OWNER, release)
+    summary = assets[0]['content'].decode()
+    checklist = next(a['content'].decode() for a in assets if a['name'].startswith('checklist-one'))
+    assert 'Applied, verification not recorded' in checklist
+    assert 'Page title' in checklist
+    assert 'Applied review records without matching verification evidence (not findings)</td><td>1' in summary
