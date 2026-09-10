@@ -52,7 +52,8 @@ function PolicySlider({ title, question, stops, value, onChange, disabled, maxLe
   </div>
 }
 
-export default function RemediationImpactCard({ runId, onRun, runBusy = false, myEmail = '', readOnly = false, refreshKey = 0, scopeFiles, renderAssessment, releaseOption }) {
+export default function RemediationImpactCard({ runId, onRun, runBusy = false, myEmail = '', readOnly = false, refreshKey = 0, scopeFiles, renderAssessment, releaseOption, requireAnswers = false, releaseAnswered = true }) {
+  const [answers, setAnswers] = useState({})
   const titleId = useId()
   const assigneeId = useId()
   const [assignmentOpen, setAssignmentOpen] = useState(false)
@@ -62,6 +63,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const [assignmentResult, setAssignmentResult] = useState(null)
   const [assignmentError, setAssignmentError] = useState('')
   const scopeKey = Array.isArray(scopeFiles) ? JSON.stringify([...scopeFiles].sort()) : null
+  useEffect(() => { setAnswers({}) }, [runId, scopeKey])
   const [selectedFile, setSelectedFile] = useState(null)
   const [impactDetails, setImpactDetails] = useState(null)
   const closeImpactDetails = useCallback(() => setImpactDetails(null), [])
@@ -140,7 +142,10 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     human: Number.isFinite(data?.lanes?.review?.findings) && Number.isFinite(data?.lanes?.manual?.findings)
       ? data.lanes.review.findings + data.lanes.manual.findings : undefined,
   })
+  const questionsComplete = !requireAnswers || (answers.rule_based && answers.tools && releaseAnswered
+    && (selected.ai === 0 || selected.ai_zone === 'local' || answers.aiConfirmed === JSON.stringify(selected)))
   const change = (key, value) => {
+    setAnswers(current => ({ ...current, [key]: true, ...(['ai', 'ai_mode'].includes(key) ? { tools: true } : {}) }))
     if (key === 'ai_mode') {
       const next = { ...selected, ai: 1, ai_zone: value, auto_approve_ai: false }
       if (value === 'local') {
@@ -205,12 +210,12 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
         <span>{ready ? `${number(data.lanes?.automatic?.findings)} automatic · ${number(data.lanes?.review?.findings)} to approve · ${number(data.lanes?.manual?.findings)} manual · ${number(data.lanes?.blocked?.findings)} blocked` : 'Review the current preview before starting.'}</span>
         <span>{selected.ai > 0 && selected.ai_zone === 'local' ? 'Ollama only · Human review · No cloud AI charges' : selected.ai > 0 ? `${selected.auto_approve_ai ? 'Auto-approval on · Manual exceptions only' : 'AI drafts need approval'} · Up to ${generationSteps(selected, data?.capabilities?.generation_chain).length || 2} models${data?.capabilities?.ai_budget === true ? ` · AI limit $${selected.ai_budget_usd}` : ' · Spending cap unavailable'}` : 'Rules only · No new AI suggestions'}</span>
       </div>
-      <button type="button" className="remediation-impact__run" disabled={readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
-      onClick={() => onRun(selected, data)}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>
+      <button type="button" className="remediation-impact__run" disabled={!questionsComplete || readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
+      onClick={() => { if (questionsComplete && ready) onRun(selected, data) }}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>
     </div>
     <div className="remediation-impact__split"><div className="remediation-impact__settings">
     {chainProblem && <p role="alert">{chainProblem}</p>}
-    <RemediationPlanChoices generationChainOptions={data?.capabilities?.generation_chain} policy={selected} providers={data?.providers}
+    <RemediationPlanChoices answers={requireAnswers ? answers : undefined} generationChainOptions={data?.capabilities?.generation_chain} policy={selected} providers={data?.providers}
       disabled={readOnly || !runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true}
       standingApprovalSupported={data?.capabilities?.ai_standing_approval?.supported === true}
       standingApprovalReason={data?.capabilities?.ai_standing_approval?.reason || ''}
@@ -219,7 +224,13 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       reviewEligibleFamilies={data?.capabilities?.ai_review?.eligible_families || []}
       automaticReviewReason={data?.capabilities?.ai_review?.reason || data?.capabilities?.ai_automatic_reason || ''}
       reviewAdministratorFloor={data?.capabilities?.ai_review?.administrator_floor ?? null} />
+    {requireAnswers && selected.ai > 0 && selected.ai_zone !== 'local' && <label>
+      <input type="checkbox" checked={answers.aiConfirmed === JSON.stringify(selected)} disabled={readOnly || runBusy || !ready}
+        onChange={event => setAnswers(current => ({ ...current, aiConfirmed: event.target.checked ? JSON.stringify(selected) : null }))} />
+      I confirm the AI providers, spending limit, and review and approval settings above.
+    </label>}
     {releaseOption}
+    {!questionsComplete && <p role="status">Answer the changes, tools, and publishing questions, and confirm any cloud AI settings to start.</p>}
     <RemediationEstimateDisclosure estimate={estimateResponse?.key === estimateKey ? estimateResponse.value : null}
       aiEnabled={selected.ai > 0 && Number(selected.ai_budget_usd ?? 1) > 0}
       loading={loading || !!error || estimateResponse?.key !== estimateKey} />
@@ -249,6 +260,8 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     </details>
     </div><div className="remediation-impact__results">
     {renderAssessment?.({
+      findings: ready ? data.findings : null,
+      scopeFiles,
       automaticDelta: countDeltas?.automatic, humanDelta: countDeltas?.human,
       automatic: ready ? data.lanes?.automatic?.findings : 'Not yet available',
       blocked: ready ? data.lanes?.blocked?.findings : null,

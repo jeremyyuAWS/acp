@@ -2446,7 +2446,7 @@ export default function App() {
 
         {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} runStream={remRun} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /> : placeholder)}
 
-        {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
+        {view === 'publish' && (run ? <Publish run={run} files={files} cap={cap} assessment={assessment} certified={certifiedDocs} readOnly={isTimeTravel} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
         {/* QueuePanel needs no assessment data at all — it's job-queue/worker/Azure-capacity
             status, not a compliance view — so it renders even behind the assessGate below.

@@ -138,20 +138,16 @@ describe('the arithmetic is on the page, not just in a test', () => {
     expect(c.textContent).toMatch(/= 6 selected checks \(3 documents × 2 criteria\)/)
   })
 
-  it('shows severity summing to the finding total', async () => {
+  it('shows remediation categories instead of severity', async () => {
     const c = await mount({ files: ESTATE })
-    // 1 critical + 1 serious + 1 moderate + 0 minor = 3 findings, which is the printed total.
-    expect(c.textContent).toMatch(/1 critical/)
-    expect(c.textContent).toMatch(/1 serious/)
-    expect(c.textContent).toMatch(/1 moderate/)
-    expect(c.textContent).toMatch(/0 minor/)
+    expect(c.textContent).toContain('Fully automated · 1')
+    expect(c.textContent).toContain('AI suggestion needed · 2')
+    expect(c.textContent).not.toContain('How serious are the issues')
   })
 
-  it('A6 · prints the severity partition as an equation, all four addends, summing to the total', async () => {
+  it('prints the remediation category total', async () => {
     const c = await mount({ files: ESTATE })
-    // The words are already there per-severity; the equation makes the partition checkable at a
-    // glance against Total findings, and includes the zero so the four addends are always four.
-    expect(c.querySelector('.assesssummary-sevsum').textContent).toMatch(/1 \+ 1 \+ 1 \+ 0 = 3/)
+    expect(c.querySelector('.remediation-category-total').textContent).toContain('3 findings across remediation categories')
   })
 
   it('A6 · prints no equation when there is nothing to add', async () => {
@@ -258,7 +254,7 @@ describe('one primary action', () => {
 })
 
 describe('the seven screen states — a run that did not complete never reads as one that did', () => {
-  const gridShown = (c) => /How serious are the issues/.test(c.textContent)
+  const gridShown = (c) => /Remediation categories/.test(c.textContent)
 
   describe('state 6 · assessment failed', () => {
     it('renders no metric grid — not even zeros — for an errored run', async () => {
@@ -464,4 +460,17 @@ describe('plan findings reconcile without adding queue tasks or checks', () => {
     expect(c.textContent).toContain('The current preview and assessment cover different finding populations')
     expect(c.textContent).not.toContain('Outside this preview-3')
   })
+})
+
+it('opens Outside this preview by file type and SC without calling the difference unfixable', async () => {
+  const c = await mount({ files: ESTATE, remediationForecast: { automatic: 1, human: 0, blocked: 0, total: 1,
+    scopeFiles: ['a.docx'], findings: [{ file: 'a.docx', rule_id: 'SC_1_3_1', finding_count: 1, lane: 'automatic' }] } })
+  const tile = [...c.querySelectorAll('button')].find(button => button.textContent.includes('Outside this preview'))
+  expect(tile).toBeTruthy()
+  await act(async () => tile.click())
+  const detail = c.querySelector('[aria-label="Outside this plan"]')
+  expect(detail.textContent).toContain('not a claim that ACP cannot fix')
+  expect(detail.textContent).toContain('DOCX')
+  expect(detail.textContent).toContain('SC 1.1.1')
+  expect(detail.textContent).toContain('outside the selected plan scope')
 })

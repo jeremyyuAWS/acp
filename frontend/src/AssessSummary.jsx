@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import RemediationCategoryBreakdown, { FindingGroups } from './RemediationCategoryBreakdown.jsx'
+import { assessmentCategoryRows, outsidePlanRows, countOf } from './remediationCategories.js'
 import AssessIncompleteChecks from './AssessIncompleteChecks.jsx'
-import { assessMetrics, reconcile, coverageSentence, SEVERITIES, SEVERITY_LABEL,
+import { assessMetrics, reconcile, coverageSentence,
          STATUS_LABEL } from './assessMetrics.js'
 
 // The assessment summary: a status a person can check, then seven metrics, then the arithmetic.
@@ -30,7 +32,6 @@ const TONE = {
   clear: { c: '#2F7D32', bar: '#2F7D32' },
   empty: { c: 'var(--muted)', bar: '#9A93A0' },
 }
-const SEV_COLOR = { CRITICAL: '#8E1B14', SERIOUS: '#B3261E', MODERATE: '#B07A00', MINOR: '#B9B3BE' }
 
 const card = {
   border: '1px solid var(--line)', borderRadius: 12, padding: '12px 14px', background: 'var(--surface)',
@@ -124,10 +125,14 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
   // The run's own status decides two of the seven screen states the file list cannot: a run of
   // 'error' is `failed` even with a stray record, and one 'cancelled'/'interrupted' is `partial`
   // even before the not-started count is known. 'done'/absent leaves classification to the findings.
+  const [outsideOpen, setOutsideOpen] = useState(false)
   const [checksOpen, setChecksOpen] = useState(false)
+  const outsideHeading = useRef(null)
+  const outsideTrigger = useRef(null)
+  useEffect(() => { if (outsideOpen) outsideHeading.current?.focus() }, [outsideOpen])
   const checksId = useId()
   const checksTrigger = useRef(null)
-  useEffect(() => { setChecksOpen(false) }, [run?.id])
+  useEffect(() => { setChecksOpen(false); setOutsideOpen(false) }, [run?.id])
   const closeChecks = () => { setChecksOpen(false); checksTrigger.current?.focus() }
   const runStatus = run?.status
   const m = assessMetrics(files, { cap, assessment, criteria, level, notStarted, runStatus })
@@ -151,14 +156,13 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
     key => Number.isSafeInteger(remediationForecast[key]) && remediationForecast[key] >= 0)
     && remediationForecast.automatic + remediationForecast.human + remediationForecast.blocked === remediationForecast.total
   const outsidePreview = forecastCounts ? m.totalFindings - remediationForecast.total : null
+  const assessmentRows = assessmentCategoryRows(files, { cap, assessment, criteria, level })
+  const outsideRows = outsidePlanRows(assessmentRows, remediationForecast?.findings, remediationForecast?.scopeFiles)
+  const categoryRows = remediationForecast ? (remediationForecast.findings || []) : assessmentRows
   const grid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12, marginTop: 16 }
   const gaps = m.unableToAssess > 0 || m.documentsUnopened.length > 0
   const lifecycleExcluded = run?.scope?.lifecycle_eligible_excluded ?? 0
-  // The by-severity addends, printed as an equation so the partition is checkable on screen — the
-  // same reason the worklist prints its per-row sum. UNKNOWN joins only when it is non-zero, and the
-  // whole thing reconciles to Total findings (assessMetrics guarantees sevSum === totalFindings).
-  const sevAddends = [...SEVERITIES.map((s) => m.bySeverity[s]),
-                      ...(m.bySeverity.UNKNOWN > 0 ? [m.bySeverity.UNKNOWN] : [])]
+
 
   return (
     <section className="panel assesssummary" style={{ borderLeft: `4px solid ${tone.bar}` }}>
@@ -315,33 +319,8 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           Issues found across the documents. The same type of issue can appear more than once.
         </Metric>
 
-        <div style={card}>
-          <div style={lab}>How serious are the issues?</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', marginTop: 9 }}>
-            {SEVERITIES.map((s) => (
-              <span key={s} style={{ fontSize: 11.5, fontVariantNumeric: 'tabular-nums',
-                                     display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 2,
-                                                  background: SEV_COLOR[s], display: 'inline-block' }} />
-                <b>{m.bySeverity[s]}</b> {SEVERITY_LABEL[s]}
-              </span>
-            ))}
-            {/* Never dropped. An unrecognised severity that vanished would break the printed sum
-                silently, which is worse than an odd label. */}
-            {m.bySeverity.UNKNOWN > 0 && (
-              <span style={{ fontSize: 11.5 }}><b>{m.bySeverity.UNKNOWN}</b> unclassified</span>
-            )}
-          </div>
-          {/* A6 · the partition, added up on screen. A severity breakdown with no visible sum is a
-              set of numbers a reader has to trust; printed as an equation it is one they can check
-              against Total findings in the tile beside it. Only when there is something to add. */}
-          {m.totalFindings > 0 && (
-            <div className="muted assesssummary-sevsum" style={{ fontSize: 11, marginTop: 8,
-                                                                 fontVariantNumeric: 'tabular-nums' }}>
-              {sevAddends.join(' + ')} = {m.totalFindings}
-            </div>
-          )}
-        </div>
+        <div style={card}><RemediationCategoryBreakdown rows={categoryRows}
+          note={remediationForecast ? (Array.isArray(remediationForecast.findings) ? 'Current plan findings. Completion still requires application and verification.' : 'Current plan categories are not yet available.') : 'Based on remediation capability. Starting a run requires a plan; approval and availability can change the route.'} /></div>
 
       </div>
       <div role="group" aria-label="Plan findings breakdown" style={grid}>
@@ -360,7 +339,7 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           Findings that cannot proceed until missing evidence or a processing issue is addressed.
           {remediationForecast.onBlocked && <> <b>View details →</b></>}
         </Metric>}
-        {outsidePreview > 0 && <Metric label="Outside this preview" value={outsidePreview}>
+        {outsidePreview > 0 && <Metric label="Outside this preview" value={outsidePreview} onClick={event => { outsideTrigger.current = event.currentTarget; setOutsideOpen(value => !value) }} expanded={outsideOpen}>
           Assessment findings not represented in the current plan. This can reflect scope or changed results; it does not prove they were fixed.
         </Metric>}
       </div>
@@ -411,6 +390,15 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
 
       </div>
 
+      {outsideOpen && outsidePreview > 0 && <section aria-label="Outside this plan" style={{ marginTop: 16 }}>
+        <h3 ref={outsideHeading} tabIndex={-1}>Outside this plan · {outsidePreview} findings</h3>
+        <button type="button" onClick={() => { setOutsideOpen(false); outsideTrigger.current?.focus() }}>Close breakdown</button>
+        <p>This is a scope or results difference, not a claim that ACP cannot fix these findings.</p>
+        {outsideRows === null ? <p>File and SC details are unavailable for this preview.</p> : <>
+          {outsideRows.reduce((n, row) => n + countOf(row), 0) !== outsidePreview && <p>The file/SC differences do not reconcile to this total. Assessment and current plan populations have changed; these groups cannot identify the exact excluded findings.</p>}
+          <FindingGroups rows={outsideRows} />
+        </>}
+      </section>}
       {checksOpen && m.unableToAssess > 0 && <AssessIncompleteChecks id={checksId} rows={m.rows} assessment={assessment} onClose={closeChecks} />}
 
       {/* ── The arithmetic, printed. Either it holds on screen or it is a visible bug. ───── */}

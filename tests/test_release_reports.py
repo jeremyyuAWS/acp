@@ -125,3 +125,48 @@ def test_applied_review_status_without_verification_evidence_remains_in_checklis
     assert 'Applied, verification not recorded' in checklist
     assert 'Page title' in checklist
     assert 'Applied review records without matching verification evidence (not findings)</td><td>1' in summary
+
+
+def test_branded_documents_categories_and_escaped_change_details(isolated_store, monkeypatch):
+    release = setup(isolated_store)
+    isolated_store.save_file_result('scan', {'file': 'one.pdf', 'engine': 'pdf', 'status': 'fail', 'score': 0, 'compliant': False, 'skipped_rules': 0, 'issues': [{'ruleId': 'SC_1_1_1', 'wcag': '1.1.1', 'severity': 'critical', 'detail': 'Missing alt'}]}, '2026-09-09T10:00:00Z')
+    isolated_store.record_remediation_diffs('scan', 'one.pdf', [{'rule_id': 'SC_2_4_2', 'before': '<unsafe>', 'after': 'Document title'}])
+    monkeypatch.setattr(isolated_store, 'get_scan_traces', lambda *a: [{'file': 'one.pdf', 'rule_id': 'SC_1_1_1', 'outcome': 'FAIL', 'fix_mode': 'ai-assisted', 'finding_count': 1}])
+    assets = build_release_reports(isolated_store, 'scan', OWNER, release)
+    summary = assets[0]['content'].decode()
+    assert 'alt="Mova iO"' in summary
+    assert 'data:image/png;base64,' in summary
+    assert 'Remediation category / SC' in summary
+    assert 'AI suggestion needed' in summary
+    assert 'SC 1.1.1' in summary
+    detail = next(a['content'].decode() for a in assets if a['name'].startswith('checklist-one'))
+    assert '<th scope="col">Severity</th>' not in detail
+    assert 'Severity: critical' in detail
+    assert '&lt;unsafe&gt;' in detail
+    assert 'SC 2.4.2' in detail
+    assert 'Document title' in detail
+
+
+@pytest.mark.parametrize('row, expected', [
+    ({'fix_mode': 'auto'}, 'automatic'), ({'fix_mode': 'ai-assisted'}, 'suggestion'),
+    ({'fix_mode': 'human'}, 'manual'), ({'remediation_supported': False}, 'unsupported'),
+    ({'outcome': 'ERROR'}, 'blocked'),
+])
+def test_report_remediation_categories(row, expected):
+    from release_reports import _category
+    assert _category(row) == expected
+
+
+def test_approval_does_not_establish_verification():
+    from release_reports import _category
+    assert _category(task={'status': 'approved', 'applied': True}) == 'applied'
+    assert _category(verified=True) == 'verified'
+
+
+def test_report_and_ui_share_approved_category_names():
+    from pathlib import Path
+    from release_reports import CATEGORIES
+    frontend = (Path(__file__).resolve().parent.parent / 'frontend/src/remediationCategories.js').read_text()
+    assert len(CATEGORIES) == 8
+    for label in CATEGORIES.values():
+        assert repr(label) in frontend

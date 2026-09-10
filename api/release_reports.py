@@ -4,6 +4,9 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from html import escape
 from urllib.parse import urlsplit
+import base64
+from pathlib import Path
+from functools import lru_cache
 import csv
 import io
 import re
@@ -26,19 +29,63 @@ def _link(url, label):
     return f'<a href="{_text(url)}">{_text(label)}</a>' if safe else _text(label)
 
 
+@lru_cache(maxsize=1)
+def _logo():
+    return base64.b64encode((Path(__file__).parent / 'assets' / 'mova-logo.png').read_bytes()).decode('ascii')
+
+
 def _page(title, content):
     return ('<!doctype html><html lang="en"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f'<title>{_text(title)}</title><style>body{{font:16px/1.5 system-ui;max-width:1100px;margin:2rem auto;padding:1rem;color:#222}}'
-            'table{border-collapse:collapse;width:100%}th,td{border:1px solid #aaa;padding:.6rem;text-align:left;vertical-align:top}'
-            'caption{text-align:left;font-weight:bold}a{color:#164fa3}h1{font-size:1.8rem}</style>'
-            f'<main><h1>{_text(title)}</h1><p>Published copies may have remaining accessibility issues. '
+            f'<title>{_text(title)}</title><style>body{{font:16px/1.5 system-ui;max-width:1280px;margin:2rem auto;padding:1rem;color:#302535;background:#fbf9fc}}'
+            'main{background:white;border:1px solid #e4dcea;border-radius:16px;padding:24px}'
+            '.brand{display:flex;gap:24px;align-items:center;border-bottom:3px solid #62435d;padding-bottom:16px}.brand img{width:200px;height:auto;max-width:45%}'
+            'table{border-collapse:collapse;width:100%;font-size:14px;margin:12px 0}th,td{border-bottom:1px solid #e4dcea;padding:.75rem;text-align:left;vertical-align:top;overflow-wrap:anywhere}'
+            'th{background:#f5eff7}caption{text-align:left;font-weight:bold}a{color:#573352}h1{font-size:1.8rem}h2{margin-top:28px}'
+            'details{border:1px solid #e4dcea;border-radius:8px;padding:10px;margin:8px 0}summary{cursor:pointer;font-weight:600}'
+            '.table-scroll{overflow-x:auto}small{color:#655b6a}.notice{padding:12px;background:#f5eff7;border-radius:8px}'
+            '@media(max-width:700px){main{padding:12px}table{min-width:650px}.brand{flex-wrap:wrap}}'
+            '@media print{body{background:white;margin:0}main{border:0}.brand img{width:150px}details{break-inside:avoid}table{font-size:10px}}</style>'
+            f'<main><header class="brand"><img src="data:image/png;base64,{_logo()}" alt="Mova iO"><div>Accessibility Compliance Platform<br><strong>Scan and remediation report</strong></div></header>'
+            f'<h1>{_text(title)}</h1><p class="notice">Published copies may have remaining accessibility issues. '
             'This report does not certify full accessibility compliance. Human follow-up is optional for publication.</p>'
             f'{content}</main></html>').encode('utf-8')
 
 
+CATEGORIES = {
+    'automatic': 'Fully automated', 'approval': 'Fix available — approval needed',
+    'suggestion': 'AI suggestion needed', 'manual': 'Manual fix required',
+    'unsupported': 'Cannot fix with ACP', 'blocked': 'Blocked',
+    'applied': 'Applied — verification pending', 'verified': 'Fixed and verified',
+}
+
+
+def _category(trace=None, task=None, verified=False):
+    trace, task = trace or {}, task or {}
+    if verified:
+        return 'verified'
+    if task.get('applied'):
+        return 'applied'
+    if task.get('status') == 'blocked' or str(trace.get('outcome') or '').upper() in ('ERROR', 'NOT_EVALUATED', 'UNSUPPORTED'):
+        return 'blocked'
+    if task.get('status') in ('rejected', 'deferred'):
+        return 'manual'
+    if task.get('proposals') or task.get('approved_value'):
+        return 'approval'
+    mode = trace.get('fix_mode')
+    if mode == 'auto':
+        return 'automatic'
+    if mode in ('ai-assisted', 'assisted'):
+        return 'suggestion'
+    if mode in ('human', 'manual', 'human-only') or trace.get('outcome') == 'REVIEW':
+        return 'manual'
+    if trace.get('remediation_supported') is False or mode in ('unsupported', 'none'):
+        return 'unsupported'
+    return 'blocked'
+
+
 def _table(headers, rows):
-    return '<table><thead><tr>' + ''.join(f'<th scope="col">{_text(h)}</th>' for h in headers) + '</tr></thead><tbody>' + ''.join('<tr>' + ''.join(f'<td>{c}</td>' for c in row) + '</tr>' for row in rows) + '</tbody></table>'
+    return '<div class="table-scroll"><table><thead><tr>' + ''.join(f'<th scope="col">{_text(h)}</th>' for h in headers) + '</tr></thead><tbody>' + ''.join('<tr>' + ''.join(f'<td>{c}</td>' for c in row) + '</tr>' for row in rows) + '</tbody></table></div>'
 
 
 def build_release_reports(store, scan_id, owner, release_id):
@@ -140,20 +187,44 @@ def build_release_reports(store, scan_id, owner, release_id):
             ('Original findings fixed and verified', verified_file),
             ('Original findings not yet verified fixed', original_file - verified_file if original_file is not None and verified_file is not None else None),
         ]]) + '<h2>Follow-up checklist</h2>'
-        detail += _table(['Criterion', 'Issue', 'Location', 'Severity', 'Recommended action', 'Owner', 'Status'], [[_text(v) for v in r] for r in checklist]) if checklist else '<p>No remaining issues are recorded in the available evidence. This is not a guarantee of compliance.</p>'
+        categorized = []
+        for row in checklist:
+            trace = next((t for t in traces if t['file'] == name and _rule(t['rule_id']) == row[0]), {})
+            task = next((q for q in open_queue if q['file'] == name and _rule(q['rule_id']) == row[0]), {})
+            category = _category(trace, task)
+            categorized.append((category, row))
+        detail += _table(['Criterion', 'Issue', 'Location', 'Remediation category', 'Recommended action', 'Owner', 'Status'],
+                         [[_text(r[0]), _text(r[1]) + '<br><small>Severity: ' + _text(r[3]) + '</small>', _text(r[2]), _text(CATEGORIES[key]), *[_text(v) for v in r[4:]]] for key, r in categorized]) if checklist else '<p>No remaining issues are recorded in the available evidence. This is not a guarantee of compliance.</p>'
+        changes = [d for d in diffs['items'] if d['file'] == name]
+        detail += '<h2>Recorded changes by success criterion</h2><p>Change records are separate from findings. Verified finding totals above require matching ledger evidence.</p>'
+        for sc in sorted({_rule(d['rule_id']) for d in changes}):
+            records = [d for d in changes if _rule(d['rule_id']) == sc]
+            detail += f'<details open><summary>SC {_text(sc)} · {len(records)} change records</summary>'
+            detail += _table(['Location', 'Before', 'After'], [[_text(d.get('page')), _text(d.get('before')), _text(d.get('after'))] for d in records]) + '</details>'
+        if not changes:
+            detail += '<p>No change records are available for this file.</p>'
         assets.append({'name': report_name, 'content': _page(f'Follow-up checklist — {name}', detail), 'content_type': 'text/html; charset=utf-8'})
-        index.append([_text(name), _text(status), _link(url, 'Open published file') if url else 'Not published', f'<a href="{report_name}">Open checklist</a>'])
-        rows.extend([[name, url or '', *r] for r in checklist])
+        category_groups = ''
+        for key, label in CATEGORIES.items():
+            matches = [r for category, r in categorized if category == key]
+            if matches:
+                category_groups += f'<details><summary>{_text(label)} · {len(matches)} checklist entries</summary><ul>' + ''.join(f'<li>SC {_text(r[0])} — {_text(r[1])}</li>' for r in matches) + '</ul></details>'
+        if verified_file:
+            category_groups += f'<p>{_text(CATEGORIES["verified"])} · {verified_file} findings</p>'
+        index.append([_text(name), _text(name.rsplit('.', 1)[-1].upper()), _text(status), _text(original_file), _text(verified_file),
+                      category_groups or 'No classified checklist entries', _text(sum(t['file'] == name for t in unfinished) if traces else None),
+                      _link(url, 'Open published file') if url else 'Not published', f'<a href="{report_name}">Open checklist</a>'])
+        rows.extend([[name, url or '', r[0], str(r[1]) + ' · Severity: ' + str(r[3]), r[2], CATEGORIES[key], *r[4:]] for key, r in categorized])
     remaining = sum(int(r.get('finding_count') or 0) for r in failed) if traces else None
     metrics = [('Files published in this release', release['published']), ('Publication failures', release['failed']), ('Not yet published', release['remaining']), ('Original assessment findings (immutable, whole scan)', original), ('Original findings fixed and verified', verified_total), ('Original findings not yet verified fixed', original - verified_total if original is not None and verified_total is not None else None), ('Current recorded remaining findings (whole scan)', remaining), ('Verified change records (not findings)', diffs['total']), ('Applied review records without matching verification evidence (not findings)', len(unverified)), ('Checks not completed (current recorded traces)', len(unfinished) if traces else None)]
     summary = f'<p>Scan: {_text(scan_id)} · Release: {_text(release_id)} · Generated: {_text(datetime.now(timezone.utc).isoformat())}</p>'
     summary += '<p>Original and current counts describe different points in time. Review tasks and change records are not added to finding totals. Not recorded means evidence is unavailable, not zero.</p>'
     summary += _table(['Measure', 'Count'], [[_text(k), _text(v)] for k, v in metrics])
-    summary += '<h2>Documents and follow-up checklists</h2>' + _table(['Document', 'Publication status', 'Published file', 'Follow-up'], index)
+    summary += '<h2>Documents and follow-up checklists</h2><p>Remediation categories describe recorded capability or state; future automatic fixes still require an accepted plan. Checklist entries, findings and change records use separate counts. Expand a category to see SCs by file.</p>' + _table(['Document', 'File type', 'Publication status', 'Original findings', 'Fixed and verified', 'Remediation category / SC', 'Incomplete checks', 'Published file', 'Follow-up'], index)
     assets.insert(0, {'name': 'scan-summary.html', 'content': _page('Remediation and publication summary', summary), 'content_type': 'text/html; charset=utf-8'})
     stream = io.StringIO(newline='')
     writer = csv.writer(stream)
-    writer.writerow(['File', 'Published URL', 'Criterion', 'Issue', 'Location', 'Severity', 'Recommended action', 'Owner', 'Status'])
+    writer.writerow(['File', 'Published URL', 'Criterion', 'Issue', 'Location', 'Remediation category', 'Recommended action', 'Owner', 'Status'])
     for row in rows:
         # Spreadsheet readers must not interpret user-controlled content as formulas.
         writer.writerow(["'" + str(v) if str(v).lstrip().startswith(('=', '+', '-', '@')) else str(v) for v in row])
