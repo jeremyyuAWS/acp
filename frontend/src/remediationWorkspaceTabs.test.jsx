@@ -1,241 +1,86 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createTestRoot, unmountAll } from './testRoots.js'
-globalThis.IS_REACT_ACT_ENVIRONMENT = true
-afterEach(async () => { await unmountAll(); vi.unstubAllGlobals() })
-import { prepareWorkflowEntry } from './workflowEntry.js'
 import RemediationWorkspaceTabs from './RemediationWorkspaceTabs.jsx'
-
-const snapshot = {
-  run_id: 'scan-1', batch_id: 'batch-1', state: 'running', terminal: false, total_documents: 10,
-  message: 'Remediation in progress', phases: [],
-  generated_at: new Date().toISOString(), progress: { lease_healthy: true },
-  documents: { completed: 2, processing: 3, waiting: 4, review: 1, failed: 0, skipped: 0 },
-  fixes: { applied: 4, verified: 4 }, delivery: { delivered: 0, pending: 0, awaiting_release: 2 },
-  integrity: { ok: true, affected: [] },
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+beforeEach(() => {
+  history.replaceState({}, '', '/?tab=remediate')
+  HTMLDialogElement.prototype.showModal = function () { this.open = true }
+  HTMLDialogElement.prototype.close = function () { this.open = false }
+})
+afterEach(async () => { await unmountAll(); vi.unstubAllGlobals() })
+const props = { runId: 'one', plan: createElement('input', { defaultValue: 'draft' }), live: 'live content', review: 'review content' }
+async function mount(extra = {}) {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(createElement(RemediationWorkspaceTabs, { ...props, ...extra })))
+  return { root, container }
 }
+it('has only Live and Review tabs and defaults to Live', async () => {
+  const { container } = await mount()
+  expect([...container.querySelectorAll('[role=tab]')].map(n => n.textContent)).toEqual(['Live', 'Review'])
+  expect(container.querySelector('#rem-panel-live').hidden).toBe(false)
+  expect(container.querySelector('dialog').open).toBe(false)
+})
+it('opens the plan as a modal, preserves edits on cancel, and retains the mode explanation', async () => {
+  const { container } = await mount()
+  const trigger = [...container.querySelectorAll('button')].find(n => n.textContent === 'Remediation plan')
+  trigger.focus()
+  await act(async () => trigger.click())
+  const dialog = container.querySelector('dialog')
+  expect(dialog.open).toBe(true)
+  dialog.querySelector('input').value = 'my choices'
+  expect(dialog.textContent).toContain('How modes work')
+  await act(async () => dialog.dispatchEvent(new Event('cancel', { bubbles: true, cancelable: true })))
+  expect(dialog.open).toBe(false)
+  expect(document.activeElement).toBe(trigger)
+  await act(async () => trigger.click())
+  expect(dialog.querySelector('input').value).toBe('my choices')
+})
+it.each(['plan', 'modes'])('opens legacy %s URLs in the plan dialog', async mode => {
+  history.replaceState({}, '', `/?tab=remediate&mode=${mode}`)
+  const { container } = await mount()
+  expect(container.querySelector('dialog').open).toBe(true)
+  expect(container.querySelectorAll('[role=tab]')).toHaveLength(2)
+})
+it('closes the plan and reveals Live on an accepted launch', async () => {
+  history.replaceState({}, '', '/?tab=remediate&mode=plan')
+  const { root, container } = await mount()
+  await act(async () => root.render(createElement(RemediationWorkspaceTabs, { ...props, workspaceRequest: { mode: 'live' } })))
+  expect(container.querySelector('dialog').open).toBe(false)
+  expect(container.querySelector('#rem-panel-live').hidden).toBe(false)
+})
+it('supports keyboard wraparound and browser history', async () => {
+  const { container } = await mount()
+  const live = container.querySelector('#rem-mode-live')
+  const review = container.querySelector('#rem-mode-review')
+  await act(async () => live.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })))
+  expect(document.activeElement).toBe(review)
+  expect(container.querySelector('#rem-panel-review').hidden).toBe(false)
+  await act(async () => review.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })))
+  expect(document.activeElement).toBe(live)
+  history.replaceState({}, '', '/?tab=remediate&mode=plan')
+  await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+  expect(container.querySelector('dialog').open).toBe(true)
+})
+it('does not display a review badge for another run', async () => {
+  const { container } = await mount({ reviewCount: 19, snapshot: { run_id: 'other', batch_id: 'batch' } })
+  expect(container.querySelector('#rem-mode-review').textContent).toBe('Review')
+})
 
-describe('the remediation workspace', () => {
-  beforeEach(() => {
-    sessionStorage.clear()
-    history.replaceState({}, '', '/?tab=remediate')
-  })
-
-  async function mount(props = {}) {
-    const { root, container: host } = createTestRoot()
-    await act(async () => root.render(createElement(RemediationWorkspaceTabs, {
-      runId: 'scan-1', reviewCount: 2, snapshot, connected: true,
-      plan: createElement('input', { 'data-testid': 'plan-state', defaultValue: 'saved selection' }),
-      review: createElement('div', { 'data-testid': 'review-state' }, 'review body'),
-      live: createElement('div', { 'data-testid': 'live-state' }, 'live body'),
-      ...props,
-    })))
-    return { root, host }
-  }
-
-  it('opens Plan on workflow entry even when an earlier visit left mode=live', async () => {
-    history.replaceState({}, '', '/?tab=remediate&mode=live')
-    const { host } = await mount()
-    expect(host.querySelector('#rem-panel-live').hidden).toBe(false)
-    await act(async () => prepareWorkflowEntry('remediate'))
-    expect(host.querySelector('#rem-panel-plan').hidden).toBe(false)
-    expect(new URLSearchParams(location.search).get('mode')).toBe('plan')
-    await act(async () => host.querySelector('#rem-mode-live').click())
-    expect(host.querySelector('#rem-panel-live').hidden).toBe(false)
-  })
-
-  it.each([null, { ...snapshot, batch_id: null }, { ...snapshot, run_id: 'another-scan' }])('shows no review badge before a plan has a matching run: %s', async (saved) => {
-      const { host } = await mount({ snapshot: saved, reviewCount: 119 })
-      expect(host.querySelector('#rem-mode-review').textContent).toBe('Review')
-  })
-
-  it('defaults to Plan even when decisions exist and keeps all panels mounted', async () => {
-    const { host } = await mount()
-    const tabs = host.querySelectorAll('[role="tab"]')
-    expect(tabs).toHaveLength(4)
-    expect(tabs[0].getAttribute('aria-selected')).toBe('true')
-    expect(Array.from(tabs, tab => tab.textContent.trim())).toEqual(['Plan', 'Live●', 'Review2', 'How modes work'])
-    expect(host.querySelector('#rem-panel-plan').hidden).toBe(false)
-    expect(host.querySelector('[data-testid="review-state"]')).toBeTruthy()
-    expect(host.querySelector('[data-testid="live-state"]')).toBeTruthy()
-    expect(host.querySelector('#rem-panel-live').hidden).toBe(true)
-    expect(host.querySelector('[data-testid="rem-run-card"]')).toBeNull()
-  })
-
-  it('keeps the mode explanation in its own full-width tab and preserves planning edits', async () => {
-    const { host } = await mount()
-    const plan = host.querySelector('#rem-panel-plan')
-    const help = host.querySelector('#rem-panel-modes')
-    expect(plan.querySelector('.rmd')).toBeNull()
-    expect(help.hidden).toBe(true)
-    const input = host.querySelector('[data-testid="plan-state"]')
-    input.value = 'my settings'
-    const tab = host.querySelector('#rem-mode-modes')
-    await act(async () => tab.click())
-    expect(tab.getAttribute('aria-selected')).toBe('true')
-    expect(help.getAttribute('aria-labelledby')).toBe(tab.id)
-    expect(help.hidden).toBe(false)
-    expect(plan.hidden).toBe(true)
-    expect(help.querySelectorAll('tbody tr')).toHaveLength(3)
-    expect(help.querySelectorAll('thead th[data-stage]')).toHaveLength(7)
-    await act(async () => tab.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })))
-    expect(plan.hidden).toBe(false)
-    expect(document.activeElement).toBe(host.querySelector('#rem-mode-plan'))
-    expect(input.value).toBe('my settings')
-  })
-
-  it('keeps review-only work inactive without changing its state or completed label', async () => {
-    const waiting = { ...snapshot, state: 'needs_attention', terminal: false, documents: { processing: 0, waiting: 0, review: 177 } }
-    const { host } = await mount({ snapshot: waiting, reviewCount: 177 })
-    expect(host.querySelector('.rem-mode-live-dot')).toBeNull()
-    expect(host.querySelector('#rem-mode-live').textContent).toBe('Live')
-    expect(host.querySelector('#rem-mode-review').textContent).toBe('Review177')
-    expect(waiting.state).toBe('needs_attention')
-    expect(waiting.terminal).toBe(false)
-  })
-
-  it('defaults to Plan when automated work is active and review is empty', async () => {
-    const { host } = await mount({ reviewCount: 0 })
-    expect(host.querySelector('#rem-mode-plan').getAttribute('aria-selected')).toBe('true')
-    expect(host.querySelector('[data-testid="live-state"]')).toBeTruthy()
-  })
-
-  it('uses the single app-level compact card instead of rendering a duplicate', async () => {
-    const { host } = await mount()
-    expect(host.querySelector('[data-testid="rem-run-card"]')).toBeNull()
-    await act(async () => host.querySelector('#rem-mode-live').click())
-    expect(host.querySelector('#rem-panel-live').hidden).toBe(false)
-    await act(async () => host.querySelector('#rem-mode-review').click())
-    expect(host.querySelector('#rem-panel-review').hidden).toBe(false)
-  })
-
-  it('switches with arrow keys without focusing the panel heading', async () => {
-    const { host } = await mount()
-    const reviewTab = host.querySelector('#rem-mode-review')
-    reviewTab.focus()
-    await act(async () => reviewTab.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'ArrowLeft', bubbles: true,
-    })))
-    expect(host.querySelector('#rem-mode-live').getAttribute('aria-selected')).toBe('true')
-    expect(document.activeElement).toBe(host.querySelector('#rem-mode-live'))
-    expect(new URLSearchParams(location.search).get('mode')).toBe('live')
-  })
-
-  it('defaults to Plan before any work and preserves its input across switches', async () => {
-    const { host } = await mount({ reviewCount: 0, snapshot: null })
-    expect(host.querySelector('#rem-mode-plan').getAttribute('aria-selected')).toBe('true')
-    const input = host.querySelector('[data-testid="plan-state"]')
-    input.value = 'changed selection'
-    await act(async () => host.querySelector('#rem-mode-live').click())
-    await act(async () => host.querySelector('#rem-mode-plan').click())
-    expect(host.querySelector('[data-testid="plan-state"]')).toBe(input)
-    expect(input.value).toBe('changed selection')
-  })
-
-  it.each(['plan', 'review', 'live', 'modes'])('preserves the %s deep link', async mode => {
-    history.replaceState({}, '', `/?tab=remediate&mode=${mode}`)
-    const { host } = await mount()
-    expect(host.querySelector(`#rem-panel-${mode}`).hidden).toBe(false)
-  })
-
-  it('moves to Live after an accepted launch, and allows returning to Plan', async () => {
-    history.replaceState({}, '', '/?tab=remediate&mode=plan')
-    const { root, host } = await mount()
-    await act(async () => root.render(createElement(RemediationWorkspaceTabs, {
-      runId: 'scan-1', workspaceRequest: { mode: 'live' }, snapshot,
-    })))
-    expect(host.querySelector('#rem-panel-live').hidden).toBe(false)
-    expect(new URLSearchParams(location.search).get('mode')).toBe('live')
-    await act(async () => host.querySelector('#rem-mode-plan').click())
-    expect(host.querySelector('#rem-panel-plan').hidden).toBe(false)
-  })
-
-  it.each(['plan', 'review'])('reveals %s from a header action', async mode => {
-    history.replaceState({}, '', '/?tab=remediate&mode=live')
-    const { root, host } = await mount()
-    await act(async () => root.render(createElement(RemediationWorkspaceTabs, {
-      runId: 'scan-1', workspaceRequest: { mode }, snapshot,
-    })))
-    expect(host.querySelector(`#rem-panel-${mode}`).hidden).toBe(false)
-  })
-
-  it('supports Home, End, wraparound, and browser history', async () => {
-    const { host } = await mount()
-    async function press(id, key) {
-      await act(async () => host.querySelector(id).dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })))
-    }
-    await press('#rem-mode-review', 'Home')
-    expect(document.activeElement.id).toBe('rem-mode-plan')
-    await press('#rem-mode-plan', 'ArrowLeft')
-    expect(document.activeElement.id).toBe('rem-mode-modes')
-    await press('#rem-mode-modes', 'ArrowRight')
-    expect(document.activeElement.id).toBe('rem-mode-plan')
-    await press('#rem-mode-plan', 'End')
-    expect(document.activeElement.id).toBe('rem-mode-modes')
-    history.replaceState({}, '', '/?tab=remediate&mode=plan')
-    await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
-    expect(host.querySelector('#rem-panel-plan').hidden).toBe(false)
-  })
-
-  function holdAnimationFrames() {
-    const callbacks = []
-    vi.stubGlobal('requestAnimationFrame', vi.fn(callback => { callbacks.push(callback); return callbacks.length }))
-    vi.stubGlobal('cancelAnimationFrame', vi.fn())
-    // Deliberately invoke saved callbacks even after cancellation, to exercise stale work.
-    return async () => act(async () => { callbacks.splice(0).forEach(callback => callback(0)) })
-  }
-
-  it('does not focus a replacement workspace from an unmounted request', async () => {
-    const flushFrames = holdAnimationFrames()
-    const first = await mount()
-    await act(async () => first.root.render(createElement(RemediationWorkspaceTabs, {
-      runId: 'scan-1', workspaceRequest: { mode: 'review' }, snapshot,
-    })))
-    await unmountAll()
-    const { host } = await mount()
-    const tab = host.querySelector('#rem-mode-plan')
-    await act(async () => tab.click())
-    tab.focus()
-    await flushFrames()
-    expect(document.activeElement).toBe(tab)
-    expect(cancelAnimationFrame).toHaveBeenCalled()
-  })
-
-  it.each(['keyboard', 'history', 'new run'])('cancels pending panel focus after %s navigation', async navigation => {
-    const flushFrames = holdAnimationFrames()
-    const { root, host } = await mount()
-    const workspaceRequest = { mode: 'review' }
-    await act(async () => root.render(createElement(RemediationWorkspaceTabs, { runId: 'scan-1', workspaceRequest, snapshot })))
-    const tab = host.querySelector('#rem-mode-plan')
-    if (navigation === 'keyboard') {
-      await act(async () => host.querySelector('#rem-mode-review').dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })))
-    } else if (navigation === 'history') {
-      history.replaceState({}, '', '/?tab=remediate&mode=plan')
-      await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
-      tab.focus()
-    } else {
-      history.replaceState({}, '', '/?tab=remediate&mode=plan')
-      await act(async () => root.render(createElement(RemediationWorkspaceTabs, { runId: 'scan-2', workspaceRequest, snapshot })))
-      tab.focus()
-    }
-    await flushFrames()
-    expect(document.activeElement).toBe(tab)
-    expect(cancelAnimationFrame).toHaveBeenCalled()
-  })
-
-  it('focuses only the latest requested panel', async () => {
-    const flushFrames = holdAnimationFrames()
-    const { root, host } = await mount()
-    for (const mode of ['live', 'plan']) await act(async () => root.render(createElement(RemediationWorkspaceTabs, {
-      runId: 'scan-1', workspaceRequest: { mode }, snapshot,
-    })))
-    await flushFrames()
-    expect(document.activeElement).toBe(host.querySelector('#rem-panel-plan'))
-  })
-
-  it('does not let a previous session choice override the default Plan tab', async () => {
-    sessionStorage.setItem('acp-remediation-mode-scan-1', 'live')
-    const { host } = await mount()
-    expect(host.querySelector('#rem-mode-plan').getAttribute('aria-selected')).toBe('true')
-  })
+it('returns to Review after closing the plan without starting', async () => {
+  history.replaceState({}, '', '/?tab=remediate&mode=review')
+  const { container } = await mount()
+  await act(async () => [...container.querySelectorAll('button')].find(n => n.textContent === 'Remediation plan').click())
+  await act(async () => container.querySelector('button[aria-label="Close remediation plan"]').click())
+  expect(container.querySelector('#rem-panel-review').hidden).toBe(false)
+})
+it('does not let a delayed header focus move focus after subsequent keyboard navigation', async () => {
+  let pending
+  vi.stubGlobal('requestAnimationFrame', vi.fn(fn => { pending = fn; return 1 }))
+  vi.stubGlobal('cancelAnimationFrame', vi.fn())
+  const { root, container } = await mount()
+  await act(async () => root.render(createElement(RemediationWorkspaceTabs, { ...props, workspaceRequest: { mode: 'review' } })))
+  await act(async () => container.querySelector('#rem-mode-review').dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })))
+  await act(async () => pending())
+  expect(document.activeElement).toBe(container.querySelector('#rem-mode-live'))
 })

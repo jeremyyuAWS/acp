@@ -80,11 +80,11 @@ describe('the board core is mounted, not merely shipped', () => {
     }
   })
 
-  it('wires the deterministic batch to the durable Remediate run and live busy state', () => {
+  it('requires the plan before starting from the work breakdown', () => {
     const s = rem()
     const m = s.match(/<RemediationWork[^/]*?\/>/s)
     expect(m, 'RemediationWork mount found').toBeTruthy()
-    expect(m[0]).toMatch(/onApplyAutomatic=\{readOnly \? undefined : runServerRemediation\}/)
+    expect(m[0]).toMatch(/onOpenPlan=\{readOnly \? undefined : openRemediationPlan\}/)
     expect(m[0]).toMatch(/applying=\{remBusy\}/)
     // RemediationWork supplies filenames while the older page controls supply file records.
     // Both must enter the same endpoint without producing an undefined scope.

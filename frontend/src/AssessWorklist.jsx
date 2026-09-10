@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { REMEDIATION_CATEGORIES, remediationCategory } from './remediationCategories.js'
 import { documentRows, SEVERITIES, SEVERITY_LABEL } from './assessMetrics.js'
 
 // The file worklist — level 2 of the results screen, directly under the summary.
@@ -80,7 +81,7 @@ const numCell = { fontVariantNumeric: 'tabular-nums', fontWeight: 700, textAlign
 const subline = { fontSize: 11, marginTop: 2, lineHeight: 1.45 }
 
 /** One row's severity partition. It sums to the Findings cell beside it, on screen, per row. */
-function Severity({ row }) {
+export function RetiredSeverity({ row }) {
   if (!row.totalFindings) return <span className="muted">None</span>
   return (
     <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: '3px 10px' }}>
@@ -117,16 +118,16 @@ function Severity({ row }) {
  *                    component offers selection ONLY over the deterministic fixes; it never
  *                    lets a bulk action silently sweep up an AI draft awaiting approval.
  */
-export default function AssessWorklist({ files, cap, assessment, criteria, level = 'AA', onOpenFile, onBulkFix }) {
+export default function AssessWorklist({ files, cap, assessment, criteria, level = 'AA', onOpenFile, onBulkFix, renderProgress, initialFilter = null, openLabel, changeRows = [] }) {
   const rows = documentRows(files, { cap, assessment, criteria, level })
   // null means "no filter chosen yet", not "all". Resolved below against the rows that actually
   // exist, so the default follows the data as it loads rather than freezing whatever was true on
   // the first render.
-  const [chosen, setChosen] = useState(null)
+  const [chosen, setChosen] = useState(initialFilter)
   // A19 severity filter and A24 auto-fixable toggle. Both compose ON TOP of the state filter
   // (ANDed together), and both keep their counts visible whether or not they are selected —
   // narrowing this list must never hide how much it narrowed, the same rule the state filter obeys.
-  const [sevChosen, setSevChosen] = useState(null)
+  const [categoryChosen, setCategoryChosen] = useState(null)
   const [autoOnly, setAutoOnly] = useState(false)
   // A11 progressive disclosure. Independent of the filters above — it narrows how much of the
   // FILTERED set is currently rendered, not which rows match. Re-derived from `visible` on every
@@ -146,21 +147,13 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
   const active = counts[chosen] ? chosen : (counts.attention ? 'attention' : 'all')
   const stateScoped = rows.filter(FILTERS.find((f) => f.key === active).match)
 
-  // The severity chips and the auto-fixable toggle count over the STATE-SCOPED rows — the exact
-  // population the two controls can narrow — so a chip never advertises findings the state filter
-  // has already put out of view. Counts are findings, not documents: "Critical 6" is six findings.
-  const sevCounts = {}
-  let sevAll = 0
-  for (const s of SEVERITIES) { sevCounts[s] = sevTotal(stateScoped, s); sevAll += sevCounts[s] }
   const autoFindings = total(stateScoped, 'autoFixAvailable')
+  const scopedChanges = changeRows.filter(change => stateScoped.some(row => row.file === change.file))
   const scopedFindings = total(stateScoped, 'totalFindings')
   const docsWithAuto = stateScoped.filter((r) => (r.autoFixAvailable || 0) > 0).length
 
-  // A severity with no findings in scope cannot be chosen; if the state filter changes out from
-  // under a selected severity, fall back to all rather than showing an empty list with no cause.
-  const sevActive = sevChosen && sevCounts[sevChosen] > 0 ? sevChosen : null
   let visible = stateScoped
-  if (sevActive) visible = visible.filter((r) => (r.bySeverity?.[sevActive] || 0) > 0)
+  if (categoryChosen) visible = visible.filter(row => row.findings?.some(finding => remediationCategory(finding) === categoryChosen) || changeRows.some(change => change.file === row.file && change.category === categoryChosen))
   if (autoOnly) visible = visible.filter((r) => (r.autoFixAvailable || 0) > 0)
   const filtered = visible.length < rows.length
   // The page actually on screen. `hidden` rows are still counted in the totals below — this only
@@ -238,30 +231,17 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
       {/* A19 severity filter + A24 auto-fixable toggle. Shown only when there is finding work in
           scope to narrow — a run with nothing to fix has nothing for either control to do. Every
           chip keeps its count whether selected or not, so a narrowed view still says what it hid. */}
-      {scopedFindings > 0 && (
+      {(scopedFindings > 0 || scopedChanges.length > 0) && (
         <div className="worklist-refine" style={{ display: 'flex', alignItems: 'center', gap: 16,
                                                   flexWrap: 'wrap', marginTop: 10 }}>
-          {sevAll > 0 && (
-            <div role="group" aria-label="Filter documents by finding severity"
-                 style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-              <span className="muted" style={{ fontSize: 11.5 }}>Severity</span>
-              <button type="button" className={!sevActive ? 'small' : 'ghost small'}
-                      aria-pressed={!sevActive} onClick={() => setSevChosen(null)}>
-                All {sevAll}
-              </button>
-              {SEVERITIES.map((s) => (
-                <button key={s} type="button"
-                        className={sevActive === s ? 'small' : 'ghost small'}
-                        aria-pressed={sevActive === s}
-                        disabled={sevCounts[s] === 0}
-                        onClick={() => setSevChosen(sevActive === s ? null : s)}>
-                  <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 2, marginRight: 5,
-                                                    background: SEV_COLOR[s], display: 'inline-block' }} />
-                  {cap1(SEVERITY_LABEL[s])} {sevCounts[s]}
-                </button>
-              ))}
-            </div>
-          )}
+          <div role="group" aria-label="Filter documents by remediation category" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button type="button" aria-pressed={!categoryChosen} onClick={() => setCategoryChosen(null)}>All remediation categories</button>
+            {REMEDIATION_CATEGORIES.map(([key, label]) => {
+              const count = stateScoped.reduce((n, row) => n + (row.findings || []).filter(finding => remediationCategory(finding) === key).length, 0)
+              const changes = scopedChanges.filter(change => change.category === key).length
+              return <button key={key} type="button" disabled={!count && !changes} aria-pressed={categoryChosen === key} onClick={() => setCategoryChosen(key)}>{label} {count}{changes > 0 && ` findings · ${changes} change records`}</button>
+            })}
+          </div>
           <label className="worklist-autoonly" style={{ display: 'inline-flex', alignItems: 'center',
                                                         gap: 7, fontSize: 12.5, cursor: 'pointer' }}>
             <input type="checkbox" checked={autoOnly}
@@ -280,9 +260,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
       {/* The ordering, said out loud. A list whose order carries a judgement and does not name it
           is one people re-sort by hand because they assume it is arbitrary. */}
       <p className="muted" style={{ fontSize: 12, margin: '8px 0 0', lineHeight: 1.6 }}>
-        Ordered by what needs a person. A finding ACP fixes deterministically is one button in
-        remediation, so it does not move a document up this list — it is still shown, still counted,
-        and still on the same row.
+        Grouped by remediation capability. Open a document’s categories to see its success criteria. The accepted plan determines what can run without approval.
       </p>
 
       {/* A28 bulk select + bulk action. Only offers the deterministic fixes in the selection — see
@@ -317,7 +295,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
             </th>
             <th scope="col" style={{ width: '36%' }}>Document</th>
             <th scope="col">Findings</th>
-            <th scope="col" style={{ width: 190 }}>Severity</th>
+            <th scope="col" style={{ width: 190 }}>Remediation category</th>
             <th scope="col">Auto-fix</th>
             <th scope="col" style={{ width: 130 }}>Needs a person</th>
             <th scope="col"><span className="vh">Action</span></th>
@@ -364,36 +342,28 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
                   <td className="col-findings" style={numCell}>
                     <span className="n">{row.totalFindings}</span>
                   </td>
-                  <td className="col-severity"><Severity row={row} /></td>
+                  <td className="col-category">
+                    {!row.findings.length && !renderProgress && <span>No remaining findings</span>}
+                    {renderProgress?.(row)}
+                    {REMEDIATION_CATEGORIES.map(([key, label]) => {
+                      const items = row.findings.filter(finding => remediationCategory(finding) === key)
+                      return items.length > 0 && <details key={key}><summary>{label} · {items.length}</summary><ul>
+                        {items.map((finding, index) => <li key={index}>SC {finding.sc} — {finding.detail || 'Finding recorded'}<br /><small>Severity: {finding.severity}</small></li>)}
+                      </ul></details>
+                    })}
+                  </td>
                   <td className="col-auto"
                       style={{ ...numCell, color: row.autoFixAvailable ? '#2F7D32' : undefined }}>
                     <span className="n">{row.autoFixAvailable}</span>
                   </td>
                   <td className="col-person" style={numCell}>
                     <span className="n">{row.humanReviewRequired}</span>
-                    {/* The mix the ordering actually keys on, in the same cell as the count it
-                        sums to. Two documents with "3" here are not the same work when one of
-                        them is three criticals. */}
-                    {row.humanReviewRequired > 0 && (
-                      <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: '2px 8px',
-                                     marginLeft: 8, fontWeight: 400 }}>
-                        {SEVERITIES.filter((s) => row.bySeverityHuman[s]).map((s) => (
-                          <span key={s} style={{ display: 'inline-flex', alignItems: 'center',
-                                                 gap: 3, fontSize: 11.5 }}>
-                            <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 2,
-                                                              background: SEV_COLOR[s],
-                                                              display: 'inline-block' }} />
-                            {row.bySeverityHuman[s]}
-                            <span className="vh"> {SEVERITY_LABEL[s]} needing a person</span>
-                          </span>
-                        ))}
-                      </span>
-                    )}
+
                   </td>
                   <td className="col-action" style={{ textAlign: 'right' }}>
                     {onOpenFile && (
                       <button className="ghost small" type="button" onClick={() => onOpenFile(row)}>
-                        {row.totalFindings ? 'Open findings' : 'Open document'} →
+                        {openLabel || (row.totalFindings ? 'Open findings' : 'Open document')} →
                       </button>
                     )}
                   </td>

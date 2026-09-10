@@ -41,7 +41,7 @@ it('explains 119 review items as grouped findings and links to the same Review t
   await act(async () => tile(container).click())
   expect(reviewTab(container).getAttribute('aria-selected')).toBe('true')
   expect(container.querySelector('#rem-panel-review').hidden).toBe(false)
-  expect(container.querySelector('#rem-panel-plan').hidden).toBe(true)
+  expect(container.querySelector('dialog').open).toBe(false)
 })
 
 it('updates the tile and tab together after a decision; zero is a queue state, not a completion claim', async () => {

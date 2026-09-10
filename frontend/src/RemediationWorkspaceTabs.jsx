@@ -1,19 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import RemediationModeDiagram from './RemediationModeDiagram.jsx'
+import RemediationPlanDialog from './RemediationPlanDialog.jsx'
 import useConfirmedRemediationActivity from './useConfirmedRemediationActivity.js'
-const MODES = ['plan', 'live', 'review', 'modes']
+const MODES = ['live', 'review']
 
 function modeFromLocation() {
   try {
     const mode = new URLSearchParams(window.location.search).get('mode')
-    return MODES.includes(mode) ? mode : null
+    return ['plan', 'modes', ...MODES].includes(mode) ? mode : null
   } catch { return null }
 }
 
 export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snapshot = null,
   plan, review, live, workspaceRequest = null }) {
-  // Open on Plan unless navigation explicitly names another tab. Background work and prior
-  // session choices must not skip the planning screen.
+  // Live is the default workspace. Legacy Plan links open the required planning dialog.
   const [chosen, setChosen] = useState(() => modeFromLocation())
   const tabs = useRef([])
   const panels = useRef({})
@@ -24,7 +23,9 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
   }
   const lastWorkspaceRequest = useRef(workspaceRequest)
   const activeWork = useConfirmedRemediationActivity(snapshot)
-  const mode = chosen || 'plan'
+  const lastPanel = useRef('live')
+  if (MODES.includes(chosen)) lastPanel.current = chosen
+  const mode = MODES.includes(chosen) ? chosen : lastPanel.current
 
   useEffect(() => {
     cancelPanelFocus()
@@ -64,7 +65,7 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
   useEffect(() => {
     if (lastWorkspaceRequest.current === workspaceRequest) return
     lastWorkspaceRequest.current = workspaceRequest
-    if (MODES.includes(workspaceRequest?.mode)) select(workspaceRequest.mode, { focusPanel: true })
+    if (['plan', ...MODES].includes(workspaceRequest?.mode)) select(workspaceRequest.mode, { focusPanel: true })
   }, [workspaceRequest])
 
   const onKeyDown = (event, index) => {
@@ -83,23 +84,21 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
         id={`rem-mode-${value}`} aria-controls={`rem-panel-${value}`} aria-selected={mode === value}
         tabIndex={mode === value ? 0 : -1} onKeyDown={(event) => onKeyDown(event, index)}
         onClick={() => select(value)}>
-        {value === 'plan' ? 'Plan' : value === 'live' ? 'Live' : value === 'review' ? 'Review' : 'How modes work'}
+        {value === 'live' ? 'Live' : 'Review'}
         {value === 'review' && snapshot?.batch_id && (snapshot.scan_id || snapshot.run_id) === runId && <span>{reviewCount.toLocaleString()}</span>}
         {value === 'live' && activeWork && <span className="rem-mode-live-dot" aria-label="active">●</span>}
       </button>)}
     </div>
-    <div ref={node => { panels.current.plan = node }} id="rem-panel-plan" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-plan"
-      hidden={mode !== 'plan'}>{plan}</div>
+    <button type="button" className="ghost" onClick={() => select('plan')}>Remediation plan</button>
+    <RemediationPlanDialog open={chosen === 'plan' || chosen === 'modes'} onClose={() => select(mode)}>
+      {plan}
+    </RemediationPlanDialog>
     <div ref={node => { panels.current.review = node }} id="rem-panel-review" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-review"
       hidden={mode !== 'review'}>{review}</div>
     <div ref={node => { panels.current.live = node }} id="rem-panel-live" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-live"
       hidden={mode !== 'live'}>
       <h2 className="sr-only">Live Processing</h2>
       {live}
-    </div>
-    <div ref={node => { panels.current.modes = node }} id="rem-panel-modes" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-modes"
-      hidden={mode !== 'modes'}>
-      <RemediationModeDiagram />
     </div>
   </>
 }

@@ -60,7 +60,7 @@ export function RetiredRemediationPlanChoices({ policy, providers, disabled, onC
 }
 
 // The previous detailed panel is retained above for restoration, but is no longer mounted.
-export default function RemediationPlanChoices({ policy, disabled, onChange, generationChainOptions, budgetSupported = false, reviewSupported = false, automaticReviewSupported = false, automaticReviewReason = '', reviewAdministratorFloor = null, reviewEligibleFamilies = [], standingApprovalSupported = false, standingApprovalReason = '' }) {
+export default function RemediationPlanChoices({ answers, policy, disabled, onChange, generationChainOptions, budgetSupported = false, reviewSupported = false, automaticReviewSupported = false, automaticReviewReason = '', reviewAdministratorFloor = null, reviewEligibleFamilies = [], standingApprovalSupported = false, standingApprovalReason = '' }) {
   const id = useId()
   const localOnly = policy.ai_zone === 'local'
   const configured = localOnly ? [] : generationSteps(policy, generationChainOptions)
@@ -71,15 +71,15 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, gen
       <legend>1. Which changes may ACP apply?</legend>
       <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
         <div className="remediation-plan-option">
-          <label className={policy.rule_based === 0 ? 'is-selected' : ''}>
-            <input type="radio" name={`${id}-automation`} checked={policy.rule_based === 0} onChange={() => onChange('rule_based', 0)} />
+          <label className={(answers === undefined || !!answers.rule_based) && policy.rule_based === 0 ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-automation`} checked={(answers === undefined || !!answers.rule_based) && policy.rule_based === 0} onChange={() => onChange('rule_based', 0)} />
             <span><strong>Review every change</strong><span>Approve proposed changes before they are applied.</span></span>
           </label>
           <RemediationOptionHelp label="review before applying">You approve every proposed fix before application. AI is a separate choice below.</RemediationOptionHelp>
         </div>
         <div className="remediation-plan-option">
-          <label className={policy.rule_based === 2 ? 'is-selected' : ''}>
-            <input type="radio" name={`${id}-automation`} checked={policy.rule_based === 2} onChange={() => onChange('rule_based', 2)} />
+          <label className={(answers === undefined || !!answers.rule_based) && policy.rule_based === 2 ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-automation`} checked={(answers === undefined || !!answers.rule_based) && policy.rule_based === 2} onChange={() => onChange('rule_based', 2)} />
             <span><strong>Apply rule-based fixes automatically</strong><span>Apply supported fixes, verify the results, and review the rest.</span></span>
           </label>
           <RemediationOptionHelp label="apply and verify automatically">ACP applies supported fixes using set rules and checks the result. Your AI approval choice below applies to eligible suggestions. Issues that need a person’s judgment go to review.</RemediationOptionHelp>
@@ -90,22 +90,22 @@ export default function RemediationPlanChoices({ policy, disabled, onChange, gen
       <legend>2. Which tools may ACP use?</legend>
       <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
         <div className="remediation-plan-option">
-          <label className={policy.ai === 0 ? 'is-selected' : ''}>
-            <input type="radio" name={`${id}-ai`} checked={policy.ai === 0} onChange={() => onChange('ai', 0)} />
+          <label className={(answers === undefined || !!answers.tools) && policy.ai === 0 ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-ai`} checked={(answers === undefined || !!answers.tools) && policy.ai === 0} onChange={() => onChange('ai', 0)} />
             <span><strong>Rules only</strong><span>Use rules without generating AI suggestions.</span></span>
           </label>
           <RemediationOptionHelp label="rules only">Use only fixes based on set rules. ACP will not ask AI to write new suggestions for this run. Your approval choice above still applies.</RemediationOptionHelp>
         </div>
         <div className="remediation-plan-option">
-          <label className={policy.ai > 0 && localOnly ? 'is-selected' : ''}>
-            <input type="radio" name={`${id}-ai`} disabled={!budgetSupported} checked={policy.ai > 0 && localOnly} onChange={() => onChange('ai_mode', 'local')} />
+          <label className={(answers === undefined || !!answers.tools) && policy.ai > 0 && localOnly ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-ai`} disabled={!budgetSupported} checked={(answers === undefined || !!answers.tools) && policy.ai > 0 && localOnly} onChange={() => onChange('ai_mode', 'local')} />
             <span><strong>Rules + Ollama · Local only</strong><span>Use deterministic fixes and self-hosted AI. No cloud AI usage charges.</span></span>
           </label>
           <RemediationOptionHelp label="local-only Ollama">AI uses the configured self-hosted Ollama service, not necessarily your computer. No cloud model or cloud fallback is allowed. If Ollama cannot produce a supported draft, the issue stays for human review. Hosting costs are separate.</RemediationOptionHelp>
         </div>
         <div className="remediation-plan-option">
-          <label className={policy.ai > 0 && !localOnly ? 'is-selected' : ''}>
-            <input type="radio" name={`${id}-ai`} checked={policy.ai > 0 && !localOnly} onChange={() => onChange('ai_mode', 'any')} />
+          <label className={(answers === undefined || !!answers.tools) && policy.ai > 0 && !localOnly ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-ai`} checked={(answers === undefined || !!answers.tools) && policy.ai > 0 && !localOnly} onChange={() => onChange('ai_mode', 'any')} />
             <span><strong>Rules + Cloud AI</strong><span>Use configured cloud models and fallbacks within your spending limit.</span></span>
           </label>
           <RemediationOptionHelp label="AI waterfall">Cloud models draft and review supported suggestions. Later models run after an empty or incomplete suggestion. Your approval choice and spending limit apply throughout the run.</RemediationOptionHelp>

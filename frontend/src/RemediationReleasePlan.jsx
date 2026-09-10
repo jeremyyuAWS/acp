@@ -4,7 +4,7 @@ import { releasePlanKey } from './releasePlanIntent.js'
 import InfoTip from './InfoTip.jsx'
 import './remediation-auto-release.css'
 
-export default function RemediationReleasePlan({ scanId, files, intent, onChange, disabled = false, read = getAutomaticRelease }) {
+export default function RemediationReleasePlan({ scanId, files, intent, onChange, disabled = false, read = getAutomaticRelease, requireChoice = false, onAnswered }) {
   const key = releasePlanKey(scanId, files)
   const [preview, setPreview] = useState(null)
   const [error, setError] = useState('')
@@ -15,19 +15,20 @@ export default function RemediationReleasePlan({ scanId, files, intent, onChange
   useEffect(() => {
     let live = true
     const controller = new AbortController()
-    setPreview(null); setError(''); onChange(null)
+    setPreview(null); setError(''); onChange(null); onAnswered?.(false)
     if (!scanId || !files.length) return () => { live = false; controller.abort() }
     read(scanId, files, { signal: controller.signal }).then(result => {
       if (!live) return
       const planning = { key, ...(result?.planning || { available: false, reason: 'Automatic publishing requires a connected destination.' }) }
       setPreview(planning)
-      if (planning.available && !choice.current.review) onChange({ key, scanId, files: [...planning.files], destination: { ...planning.destination }, source_revision: planning.source_revision, allow_remaining_issues: true, include_reports: true })
+      if (!requireChoice && planning.available && !choice.current.review) onChange({ key, scanId, files: [...planning.files], destination: { ...planning.destination }, source_revision: planning.source_revision, allow_remaining_issues: true, include_reports: true })
     }).catch(() => { if (live) setError('The release destination could not be checked.') })
     return () => { live = false; controller.abort() }
   }, [key, reload, read])
   const ready = preview?.key === key && preview.available === true
   const checked = ready && intent?.key === key
   const choose = review => {
+    onAnswered?.(true)
     choice.current = { key, review }
     setReviewKey(review ? key : null)
     onChange(review ? null : { key, scanId, files: [...preview.files], destination: { ...preview.destination }, source_revision: preview.source_revision, allow_remaining_issues: true, include_reports: true })

@@ -533,6 +533,7 @@ describe('AssessSummary — completed run with findings', () => {
         onRunDetails: () => {},
       }))
     })
+    await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent.includes('AI suggestion needed')).click())
     const text = container.textContent
     // CRITICAL findings must appear as a text label, not only as a colour swatch
     expect(text).toMatch(/critical|CRITICAL/i)

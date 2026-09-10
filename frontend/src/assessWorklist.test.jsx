@@ -134,31 +134,29 @@ describe('one row per document, in the order the module gave', () => {
 })
 
 describe('the severity partition sums to the row it sits in', () => {
-  it('names each severity and adds up to that row’s finding count', async () => {
+  it('replaces severity with remediation category counts and SC details', async () => {
     const c = await mount({ files: ESTATE })
     const row = named(c, 'handbook.docx')
-    // The colour is shorthand for sighted readers; the word is always in the DOM, so four dots
-    // never reach a screen reader as "1 1 1 0".
-    const sev = row.querySelector('.col-severity').textContent
-    for (const [n, s] of [[1, 'critical'], [1, 'serious'], [1, 'moderate'], [0, 'minor']]) {
-      expect(sev, `${s} missing from the row`).toMatch(new RegExp(`${n} ${s}`))
-    }
-    // 1 + 1 + 1 + 0 = 3, which is the Findings cell in the same row.
+    const category = row.querySelector('.col-category')
+    expect(category.textContent).toContain('Fully automated · 2')
+    expect(category.textContent).toContain('AI suggestion needed · 1')
+    expect(category.textContent).toContain('SC 1.1.1')
+    expect(category.textContent).toContain('Severity: CRITICAL')
     expect(cell(row, 'findings')).toBe('3')
+    expect(c.querySelector('th').parentElement.textContent).not.toContain('Severity')
   })
 
   it('breaks down the work needing a person, in the cell it sums to', async () => {
     const c = await mount({ files: ESTATE })
-    // Two documents showing "3" here are not the same afternoon when one of them is criticals.
-    const person = named(c, 'handbook.docx').querySelector('.col-person')
-    expect(person.textContent).toMatch(/1 critical needing a person/)
-    expect(cell(named(c, 'handbook.docx'), 'person')).toBe('1')
+    const row = named(c, 'handbook.docx')
+    expect(row.querySelector('.col-category').textContent).toContain('AI suggestion needed · 1')
+    expect(cell(row, 'person')).toBe('1')
   })
 
   it('says None rather than four zeros where there is nothing to partition', async () => {
     const c = await mount({ files: ESTATE })
     await showAll(c)
-    expect(named(c, 'clean.pptx').textContent).toMatch(/None/)
+    expect(named(c, 'clean.pptx').textContent).toMatch(/No remaining findings/)
   })
 })
 
@@ -182,7 +180,7 @@ describe('the order is what needs a person, not what looks worst', () => {
     const row = named(c, 'machine.pptx')
     expect(cell(row, 'findings')).toBe('2')
     expect(cell(row, 'auto')).toBe('2')
-    expect(row.querySelector('.col-severity').textContent).toMatch(/2 critical/)
+    expect(row.querySelector('.col-category').textContent).toMatch(/Fully automated · 2/)
     expect(c.textContent).toMatch(/3 findings · 2 auto-fix · 1 needing a person/)
   })
 
@@ -195,7 +193,7 @@ describe('the order is what needs a person, not what looks worst', () => {
 
   it('names the ordering rather than leaving it to be inferred', async () => {
     const c = await mount({ files: ESTATE })
-    expect(c.textContent).toMatch(/Ordered by what needs a person/)
+    expect(c.textContent).toMatch(/Grouped by remediation capability/)
   })
 })
 
@@ -296,26 +294,24 @@ describe('A19 severity filter and A24 auto-fixable toggle — narrow, never hide
   const refineBtn = (c, re) => [...c.querySelectorAll('.worklist-refine button')].find((b) => re.test(b.textContent))
   const autoInput = (c) => c.querySelector('.worklist-autoonly input')
 
-  it('counts findings by severity and keeps every count visible, selected or not', async () => {
+  it('counts findings by remediation category without dropping zero categories', async () => {
     const c = await mount({ files: ESTATE })
-    // 1 critical + 2 serious + 2 moderate + 1 minor = 6, the findings held by the 3 attention docs.
-    expect(refineBtn(c, /^All /).textContent).toMatch(/All 6/)
-    expect(refineBtn(c, /Critical/).textContent).toMatch(/Critical 1/)
-    expect(refineBtn(c, /Serious/).textContent).toMatch(/Serious 2/)
-    expect(refineBtn(c, /Moderate/).textContent).toMatch(/Moderate 2/)
-    expect(refineBtn(c, /Minor/).textContent).toMatch(/Minor 1/)
+    expect(refineBtn(c, /Fully automated/).textContent).toContain('3')
+    expect(refineBtn(c, /AI suggestion needed/).textContent).toContain('3')
+    expect(refineBtn(c, /Manual fix required/).textContent).toContain('0')
+    expect(refineBtn(c, /Blocked/).disabled).toBe(true)
   })
 
-  it('narrows to the documents holding a finding of the chosen severity', async () => {
+  it('narrows to the documents holding a finding of the chosen remediation category', async () => {
     const c = await mount({ files: ESTATE })
-    await act(async () => { refineBtn(c, /Serious/).click() })
+    await act(async () => { refineBtn(c, /AI suggestion needed/).click() })
     // handbook (serious 1.3.1) and board (serious 1.1.1) hold one; deck.pptx (a lone moderate) does not.
     expect(order(c)).toEqual(['handbook.docx', 'board.pdf'])
   })
 
-  it('still prints the estate totals when a severity is chosen', async () => {
+  it('still prints the estate totals when a remediation category is chosen', async () => {
     const c = await mount({ files: ESTATE })
-    await act(async () => { refineBtn(c, /Serious/).click() })
+    await act(async () => { refineBtn(c, /AI suggestion needed/).click() })
     expect(c.textContent).toMatch(/Showing 2 of 6 documents/)
     expect(c.textContent, 'a severity-filtered view lost the estate totals')
       .toMatch(/Across all 6: 6 findings · 3 auto-fix · 3 needing a person/)
@@ -332,22 +328,22 @@ describe('A19 severity filter and A24 auto-fixable toggle — narrow, never hide
     expect(c.textContent).toMatch(/Across all 6:/)
   })
 
-  it('ANDs severity and auto-fixable when both are set', async () => {
+  it('ANDs remediation category and auto-fixable when both are set', async () => {
     const c = await mount({ files: ESTATE })
-    await act(async () => { refineBtn(c, /Serious/).click() })
+    await act(async () => { refineBtn(c, /AI suggestion needed/).click() })
     await act(async () => { autoInput(c).click() })
     // serious AND auto-fixable: handbook keeps its place; board is serious-but-manual, deck is
     // auto-but-not-serious. Only the intersection survives.
     expect(order(c)).toEqual(['handbook.docx'])
   })
 
-  it('offers an empty severity but does not let it be chosen', async () => {
+  it('offers an empty remediation category but does not let it be chosen', async () => {
     const c = await mount({ files: [doc('a.pptx', [finding('1.3.1', 'CRITICAL')])] })
     // One critical finding and nothing else — the other three severities are shown at zero, so the
     // reader sees they were considered, and disabled, so the list cannot be filtered to nothing.
-    expect(refineBtn(c, /Critical/).disabled).toBe(false)
-    expect(refineBtn(c, /Minor/).disabled).toBe(true)
-    expect(refineBtn(c, /Minor/).textContent).toMatch(/Minor 0/)
+    expect(refineBtn(c, /Fully automated/).disabled).toBe(false)
+    expect(refineBtn(c, /AI suggestion needed/).disabled).toBe(true)
+    expect(refineBtn(c, /AI suggestion needed/).textContent).toMatch(/AI suggestion needed 0/)
   })
 
   it('hides both controls when the state in view has no finding work to narrow', async () => {
@@ -542,10 +538,11 @@ describe('what the component is not allowed to derive itself', () => {
     expect(src, 'the component counts files itself').not.toMatch(/files\.(filter|length|reduce|map)/)
   })
 
-  it('does not reach inside a row’s findings', () => {
-    // The per-criterion grouping is the next screen down and has its own module function. Counting
-    // findings here is how the worklist and the file view start disagreeing about one document.
-    expect(src, 'the worklist walks the findings array').not.toMatch(/\.findings\b/)
+  it('uses scoped findings for category and SC disclosure', async () => {
+    // Category/SC disclosure uses already-scoped findings from documentRows.
+    expect(src).toContain('remediationCategory(finding)')
+    expect(src).not.toMatch(/\.issues\b/)
+    expect(src).toContain('SC {finding.sc}')
   })
 
   it('does not impose a second ordering on the list', () => {

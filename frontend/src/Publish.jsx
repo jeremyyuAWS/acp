@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import RemediationLiveDocuments from './RemediationLiveDocuments.jsx'
 import ScopeBanner from './ScopeBanner.jsx'
 import ReleaseQuickActions from './ReleaseQuickActions.jsx'
 import ReleaseCopyDestination from './ReleaseCopyDestination.jsx'
@@ -27,7 +28,7 @@ import { hasCorrectedCopy, hasSavedCorrectedCopy, deliveryIsCurrent, releaseRead
 // publish() persists via POST /scans/{sid}/publish.
 // readOnly: time-travel replay — publishing must act on the live estate, not a snapshot.
 export default function Publish({ run, files = [], certified = [], readOnly = false, onPublish, me,
-  triage = {} }) {
+  triage = {}, cap, assessment }) {
   // Release operates on the exact document cohort chosen in Remediate. The banner below explains
   // the restriction; this filter enforces it for selection, delivery, packaging and set status.
   const releaseFiles = documentsInSelection(files, triage)
@@ -766,6 +767,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
         </details>
       </section>
+      <RemediationLiveDocuments key={run?.id} scanId={run?.id} files={releaseFiles} cap={cap} assessment={assessment} refreshKey={publishedCount} />
       <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
         folderName={releaseFolderName} readOnly={readOnly} publishing={publishing} destinationLocked={destinationLocked} destinationPending={destinationPending || (settingsPending && !destinationLocked)}
         announcement={releaseError ? 'Publishing needs attention. See the message below.' : releaseAnnouncement}

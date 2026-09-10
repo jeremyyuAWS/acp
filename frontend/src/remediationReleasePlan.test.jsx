@@ -43,3 +43,18 @@ it('preserves a review choice made while the destination is loading',async()=>{
  await act(async()=>resolve({planning}))
  expect(v.review().checked).toBe(true);expect(v.input().checked).toBe(false);expect(v.onChange).toHaveBeenLastCalledWith(null)
 })
+
+it('requires a publishing answer in the mandatory plan and resets it for a new scope', async () => {
+  const onAnswered = vi.fn()
+  const v = await mount({ requireChoice: true, onAnswered })
+  expect(v.input().checked).toBe(false)
+  expect(v.review().checked).toBe(false)
+  expect(onAnswered).toHaveBeenLastCalledWith(false)
+  await act(async () => v.input().click())
+  expect(onAnswered).toHaveBeenLastCalledWith(true)
+  expect(v.onChange).toHaveBeenLastCalledWith(expect.objectContaining({ files: ['a'] }))
+  await v.render({ files: ['b'] })
+  expect(v.input().checked).toBe(false)
+  expect(v.review().checked).toBe(false)
+  expect(onAnswered).toHaveBeenLastCalledWith(false)
+})

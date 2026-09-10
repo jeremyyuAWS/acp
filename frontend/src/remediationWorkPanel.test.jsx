@@ -181,3 +181,17 @@ describe('the prohibitions this screen inherits', () => {
     expect(SRC).not.toMatch(/\bdelet/i)
   })
 })
+
+it('opens the mandatory plan instead of offering the retired direct batch action', async () => {
+  let opened = 0
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(createElement(RemediationWork, {
+    files: ESTATE, cap: CAP, assessment: ASMT, criteria: CRITERIA,
+    onOpenPlan: () => { opened++ },
+  })))
+  const button = [...container.querySelectorAll('button')].find(node => node.textContent === 'Review remediation plan')
+  expect(button).toBeTruthy()
+  expect(container.textContent).not.toContain('no AI draft is ever approved by it')
+  await act(async () => button.click())
+  expect(opened).toBe(1)
+})

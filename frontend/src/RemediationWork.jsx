@@ -60,7 +60,7 @@ const LANE_NOTE = {
  */
 export default function RemediationWork({ files, cap, assessment, criteria, level = 'AA',
                                           appliedCriteria, unfixableCriteria, driveMirror = null,
-                                          onApplyAutomatic, applying = false }) {
+                                          onApplyAutomatic, onOpenPlan, applying = false }) {
   const w = remediationWork(files, { cap, assessment, criteria, level,
                                      appliedCriteria, unfixableCriteria })
   // Nothing, rather than five zeros. A remediation screen over a run that has not happened is not a
@@ -100,7 +100,11 @@ export default function RemediationWork({ files, cap, assessment, criteria, leve
       </div>
 
       {/* ── R3 · the batch ───────────────────────────────────────────────────────────────── */}
-      {batch && (
+      {onOpenPlan && batch && <div className="panel" style={{ marginTop: 16 }}>
+        <p>{batch.count} automatic fixes are available across {batch.documents} documents. Choose the permissions for this run before starting.</p>
+        <button type="button" disabled={applying} onClick={onOpenPlan}>Review remediation plan</button>
+      </div>}
+      {!onOpenPlan && batch && (
         <div className="panel" style={{ marginTop: 16, borderLeft: '4px solid #2F7D32' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
                         gap: 20, flexWrap: 'wrap' }}>

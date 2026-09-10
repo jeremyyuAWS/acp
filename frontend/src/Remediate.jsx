@@ -1,4 +1,5 @@
 import { reviewableRemediationItems } from './remediationReviewAvailability.js'
+import RemediationLiveDocuments from './RemediationLiveDocuments.jsx'
 import RemediationAutoRelease from './RemediationAutoRelease.jsx'
 import RemediationReleasePlan from './RemediationReleasePlan.jsx'
 import { authorizeAcceptedRelease } from './releasePlanIntent.js'
@@ -533,6 +534,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     return () => window.removeEventListener('acp:hitl-changed', reload)
   }, [runId, files]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Pull durable file evidence as the shared stream reports completed work.
+  useEffect(() => {
+    if (!runId || !runStream?.snapshot?.batch_id) return
+    const timer = setTimeout(fetchFixes, 800)
+    return () => clearTimeout(timer)
+  }, [runId, runStream?.snapshot?.fixes?.applied, runStream?.snapshot?.documents?.completed])
+
   // Derive fix-type breakdown from auto-action files in the corpus
   const fixTypesDisplay = useMemo(() => {
     const counts = {}
@@ -552,6 +560,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [remBusy, setRemBusy] = useState(false)
   const [remMsg, setRemMsg] = useState('')
   const [workspaceRequest, setWorkspaceRequest] = useState(null)
+  const [releaseAnswered, setReleaseAnswered] = useState(false)
+  const [planRevision, setPlanRevision] = useState(0)
   const [remProg, setRemProg] = useState(null)   // authoritative SSE status + client-known batch total
   const [remUpdates, setRemUpdates] = useState('idle') // live | polling | idle
   // The server-owned run snapshot (api/remediation_run.py). Held separately from `remProg`
@@ -781,6 +791,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   + `remediated elsewhere; re-scan to refresh.`)
         setRemBusy(false); return
       }
+      setPlanRevision(value => value + 1)
       setWorkspaceRequest({ mode: 'live' })
       if (releaseIntent) {
         const notice = await authorizeAcceptedRelease(runId, scope, r, releaseIntent)
@@ -1275,7 +1286,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
       {/* R2 · the work, partitioned once — and R3, the deterministic batch inside it. */}
       <RemediationWork files={files} cap={cap} assessment={assessment}
-                       onApplyAutomatic={readOnly ? undefined : runServerRemediation}
+                       onOpenPlan={readOnly ? undefined : openRemediationPlan}
                        applying={remBusy} />
 
 
@@ -1858,7 +1869,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         runId={runId}
         workspaceRequest={workspaceRequest}
         plan={<>
-          <RemediationImpactCard key={runId || 'current'} runId={runId}
+          <RemediationImpactCard requireAnswers releaseAnswered={releaseAnswered} key={`${runId || 'current'}:${planRevision}`} runId={runId}
             runBusy={remBusy} readOnly={readOnly} myEmail={myEmail}
             scopeFiles={impactScope.map(file => file.file)}
             refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`}
@@ -1866,11 +1877,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               assessedAt={assessedAt} run={run} notStarted={run?.not_assessed?.count}
               remediationForecast={forecast} reviewSummary={reviewCounts}
               onOpenReview={() => setWorkspaceRequest({ mode: 'review' })} />}
-            releaseOption={<RemediationReleasePlan scanId={runId} files={impactScope.map(file => file.file)}
+            releaseOption={<RemediationReleasePlan requireChoice onAnswered={setReleaseAnswered} scanId={runId} files={impactScope.map(file => file.file)}
               intent={releasePlanIntent} onChange={setReleasePlanIntent} disabled={readOnly || remBusy} />}
             onRun={readOnly ? undefined : (policy) => {
               const intent = releasePlanIntent
-              setReleasePlanIntent(null)
               return runServerRemediation(impactScope, policy, intent)
             }} />
           {remMsg && <div role="status">{remMsg}</div>}
@@ -1881,6 +1891,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         review={reviewWorkspace}
         live={<>
           {releasePlanNotice && <div role="status">{releasePlanNotice}</div>}
+          {remMsg && <div role="status">{remMsg}</div>}
+          <RemediationLiveDocuments key={runId} scanId={runId} files={impactScope} cap={cap} assessment={assessment}
+            fixes={fixSource} fixTotal={fixTotal} refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`} />
           <RemediationAutoRelease scanId={runId} files={impactScope} readOnly={readOnly} />
           {/* The large panel consumes the App-owned controller. Mounting this view opens no
               stream of its own, so the compact card, global card and panel stay on one cursor. */}

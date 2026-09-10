@@ -1,0 +1,11 @@
+.remediation-plan-dialog { width: min(1200px, 94vw); max-height: 90dvh; box-sizing: border-box; overflow: auto; padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface, white); color: var(--ink); }
+.remediation-plan-dialog::backdrop { background: rgb(25 15 35 / .55); }
+.remediation-plan-dialog__header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.remediation-plan-dialog__header h2 { margin: 0; }
+.remediation-plan-dialog .remediation-impact__split { grid-template-columns: minmax(0, 1fr); }
+.remediation-plan-dialog .remediation-impact__startbar { position: sticky; top: 0; }
+.remediation-live-documents { overflow-x: auto; }
+.remediation-live-documents .panel { min-width: 760px; }
+.remediation-fix-detail { padding: 12px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.remediation-fix-detail dl { display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 8px; }
+.remediation-fix-detail dd { margin: 0; white-space: pre-wrap; }
