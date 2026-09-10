@@ -11,7 +11,7 @@ function modeFromLocation() {
 }
 
 export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snapshot = null,
-  plan, review, live, workspaceRequest = null }) {
+  plan, review, live, reviewOptional = false, workspaceRequest = null }) {
   // Live is the default workspace. Legacy Plan links open the required planning dialog.
   const [chosen, setChosen] = useState(() => modeFromLocation())
   const tabs = useRef([])
@@ -84,7 +84,7 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
         id={`rem-mode-${value}`} aria-controls={`rem-panel-${value}`} aria-selected={mode === value}
         tabIndex={mode === value ? 0 : -1} onKeyDown={(event) => onKeyDown(event, index)}
         onClick={() => select(value)}>
-        {value === 'live' ? 'Live' : 'Review'}
+        {value === 'live' ? 'Live' : reviewOptional ? 'Review suggestions · Optional' : 'Review'}
         {value === 'review' && snapshot?.batch_id && (snapshot.scan_id || snapshot.run_id) === runId && <span>{reviewCount.toLocaleString()}</span>}
         {value === 'live' && activeWork && <span className="rem-mode-live-dot" aria-label="active">●</span>}
       </button>)}
@@ -94,7 +94,7 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
       {plan}
     </RemediationPlanDialog>
     <div ref={node => { panels.current.review = node }} id="rem-panel-review" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-review"
-      hidden={mode !== 'review'}>{review}</div>
+      hidden={mode !== 'review'}>{reviewOptional && <p>Review is optional for publishing. Suggestions requiring approval stay unapplied and appear in the remaining-work checklist.</p>}{review}</div>
     <div ref={node => { panels.current.live = node }} id="rem-panel-live" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-live"
       hidden={mode !== 'live'}>
       <h2 className="sr-only">Live Processing</h2>

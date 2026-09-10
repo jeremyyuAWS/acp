@@ -138,3 +138,33 @@ def test_late_failed_worker_does_not_regress_completed_bundle(setup, monkeypatch
     result = delivery.process_release_reports(store, bundle['bundle_id'], OWNER)
     assert result['status'] == 'completed'
     assert result['error'] is None
+
+
+def test_pdf_bytes_survive_frozen_storage_and_download(setup, monkeypatch):
+    import release_reports
+    store, release = setup
+    content = b'%PDF-1.7\n\xff\x00binary fixture'
+    monkeypatch.setattr(release_reports, 'build_release_reports', lambda *a: [dict(name='scan-summary.pdf', content=content, content_type='application/pdf')])
+    bundle = delivery.queue_release_reports(store, SID, OWNER, release['id'])
+    frozen = delivery._get(store, bundle['bundle_id'], OWNER)['assets'][0]
+    assert frozen['encoding'] == 'base64'
+    assert delivery._asset_bytes(frozen) == content
+    assert delivery.get_release_report_asset(store, SID, OWNER, bundle['bundle_id'], 0)['content'] == content
+
+
+def test_completed_legacy_bundle_can_generate_new_pdf_without_rescanning(setup, monkeypatch):
+    import release_reports
+    store, release = setup
+    old = delivery.queue_release_reports(store, SID, OWNER, release['id'])
+    monkeypatch.setattr(delivery, '_upload', lambda *args: dict(id='saved', url='https://example.com/report'))
+    delivery.process_release_reports(store, old['bundle_id'], OWNER)
+    # A legacy bundle predates the versioned PDF fingerprint.
+    with store._db.cursor() as cur:
+        store._db.execute(cur, 'UPDATE release_report_bundles SET id=%s WHERE id=%s', ('legacy-bundle', old['bundle_id']))
+    content = b'%PDF-1.7\nrefreshed'
+    monkeypatch.setattr(release_reports, 'build_release_reports', lambda *a: [dict(name='scan-summary.pdf', content=content, content_type='application/pdf')])
+    refreshed = delivery.retry_release_reports(store, SID, OWNER)
+    assert refreshed['bundle_id'] != 'legacy-bundle'
+    assert refreshed['reports'][0]['content_type'] == 'application/pdf'
+    assert store.release_status(release['id'], OWNER)['published'] == 1
+    assert delivery.get_release_report_asset(store, SID, OWNER, 'legacy-bundle', 0)['content'].startswith(b'<a')

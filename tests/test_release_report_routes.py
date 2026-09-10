@@ -27,9 +27,11 @@ def test_status_download_headers_and_durable_payload(report_bundle):
     assert response.headers['cache-control'] == 'no-store'
     assert status['status'] == 'queued' and status['bundle_id'] == bundle['bundle_id']
     result = scans.download_release_report('scan', bundle['bundle_id'], 0, request())
-    assert b'Remediation and publication summary' in result.body
+    from pypdf import PdfReader
+    import io
+    assert 'Remediation and publication summary' in PdfReader(io.BytesIO(result.body)).pages[0].extract_text()
     assert result.headers['content-disposition'].startswith("attachment; filename*=UTF-8''scan-summary-")
-    assert result.headers['content-type'].startswith('text/html')
+    assert result.headers['content-type'].startswith('application/pdf')
     assert result.headers['x-content-type-options'] == 'nosniff'
     assert result.headers['content-security-policy'] == "sandbox; default-src 'none'; style-src 'unsafe-inline'"
     assert result.headers['cache-control'] == 'no-store'

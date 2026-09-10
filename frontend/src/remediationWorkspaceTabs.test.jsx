@@ -84,3 +84,11 @@ it('does not let a delayed header focus move focus after subsequent keyboard nav
   await act(async () => pending())
   expect(document.activeElement).toBe(container.querySelector('#rem-mode-live'))
 })
+it('keeps review available but optional for automatic publication', async () => {
+  const { container } = await mount({ reviewOptional: true })
+  const tab = container.querySelector('#rem-mode-review')
+  expect(tab.textContent).toContain('Review suggestions · Optional')
+  await act(async () => tab.click())
+  expect(container.querySelector('#rem-panel-review').hidden).toBe(false)
+  expect(container.querySelector('#rem-panel-review').textContent).toContain('Suggestions requiring approval stay unapplied')
+})

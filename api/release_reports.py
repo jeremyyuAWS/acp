@@ -20,6 +20,32 @@ def _rule(value):
     return str(value or '').removeprefix('SC_').replace('_', '.').split('/')[0]
 
 
+def _location(row):
+    parts = []
+    for key, label in [('page', 'Page'), ('page_number', 'Page'), ('pages', 'Pages'),
+                       ('slide', 'Slide'), ('slide_number', 'Slide'), ('sheet', 'Sheet'),
+                       ('cell', 'Cell'), ('paragraph', 'Paragraph'), ('paragraph_index', 'Paragraph index'),
+                       ('element', 'Element'), ('selector', 'Selector'), ('location', 'Location')]:
+        value = row.get(key)
+        if value is not None and value != '':
+            parts.append(f'{label}: {value}')
+    return '; '.join(parts) or 'Not recorded'
+
+
+def _suggestions(task):
+    proposals = task.get('proposals') or []
+    if isinstance(proposals, dict):
+        proposals = [proposals]
+    rendered = []
+    for proposal in proposals:
+        if isinstance(proposal, dict):
+            rendered.append('Before: ' + str(proposal.get('before', 'Not recorded')) +
+                            '; Suggested: ' + str(proposal.get('proposed_value') or proposal.get('value') or proposal.get('text') or 'Not recorded'))
+        elif isinstance(proposal, str):
+            rendered.append(proposal)
+    return '; '.join(rendered) or task.get('approved_value') or 'Not recorded'
+
+
 def _link(url, label):
     try:
         parsed = urlsplit(str(url or ''))
@@ -88,7 +114,7 @@ def _table(headers, rows):
     return '<div class="table-scroll"><table><thead><tr>' + ''.join(f'<th scope="col">{_text(h)}</th>' for h in headers) + '</tr></thead><tbody>' + ''.join('<tr>' + ''.join(f'<td>{c}</td>' for c in row) + '</tr>' for row in rows) + '</tbody></table></div>'
 
 
-def build_release_reports(store, scan_id, owner, release_id):
+def build_release_report_sources(store, scan_id, owner, release_id):
     """Return HTML assets, one per document, plus an aggregate checklist CSV.
 
     Original totals use sealed assessment evidence only. Verification credit requires
@@ -152,6 +178,7 @@ def build_release_reports(store, scan_id, owner, release_id):
     rows = []
     assets = []
     index = []
+    appendices = []
     for name in names:
         file = files.get(name, {})
         outcome = outcomes.get(name, {})
@@ -160,9 +187,9 @@ def build_release_reports(store, scan_id, owner, release_id):
         checklist = []
         issues = file.get('issues') or []
         for issue in issues:
-            rid = _rule(issue.get('rule_id') or issue.get('wcag'))
+            rid = _rule(issue.get('rule_id') or issue.get('ruleId') or issue.get('wcag'))
             task = next((q for q in open_queue if q['file'] == name and _rule(q['rule_id']) == rid), {})
-            checklist.append([rid, issue.get('detail') or 'Accessibility issue remains', issue.get('page') or issue.get('location') or 'Not recorded', issue.get('severity') or 'Unclassified', task.get('instruction') or task.get('description') or 'Review and correct this issue in the source document; reassess when convenient.', task.get('assignee') or 'Unassigned', 'Remaining issue'])
+            checklist.append([rid, issue.get('detail') or 'Accessibility issue remains', _location(issue), issue.get('severity') or 'Unclassified', issue.get('recommended_action') or issue.get('remediation') or task.get('instruction') or task.get('description') or 'Review and correct this issue in the source document; reassess when convenient.', task.get('assignee') or 'Unassigned', 'Remaining issue'])
         for trace in [t for t in failed if t['file'] == name]:
             rid = _rule(trace['rule_id'])
             if not any(r[0] == rid for r in checklist):
@@ -170,7 +197,7 @@ def build_release_reports(store, scan_id, owner, release_id):
         for task in [q for q in open_queue if q['file'] == name]:
             rid = _rule(task['rule_id'])
             if not any(r[0] == rid for r in checklist):
-                checklist.append([rid, task.get('title') or task.get('rule_name') or 'Follow-up review task', task.get('location') or task.get('pages') or 'Not recorded', task.get('severity') or 'Unclassified', task.get('instruction') or 'Inspect the saved copy when convenient; this task does not block publication.', task.get('assignee') or 'Unassigned', 'Applied, verification not recorded' if task.get('applied') else task.get('status') or 'Pending'])
+                checklist.append([rid, task.get('title') or task.get('rule_name') or 'Follow-up review task', _location(task), task.get('severity') or 'Unclassified', task.get('instruction') or 'Inspect the saved copy when convenient; this task does not block publication.', task.get('assignee') or 'Unassigned', 'Applied, verification not recorded' if task.get('applied') else task.get('status') or 'Pending'])
         for trace in [t for t in traces if t['file'] == name and t.get('outcome') == 'REVIEW' and selected(t)]:
             rid = _rule(trace['rule_id'])
             if not any(r[0] == rid for r in checklist):
@@ -195,14 +222,34 @@ def build_release_reports(store, scan_id, owner, release_id):
             categorized.append((category, row))
         detail += _table(['Criterion', 'Issue', 'Location', 'Remediation category', 'Recommended action', 'Owner', 'Status'],
                          [[_text(r[0]), _text(r[1]) + '<br><small>Severity: ' + _text(r[3]) + '</small>', _text(r[2]), _text(CATEGORIES[key]), *[_text(v) for v in r[4:]]] for key, r in categorized]) if checklist else '<p>No remaining issues are recorded in the available evidence. This is not a guarantee of compliance.</p>'
+        from wcag_codeset import _name_for
+        file_traces = [t for t in traces if t['file'] == name and selected(t)]
+        if scope is not None:
+            recorded = {_rule(t['rule_id']) for t in file_traces}
+            for criterion in scope:
+                missing = {'file': name, 'rule_id': criterion, 'outcome': 'Not recorded', 'finding_count': None}
+                if _rule(criterion) not in recorded and selected(missing):
+                    file_traces.append(missing)
+        detail += '<h2>Success criteria coverage</h2><p>All recorded selected criteria for this file. An incomplete or missing check is not a pass.</p>'
+        detail += _table(['Success criterion', 'Name / level', 'Recorded outcome', 'Recorded findings'],
+                         [[_text(_rule(t['rule_id'])), _text(_name_for(_rule(t['rule_id']))) + ' / ' + _text(t.get('level')),
+                           _text(t.get('outcome')), _text(t.get('finding_count'))] for t in file_traces]) if file_traces else '<p>Criterion-level coverage was not recorded.</p>'
+        tasks = [q for q in open_queue if q['file'] == name]
+        if tasks:
+            detail += '<h2>Review task details</h2><p>Tasks may cover several findings; these are not additional findings.</p>'
+            detail += _table(['Criterion', 'Task', 'Location', 'Instruction', 'Suggestions', 'Status'],
+                             [[_text(_rule(q['rule_id'])), _text(q.get('title') or q.get('rule_name')),
+                               _text(_location(q)), _text(q.get('instruction') or q.get('description')),
+                               _text(_suggestions(q)), _text(q.get('status'))] for q in tasks])
         changes = [d for d in diffs['items'] if d['file'] == name]
         detail += '<h2>Recorded changes by success criterion</h2><p>Change records are separate from findings. Verified finding totals above require matching ledger evidence.</p>'
         for sc in sorted({_rule(d['rule_id']) for d in changes}):
             records = [d for d in changes if _rule(d['rule_id']) == sc]
             detail += f'<details open><summary>SC {_text(sc)} · {len(records)} change records</summary>'
-            detail += _table(['Location', 'Before', 'After'], [[_text(d.get('page')), _text(d.get('before')), _text(d.get('after'))] for d in records]) + '</details>'
+            detail += _table(['Location', 'Before', 'After'], [[_text(_location(d)), _text(d.get('before')), _text(d.get('after'))] for d in records]) + '</details>'
         if not changes:
             detail += '<p>No change records are available for this file.</p>'
+        appendices.append(f'<section class="document-appendix"><h2>Document: {_text(name)}</h2>{detail}</section>')
         assets.append({'name': report_name, 'content': _page(f'Follow-up checklist — {name}', detail), 'content_type': 'text/html; charset=utf-8'})
         category_groups = ''
         for key, label in CATEGORIES.items():
@@ -221,6 +268,7 @@ def build_release_reports(store, scan_id, owner, release_id):
     summary += '<p>Original and current counts describe different points in time. Review tasks and change records are not added to finding totals. Not recorded means evidence is unavailable, not zero.</p>'
     summary += _table(['Measure', 'Count'], [[_text(k), _text(v)] for k, v in metrics])
     summary += '<h2>Documents and follow-up checklists</h2><p>Remediation categories describe recorded capability or state; future automatic fixes still require an accepted plan. Checklist entries, findings and change records use separate counts. Expand a category to see SCs by file.</p>' + _table(['Document', 'File type', 'Publication status', 'Original findings', 'Fixed and verified', 'Remediation category / SC', 'Incomplete checks', 'Published file', 'Follow-up'], index)
+    summary += '<h2>Detailed printable checklists by document</h2>' + ''.join(appendices)
     assets.insert(0, {'name': 'scan-summary.html', 'content': _page('Remediation and publication summary', summary), 'content_type': 'text/html; charset=utf-8'})
     stream = io.StringIO(newline='')
     writer = csv.writer(stream)
@@ -230,3 +278,12 @@ def build_release_reports(store, scan_id, owner, release_id):
         writer.writerow(["'" + str(v) if str(v).lstrip().startswith(('=', '+', '-', '@')) else str(v) for v in row])
     assets.append({'name': 'remaining-issues.csv', 'content': stream.getvalue().encode('utf-8-sig'), 'content_type': 'text/csv; charset=utf-8'})
     return assets
+
+
+def build_release_reports(store, scan_id, owner, release_id):
+    """PDF is the delivery format; retain legacy source generation for audit tests."""
+    from release_report_pdf import render_report_pdf
+    return [dict(name=asset['name'].removesuffix('.html') + '.pdf',
+                 content=render_report_pdf(asset['content']), content_type='application/pdf')
+            for asset in build_release_report_sources(store, scan_id, owner, release_id)
+            if asset['content_type'].startswith('text/html')]

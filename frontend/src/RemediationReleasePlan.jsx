@@ -4,7 +4,7 @@ import { releasePlanKey } from './releasePlanIntent.js'
 import InfoTip from './InfoTip.jsx'
 import './remediation-auto-release.css'
 
-export default function RemediationReleasePlan({ scanId, files, intent, onChange, disabled = false, read = getAutomaticRelease, requireChoice = false, onAnswered }) {
+export default function RemediationReleasePlan({ scanId, files, intent, onChange, disabled = false, read = getAutomaticRelease, requireChoice = false, compact = false, onAnswered }) {
   const key = releasePlanKey(scanId, files)
   const [preview, setPreview] = useState(null)
   const [error, setError] = useState('')
@@ -34,12 +34,12 @@ export default function RemediationReleasePlan({ scanId, files, intent, onChange
     onChange(review ? null : { key, scanId, files: [...preview.files], destination: { ...preview.destination }, source_revision: preview.source_revision, allow_remaining_issues: true, include_reports: true })
   }
   return <section className="rem-auto-release" aria-label="Release option for this plan">
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><strong>When should files be published?</strong>
-      <InfoTip label="automatic release">Approve plan and start authorizes this run to publish saved copies after automatic processing, even when issues remain. Your selected rules and AI settings still apply. Human inspection is optional; unapproved suggestions are not applied. The scan summary and per-file checklist distinguish verified fixes, applied but unverified changes, remaining issues, and checks that could not run. Publishing does not certify accessibility. Permission lasts up to 24 hours. Changing the scope creates a new draft plan; permission begins only when that plan is accepted. Use Live to stop future releases. Original files stay unchanged.</InfoTip>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><strong>{compact ? 'Auto-publish?' : 'When should files be published?'}</strong>
+      {!compact && <InfoTip label="automatic release">Approve plan and start authorizes this run to publish saved copies after automatic processing, even when issues remain. Your selected rules and AI settings still apply. Human inspection is optional; unapproved suggestions are not applied. The scan summary and per-file checklist distinguish verified fixes, applied but unverified changes, remaining issues, and checks that could not run. Publishing does not certify accessibility. Permission lasts up to 24 hours. Changing the scope creates a new draft plan; permission begins only when that plan is accepted. Use Live to stop future releases. Original files stay unchanged.</InfoTip>}
     </div>
-    <label className="rem-auto-release-option"><input type="radio" name={`release-mode-${scanId}`} checked={!!checked} disabled={disabled || !ready} onChange={() => choose(false)} /><strong>Fix and publish automatically</strong></label>
-    <label className="rem-auto-release-option"><input type="radio" name={`release-mode-${scanId}`} checked={reviewKey === key && choice.current.review} disabled={disabled} onChange={() => choose(true)} /><strong>Review before publishing</strong></label>
-    <p>Remaining issues become a follow-up checklist. Files and reports are saved together.</p>
+    <label className="rem-auto-release-option"><input type="radio" name={`release-mode-${scanId}`} checked={!!checked} disabled={disabled || !ready} onChange={() => choose(false)} /><strong>{compact ? 'Yes — publish processed copies and reports automatically' : 'Fix and publish automatically'}</strong></label>
+    <label className="rem-auto-release-option"><input type="radio" name={`release-mode-${scanId}`} checked={reviewKey === key && choice.current.review} disabled={disabled} onChange={() => choose(true)} /><strong>{compact ? 'No — review in Release before publishing' : 'Review before publishing'}</strong></label>
+    <p>Unapproved suggestions remain unapplied. Remaining issues are included in the follow-up checklist.</p>
     <p><b>Destination:</b> {preview?.destination_label ? `${preview.destination_label} / Remediated / Timestamp + user email` : (preview || error ? 'Not available' : 'Checking destination…')}</p>
     {preview?.reason && <p>{preview.reason}</p>}
     {preview && !ready && <p>Connect an authorized destination to enable automatic publishing. You can still run remediation.</p>}

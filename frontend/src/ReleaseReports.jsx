@@ -38,6 +38,7 @@ export default function ReleaseReports({ scanId, publishedCount = 0, readOnly = 
       {state.bundle_id && report.download_url && <button type="button" className="linklike" style={{ marginLeft: 10 }} onClick={async () => { try { await download(scanId, state.bundle_id, index, report.name) } catch { if (currentScan.current === scanId) setError('The report could not be downloaded.') } }}>Download</button>}
     </li>)}</ul>}
     {state?.status === 'not_started' && <button type="button" className="linklike" onClick={() => setRefresh(n => n + 1)}>Refresh reports</button>}
+    {state?.status === 'completed' && state.reports?.some(report => report.content_type !== 'application/pdf') && <button type="button" disabled={busy || readOnly} onClick={retryDelivery}>Generate PDF reports</button>}
     {state?.status === 'failed' && <button type="button" className="ghost small" disabled={busy || readOnly} onClick={retryDelivery}>Retry report delivery</button>}
     {error && <p role="alert">{error} <button type="button" className="linklike" onClick={() => setRefresh(n => n + 1)}>Refresh reports</button></p>}
   </section>

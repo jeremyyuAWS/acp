@@ -1,6 +1,6 @@
 """Real store reports retain unresolved work without inventing publication or audit."""
 import pytest
-from release_reports import build_release_reports
+from release_reports import build_release_report_sources as build_release_reports
 
 OWNER = 'owner@example.com'
 
@@ -56,7 +56,7 @@ def test_evidence_identity_required_and_remaining_checklist(isolated_store, monk
     assert 'Original findings not yet verified fixed</td><td>1' in summary
     checklist = next(a['content'].decode() for a in assets if a['name'].startswith('checklist-one'))
     assert '=Missing &lt;alt&gt;' in checklist
-    assert '<td>3</td>' in checklist
+    assert '<td>Page: 3</td>' in checklist
     csv = assets[-1]['content'].decode('utf-8-sig')
     assert "'=Missing <alt>" in csv
 
@@ -170,3 +170,47 @@ def test_report_and_ui_share_approved_category_names():
     assert len(CATEGORIES) == 8
     for label in CATEGORIES.values():
         assert repr(label) in frontend
+
+
+def test_pdf_reports_include_brand_evidence_and_no_csv(isolated_store, tmp_path):
+    from release_reports import build_release_reports as build_pdfs
+    from pypdf import PdfReader
+    import io
+    release = setup(isolated_store)
+    assets = build_pdfs(isolated_store, 'scan', OWNER, release)
+    assert len(assets) == 3
+    for asset in assets:
+        assert asset['name'].endswith('.pdf')
+        assert asset['content_type'] == 'application/pdf'
+        reader = PdfReader(io.BytesIO(asset['content']))
+        text = '\n'.join(page.extract_text() for page in reader.pages)
+        assert 'Not recorded' in text
+        assert 'Mova iO' in text
+        assert 'Publication' in text
+        assert reader.trailer['/Root'].get('/StructTreeRoot')
+        assert any(page.images for page in reader.pages)
+        (tmp_path / asset['name']).write_bytes(asset['content'])
+
+
+def test_printable_pdf_preserves_locations_all_criteria_and_human_checkboxes(isolated_store, monkeypatch):
+    from release_reports import build_release_reports as build_pdfs
+    from pypdf import PdfReader
+    import io
+    release = setup(isolated_store)
+    isolated_store.save_file_result('scan', {'file': 'one.pdf', 'engine': 'pdf', 'status': 'fail', 'score': 0,
+        'compliant': False, 'skipped_rules': 0, 'issues': [
+            {'ruleId': 'SC_1_1_1', 'wcag': '1.1.1', 'severity': 'critical', 'detail': 'Figure missing alt text', 'page': 3, 'location': 'Figure 2'},
+            {'ruleId': 'SC_1_1_1', 'wcag': '1.1.1', 'severity': 'critical', 'detail': 'Second figure needs context', 'page': 5},
+        ]}, '2026-09-09T10:00:00Z')
+    monkeypatch.setattr(isolated_store, 'get_scan_traces', lambda *a: [
+        {'file': 'one.pdf', 'rule_id': 'SC_1_1_1', 'outcome': 'FAIL', 'finding_count': 2},
+        {'file': 'one.pdf', 'rule_id': 'SC_3_1_1', 'outcome': 'PASS', 'finding_count': 0},
+    ])
+    for asset in build_pdfs(isolated_store, 'scan', OWNER, release):
+        if asset['name'].startswith('checklist-two'):
+            continue
+        text = '\n'.join(p.extract_text() for p in PdfReader(io.BytesIO(asset['content'])).pages)
+        for expected in ['Figure missing alt text', 'Second figure needs context', 'Page: 3', 'Page: 5',
+                         'Figure 2', 'Remediated and rechecked', 'Reviewer / date / notes:',
+                         '3.1.1', 'PASS', 'Non-text Content']:
+            assert expected in text
