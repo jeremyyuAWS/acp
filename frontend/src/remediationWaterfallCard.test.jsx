@@ -55,8 +55,8 @@ it('never builds a bar or equates changes with findings when reconciliation is i
   const { root, container } = createTestRoot()
   await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot({ finding_reconciliation: { exact: false, assessed: 100 } })} />))
   expect(container.querySelector('.wf-outcome-bar')).toBeNull()
-  expect(container.textContent).toContain('Verified changes · all origins')
-  expect(container.textContent).toContain('Review items · not findings')
+  expect(container.textContent).not.toContain('Verified changes · all origins')
+  expect(container.textContent).not.toContain('Review items · not findings')
   expect(container.textContent).toContain('Activity count unavailable')
 })
 it.each([true, false])('keeps the requested outcome section retired, exact=%s', async exact => {
