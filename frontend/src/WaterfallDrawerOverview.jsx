@@ -10,9 +10,10 @@ export function selectedDrawerScope(model) {
   return stage ? { stage, provider: model?.provider || null, model: model?.model || null } : null
 }
 export default function WaterfallDrawerOverview({ scanId, batchId, identity, selectedModel, role,
-  description, snapshot, live, paused, selectTab }) {
+  description, snapshot, live, paused, selectTab, aiEnabled }) {
+  const disabled = aiEnabled === false && !['rules', 'verify', 'approval'].includes(role)
   const scope = selectedDrawerScope(selectedModel)
-  const metrics = useWaterfallDrawerMetrics({ scanId, batchId, scope: scope || {}, live, enabled: !!scope })
+  const metrics = useWaterfallDrawerMetrics({ scanId, batchId, scope: scope || {}, live, enabled: !!scope && !disabled })
   const [reduced, setReduced] = useState(() => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false)
   useEffect(() => {
     const media = window.matchMedia?.('(prefers-reduced-motion: reduce)')
@@ -22,6 +23,24 @@ export default function WaterfallDrawerOverview({ scanId, batchId, identity, sel
   }, [])
   const charts = buildWaterfallDrawerCharts({ metrics: metrics.data })
   const counterIdentity = `${identity}:${JSON.stringify(scope)}:${metrics.baseline || 0}`
+  if (disabled) return <div className="wf-disabled-overview">
+    <section className="wf-disabled-message">
+      <span className="wf-disabled-label">Selected AI stage · off</span>
+      <h3>AI wasn’t enabled for this run</h3>
+      <p>This stage is not processing documents. Rule-based fixes can continue under the saved plan.</p>
+      <p>AI charts do not apply to this run. To use local or cloud models, enable AI when starting a new remediation plan.</p>
+    </section>
+    <section aria-label="Overall run progress">
+      <h3>Overall run · {snapshot.terminal ? 'finished' : live ? 'in progress' : 'saved activity'}</h3>
+      <p>These totals describe the whole run, not the selected AI stage.</p>
+      <div className="wf-disabled-totals">
+        <div><span>Verified changes · all origins</span><strong>{snapshot.fixes?.verified ?? 'Not recorded'}</strong></div>
+        <div><span>Review items</span><strong>{snapshot.review?.items ?? 'Not recorded'}</strong></div>
+      </div>
+    </section>
+    <p>Remaining issues stay in the follow-up checklist. Review and publication are separate from AI activity.</p>
+    <button type="button" className="ghost" onClick={() => selectTab('Evidence')}>View saved evidence</button>
+  </div>
   return <div className="wf-detail">
     <p>{description}</p>
     {selectedModel?.detail && selectedModel.detail !== 'Recorded outcome unknown.' && <p>{selectedModel.detail}</p>}

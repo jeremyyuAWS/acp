@@ -33,3 +33,13 @@
 @media (prefers-reduced-motion: reduce) {
   .waterfall-visual-drawer .drawer { animation: none; }
 }
+
+.wf-disabled-overview { display:grid; gap:18px; }
+.wf-disabled-message { border-left:4px solid var(--wf-drawer-accent); background:var(--wf-drawer-tint); border-radius:10px; padding:18px; }
+.wf-disabled-label { color:var(--wf-drawer-accent); font-weight:600; }
+.waterfall-visual-drawer .wf-disabled-message h3 { font-size:20px; margin:8px 0; }
+.wf-disabled-totals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.wf-disabled-totals > div { display:grid; gap:8px; padding:16px; border:1px solid var(--line); border-top:3px solid #307742; border-radius:10px; background:#eff8f1; }
+.wf-disabled-totals > div + div { border-top-color:#79529c; background:#f7f2fb; }
+.wf-disabled-totals strong { font-size:26px; }
+@media(max-width:400px) { .wf-disabled-totals { grid-template-columns:1fr; } }
