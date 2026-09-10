@@ -354,3 +354,15 @@ it('restores a frozen default destination even when preferences arrive later', a
   await click(button(c, 'Publish ready files (1)'))
   expect(publishAllFiles.mock.calls.at(-1)[3].destination).toBeNull()
 })
+
+it('waits for a new release destination preference before enabling publish', async () => {
+  let resolveSettings
+  getSettings.mockImplementationOnce(() => new Promise(resolve => { resolveSettings = resolve }))
+  const c = await mount({ run: { ...run, source: 'sharepoint' }, files: [verified('ready.pdf')] })
+  expect(button(c, 'Publish ready files (1)').disabled).toBe(true)
+  await act(async () => resolveSettings({ release_destination: { provider: 'sharepoint', folder_id: 'preferred-parent', folder_name: 'Preferred location' } }))
+  await flush()
+  expect(button(c, 'Publish ready files (1)').disabled).toBe(false)
+  await click(button(c, 'Publish ready files (1)'))
+  expect(publishAllFiles.mock.calls.at(-1)[3].destination.folder_id).toBe('preferred-parent')
+})

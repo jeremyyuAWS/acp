@@ -54,6 +54,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [releaseDestination, setReleaseDestination] = useState(null)
   const [destinationLocked, setDestinationLocked] = useState(false)
   const [destinationPending, setDestinationPending] = useState(true)
+  const [settingsPending, setSettingsPending] = useState(true)
   const frozenDestination = useRef(undefined)
   const [preserveHierarchy, setPreserveHierarchy] = useState(true)
   const [includeManifest, setIncludeManifest] = useState(true)
@@ -152,13 +153,14 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [settings, setSettings] = useState(null)
   useEffect(() => {
     let live = true
+    setSettingsPending(true)
     getSettings().then((s) => {
       if (!live || !s) return
       setSettings(s)
       setReleaseTemplates(Array.isArray(s.release_templates) ? s.release_templates : [])
       const preference = s.release_destination?.provider === run?.source ? s.release_destination : null
       setReleaseDestination((current) => frozenDestination.current !== undefined ? frozenDestination.current : current?.provider === run?.source ? current : preference)
-    }).catch(() => {})
+    }).catch(() => {}).finally(() => { if (live) setSettingsPending(false) })
     return () => { live = false }
   }, [run?.id, run?.source])
   const ms = mirrorState(settings)
@@ -455,7 +457,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     }
   }
   const publishAll = async (fileNames = null, preferredFolderName = '', exact = false) => {
-    if (publishing || readOnly || destinationPending) return
+    if (publishing || readOnly || destinationPending || (settingsPending && !destinationLocked)) return
     setPublishing(true)
     const requested = fileNames ? new Set(fileNames) : null
     const pending = selectableReady.filter((f) => !done[f.file] && (!requested || requested.has(f.file))).map((f) => f.file)
@@ -711,7 +713,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </details>
       </section>
       <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
-        folderName={releaseFolderName} readOnly={readOnly} publishing={publishing} destinationLocked={destinationLocked} destinationPending={destinationPending}
+        folderName={releaseFolderName} readOnly={readOnly} publishing={publishing} destinationLocked={destinationLocked} destinationPending={destinationPending || (settingsPending && !destinationLocked)}
         allowRemainingIssues={allowRemainingIssues}
         fileStates={Object.fromEntries(releaseFiles.map((file, index) => [file.file, states[index]]))}
         releaseOptions={<div className="panel" style={{ marginTop: 12, padding: 14 }}>
