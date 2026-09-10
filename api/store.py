@@ -7699,7 +7699,7 @@ class Store:
                 verified_at=self._now())
 
     def seed_finding_dispositions(self, scan_id: str, batch_id: str, *,
-                                  snapshot_id: str | None = None, _cursor=None) -> list[dict]:
+                                  snapshot_id: str | None = None, input_manifest_id: str | None = None, _cursor=None) -> list[dict]:
         """Create one stable row per assessed finding for this immutable remediation batch.
 
         `scan_rule_traces` is criterion-aggregate data, so an ordinal is the only honest locator
@@ -7737,6 +7737,27 @@ class Store:
                 "WHERE t.scan_id=%s AND t.outcome='FAIL' ORDER BY t.file,t.rule_id",
                 (scan_id,))
             traces = self._db.fetchall(cur)
+            # Remediation verification rewrites live traces. Seed the same immutable
+            # population used by Assess and finding_reconciliation, including reruns.
+            execution = self.get_stage_execution(batch_id)
+            manifest_id = input_manifest_id or (execution or {}).get("input_manifest_id")
+            manifest = self.get_stage_output_manifest(manifest_id) if manifest_id else None
+            for entry in (manifest or {}).get("entries") or []:
+                audit = entry.get("assessment_summary")
+                if not isinstance(audit, dict):
+                    continue
+                audit = self._validated_assessment_audit(audit)
+                groups = audit.get("finding_groups")
+                if (audit.get("valid") and isinstance(groups, list)
+                        and all(isinstance(group, dict) and group.get("file") and group.get("rule_id")
+                                and type(group.get("finding_count")) is int and group["finding_count"] >= 0
+                                for group in groups)
+                        and sum(group["finding_count"] for group in groups) == audit.get("findings_recorded")):
+                    self._db.execute(cur,
+                        "SELECT file,drive_file_id,checksum FROM file_records WHERE scan_id=%s", (scan_id,))
+                    metadata = {row["file"]: row for row in self._db.fetchall(cur)}
+                    traces = [{**metadata.get(group["file"], {}), **group} for group in groups]
+                break
             for trace in traces:
                 document_id = resolve_doc_id(
                     run.get("source") or "local", trace.get("drive_file_id"), trace["file"],
@@ -15060,7 +15081,8 @@ class Store:
                 unknown = {r["file"] for r in self._db.fetchall(cur)
                            if r.get("finding_count") is None or int(r["finding_count"]) <= 0}
                 if owner and selected and set(selected) <= assessed and not set(selected) & unknown:
-                    findings = self.seed_finding_dispositions(scan_id, batch_id, snapshot_id=snapshot_id, _cursor=cur)
+                    findings = self.seed_finding_dispositions(scan_id, batch_id, snapshot_id=snapshot_id,
+                        input_manifest_id=input_manifest_id, _cursor=cur)
                     freeze_baseline(self._db, cur, owner, scan_id, batch_id, snapshot_id, findings, selected)
         self._record_stage_started(scan_id, stage, batch_id, job_type, len(job_ids))
         return {"batch_id": batch_id, "job_ids": job_ids, "reused": False,

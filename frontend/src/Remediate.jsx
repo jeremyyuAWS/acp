@@ -1669,7 +1669,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               <div className="conftrack" style={{ width: 120 }}><i style={{ width: `${reviewPct}%`, background: reviewPct === 100 ? 'var(--success-fg)' : 'var(--info-fg)' }} /></div>
               {/* "reviewed", the inbox pane's word — an approved fix awaiting the re-scan has been
                   reviewed and is not yet Completed, so "resolved" here contradicted the tabs. */}
-              <span className="muted">{reviewProgress.resolved} of {reviewProgress.total} reviewed</span>
+              <span className="muted">{reviewProgress.resolved} of {reviewProgress.total} reviewed · tasks and change inspections</span>
             </div>
           )}
           {/* Reviewer analytics (vision #39) — real counts from hitl_events, not a fabricated score:

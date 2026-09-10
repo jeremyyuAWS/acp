@@ -22,19 +22,19 @@ describe('RemediationRunHeader — the summary leads with automation', () => {
   it('reads automation first, then the queues, joined with a middot', async () => {
     const c = await mount({ counts: { autoFixed: 326, needsApproval: 14, manual: 8, documents: 84 } })
     expect(summary(c)).toBe(
-      '326 fixes applied automatically across 84 documents · 14 need approval · 8 require manual work')
+      '326 change records applied automatically across 84 documents · 14 review tasks need approval · 8 review tasks require manual work')
   })
 
   it('omits the document clause when documents is not known', async () => {
     const c = await mount({ counts: { autoFixed: 326 } })
-    expect(summary(c)).toBe('326 fixes applied automatically')
+    expect(summary(c)).toBe('326 change records applied automatically')
   })
 
   it('renders every segment in the fixed order when all are present', async () => {
     const c = await mount({ counts: { autoFixed: 5, needsApproval: 4, manual: 3,
                                       revalidating: 2, blocked: 1, documents: 2 } })
     expect(summary(c)).toBe(
-      '5 fixes applied automatically across 2 documents · 4 need approval · 3 require manual work'
+      '5 change records applied automatically across 2 documents · 4 review tasks need approval · 3 review tasks require manual work'
       + ' · 2 awaiting revalidation · 1 blocked')
   })
 })
@@ -43,7 +43,7 @@ describe('RemediationRunHeader — undefined is not zero', () => {
   it('omits undefined counts entirely rather than rendering them as 0', async () => {
     const c = await mount({ counts: { autoFixed: 12, documents: 4 } })
     const text = summary(c)
-    expect(text).toBe('12 fixes applied automatically across 4 documents')
+    expect(text).toBe('12 change records applied automatically across 4 documents')
     expect(text).not.toMatch(/approval/)
     expect(text).not.toMatch(/manual/)
     expect(text).not.toMatch(/revalidation/)
@@ -53,17 +53,17 @@ describe('RemediationRunHeader — undefined is not zero', () => {
 
   it('omits a zero needsApproval segment', async () => {
     const c = await mount({ counts: { autoFixed: 9, needsApproval: 0, manual: 2 } })
-    expect(summary(c)).toBe('9 fixes applied automatically · 2 require manual work')
+    expect(summary(c)).toBe('9 change records applied automatically · 2 review tasks require manual work')
   })
 
   it('omits zero revalidating and zero blocked', async () => {
     const c = await mount({ counts: { autoFixed: 9, revalidating: 0, blocked: 0 } })
-    expect(summary(c)).toBe('9 fixes applied automatically')
+    expect(summary(c)).toBe('9 change records applied automatically')
   })
 
   it('states a zero autoFixed rather than dropping it — it is an automation claim', async () => {
     const c = await mount({ counts: { autoFixed: 0, needsApproval: 14 } })
-    expect(summary(c)).toBe('No fixes applied automatically yet · 14 need approval')
+    expect(summary(c)).toBe('No fixes applied automatically yet · 14 review tasks need approval')
   })
 
   it('falls back to one sentence when nothing at all is renderable', async () => {
@@ -78,7 +78,7 @@ describe('RemediationRunHeader — undefined is not zero', () => {
 
   it('never puts completed in the summary line (it belongs to run details)', async () => {
     const c = await mount({ counts: { autoFixed: 3, completed: 77 } })
-    expect(summary(c)).toBe('3 fixes applied automatically')
+    expect(summary(c)).toBe('3 change records applied automatically')
     expect(summary(c)).not.toMatch(/77/)
   })
 })
@@ -86,12 +86,12 @@ describe('RemediationRunHeader — undefined is not zero', () => {
 describe('RemediationRunHeader — singular and plural', () => {
   it('says "1 fix" for a single automatic fix', async () => {
     const c = await mount({ counts: { autoFixed: 1 } })
-    expect(summary(c)).toBe('1 fix applied automatically')
+    expect(summary(c)).toBe('1 change record applied automatically')
   })
 
   it('says "1 document" for a single document', async () => {
     const c = await mount({ counts: { autoFixed: 1, documents: 1 } })
-    expect(summary(c)).toBe('1 fix applied automatically across 1 document')
+    expect(summary(c)).toBe('1 change record applied automatically across 1 document')
   })
 })
 

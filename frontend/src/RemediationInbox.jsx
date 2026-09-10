@@ -1083,7 +1083,7 @@ export default function RemediationInbox({
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
             {/* "reviewed" (a decision is recorded), NOT "resolved" — an approved fix awaiting the
                 re-scan is reviewed but not yet Completed, so this never contradicts the tab counts. */}
-            <span className="muted" style={{ fontSize: 11.5, fontWeight: 600 }}>{prog.resolved} of {prog.total} reviewed</span>
+            <span className="muted" style={{ fontSize: 11.5, fontWeight: 600 }}>{prog.resolved} of {prog.total} reviewed · tasks and change inspections</span>
           </div>
         </div>
         <div ref={listRef} onKeyDown={onQueueKey} aria-label="Findings — use Up and Down arrow keys to move between them"

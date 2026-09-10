@@ -12,3 +12,6 @@
 .remediation-category-filter { background: transparent; color: var(--ink); border: 1px solid transparent; padding: 2px; border-radius: 999px; }
 .remediation-category-filter[aria-pressed="true"] { border-color: var(--ink); outline: 1px solid var(--ink); outline-offset: 1px; }
 .remediation-category-filter:disabled { opacity: .55; }
+
+/* Keep counts at the compact tag size even inside large-number summary cards. */
+.remediation-category-pill .remediation-category-pill__count { font-size: inherit; line-height: inherit; }

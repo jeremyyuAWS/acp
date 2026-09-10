@@ -28,13 +28,13 @@ function summarySegments(counts) {
       const docs = typeof documents === 'number'
         ? ` across ${documents} document${documents === 1 ? '' : 's'}`
         : ''
-      out.push(`${autoFixed} fix${autoFixed === 1 ? '' : 'es'} applied${automaticOnly ? ' automatically' : ''}${docs}`)
+      out.push(`${autoFixed} change record${autoFixed === 1 ? '' : 's'} applied${automaticOnly ? ' automatically' : ''}${docs}`)
     }
   }
   if (typeof autoFixed !== 'number' && typeof autoFixedLoaded === 'number') out.push(`${autoFixedLoaded} applied-change records loaded · total unavailable`)
-  if (typeof individualReview === 'number' && individualReview > 0) out.push(`${individualReview} need individual review`)
-  if (typeof needsApproval === 'number' && needsApproval > 0) out.push(`${needsApproval} need approval`)
-  if (typeof manual === 'number' && manual > 0) out.push(`${manual} require manual work`)
+  if (typeof individualReview === 'number' && individualReview > 0) out.push(`${individualReview} tasks need individual review`)
+  if (typeof needsApproval === 'number' && needsApproval > 0) out.push(`${needsApproval} review tasks need approval`)
+  if (typeof manual === 'number' && manual > 0) out.push(`${manual} review tasks require manual work`)
   if (typeof inspection === 'number' && inspection > 0) out.push(`${inspection} loaded changes available to inspect`)
   if (typeof revalidating === 'number' && revalidating > 0) out.push(`${revalidating} awaiting revalidation`)
   if (typeof blocked === 'number' && blocked > 0) out.push(`${blocked} blocked`)

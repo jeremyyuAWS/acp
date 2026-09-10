@@ -137,3 +137,34 @@ def test_premature_historical_audit_is_flagged_without_rewriting_manifest(isolat
     assert reconciliation['original_assessment'] is None
     assert {'code': 'assessment_incomplete_at_capture'} in reconciliation['violations']
     assert store.get_stage_output_manifest(manifest_id) == before
+
+
+def test_new_remediation_batch_seeds_the_same_finding_population_as_sealed_assess(isolated_store):
+    """A rerun must not seed fewer identities from mutable post-fix traces."""
+    store = isolated_store
+    _scan(store)
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "INSERT INTO scan_rule_traces(scan_id,file,rule_id,outcome,finding_count) "
+                          "VALUES(%s,'a.docx','1.1.1','FAIL',8)", ('stage-scan',))
+    assess = _execution(store)
+    for job in assess['job_ids']:
+        claim = _hold(store, job)
+        store._start_stage_attempt(store.get_job(job))
+        store.publish_worker_stage_event(job, claim['worker_id'], claim['attempt'], 'attempt.started')
+        assert store.complete_job(job, **claim)
+    saved = store.stage_execution_snapshot(assess['batch_id'])
+    assert saved['assessment_summary']['valid'], saved['assessment_summary']
+    sealed = saved['output_manifest_id']
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "UPDATE scan_rule_traces SET finding_count=7 WHERE scan_id=%s", ('stage-scan',))
+    batch = store.enqueue_stage_batch('stage-scan', 'remediate', 'remediate_file',
+        [{'file': 'a.docx'}], snapshot_id=sealed, request_fingerprint='rerun-after-fix', input_manifest_id=sealed)
+    rows = store.seed_finding_dispositions('stage-scan', batch['batch_id'], snapshot_id=sealed)
+    assert len(rows) == 8
+    for index, row in enumerate(rows):
+        store.transition_finding_disposition('stage-scan', batch['batch_id'], row['finding_id'],
+            'unchanged_no_fix', expected_revision=0, event_id=f'unchanged-{index}')
+    reconciliation = store.finding_reconciliation('stage-scan', batch['batch_id'])
+    assert reconciliation['assessed'] == 8
+    assert reconciliation['accounted'] == 8
+    assert reconciliation['exact'] is True

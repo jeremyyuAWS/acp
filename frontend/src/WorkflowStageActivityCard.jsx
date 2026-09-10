@@ -12,6 +12,8 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
   const total = domain?.total ?? model.total
   const pct = typeof done === 'number' && typeof total === 'number' && total > 0
     ? Math.max(0, Math.min(100, Math.round(done / total * 100))) : 0
+  const findingAccounting = model.stage === 'remediate' && !!domain
+  const missingOutcomes = findingAccounting && Number.isSafeInteger(total) && Number.isSafeInteger(done) && total > done ? total - done : 0
   const live = !terminal(snapshot.state)
   return <section className={`workflow-sse-card stage-${model.stage}`} aria-label={`${model.stageLabel} activity`}>
     <header className="workflow-sse-card__header">
@@ -21,12 +23,12 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
         historyKey={`${snapshot.workflow_id || 'workflow'}:${model.executionId || model.stage}`} showText />}
       {onOpen && <button type="button" className="linklike" onClick={onOpen}>Open details →</button>}
     </header>
-    <p className="workflow-sse-card__outcome"><b>{shown(done)} of {shown(total)}</b> {domain?.unit || model.unit}</p>
-    <div className="workflow-sse-card__track" aria-label={`${pct}% complete`} role="progressbar"
+    <p className="workflow-sse-card__outcome"><b>{shown(done)} of {shown(total)}</b> {domain?.unit || model.unit}{findingAccounting ? ' accounted for' : ''}</p>
+    <div className="workflow-sse-card__track" aria-label={`${pct}% ${findingAccounting ? 'accounted for' : 'complete'}`} role="progressbar"
       aria-valuemin="0" aria-valuemax="100" aria-valuenow={pct}><span style={{ width: `${pct}%` }} /></div>
     {domain?.buckets?.length > 0 && <dl className="workflow-sse-card__metrics">
       {domain.buckets.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{shown(value)}</dd></div>)}
     </dl>}
-    {!model.integrityOk && <p className="workflow-sse-card__notice"><b>Accounting is reconciling.</b> Durable totals remain visible while ACP verifies this snapshot.</p>}
+    {!model.integrityOk && <p className="workflow-sse-card__notice"><b>Accounting is reconciling.</b> {missingOutcomes > 0 ? `${missingOutcomes} assessed finding${missingOutcomes === 1 ? '' : 's'} still lack a recorded outcome. This is not a count of fixes completed.` : 'Durable totals remain visible while ACP verifies this snapshot.'}</p>}
   </section>
 }
