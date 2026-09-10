@@ -90,3 +90,51 @@ def test_sharepoint_transport_uses_existing_folder_and_reads_back(monkeypatch):
     assert '/items/saved-folder:/report.html:/content' in calls[0]['put_url']
     assert calls[0]['conflict_behavior'] == 'fail'
     assert calls[0]['content'] == b'checklist'
+
+
+def test_drive_transport_uses_saved_folder_and_verifies_downloaded_bytes(monkeypatch):
+    from types import SimpleNamespace
+    import handlers
+    import publish
+    calls = []
+    downloaded = [b'follow-up checklist']
+    def get_media(*, fileId):
+        calls.append(('get_media', fileId))
+        return SimpleNamespace(execute=lambda: downloaded[0])
+    service = SimpleNamespace(files=lambda: SimpleNamespace(get_media=get_media))
+    def make_service(source, tokens):
+        assert source == 'drive' and tokens == {'drive': 'fixture-token'}
+        return service
+    monkeypatch.setattr(handlers, '_make_svc', make_service)
+    def upload(svc, folder_id, filename, data, **options):
+        assert svc is service
+        calls.append(('upload', folder_id, filename, data, options))
+        return dict(id='report-drive-item', url='https://drive.google.com/report', verified=True)
+    monkeypatch.setattr(publish, 'upload_published', upload)
+    root = dict(provider='drive', provider_location='drive', folder_id='existing-release-folder')
+    asset = dict(name='follow-up.html', content='follow-up checklist', content_type='text/html')
+    result = delivery._upload(root, asset, {'drive': 'fixture-token'}, 'bundle:asset-key')
+    assert result['url'] == 'https://drive.google.com/report'
+    assert calls == [('upload', 'existing-release-folder', 'follow-up.html', b'follow-up checklist',
+                      {'idempotency_key': 'bundle:asset-key', 'return_details': True}),
+                     ('get_media', 'report-drive-item')]
+    downloaded[0] = b'different bytes'
+    with pytest.raises(ValueError, match='could not be verified'):
+        delivery._upload(root, asset, {'drive': 'fixture-token'}, 'bundle:asset-key')
+    before = len(calls)
+    with pytest.raises(ValueError, match='connection is unavailable'):
+        delivery._upload(root, asset, {}, 'bundle:asset-key')
+    assert len(calls) == before
+
+
+def test_late_failed_worker_does_not_regress_completed_bundle(setup, monkeypatch):
+    store, release = setup
+    bundle = delivery.queue_release_reports(store, SID, OWNER, release['id'])
+    def another_worker_completed_then_this_upload_failed(*args):
+        with store._db.cursor() as cur:
+            store._db.execute(cur, "UPDATE release_report_bundles SET status='completed',error=NULL WHERE id=%s", (bundle['bundle_id'],))
+        raise RuntimeError('Late duplicate upload failure')
+    monkeypatch.setattr(delivery, '_upload', another_worker_completed_then_this_upload_failed)
+    result = delivery.process_release_reports(store, bundle['bundle_id'], OWNER)
+    assert result['status'] == 'completed'
+    assert result['error'] is None
