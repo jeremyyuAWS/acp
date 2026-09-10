@@ -1,6 +1,8 @@
 import { useCallback, useState } from 'react'
 import FolderPicker from './FolderPicker.jsx'
-import { listFolders, listSpFolders, putMyReleaseDestination } from './api.js'
+import { listFolders, putMyReleaseDestination } from './api.js'
+
+import { listReleaseMicrosoftFolders } from './releaseFolderBrowser.js'
 
 const providerCopy = (provider) => provider === 'sharepoint'
   ? { name: 'SharePoint or OneDrive', root: 'Microsoft files' }
@@ -14,7 +16,7 @@ export default function ReleaseDestinationPicker({ provider, value, onChange, on
   // key and as a dependency of its initial-load effect; recreating it here
   // causes the picker to reload on every parent update, which looks like a flash.
   const lister = useCallback((parent) => (
-    provider === 'sharepoint' ? listSpFolders(parent) : listFolders(parent)
+    provider === 'sharepoint' ? listReleaseMicrosoftFolders(parent) : listFolders(parent)
   ), [provider])
 
   const save = async (picked) => {

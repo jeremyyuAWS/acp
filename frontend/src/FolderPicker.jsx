@@ -282,7 +282,7 @@ export default function FolderPicker({
           padding: '11px 18px', fontSize: 13,
           background: multi && !inherited && isPicked(f.id) ? '#F3EEFC' : 'transparent',
           borderBottom: idx < shown.length - 1 ? '1px solid var(--line)' : 'none' }}>
-          {multi && (() => {
+          {multi && f.selectable !== false && (() => {
             // Selecting and drilling in are DIFFERENT actions on the same row, so they get
             // different targets. One control doing both is the picker bug where opening a
             // folder to look inside it silently changes what you are about to scan.
