@@ -30,3 +30,6 @@
 @media(max-width:600px) { .release-quick-step { padding:12px; } .release-quick-file { flex-wrap:wrap; } .release-quick-file small { width:100%; padding-left:28px; } }
 .release-quick-file { flex-wrap:wrap; }
 .release-quick-file > .release-quick-file-reason { flex-basis:100%; margin-left:28px; font-size:12px; color:var(--muted); }
+.release-published-message { display:grid; gap:8px; padding:16px; border:1px solid var(--line); border-left:4px solid var(--success-fg); border-radius:10px; }
+.release-published-message a { width:fit-content; font-weight:600; }
+.release-quick-file--delivered { background:#f3f2f4; color:var(--muted); }
