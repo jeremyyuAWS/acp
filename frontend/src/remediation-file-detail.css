@@ -1,0 +1,16 @@
+.remediation-file-page nav { display: flex; gap: 12px; }
+.remediation-file-page h2 { font-family: var(--font-mono); overflow-wrap: anywhere; }
+.remediation-file-summary { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
+.remediation-file-summary > div { display: grid; gap: 6px; }
+.remediation-file-summary small { text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+.remediation-file-summary strong { font-size: 22px; }
+.remediation-sc-card { border: 1px solid var(--line); border-radius: 12px; margin: 12px 0; overflow: hidden; background: var(--surface, white); }
+.remediation-sc-card header { display: flex; gap: 12px; align-items: center; padding: 12px 15px; flex-wrap: wrap; }
+.remediation-sc-card h4, .remediation-sc-card header p { margin: 0; }
+.remediation-sc-card header p { font-size: 12px; margin-top: 4px; }
+.remediation-sc-card header > small { margin-left: auto; }
+.remediation-sc-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.remediation-sc-row, .remediation-sc-change { border-top: 1px solid var(--line); padding: 12px 15px; overflow-wrap: anywhere; }
+.remediation-sc-change dl { display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 8px; }
+.remediation-sc-change dd { margin: 0; white-space: pre-wrap; }
+.remediation-live-documents .remediation-file-summary { min-width: 0; }

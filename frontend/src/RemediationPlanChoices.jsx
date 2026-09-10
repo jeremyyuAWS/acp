@@ -60,14 +60,14 @@ export function RetiredRemediationPlanChoices({ policy, providers, disabled, onC
 }
 
 // The previous detailed panel is retained above for restoration, but is no longer mounted.
-export default function RemediationPlanChoices({ answers, policy, disabled, onChange, generationChainOptions, budgetSupported = false, reviewSupported = false, automaticReviewSupported = false, automaticReviewReason = '', reviewAdministratorFloor = null, reviewEligibleFamilies = [], standingApprovalSupported = false, standingApprovalReason = '' }) {
+export default function RemediationPlanChoices({ step = null, answers, policy, disabled, onChange, generationChainOptions, budgetSupported = false, reviewSupported = false, automaticReviewSupported = false, automaticReviewReason = '', reviewAdministratorFloor = null, reviewEligibleFamilies = [], standingApprovalSupported = false, standingApprovalReason = '' }) {
   const id = useId()
   const localOnly = policy.ai_zone === 'local'
   const configured = localOnly ? [] : generationSteps(policy, generationChainOptions)
   const catalogFor = step => generationChainOptions?.models?.find(
     model => model.provider === step.provider && model.model === step.model)
   return <div className="remediation-plan-choices">
-    <fieldset disabled={disabled}>
+    <fieldset hidden={step !== null && step !== 0} disabled={disabled}>
       <legend>1. Which changes may ACP apply?</legend>
       <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
         <div className="remediation-plan-option">
@@ -86,7 +86,7 @@ export default function RemediationPlanChoices({ answers, policy, disabled, onCh
         </div>
       </div>
     </fieldset>
-    <fieldset disabled={disabled}>
+    <fieldset hidden={step !== null && step !== 1} disabled={disabled}>
       <legend>2. Which tools may ACP use?</legend>
       <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
         <div className="remediation-plan-option">
@@ -111,6 +111,8 @@ export default function RemediationPlanChoices({ answers, policy, disabled, onCh
           <RemediationOptionHelp label="AI waterfall">Cloud models draft and review supported suggestions. Later models run after an empty or incomplete suggestion. Your approval choice and spending limit apply throughout the run.</RemediationOptionHelp>
         </div>
       </div>
+    </fieldset>
+    <div hidden={step !== null && step !== 2}>
       {/* Where content actually goes, before Start. Read from the server's verified
           catalog (generationChainOptions) rather than a hardcoded provider list, so this
           can never advertise a destination this deployment has not configured. Provider
@@ -140,15 +142,14 @@ export default function RemediationPlanChoices({ answers, policy, disabled, onCh
           ? 'AI pauses when the remaining budget cannot cover a request. Rule-based fixes continue. $0 permits no paid AI requests. Infrastructure costs are separate.'
           : 'Spending limits are not available on this server. Choose Rules only if you need a firm cap.'}</p>
       </div>}
-    </fieldset>
     {policy.ai > 0 && localOnly && <p>Ollama drafts wait for your review. Cloud AI review and fallback models are off. Unavailable or unsupported local drafts remain for manual attention.</p>}
-    <RemediationAutoApproval policy={policy} onChange={onChange} disabled={disabled}
-      supported={standingApprovalSupported && budgetSupported} reason={standingApprovalReason} />
+    {(step === null || (policy.ai > 0 && !localOnly)) && <RemediationAutoApproval policy={policy} onChange={onChange} disabled={disabled}
+      supported={standingApprovalSupported && budgetSupported} reason={standingApprovalReason} />}
     {policy.ai > 0 && !localOnly && <RemediationGenerationChain policy={policy} options={generationChainOptions} disabled={disabled} budgetSupported={budgetSupported} onChange={onChange} />}
     {policy.ai > 0 && !localOnly && reviewSupported && <details><summary>Optional AI review and approval threshold</summary><RemediationReviewPolicy value={policy.ai_review} onChange={value => onChange('ai_review', value)}
       disabled={disabled || !budgetSupported} supported={reviewSupported} automaticSupported={automaticReviewSupported} standingApprovalEnabled={policy.auto_approve_ai === true}
       automaticReason={automaticReviewReason} administratorFloor={reviewAdministratorFloor} eligibleFamilies={reviewEligibleFamilies} /></details>}
-
+    </div>
   </div>
 }
 

@@ -77,7 +77,7 @@ const nameOf = (r) => r.querySelector('td div').textContent
 const order = (c) => rowsOf(c).map(nameOf)
 const named = (c, name) => rowsOf(c).find((r) => nameOf(r) === name)
 const cell = (r, col) => r.querySelector(`.col-${col} .n`).textContent
-const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
+const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.querySelector('.remediation-category-pill')?.getAttribute('aria-label') || b.textContent))
 // "Show every row" — the state filter AND, now, the A11 pagination reveal if the filtered set still
 // exceeds one page. Existing callers asked for every row to be visible; A11 truncation is additive
 // and this keeps that promise rather than making every pre-existing test learn about page size.
@@ -138,10 +138,11 @@ describe('the severity partition sums to the row it sits in', () => {
     const c = await mount({ files: ESTATE })
     const row = named(c, 'handbook.docx')
     const category = row.querySelector('.col-category')
-    expect(category.textContent).toContain('Fully automated · 2')
-    expect(category.textContent).toContain('AI suggestion needed · 1')
-    expect(category.textContent).toContain('SC 1.1.1')
-    expect(category.textContent).toContain('Severity: CRITICAL')
+    expect(category.textContent).toContain('Auto 2')
+    expect(category.textContent).toContain('AI 1')
+    expect(category.querySelector('details')).toBeNull()
+    expect(category.querySelector('[aria-label="Fully automated: 2 findings"]')).not.toBeNull()
+    expect(c.querySelector('[aria-label="Remediation category legend"]').textContent).toContain('Fully automated')
     expect(cell(row, 'findings')).toBe('3')
     expect(c.querySelector('th').parentElement.textContent).not.toContain('Severity')
   })
@@ -149,7 +150,7 @@ describe('the severity partition sums to the row it sits in', () => {
   it('breaks down the work needing a person, in the cell it sums to', async () => {
     const c = await mount({ files: ESTATE })
     const row = named(c, 'handbook.docx')
-    expect(row.querySelector('.col-category').textContent).toContain('AI suggestion needed · 1')
+    expect(row.querySelector('.col-category').textContent).toContain('AI 1')
     expect(cell(row, 'person')).toBe('1')
   })
 
@@ -180,7 +181,7 @@ describe('the order is what needs a person, not what looks worst', () => {
     const row = named(c, 'machine.pptx')
     expect(cell(row, 'findings')).toBe('2')
     expect(cell(row, 'auto')).toBe('2')
-    expect(row.querySelector('.col-category').textContent).toMatch(/Fully automated · 2/)
+    expect(row.querySelector('.col-category').textContent).toMatch(/Auto 2/)
     expect(c.textContent).toMatch(/3 findings · 2 auto-fix · 1 needing a person/)
   })
 
@@ -291,7 +292,7 @@ describe('A19 severity filter and A24 auto-fixable toggle — narrow, never hide
   // count stays on screen whether or not it is the one selected, and a narrowed view still prints
   // the estate totals underneath it. Severity counts are FINDINGS ("Serious 2"), the toggle's
   // denominator is findings AND documents, and neither control invents a number of its own.
-  const refineBtn = (c, re) => [...c.querySelectorAll('.worklist-refine button')].find((b) => re.test(b.textContent))
+  const refineBtn = (c, re) => [...c.querySelectorAll('.worklist-refine button')].find((b) => re.test(b.querySelector('.remediation-category-pill')?.getAttribute('aria-label') || b.textContent))
   const autoInput = (c) => c.querySelector('.worklist-autoonly input')
 
   it('counts findings by remediation category without dropping zero categories', async () => {
@@ -343,7 +344,7 @@ describe('A19 severity filter and A24 auto-fixable toggle — narrow, never hide
     // reader sees they were considered, and disabled, so the list cannot be filtered to nothing.
     expect(refineBtn(c, /Fully automated/).disabled).toBe(false)
     expect(refineBtn(c, /AI suggestion needed/).disabled).toBe(true)
-    expect(refineBtn(c, /AI suggestion needed/).textContent).toMatch(/AI suggestion needed 0/)
+    expect(refineBtn(c, /AI suggestion needed/).textContent).toMatch(/AI 0/)
   })
 
   it('hides both controls when the state in view has no finding work to narrow', async () => {
@@ -542,7 +543,7 @@ describe('what the component is not allowed to derive itself', () => {
     // Category/SC disclosure uses already-scoped findings from documentRows.
     expect(src).toContain('remediationCategory(finding)')
     expect(src).not.toMatch(/\.issues\b/)
-    expect(src).toContain('SC {finding.sc}')
+    expect(src).toContain('<RemediationCategoryPill')
   })
 
   it('does not impose a second ordering on the list', () => {
