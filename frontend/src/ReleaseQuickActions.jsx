@@ -132,7 +132,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
       {!readOnly && !destinationLocked && <details><summary>Change destination</summary>{destinationPicker}</details>}
     </section>
     <section className="release-quick-step" aria-labelledby={`${reasonId}-publish`}>
-      <h4 id={`${reasonId}-publish`}><span className="release-step-number">3</span> Publish copies</h4>
+      <h4 id={`${reasonId}-publish`}><span className="release-step-number">3</span> {allDelivered ? 'Publication complete' : 'Publish copies'}</h4>
       <p>Saved copies are published with a scan summary and a per-file checklist of remaining work. Publishing does not certify accessibility.</p>
       <div className="release-quick-buttons">
       <div className="release-quick-action">
