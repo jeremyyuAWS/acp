@@ -30,7 +30,7 @@ def _deck(*names: str) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr(SLIDE, f"<p:sld>{pics}</p:sld>")
-        z.writestr("docProps/core.xml", "<cp:coreProperties/>")
+        z.writestr("docProps/core.xml", "<cp:coreProperties xmlns:cp='http://schemas.openxmlformats.org/package/2006/metadata/core-properties'/>")
     return buf.getvalue()
 
 
@@ -111,6 +111,19 @@ def test_each_image_receives_its_own_approved_description(store, monkeypatch):
     assert 'name="Picture 1" descr="A clinician at a desk."' in xml
     assert 'name="Chart 2" descr="AI draft for Chart 2"' in xml     # unedited draft accepted
     assert blob.uploads == [(FILE, "application/vnd.openxmlformats-officedocument.presentationml.presentation")]
+    # Approved edits carry the same embedded provenance as deterministic outputs, and
+    # evidence binds the final stamped bytes, not an earlier unstamped version.
+    from xml.etree import ElementTree as ET
+    import hashlib
+    with zipfile.ZipFile(io.BytesIO(blob.data)) as archive:
+        props = ET.fromstring(archive.read("docProps/custom.xml"))
+        by_name = {p.get("name"): list(p)[0].text for p in props}
+    assert by_name["Remediated By"] == "Mova.io ACP"
+    assert by_name["Remediation Date"].endswith("Z")
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "SELECT corrected_sha256 FROM file_records WHERE scan_id=%s AND file=%s", (SID, FILE))
+        assert store._db.fetchone(cur)["corrected_sha256"] == hashlib.sha256(blob.data).hexdigest()
+
 
 
 def test_written_values_are_credited_and_the_file_certifies_off_the_rescan(store, monkeypatch):

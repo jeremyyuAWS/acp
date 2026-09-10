@@ -46,6 +46,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [releaseError, setReleaseError] = useState(null)
   const [manifestError, setManifestError] = useState('')
   const [publishing, setPublishing] = useState(false)
+  const publishLock = useRef(false)
   const [downloading, setDownloading] = useState(false)
   const [builderStep, setBuilderStep] = useState(1)
   const [deliveryMethod, setDeliveryMethod] = useState('publish')
@@ -82,6 +83,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   })
   const [sel, setSel] = useState(null)
   useEffect(() => {
+    publishLock.current = false; setPublishing(false)
     continuationReported.current = new Set()
     frozenDestination.current = undefined
     setReleaseDestination(null); setDestinationLocked(false); setDestinationPending(true)
@@ -390,15 +392,17 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   })
   }
   const followSharePointRelease = async (expectedFiles) => {
+    const scanId = run.id
     // The backend queues one durable job per SharePoint document. Follow the persisted release,
     // not the originating request: navigation, a worker restart, or a replica change cannot erase
     // progress. The normal load effect below restores the same state after a page reload.
     for (let attempt = 0; attempt < 180; attempt += 1) {
-      const status = await getReleaseStatus(run.id)
+      if (currentRunId.current !== scanId) return null
+      const status = await getReleaseStatus(scanId)
+      if (currentRunId.current !== scanId) return null
       applyReleaseStatus(status)
       const rows = status?.documents || []
-      const pending = rows.some((row) => row.status === 'queued' || row.status === 'running')
-      if (!pending && rows.length >= expectedFiles.length) return status
+      if (expectedFiles.every(file => rows.some(row => row.file === file && ['published', 'failed'].includes(row.status)))) return status
       await new Promise((resolve) => setTimeout(resolve, 2000))
     }
     setReleaseAnnouncement('Release is still running safely in the background. You may leave this page and return later.')
@@ -497,29 +501,39 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     return true
   }
   const publishAll = async (fileNames = null, preferredFolderName = '', exact = false) => {
-    if (publishing || readOnly || destinationPending || (settingsPending && !destinationLocked)) return
+    if (publishLock.current || publishing || readOnly || destinationPending || (settingsPending && !destinationLocked)) return
+    const operation = { scanId: run?.id }
+    publishLock.current = operation
     setPublishing(true)
+    setReleaseError(null)
+    setReleaseAnnouncement('Publishing your selected copies. Please wait for confirmation.')
     const requested = fileNames ? new Set(fileNames) : null
     const pending = selectableReady.filter((f) => !done[f.file] && (!requested || requested.has(f.file))).map((f) => f.file)
-    if (!pending.length) { setPublishing(false); return }
+    if (!pending.length) { publishLock.current = false; setPublishing(false); return }
     try {
       const res = exact
         ? await publishAllFiles(run?.id, pending, preferredFolderName, { destination: releaseDestination,
           ...partialReleaseOptions(pending), expectedArtifacts: Object.fromEntries(selectableReady.filter(f => pending.includes(f.file)).map(f => [f.file, f.corrected_sha256])) })
         : await publishSelectedFiles(pending, preferredFolderName)
+      if (currentRunId.current !== operation.scanId) return
       const successful = rememberRelease(res, pending)
       if (releaseProvider === 'sharepoint' && res?.queued) {
         const status = await followSharePointRelease(pending)
+        if (currentRunId.current !== operation.scanId) return
         ;(status?.documents || []).filter((row) => row.status === 'published')
           .forEach((row) => onPublish?.(row.file))
-        setPublishing(false)
         return
       }
       successful.forEach((row) => onPublish?.(row.file))
     } catch (error) {
+      if (currentRunId.current !== operation.scanId) return
       if (!await recoverReleaseDestination(error, pending)) setReleaseError({ summary: 'The selected copies could not be released.', details: error?.detail?.message || error?.detail?.preflight?.message || error?.message || 'The release service did not complete the request.', retry: () => publishAll(fileNames, preferredFolderName, exact) })
+    } finally {
+      if (publishLock.current === operation) {
+        publishLock.current = false
+        setPublishing(false)
+      }
     }
-    setPublishing(false)
   }
   const downloadSelected = async () => {
     if (downloading || !selectedReady.length) return
@@ -754,6 +768,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       </section>
       <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
         folderName={releaseFolderName} readOnly={readOnly} publishing={publishing} destinationLocked={destinationLocked} destinationPending={destinationPending || (settingsPending && !destinationLocked)}
+        announcement={releaseError ? 'Publishing needs attention. See the message below.' : releaseAnnouncement}
         allowRemainingIssues={allowRemainingIssues}
         providerLabel={sourceProduct}
         publishedFolders={releaseFolders.length ? releaseFolders : releaseFolder?.url ? [releaseFolder] : []}
@@ -794,6 +809,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <button className="ghost small" onClick={downloadReleaseManifest}>Download delivery receipt (manifest)</button>
           {manifestError && <p role="alert">{manifestError}</p>}
           {publishedEntries.map((entry) => <div className="release-receipt__file" key={entry.file}><b>{entry.file}</b><span>{fmtPublished(entry)}</span>{pubUrls[entry.file] && <a href={pubUrls[entry.file]} target="_blank" rel="noopener noreferrer">Open delivered copy ↗</a>}</div>)}
+          <ReleaseReports scanId={run?.id} publishedCount={publishedCount} readOnly={readOnly} />
         </section>}
 
       {packageJob && <section className="release-notice release-package-job" role="status" aria-label="Prepared package status">
@@ -1176,7 +1192,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       </details>
       <section className="panel" aria-label="Reports and delivery history">
         <h3>Reports and delivery history</h3>
-        <ReleaseReports scanId={run?.id} publishedCount={publishedCount} readOnly={readOnly} />
+        {!(releaseId || publishedList.length > 0) && <ReleaseReports scanId={run?.id} publishedCount={publishedCount} readOnly={readOnly} />}
         <ReleaseHistory refreshKey={`${run?.id || ''}:${publishedCount}:${failedCount}`} />
       </section>
 
