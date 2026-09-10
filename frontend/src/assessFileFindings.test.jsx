@@ -131,9 +131,9 @@ describe('AssessFileFindings — every number comes from assessMetrics', () => {
     expect(row.autoFixAvailable).toBe(2)      // 1.3.1 + 2.4.2
     expect(row.humanReviewRequired).toBe(2)   // two 1.1.1 findings, assisted
     expect(t).toMatch(/Findings 4/)
-    expect(t).toMatch(/1 critical/)
-    expect(t).toMatch(/2 serious/)
-    expect(t).toMatch(/1 minor/)
+    expect(t).toMatch(/Fully automated/)
+    expect(t).toMatch(/AI 2/)
+    expect(t).toMatch(/Auto 2/)
     expect(t).toMatch(/Auto-fix available 2/)
     expect(t).toMatch(/Human review required 2/)
   })
@@ -262,10 +262,10 @@ describe('AssessFileFindings — ordered by what needs a person, and nothing is 
     const row = documentRow(MIXED, { cap, assessment: asmt, criteria: CRITERIA, level: 'AA' })
     const t = text(await mount({ row, file: MIXED, cap, assessment: asmt }))
     // The auto-fixable group is last, and still says CRITICAL, still names its finding.
-    expect(t).toMatch(/Critical/)
+    expect(t).toMatch(/Fully automated/)
     expect(t).toMatch(/1\.3\.1 Info and Relationships/)
     expect(t).toMatch(/Table has no header row/)
-    expect(t).toMatch(/1 critical/)   // and it is still counted in the file's severity mix
+    expect(t).toMatch(/Fully automated/)   // and it is still counted in the file's severity mix
   })
 
   it('renders a single band when every group is on the same side', async () => {
