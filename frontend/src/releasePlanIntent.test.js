@@ -36,3 +36,16 @@ it('rejects an intent whose stored files disagree with its displayed scope key',
   const c = client(); await authorizeAcceptedRelease('scan', ['a'], accepted, {...intent,files:['b']}, c)
   expect(c.enable).not.toHaveBeenCalled(); expect(c.get).not.toHaveBeenCalled()
 })
+
+it('passes remaining issue and report flags only for a matching accepted run',async()=>{
+ const c=client();const auto={...intent,allow_remaining_issues:true,include_reports:true}
+ await authorizeAcceptedRelease('scan',['a'],accepted,auto,c)
+ expect(c.enable).toHaveBeenCalledWith('scan',expect.objectContaining({allow_remaining_issues:true,include_reports:true}))
+ c.enable.mockClear();await authorizeAcceptedRelease('scan',['a'],{...accepted,enqueued:0},auto,c);expect(c.enable).not.toHaveBeenCalled()
+})
+it('does not claim recovered consent if saved report or remaining-issue flags differ',async()=>{
+ const c=client();c.enable.mockRejectedValue(new Error('lost'))
+ c.get.mockImplementation(async()=>({authorization:{request_id:c.enable.mock.calls[0][1].request_id,run_id:'accepted-run',source_revision:'source',status:'active',allow_remaining_issues:false,include_reports:false}}))
+ const notice=await authorizeAcceptedRelease('scan',['a'],accepted,{...intent,allow_remaining_issues:true,include_reports:true},c)
+ expect(notice).toContain('could not be confirmed')
+})

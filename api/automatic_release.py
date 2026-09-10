@@ -16,6 +16,11 @@ class DeliveryAlreadyAdmitted(ValueError):
     pass
 
 
+class FileRemediationFinishedWithoutCopy(ValueError):
+    """This authorized file settled without a publishable corrected artifact."""
+    pass
+
+
 def current_run(store, sid, owner):
     with store._db.cursor() as cur:
         store._db.execute(cur, "SELECT * FROM stage_executions WHERE scan_id=%s AND owner_email=%s AND stage='remediate' AND is_current=1 ORDER BY created_at DESC LIMIT 1", (sid, owner))
@@ -92,7 +97,7 @@ def public(row, store=None):
     counts = dict(published=0, pending=0, blocked=0, failed=0)
     details = {}
     for file in files:
-        entry = dict(progress.get(file, {'state': 'waiting', 'message': 'Waiting for approval and verification'}))
+        entry = dict(progress.get(file, {'state': 'waiting', 'message': 'Waiting for a saved corrected copy' if row['intent'].get('allow_remaining_issues') else 'Waiting for approval and verification'}))
         # A delivery admitted before Stop may finish afterward. Its exact durable
         # receipt remains visible without reviving authorization or scheduling work.
         if store is not None and entry.get('artifact_digest'):
@@ -110,7 +115,9 @@ def public(row, store=None):
                 request_id=row['request_id'], source_revision=row['intent']['source_revision'],
                 destination_label=destination_label(row['intent']['destination']), destination=row['intent']['destination'],
                 progress=counts, file_progress=details, stopped_at=row.get('stopped_at'),
-                expires_at=row['intent']['expires_at'], revision=row['revision'])
+                expires_at=row['intent']['expires_at'], revision=row['revision'],
+                allow_remaining_issues=row['intent'].get('allow_remaining_issues', False),
+                include_reports=row['intent'].get('include_reports', False))
 
 
 def planning_preview(store, sid, owner, files):
@@ -163,14 +170,16 @@ def preview(store, sid, owner, files):
     return result
 
 
-def authorize(store, sid, owner, run_id, files, destination, request_id, expected_source_revision=None):
+def authorize(store, sid, owner, run_id, files, destination, request_id, expected_source_revision=None, *, allow_remaining_issues=False, include_reports=False):
     import publish
+    if type(allow_remaining_issues) is not bool or type(include_reports) is not bool:
+        raise ValueError("Release options must be booleans.")
     if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', request_id):
         raise ValueError('A bounded unique request ID is required.')
     # A lost-response replay must not recompute a later expiry or folder name.
     prior = persistence.by_request(store, owner, sid, request_id)
     if prior:
-        if (expected_source_revision is not None and expected_source_revision != prior['intent']['source_revision']) or prior['run_id'] != run_id or sorted(files) != list(prior['intent']['files']) or destination != prior['intent']['destination']:
+        if (expected_source_revision is not None and expected_source_revision != prior['intent']['source_revision']) or prior['run_id'] != run_id or sorted(files) != list(prior['intent']['files']) or destination != prior['intent']['destination'] or allow_remaining_issues != prior['intent'].get('allow_remaining_issues', False) or include_reports != prior['intent'].get('include_reports', False):
             raise ValueError('This request ID belongs to different release permission.')
         return prior
     with store.transaction():
@@ -178,7 +187,7 @@ def authorize(store, sid, owner, run_id, files, destination, request_id, expecte
             store._db.execute(cur,'UPDATE scan_runs SET owner_email=owner_email WHERE id=%s AND owner_email=%s',(sid,owner))
         prior = persistence.by_request(store,owner,sid,request_id)
         if prior:
-            if (expected_source_revision is not None and expected_source_revision != prior['intent']['source_revision']) or prior['run_id'] != run_id or sorted(files) != list(prior['intent']['files']) or destination != prior['intent']['destination']:
+            if (expected_source_revision is not None and expected_source_revision != prior['intent']['source_revision']) or prior['run_id'] != run_id or sorted(files) != list(prior['intent']['files']) or destination != prior['intent']['destination'] or allow_remaining_issues != prior['intent'].get('allow_remaining_issues', False) or include_reports != prior['intent'].get('include_reports', False):
                 raise ValueError('This request ID belongs to different release permission.')
             return prior
         run, source, records = selection(store, sid, owner, files, run_id)
@@ -186,7 +195,7 @@ def authorize(store, sid, owner, run_id, files, destination, request_id, expecte
             raise ValueError('The assessed source changed after Plan. Review the plan and start again.')
         destination = destination_for(store, sid, owner, source, records, files, destination)
         existing = store.release_for_scan(sid, owner)
-        intent = dict(version=1, source=source, source_revision=run['input_snapshot_id'],
+        intent = dict(version=2, allow_remaining_issues=allow_remaining_issues, include_reports=include_reports, source=source, source_revision=run['input_snapshot_id'],
                       files={f: record_identity(records[f]) for f in sorted(files)}, destination=destination,
                       release_folder_name=(existing or {}).get('folder_name') or publish.release_folder_name(owner_email=owner),
                       release_parent_id=existing.get('parent_folder_id') if existing else destination['folder_id'],
@@ -214,21 +223,33 @@ def require_authority(store, row, file):
 
 def ready(store, row, file):
     record = require_authority(store, row, file)
-    if run_files(store, row['run_id']).get(file) != 'done':
+    work_state = run_files(store, row['run_id']).get(file)
+    partial = row['intent'].get('allow_remaining_issues') is True
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "SELECT payload FROM jobs WHERE scan_id=%s AND type='apply_approved_values' AND status IN ('queued','running','processing','retry')", (row['scan_id'],))
+        for job in store._db.fetchall(cur):
+            payload = json.loads(job['payload']) if isinstance(job['payload'], str) else job['payload']
+            if payload.get('file') == file:
+                raise ValueError('Waiting for active corrections to finish writing this file.')
+    if partial and work_state in {'dead', 'cancelled'}:
+        raise FileRemediationFinishedWithoutCopy('Remediation for this file stopped or failed. No corrected copy was published; the original is unchanged.')
+    if work_state != 'done':
         raise ValueError('Waiting for this run to finish remediating the file.')
-    if not record.get('compliant') or not record.get('remediated_at') or not re.fullmatch('[0-9a-f]{64}', record.get('corrected_sha256') or ''):
-        raise ValueError('Waiting for a verified corrected artifact.')
-    if store.count_unapplied_approved_values(row['scan_id'], file):
+    if partial and (not record.get('remediated_at') or not re.fullmatch('[0-9a-f]{64}', record.get('corrected_sha256') or '')):
+        raise FileRemediationFinishedWithoutCopy('Remediation finished without a saved corrected copy. The original is unchanged; remaining issues are listed for follow-up.')
+    if (not partial and not record.get('compliant')) or not record.get('remediated_at') or not re.fullmatch('[0-9a-f]{64}', record.get('corrected_sha256') or ''):
+        raise ValueError('Waiting for a saved corrected artifact.' if partial else 'Waiting for a verified corrected artifact.')
+    if not partial and store.count_unapplied_approved_values(row['scan_id'], file):
         raise ValueError('Approved changes still need application and verification.')
     for item in store.list_hitl_queue(scan_id=row['scan_id'], owner=row['owner_email'], include_superseded=True):
-        if item.get('file') != file or item.get('superseded'):
+        if partial or item.get('file') != file or item.get('superseded'):
             continue
         if item.get('status') not in {'approved', 'resolved'}:
             raise ValueError('Per-file review or manual work remains.')
         if item.get('status') == 'approved' and item.get('proposals'):
             if item.get('approved_source_revision') != row['intent']['source_revision']:
                 raise ValueError('Approval belongs to a different assessed source.')
-    require_current_record(store, row['scan_id'], file, record['corrected_sha256'], record['remediated_at'], owner=row['owner_email'])
+    require_current_record(store, row['scan_id'], file, record['corrected_sha256'], record['remediated_at'], owner=row['owner_email'], allow_remaining_issues=partial)
     return record
 
 
@@ -328,6 +349,7 @@ def advance(store, payload, job):
             result = publish_files(row['scan_id'], request_for(row['owner_email'], row['scan_id']),
                 dict(files=[file], destination=row['intent']['destination'] if row['intent']['release_parent_id'] else None,
                      release_folder_name=row['intent']['release_folder_name'], automatic_release_id=row['id'],
+                     allow_remaining_issues=row['intent'].get('allow_remaining_issues', False),
                      expected_artifacts={file:digest}, expected_destination=row['intent']['destination'] if row['intent']['release_parent_id'] else None))
             outcome = next((r for r in result.get('published',[]) if r.get('file')==file),{})
             confirmed = receipt(store,row,file,digest)
@@ -336,6 +358,8 @@ def advance(store, payload, job):
                 message='Delivered' if state=='published' else 'Waiting for delivery receipt' if state=='publishing' else 'Delivery was not confirmed. Inspect the receipt before retrying.',receipt=outcome))
         except DeliveryAlreadyAdmitted:
             continue
+        except FileRemediationFinishedWithoutCopy as exc:
+            persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='failed',message=str(exc),failure_category='no_corrected_copy'))
         except (ValueError, ReleaseArtifactError) as exc:
             persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc)))
         except Exception:
@@ -347,8 +371,28 @@ def advance(store, payload, job):
         states = [r.get('state') for r in row['progress'].get('files',{}).values()]
         expired = datetime.now(timezone.utc) >= datetime.fromisoformat(row['intent']['expires_at'])
         completed = len(states)==len(row['intent']['files']) and all(s=='published' for s in states)
-        persistence.save(store,row,status='completed' if completed else 'failed' if expired else 'waiting',
-                         progress=row['progress'],schedule=not completed and not expired,delay=20)
+        terminal = len(states)==len(row['intent']['files']) and all(s in {'published', 'failed'} for s in states)
+        if (terminal or expired) and row['intent'].get('include_reports'):
+            from release_report_delivery import queue_release_reports
+            release = store.release_for_scan(row['scan_id'], row['owner_email'])
+            if release:
+                # Include selected files that finished without a copy even if another
+                # file created the release only later in this tick. Never replace a receipt.
+                failures = [(file, entry) for file, entry in row['progress'].get('files', {}).items()
+                            if entry.get('failure_category') == 'no_corrected_copy']
+                if failures:
+                    store.ensure_release_execution(row['scan_id'], row['owner_email'], row['intent']['source'],
+                        len(row['intent']['files']), preferred_folder_name=release['folder_name'],
+                        parent_folder_id=release.get('parent_folder_id'), parent_folder_name=release.get('parent_folder_name'))
+                    for file, entry in failures:
+                        saved = store.get_release_document(release['id'], file, row['owner_email'])
+                        if not saved or saved.get('status') != 'published':
+                            store.record_release_document(release['id'], row['owner_email'],
+                                dict(file=file, status='failed', failure_category='no_corrected_copy', explanation=entry['message']))
+                # Freeze reports and enqueue delivery in the same transaction as completion.
+                queue_release_reports(store, row['scan_id'], row['owner_email'], release['id'])
+        persistence.save(store,row,status='completed' if completed else 'failed' if terminal or expired else 'waiting',
+                         progress=row['progress'],schedule=not terminal and not expired,delay=20)
 
 
 def validate_publish_request(store, sid, owner, files, body):
@@ -356,6 +400,8 @@ def validate_publish_request(store, sid, owner, files, body):
     row = persistence.get(store,body['automatic_release_id'],owner)
     if not row or row['scan_id'] != sid:
         raise ValueError('Automatic release authorization not found in this scan.')
+    if body.get('allow_remaining_issues', False) != row['intent'].get('allow_remaining_issues', False):
+        raise ValueError('Automatic release options differ from the accepted plan.')
     expected_destination = row['intent']['destination'] if row['intent']['release_parent_id'] else None
     if body.get('destination') != expected_destination or body.get('release_folder_name') != row['intent']['release_folder_name']:
         raise ValueError('Automatic release destination differs from the authorized destination.')

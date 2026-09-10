@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getAutomaticRelease } from './api.js'
 import { releasePlanKey } from './releasePlanIntent.js'
 import InfoTip from './InfoTip.jsx'
@@ -9,31 +9,39 @@ export default function RemediationReleasePlan({ scanId, files, intent, onChange
   const [preview, setPreview] = useState(null)
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
+  const [reviewKey, setReviewKey] = useState(null)
+  const choice = useRef({ key, review: false })
+  if (choice.current.key !== key) choice.current = { key, review: false }
   useEffect(() => {
     let live = true
     const controller = new AbortController()
     setPreview(null); setError(''); onChange(null)
     if (!scanId || !files.length) return () => { live = false; controller.abort() }
     read(scanId, files, { signal: controller.signal }).then(result => {
-      if (live) setPreview({ key, ...(result?.planning || { available: false, reason: 'Automatic release planning is unavailable on this server.' }) })
+      if (!live) return
+      const planning = { key, ...(result?.planning || { available: false, reason: 'Automatic publishing requires a connected destination.' }) }
+      setPreview(planning)
+      if (planning.available && !choice.current.review) onChange({ key, scanId, files: [...planning.files], destination: { ...planning.destination }, source_revision: planning.source_revision, allow_remaining_issues: true, include_reports: true })
     }).catch(() => { if (live) setError('The release destination could not be checked.') })
     return () => { live = false; controller.abort() }
   }, [key, reload, read])
   const ready = preview?.key === key && preview.available === true
   const checked = ready && intent?.key === key
+  const choose = review => {
+    choice.current = { key, review }
+    setReviewKey(review ? key : null)
+    onChange(review ? null : { key, scanId, files: [...preview.files], destination: { ...preview.destination }, source_revision: preview.source_revision, allow_remaining_issues: true, include_reports: true })
+  }
   return <section className="rem-auto-release" aria-label="Release option for this plan">
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><label className="rem-auto-release-option">
-      <input type="checkbox" checked={!!checked} disabled={disabled || !ready}
-        onChange={event => onChange(event.target.checked ? { key, scanId, files: [...preview.files], destination: { ...preview.destination }, source_revision: preview.source_revision } : null)} />
-      <strong>Automatically release files when ready</strong>
-    </label>
-    <InfoTip label="automatic release">
-      When you approve this plan and start, release each selected file after its required approvals and verification pass. Other files can keep processing.
-      {' '}{checked ? `Selected for ${files.length} file${files.length === 1 ? '' : 's'} in this plan. Permission starts only after this run is accepted and lasts up to 24 hours.` : 'Off by default for each new plan. This choice is separate from AI approval and is not saved as a future default.'}
-      {' '}Changing files or leaving this page clears this choice. After starting, use Live to see progress or stop future releases. Corrected copies go into a release subfolder named with the timestamp and your email; originals stay unchanged.
-    </InfoTip></div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><strong>When should files be published?</strong>
+      <InfoTip label="automatic release">Approve plan and start authorizes this run to publish saved copies after automatic processing, even when issues remain. Your selected rules and AI settings still apply. Human inspection is optional; unapproved suggestions are not applied. The scan summary and per-file checklist distinguish verified fixes, applied but unverified changes, remaining issues, and checks that could not run. Publishing does not certify accessibility. Permission lasts up to 24 hours. Changing the scope creates a new draft plan; permission begins only when that plan is accepted. Use Live to stop future releases. Original files stay unchanged.</InfoTip>
+    </div>
+    <label className="rem-auto-release-option"><input type="radio" name={`release-mode-${scanId}`} checked={!!checked} disabled={disabled || !ready} onChange={() => choose(false)} /><strong>Fix and publish automatically</strong></label>
+    <label className="rem-auto-release-option"><input type="radio" name={`release-mode-${scanId}`} checked={reviewKey === key && choice.current.review} disabled={disabled} onChange={() => choose(true)} /><strong>Review before publishing</strong></label>
+    <p>Remaining issues become a follow-up checklist. Files and reports are saved together.</p>
     <p><b>Destination:</b> {preview?.destination_label ? `${preview.destination_label} / Remediated / Timestamp + user email` : (preview || error ? 'Not available' : 'Checking destination…')}</p>
     {preview?.reason && <p>{preview.reason}</p>}
+    {preview && !ready && <p>Connect an authorized destination to enable automatic publishing. You can still run remediation.</p>}
     {error && <p role="alert">{error} <button className="linklike" type="button" disabled={disabled} onClick={() => setReload(n => n + 1)}>Refresh destination</button></p>}
   </section>
 }

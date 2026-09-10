@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
+import { getAutomaticRelease } from './api.js'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
@@ -15,6 +16,8 @@ const previewReleaseDestination = vi.fn(() => Promise.resolve({ can_release: tru
 const getSettings = vi.fn(() => Promise.resolve({ drive_mirror_enabled: false, drive_mirror_folder: 'Remediated' }))
 const putMyReleaseTemplates = vi.fn((templates) => Promise.resolve({ release_templates: templates }))
 vi.mock('./api.js', () => ({
+  getAutomaticRelease: vi.fn().mockResolvedValue({authorization:null}),
+  getReleaseReports: vi.fn().mockResolvedValue({status:'not_started',reports:[]}), retryReleaseReports: vi.fn(), downloadReleaseReport: vi.fn(),
   getReleaseAiProvenance: vi.fn(() => Promise.resolve({ calls: [] })),
   openReport: vi.fn(), publishFile: vi.fn(() => Promise.resolve({})),
   publishAllFiles: (...a) => publishAllFiles(...a),
@@ -45,7 +48,7 @@ vi.mock('./remediableScope.js', () => ({
 
 const { default: Publish } = await import('./Publish.jsx')
 
-afterEach(async () => { await unmountAll(); vi.clearAllMocks(); getReleaseStatus.mockResolvedValue({ release_id: null }); getSourceStatus.mockResolvedValue({ files: [], stale_count: 0 }); publishAllFiles.mockResolvedValue({ published: [] }); listHitlQueue.mockResolvedValue([]) })
+afterEach(async () => { await unmountAll(); vi.clearAllMocks(); getAutomaticRelease.mockResolvedValue({authorization:null}); getReleaseStatus.mockResolvedValue({ release_id: null }); getSourceStatus.mockResolvedValue({ files: [], stale_count: 0 }); publishAllFiles.mockResolvedValue({ published: [] }); listHitlQueue.mockResolvedValue([]) })
 const flush = async () => { for (let k = 0; k < 5; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
 const mount = async (props) => {
   const { container, root } = createTestRoot()
@@ -309,4 +312,20 @@ it('offers partial publication in the visible release actions without opening ad
   })
   expect(previewReleaseDestination).not.toHaveBeenCalled()
   expect(files.every(f => f.compliant === false)).toBe(true)
+})
+
+it('restores accepted automatic plan permission so saved incomplete files are publishable', async () => {
+ const files=[held('one.pdf',{remediated_at:'2026-09-09',corrected_sha256:'digest'})]
+ listHitlQueue.mockResolvedValue([{id:1,file:'one.pdf',status:'pending'}])
+ getAutomaticRelease.mockResolvedValue({authorization:{status:'active',allow_remaining_issues:true,files:['one.pdf']}})
+ const c=await mount({run,files})
+ const choice=[...c.querySelectorAll('label')].find(el=>el.textContent.includes('Publish with remaining issues')).querySelector('input')
+ expect(choice.checked).toBe(true);expect(button(c,'Publish saved copies (1)').disabled).toBe(false)
+ expect(publishAllFiles).not.toHaveBeenCalled()
+ await click(choice);expect(choice.checked).toBe(false)
+})
+it('does not extend saved publication permission to files outside the accepted scope', async () => {
+ getAutomaticRelease.mockResolvedValue({authorization:{status:'active',allow_remaining_issues:true,files:['one.pdf']}})
+ const c=await mount({run,files:[held('other.pdf',{remediated_at:'2026-09-09',corrected_sha256:'digest'})]})
+ expect([...c.querySelectorAll('label')].find(el=>el.textContent.includes('Publish with remaining issues')).querySelector('input').checked).toBe(false)
 })

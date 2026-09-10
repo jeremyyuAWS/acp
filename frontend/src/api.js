@@ -2615,3 +2615,15 @@ export const stopAutomaticRelease = (scanId, authorizationId) => fetch(
   `${BASE}/scans/${encodeURIComponent(scanId)}/release/automatic/${encodeURIComponent(authorizationId)}/stop`, {
     method: 'POST', headers: headers(),
   }).then(j)
+
+export const getReleaseReports = (scanId, options = {}) => (SIM
+  ? sim({ status: 'not_started', reports: [] })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/reports`, { headers: headers(), signal: options.signal }).then(j))
+export const retryReleaseReports = scanId => fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/reports/retry`, { method: 'POST', headers: headers() }).then(j)
+export const downloadReleaseReport = async (scanId, bundleId, assetIndex, name) => {
+  const response = await fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/reports/${encodeURIComponent(bundleId)}/${assetIndex}`, { headers: headers() })
+  if (!response.ok) throw new Error('The report could not be downloaded.')
+  const url = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}

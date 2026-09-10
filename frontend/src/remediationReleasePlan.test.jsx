@@ -1,4 +1,4 @@
-import { act, createElement } from 'react'
+import { act, createElement, useState } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import RemediationReleasePlan from './RemediationReleasePlan.jsx'
@@ -6,21 +6,19 @@ const planning = { available:true, files:['a'], source_revision:'source', destin
 afterEach(async () => { await unmountAll() })
 async function mount(extra={}) {
   const {root,container}=createTestRoot(); const onChange=vi.fn(); const read=vi.fn().mockResolvedValue({planning})
-  const props={scanId:'scan',files:['a'],intent:null,onChange,read,...extra}
-  const render=async changes=>act(async()=>root.render(createElement(RemediationReleasePlan,{...props,...changes})))
-  await render();return {container,onChange,read,render,input:()=>container.querySelector('input')}
+  function Harness(props) { const [intent,setIntent]=useState(null); return createElement(RemediationReleasePlan,{scanId:'scan',files:['a'],read,...extra,...props,intent,onChange:value=>{onChange(value);setIntent(value)}}) }
+  const render=async changes=>act(async()=>root.render(createElement(Harness,changes)))
+  await render();return {container,onChange,read,render,input:()=>container.querySelector('input'),review:()=>container.querySelectorAll('input')[1]}
 }
-it('shows a read-only destination and starts unchecked before any accepted run',async()=>{
-  const v=await mount();expect(v.input().checked).toBe(false);expect(v.input().disabled).toBe(false)
-  expect(v.container.textContent).toContain('Google Drive / root');expect(v.onChange.mock.calls.every(([value])=>value===null)).toBe(true)
-  await act(async()=>v.input().click())
-  expect(v.onChange).toHaveBeenLastCalledWith(expect.objectContaining({files:['a'],source_revision:'source',destination:planning.destination}))
-  expect(v.read).toHaveBeenCalledOnce()
+it('defaults a ready draft to automatic publishing and allows review opt out',async()=>{
+  const v=await mount();expect(v.input().checked).toBe(true)
+  expect(v.onChange).toHaveBeenLastCalledWith(expect.objectContaining({allow_remaining_issues:true,include_reports:true,source_revision:'source'}))
+  await act(async()=>v.review().click());expect(v.input().checked).toBe(false);expect(v.review().checked).toBe(true);expect(v.onChange).toHaveBeenLastCalledWith(null)
 })
-it('clears the draft when the displayed scope changes',async()=>{
-  const v=await mount();await act(async()=>v.input().click());const selected=v.onChange.mock.calls.at(-1)[0]
-  await v.render({intent:selected});expect(v.input().checked).toBe(true)
-  await v.render({files:['b'],intent:selected});expect(v.input().checked).toBe(false);expect(v.onChange).toHaveBeenLastCalledWith(null)
+it('defaults new scope to automatic publishing with fresh consent',async()=>{
+  const v=await mount();await act(async()=>v.review().click())
+  await v.render({files:['b'],read:async()=>({planning:{...planning,files:['b'],source_revision:'next'}})})
+  expect(v.input().checked).toBe(true);expect(v.onChange).toHaveBeenLastCalledWith(expect.objectContaining({files:['b'],source_revision:'next'}))
 })
 it('disables unsupported or read-only planning',async()=>{
   const v=await mount({disabled:true});expect(v.input().disabled).toBe(true)
@@ -30,11 +28,18 @@ it('disables unsupported or read-only planning',async()=>{
 it('keeps the timestamp destination visible and moves explanation behind keyboard-accessible info', async () => {
   const v=await mount()
   expect(v.container.textContent).toContain('Google Drive / root / Remediated / Timestamp + user email')
-  expect(v.container.textContent).not.toContain('Off by default')
+  expect(v.container.textContent).not.toContain('Human inspection is optional')
   const tip=v.container.querySelector('button[aria-label="About automatic release"]')
   expect(tip.closest('label')).toBeNull()
   await act(async()=>tip.focus())
-  expect(v.container.querySelector('[role="tooltip"]').textContent).toContain('Off by default')
-  expect(v.container.querySelector('[role="tooltip"]').textContent).toContain('originals stay unchanged')
-  expect(v.input().checked).toBe(false)
+  expect(v.container.querySelector('[role="tooltip"]').textContent).toContain('Human inspection is optional')
+  expect(v.container.querySelector('[role="tooltip"]').textContent).toContain('Original files stay unchanged')
+  expect(v.input().checked).toBe(true)
+})
+
+it('preserves a review choice made while the destination is loading',async()=>{
+ let resolve;const read=()=>new Promise(r=>{resolve=r});const v=await mount({read})
+ await act(async()=>v.review().click())
+ await act(async()=>resolve({planning}))
+ expect(v.review().checked).toBe(true);expect(v.input().checked).toBe(false);expect(v.onChange).toHaveBeenLastCalledWith(null)
 })

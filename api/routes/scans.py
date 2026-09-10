@@ -3569,9 +3569,9 @@ def publish_files(sid: str, request: Request, body: dict):
     expected_artifacts = body.get("expected_artifacts") or {}
     if not isinstance(expected_artifacts, dict):
         raise HTTPException(422, "expected_artifacts must map selected files to corrected digests")
-    if allow_remaining_issues and (automatic_release_id or any(
+    if allow_remaining_issues and any(
             not expected_artifacts.get(f) or expected_artifacts[f] !=
-            (core.store.get_file_record(sid, f) or {}).get("corrected_sha256") for f in files)):
+            (core.store.get_file_record(sid, f) or {}).get("corrected_sha256") for f in files):
         raise HTTPException(409, "Confirm each current corrected artifact before releasing with remaining issues")
     if any((core.store.get_file_record(sid, file) or {}).get("corrected_sha256") != digest
            for file, digest in expected_artifacts.items() if file in files):
@@ -3753,6 +3753,9 @@ def publish_files(sid: str, request: Request, body: dict):
                 sid, "release", "publish_file", payloads,
                 snapshot_id=snapshot_id, request_fingerprint=fingerprint,
                 input_manifest_id=input_manifest_id)
+        if not automatic_release_id:
+            from release_report_delivery import queue_if_release_settled
+            queue_if_release_settled(core.store, sid, owner, release_id)
         status = core.store.release_status(release_id, owner)
         return {"release_id": release_id, "release_folder_id": None,
                 "release_folder_name": folder_name, "release_folder_url": None,
@@ -3965,6 +3968,9 @@ def publish_files(sid: str, request: Request, body: dict):
             results.append(result)
             if not uncertain:
                 finish_synchronous(f, "failed", result)
+    if not automatic_release_id:
+        from release_report_delivery import queue_if_release_settled
+        queue_if_release_settled(core.store, sid, owner, release_id)
     status = core.store.release_status(release_id, owner)
     roots = status.get("roots", []) if status else []
     first_root = roots[0] if roots else None
@@ -5143,3 +5149,45 @@ def get_file_verify_pdf_contrast(scan_id: str, filename: str, request: Request):
         return {"measured": False, "reason": "source_unavailable"}
 
     return _prv.measure_pdf_over_image_contrast(data)
+
+
+@router.get('/scans/{sid}/release/reports')
+def get_release_reports(sid: str, request: Request, response: Response):
+    from routes.release_continuation import owner_scan
+    from release_report_delivery import get_latest_release_reports
+    owner, _ = owner_scan(sid, request)
+    response.headers['Cache-Control'] = 'no-store'
+    return get_latest_release_reports(core.store, sid, owner)
+
+
+@router.get('/scans/{sid}/release/reports/{bundle_id}/{asset_index}')
+def download_release_report(sid: str, bundle_id: str, asset_index: int, request: Request):
+    from routes.release_continuation import owner_scan
+    from release_report_delivery import get_release_report_asset
+    owner, _ = owner_scan(sid, request)
+    try:
+        asset = get_release_report_asset(core.store, sid, owner, bundle_id, asset_index)
+        if not asset:
+            raise KeyError('Report not found')
+    except (KeyError, IndexError, ValueError) as exc:
+        raise HTTPException(404, 'Report not found') from exc
+    return Response(content=asset['content'], media_type=asset['content_type'], headers={
+        'Content-Disposition': "attachment; filename*=UTF-8''" + quote(asset['name'], safe=''),
+        'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+    })
+
+
+@router.post('/scans/{sid}/release/reports/retry')
+def retry_release_reports(sid: str, request: Request, response: Response):
+    from routes.release_continuation import owner_scan, credentials
+    from release_report_delivery import retry_release_reports as retry
+    owner, _ = owner_scan(sid, request)
+    credentials(sid, request)
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        return retry(core.store, sid, owner)
+    except KeyError as exc:
+        raise HTTPException(404, 'Report not found') from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc

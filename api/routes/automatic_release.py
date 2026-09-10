@@ -1,6 +1,6 @@
 """Explicit automatic release opt-in; read-only inspection never authorizes work."""
 from fastapi import APIRouter, HTTPException, Query, Request, Response
-from pydantic import BaseModel, Field, StrictStr
+from pydantic import BaseModel, Field, StrictStr, StrictBool
 import core
 import automatic_release as service
 import automatic_release_store as persistence
@@ -15,6 +15,8 @@ class AuthorizationRequest(BaseModel):
     files: list[StrictStr] = Field(min_length=1, max_length=500)
     destination: dict
     request_id: StrictStr = Field(min_length=1, max_length=128)
+    allow_remaining_issues: StrictBool = False
+    include_reports: StrictBool = False
     expected_source_revision: StrictStr | None = Field(default=None, min_length=1, max_length=256)
 
 
@@ -38,7 +40,9 @@ def authorize(sid: str, body: AuthorizationRequest, request: Request, response: 
             raise HTTPException(409, 'Destination is unavailable. Restore access before enabling automatic release.')
     try:
         return service.public(service.authorize(core.store, sid, owner, body.run_id, body.files,
-                                               destination, body.request_id, body.expected_source_revision), core.store)
+                                               destination, body.request_id, body.expected_source_revision,
+                                               allow_remaining_issues=body.allow_remaining_issues,
+                                               include_reports=body.include_reports), core.store)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 

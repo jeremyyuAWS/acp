@@ -1351,6 +1351,12 @@ _SCHEMA = [
     "ALTER TABLE release_executions ADD COLUMN IF NOT EXISTS parent_folder_name TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_release_scan_owner ON release_executions(scan_id,owner_email)",
     "CREATE INDEX IF NOT EXISTS idx_release_owner ON release_executions(owner_email,created_at)",
+    """CREATE TABLE IF NOT EXISTS release_report_bundles (
+      id TEXT PRIMARY KEY, release_id TEXT NOT NULL, scan_id TEXT NOT NULL, owner_email TEXT NOT NULL,
+      assets TEXT NOT NULL, roots TEXT NOT NULL, receipts TEXT NOT NULL, status TEXT NOT NULL,
+      error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_release_report_owner ON release_report_bundles(owner_email,scan_id,created_at)",
     """CREATE TABLE IF NOT EXISTS release_roots (
       release_id TEXT NOT NULL, provider TEXT NOT NULL, provider_location TEXT NOT NULL,
       folder_id TEXT NOT NULL, folder_name TEXT NOT NULL, folder_url TEXT, created_at TEXT NOT NULL,
@@ -2501,8 +2507,8 @@ class _PgAdapter:
     # in a card's per-draft fan-out. Additive and nullable: a replica still running v50 keeps
     # writing rows without it, and _decision_rows reads NULL as a legacy row rather than as a
     # decision, so a rolling deploy under-counts nothing and double-counts nothing.
-    _SCHEMA_VERSION = 51
-    _SCHEMA_CHECKSUM_AT_VERSION = "850f4e05a0c06d5cb43211185b0d8900"
+    _SCHEMA_VERSION = 52
+    _SCHEMA_CHECKSUM_AT_VERSION = "16c3b2ce6b5b581d9f86dcfe680078d2"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -4822,7 +4828,7 @@ class Store:
                          # bound to a run are records of customer work and must not.
                          "remediation_policy_action", "remediation_run_policy_snapshot",
                          # Release executions and their provider destinations are customer data.
-                         "release_documents", "release_roots", "release_root_claims",
+                         "release_report_bundles", "release_documents", "release_roots", "release_root_claims",
                          "release_executions", "release_continuations", "automatic_release_authorizations",
                          # Canonical execution history, delivery state, manifests and receipts
                          # are all records of customer work and must leave with the scan data.
@@ -4958,7 +4964,7 @@ class Store:
         with self._db.cursor() as cur:
             # Release children key on release_id rather than scan_id. Remove them before their
             # owner-scoped executions, while the join can still identify this user's rows.
-            for table in ("release_documents", "release_roots", "release_root_claims"):
+            for table in ("release_report_bundles", "release_documents", "release_roots", "release_root_claims"):
                 self._db.execute(cur,
                     f"DELETE FROM {table} WHERE release_id IN "
                     "(SELECT id FROM release_executions WHERE owner_email=%s)", (owner_email,))
@@ -5070,7 +5076,7 @@ class Store:
                 return None
 
         with self._db.cursor() as cur:
-            for table in ("release_documents", "release_roots", "release_root_claims"):
+            for table in ("release_report_bundles", "release_documents", "release_roots", "release_root_claims"):
                 self._db.execute(cur,
                     f"DELETE FROM {table} WHERE release_id IN "
                     "(SELECT id FROM release_executions WHERE scan_id=%s AND owner_email=%s)",
