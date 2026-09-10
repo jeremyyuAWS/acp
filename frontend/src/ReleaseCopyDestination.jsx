@@ -7,7 +7,10 @@ export default function ReleaseCopyDestination({ provider, destination, folder, 
   const links = folders.length ? folders : folder?.url ? [folder] : []
   return <section aria-label="Published copy destination" style={{ marginTop: 14, padding: 14, border: '1px solid var(--line)', borderRadius: 10 }}>
     <b>Where your published documents will be saved</b>
-    <p style={{ margin: '6px 0', overflowWrap: 'anywhere' }}>{product} / {parent} / Remediated / <b>{name || 'Timestamp + user email'}</b></p>
+    {destination?.folder_name?.trim().toLowerCase() === 'remediated' ? <div style={{ margin: '6px 0', overflowWrap: 'anywhere' }}>
+      <p><b>Selected parent:</b> {product} / {parent}</p>
+      <p><b>Release subfolder inside this parent:</b> Remediated / <b>{name || 'Timestamp + user email'}</b></p>
+    </div> : <p style={{ margin: '6px 0', overflowWrap: 'anywhere' }}>{product} / {parent} / Remediated / <b>{name || 'Timestamp + user email'}</b></p>}
     <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
       {name ? 'This release uses the folder shown above.' : 'ACP creates a subfolder named with the timestamp and your email when you release the documents.'}
       {' '}Corrected copies are saved there; original documents stay unchanged.
