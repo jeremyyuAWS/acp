@@ -329,3 +329,28 @@ it('does not extend saved publication permission to files outside the accepted s
  const c=await mount({run,files:[held('other.pdf',{remediated_at:'2026-09-09',corrected_sha256:'digest'})]})
  expect([...c.querySelectorAll('label')].find(el=>el.textContent.includes('Publish with remaining issues')).querySelector('input').checked).toBe(false)
 })
+
+it('restores the saved destination instead of a changed preference and keeps it locked', async () => {
+  getSettings.mockResolvedValueOnce({ release_destination: { provider: 'sharepoint', folder_id: 'new-preference', folder_name: 'New preference' } })
+  getReleaseStatus.mockResolvedValue({ release_id: 'existing-release', parent_folder_id: 'original-parent', parent_folder_name: 'Original destination', release_folder_name: '2026-09-09 - owner@example.test', documents: [] })
+  const c = await mount({ run: { ...run, source: 'sharepoint' }, files: [verified('ready.pdf')] })
+  const main = c.querySelector('.release-quick')
+  expect(main.textContent).toContain('Original destination')
+  expect(main.textContent).toContain('2026-09-09 - owner@example.test')
+  expect(main.textContent).not.toContain('New preference')
+  expect([...main.querySelectorAll('summary')].some(s => s.textContent === 'Change destination')).toBe(false)
+  await click(button(c, 'Publish ready files (1)'))
+  expect(publishAllFiles.mock.calls.at(-1)[3].destination.folder_id).toBe('original-parent')
+})
+
+it('restores a frozen default destination even when preferences arrive later', async () => {
+  let resolveSettings
+  getSettings.mockImplementationOnce(() => new Promise(resolve => { resolveSettings = resolve }))
+  getReleaseStatus.mockResolvedValue({ release_id: 'existing-release', parent_folder_id: null, parent_folder_name: null, release_folder_name: 'Saved release', documents: [] })
+  const c = await mount({ run: { ...run, source: 'sharepoint' }, files: [verified('ready.pdf')] })
+  await act(async () => resolveSettings({ release_destination: { provider: 'sharepoint', folder_id: 'new-parent', folder_name: 'Wrong preference' } }))
+  await flush()
+  expect(c.querySelector('.release-quick').textContent).not.toContain('Wrong preference')
+  await click(button(c, 'Publish ready files (1)'))
+  expect(publishAllFiles.mock.calls.at(-1)[3].destination).toBeNull()
+})
