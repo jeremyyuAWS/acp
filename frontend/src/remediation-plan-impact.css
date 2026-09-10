@@ -1,0 +1,14 @@
+.plan-impact { margin-bottom: 18px; }
+.plan-impact h4 { margin: 0 0 10px; }
+.plan-impact__grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+.plan-impact__tile { border: 1px solid currentColor; border-radius: 9px; padding: 9px; font-size: 12px; position: relative; }
+.plan-impact__tile > span:first-child { display: block; min-height: 34px; }
+.plan-impact__tile > strong { font-size: 20px; }
+.plan-impact__delta { margin-left: 8px; display: inline-block; font-weight: 700; animation: plan-delta .35s ease-out; }
+.plan-impact__delta.positive { color: #17602a; }
+.plan-impact__delta.negative { color: #a21d27; }
+.plan-impact__delta.neutral { color: #454957; }
+.plan-impact p, .plan-impact small { font-size: 12px; }
+@keyframes plan-delta { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .plan-impact__delta { animation: none; } }
+@media (max-width: 560px) { .plan-impact__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

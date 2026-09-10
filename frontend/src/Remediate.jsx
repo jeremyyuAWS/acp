@@ -450,6 +450,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const runId = run?.id
   const [releasePlanIntent, setReleasePlanIntent] = useState(null)
   const [releasePlanNotice, setReleasePlanNotice] = useState('')
+  const [automaticReleaseState, setAutomaticReleaseState] = useState(null)
   const releasePlanScan = useRef(runId)
   releasePlanScan.current = runId
   useEffect(() => { setReleasePlanIntent(null); setReleasePlanNotice('') }, [runId])
@@ -1866,6 +1867,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         onOpenRunDetails={() => { setRunDetailsOpen((v) => !v); setWorkspaceRequest({ mode: 'live' }) }} />
       <RemediationReleaseAccess files={impactScope} readOnly={readOnly} onNavigate={onNavigate} />
       <RemediationWorkspaceTabs
+        reviewOptional={automaticReleaseState?.scanId === runId && automaticReleaseState?.authorization?.allow_remaining_issues === true && ['active', 'waiting', 'publishing', 'blocked', 'completed'].includes(automaticReleaseState?.authorization?.status)}
         runId={runId}
         workspaceRequest={workspaceRequest}
         plan={<>
@@ -1877,7 +1879,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               assessedAt={assessedAt} run={run} notStarted={run?.not_assessed?.count}
               remediationForecast={forecast} reviewSummary={reviewCounts}
               onOpenReview={() => setWorkspaceRequest({ mode: 'review' })} />}
-            releaseOption={<RemediationReleasePlan requireChoice onAnswered={setReleaseAnswered} scanId={runId} files={impactScope.map(file => file.file)}
+            releaseOption={<RemediationReleasePlan compact requireChoice onAnswered={setReleaseAnswered} scanId={runId} files={impactScope.map(file => file.file)}
               intent={releasePlanIntent} onChange={setReleasePlanIntent} disabled={readOnly || remBusy} />}
             onRun={readOnly ? undefined : (policy) => {
               const intent = releasePlanIntent
@@ -1894,7 +1896,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           {remMsg && <div role="status">{remMsg}</div>}
           <RemediationLiveDocuments key={runId} scanId={runId} files={impactScope} cap={cap} assessment={assessment}
             fixes={fixSource} fixTotal={fixTotal} refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`} />
-          <RemediationAutoRelease scanId={runId} files={impactScope} readOnly={readOnly} />
+          <RemediationAutoRelease onStatus={setAutomaticReleaseState} scanId={runId} files={impactScope} readOnly={readOnly} />
           {/* The large panel consumes the App-owned controller. Mounting this view opens no
               stream of its own, so the compact card, global card and panel stay on one cursor. */}
           <RemediationOpsPanel snapshot={runStream?.snapshot || null}

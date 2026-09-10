@@ -524,7 +524,7 @@ it('requires explicit answers even when saved defaults are valid, and invalidate
   expect(button(container, 'Next').disabled).toBe(true)
 })
 
-it('requires cloud settings confirmation and invalidates it when the policy changes', async () => {
+it('starts cloud plans with explicit choices without an extra confirmation or expanded approval permissions', async () => {
   const onRun = vi.fn()
   const { container } = await mount({ onRun, requireAnswers: true })
   const choice = text => [...container.querySelectorAll('label')].find(node => node.textContent.includes(text)).querySelector('input')
@@ -532,11 +532,11 @@ it('requires cloud settings confirmation and invalidates it when the policy chan
   await act(async () => button(container, 'Next').click())
   await act(async () => choice('Rules + Cloud AI').click())
   await act(async () => button(container, 'Next').click())
-  expect(button(container, 'Approve plan and start').disabled).toBe(true)
-  await act(async () => choice('I confirm the AI providers').click())
+  expect(container.textContent).not.toContain('I confirm the AI providers')
+  expect(container.querySelector('.remediation-plan-choices input[type=checkbox]')).toBeNull()
   expect(button(container, 'Approve plan and start').disabled).toBe(false)
-  await act(async () => choice('Review every change').click())
-  expect(button(container, 'Approve plan and start').disabled).toBe(true)
+  await act(async () => button(container, 'Approve plan and start').click())
+  expect(onRun.mock.calls[0][0].auto_approve_ai).toBe(false)
 })
 
 it('shows three bottom dots, prevents skipping, and preserves answers through Back and dot navigation', async () => {
@@ -554,7 +554,7 @@ it('shows three bottom dots, prevents skipping, and preserves answers through Ba
   await act(async () => choice('Rules only').click())
   await act(async () => button(container, 'Next').click())
   expect(dots()[2].getAttribute('aria-current')).toBe('step')
-  expect(container.querySelector('.plan-step-heading').textContent).toContain('Review & publishing')
+  expect(container.querySelector('.plan-step-heading').textContent).toContain('Publishing')
   await act(async () => button(container, 'Back').click())
   expect(choice('Rules only').checked).toBe(true)
   await act(async () => dots()[0].click())

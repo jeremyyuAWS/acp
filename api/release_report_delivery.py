@@ -1,7 +1,12 @@
 """Frozen, owner-scoped follow-up reports delivered alongside published copies."""
+import base64
 import hashlib
 import json
 from urllib.parse import quote
+
+
+def _asset_bytes(asset):
+    return base64.b64decode(asset['content'], validate=True) if asset.get('encoding') == 'base64' else asset['content'].encode('utf-8')
 
 
 def _get(store, bundle_id, owner):
@@ -35,7 +40,7 @@ def queue_release_reports(store, scan_id, owner, release_id):
     release = store.release_status(release_id, owner)
     if not release or release['scan_id'] != scan_id:
         raise KeyError('Release not found')
-    fingerprint = hashlib.sha256(json.dumps([release_id, release['documents'], release['roots']], sort_keys=True).encode()).hexdigest()
+    fingerprint = hashlib.sha256(json.dumps(['pdf-v1', release_id, release['documents'], release['roots']], sort_keys=True).encode()).hexdigest()
     identity = fingerprint[:24]
     with store.transaction():
         # Serialize creation and retries for this owner's release.
@@ -48,11 +53,12 @@ def queue_release_reports(store, scan_id, owner, release_id):
         names = {a['name']: a['name'].rsplit('.', 1)[0] + '-' + identity[:10] + '.' + a['name'].rsplit('.', 1)[1] for a in assets}
         frozen = []
         for asset in assets:
-            content = asset['content'].decode('utf-8') if isinstance(asset['content'], bytes) else asset['content']
+            binary = asset['content_type'] == 'application/pdf'
+            content = base64.b64encode(asset['content']).decode('ascii') if binary else asset['content'].decode('utf-8') if isinstance(asset['content'], bytes) else asset['content']
             if asset['content_type'].startswith('text/html'):
                 for old, new in names.items():
                     content = content.replace('href="' + old + '"', 'href="' + new + '"')
-            frozen.append(dict(name=names[asset['name']], content_type=asset['content_type'], content=content))
+            frozen.append(dict(name=names[asset['name']], content_type=asset['content_type'], content=content, encoding='base64' if binary else 'utf-8'))
         with store._db.cursor() as cur:
             store._db.execute(cur, '''INSERT INTO release_report_bundles
                 (id,release_id,scan_id,owner_email,assets,roots,receipts,status,created_at,updated_at)
@@ -75,13 +81,18 @@ def get_release_report_asset(store, sid, owner, bundle_id, index):
     if not row or row['scan_id'] != sid or type(index) is not int or not 0 <= index < len(row['assets']):
         raise KeyError('Report not found')
     asset = row['assets'][index]
-    return {**asset, 'content': asset['content'].encode('utf-8')}
+    return {**asset, 'content': _asset_bytes(asset)}
 
 
 def retry_release_reports(store, sid, owner):
     latest = get_latest_release_reports(store, sid, owner)
     if not latest['bundle_id']:
         raise KeyError('Report not found')
+    if latest['status'] == 'completed' and any(report['content_type'] != 'application/pdf' for report in latest['reports']):
+        result = queue_if_release_settled(store, sid, owner, _get(store, latest['bundle_id'], owner)['release_id'])
+        if not result:
+            raise ValueError('Wait for publication to finish before generating PDF reports')
+        return result
     with store.transaction():
         with store._db.cursor() as cur:
             store._db.execute(cur, "UPDATE release_report_bundles SET status='queued',error=NULL,updated_at=%s WHERE id=%s AND owner_email=%s AND status='failed'", (store._now(), latest['bundle_id'], owner))
@@ -95,7 +106,7 @@ def retry_release_reports(store, sid, owner):
 def _upload(root, asset, tokens, key):
     import publish
     import scanner
-    data = asset['content'].encode('utf-8')
+    data = _asset_bytes(asset)
     digest = hashlib.sha256(data).hexdigest()
     if root['provider'] == 'sharepoint':
         token = tokens.get('sp')

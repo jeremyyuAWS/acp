@@ -5,7 +5,7 @@ import './remediation-auto-release.css'
 
 const ACTIVE = new Set(['active', 'waiting', 'publishing', 'blocked'])
 const defaultClient = { get: getAutomaticRelease, enable: enableAutomaticRelease, stop: stopAutomaticRelease }
-export default function RemediationAutoRelease({ scanId, files = [], readOnly = false, client = defaultClient }) {
+export default function RemediationAutoRelease({ scanId, files = [], readOnly = false, client = defaultClient, onStatus }) {
   const descriptionId = useId()
   const [state, setState] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -29,7 +29,7 @@ export default function RemediationAutoRelease({ scanId, files = [], readOnly = 
       try {
         const result = await client.get(scanId, scope, { signal: controller.signal })
         if (!live || version !== mutationVersion.current) return
-        setState(result); setError(''); setUnconfirmed(false)
+        setState({ ...result, reportScanId: scanId }); setError(''); setUnconfirmed(false)
       } catch (e) {
         if (live && version === mutationVersion.current) setError(e?.message || 'Automatic release status could not be loaded.')
       } finally {
@@ -39,6 +39,7 @@ export default function RemediationAutoRelease({ scanId, files = [], readOnly = 
     load()
     return () => { live = false; clearTimeout(timer); controller.abort() }
   }, [key, refresh, client])
+  useEffect(() => { onStatus?.({ scanId, authorization: state?.reportScanId === scanId ? state.authorization : undefined }) }, [scanId, state, onStatus])
   const authorization = state?.authorization
   const enabled = ACTIVE.has(authorization?.status)
   const destination = authorization?.destination_label || state?.destination_label

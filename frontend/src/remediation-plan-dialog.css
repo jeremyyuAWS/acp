@@ -27,3 +27,5 @@
 .remediation-plan-dialog[open]:has([data-wizard]) { display: flex; flex-direction: column; gap: 8px; }
 .remediation-plan-dialog [data-wizard] { flex: 1; min-height: 0; max-height: none; }
 .remediation-plan-dialog:has([data-wizard]) > details { flex-shrink: 0; max-height: 25dvh; overflow: auto; }
+
+.remediation-plan-dialog:has([data-wizard][data-step="2"]) > details { display: none; }

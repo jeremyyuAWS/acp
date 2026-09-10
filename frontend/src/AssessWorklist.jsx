@@ -129,7 +129,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
   // (ANDed together), and both keep their counts visible whether or not they are selected —
   // narrowing this list must never hide how much it narrowed, the same rule the state filter obeys.
   const [categoryChosen, setCategoryChosen] = useState(null)
-  const [autoOnly, setAutoOnly] = useState(false)
+  // The automatic-only filter is deliberately retired; category filters remain.
   // A11 progressive disclosure. Independent of the filters above — it narrows how much of the
   // FILTERED set is currently rendered, not which rows match. Re-derived from `visible` on every
   // render, so tightening a filter to under PAGE_SIZE rows shows everything with no stale toggle.
@@ -155,7 +155,6 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
 
   let visible = stateScoped
   if (categoryChosen) visible = visible.filter(row => row.findings?.some(finding => remediationCategory(finding) === categoryChosen) || changeRows.some(change => change.file === row.file && change.category === categoryChosen))
-  if (autoOnly) visible = visible.filter((r) => (r.autoFixAvailable || 0) > 0)
   const filtered = visible.length < rows.length
   // The page actually on screen. `hidden` rows are still counted in the totals below — this only
   // ever cuts how many ROWS render, never a number.
@@ -244,18 +243,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
               return <button key={key} className="remediation-category-filter" type="button" disabled={!count && !changes} aria-pressed={categoryChosen === key} onClick={() => setCategoryChosen(key)}><RemediationCategoryPill category={key} count={count} />{changes > 0 && ` · ${changes} change records`}</button>
             })}
           </div>
-          <label className="worklist-autoonly" style={{ display: 'inline-flex', alignItems: 'center',
-                                                        gap: 7, fontSize: 12.5, cursor: 'pointer' }}>
-            <input type="checkbox" checked={autoOnly}
-                   onChange={(e) => setAutoOnly(e.target.checked)} />
-            <span>Only what ACP can fix without a person</span>
-            {/* The toggle carries its own denominator for the same reason the chips do: hiding the
-                documents a person must still touch is exactly the mistake this screen guards against. */}
-            <span className="muted">
-              {autoFindings} of {scopedFindings} findings ·{' '}
-              {docsWithAuto} of {plural(stateScoped.length, 'document', 'documents')}
-            </span>
-          </label>
+          <span className="muted worklist-auto-counts">Auto-fix available: {autoFindings} of {scopedFindings} findings · {docsWithAuto} of {plural(stateScoped.length, 'document', 'documents')}</span>
         </div>
       )}
 
@@ -297,9 +285,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
             </th>
             <th scope="col" style={{ width: '36%' }}>Document</th>
             <th scope="col">Findings</th>
-            <th scope="col" style={{ width: 190 }}>Remediation category</th>
-            <th scope="col">Auto-fix</th>
-            <th scope="col" style={{ width: 130 }}>Needs a person</th>
+            <th scope="col" style={{ width: '40%' }}>Remediation categories</th>
             <th scope="col"><span className="vh">Action</span></th>
           </tr>
         </thead>
@@ -352,14 +338,6 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
                       return items.length > 0 && <RemediationCategoryPill key={key} category={key} count={items.length} />
                     })}
                   </td>
-                  <td className="col-auto"
-                      style={{ ...numCell, color: row.autoFixAvailable ? '#2F7D32' : undefined }}>
-                    <span className="n">{row.autoFixAvailable}</span>
-                  </td>
-                  <td className="col-person" style={numCell}>
-                    <span className="n">{row.humanReviewRequired}</span>
-
-                  </td>
                   <td className="col-action" style={{ textAlign: 'right' }}>
                     {onOpenFile && (
                       <button className="ghost small" type="button" onClick={() => onOpenFile(row)}>
@@ -372,7 +350,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
                 // No counts at all, rather than zeros: a file ACP never read has no findings, no
                 // auto-fixable work and nothing awaiting review, and a 0 in any of those columns
                 // would read as a document that came back clean.
-                <td className="muted" colSpan={5} style={{ fontSize: 12 }}>
+                <td className="muted" colSpan={3} style={{ fontSize: 12 }}>
                   No result from this run — it holds no work until the file can be opened.
                 </td>
               )}

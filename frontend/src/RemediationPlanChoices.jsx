@@ -62,6 +62,7 @@ export function RetiredRemediationPlanChoices({ policy, providers, disabled, onC
 // The previous detailed panel is retained above for restoration, but is no longer mounted.
 export default function RemediationPlanChoices({ step = null, answers, policy, disabled, onChange, generationChainOptions, budgetSupported = false, reviewSupported = false, automaticReviewSupported = false, automaticReviewReason = '', reviewAdministratorFloor = null, reviewEligibleFamilies = [], standingApprovalSupported = false, standingApprovalReason = '' }) {
   const id = useId()
+  const ProviderBox = step === null ? 'div' : 'details'
   const localOnly = policy.ai_zone === 'local'
   const configured = localOnly ? [] : generationSteps(policy, generationChainOptions)
   const catalogFor = step => generationChainOptions?.models?.find(
@@ -120,7 +121,8 @@ export default function RemediationPlanChoices({ step = null, answers, policy, d
           chain must share one provider (llm_waterfall_provider: "all models must use the
           owner-selected text provider"), so this reports the configuration rather than
           offering a choice it cannot honor. */}
-      {policy.ai > 0 && configured.length > 0 && <div className="remediation-plan-providers">
+      {policy.ai > 0 && configured.length > 0 && <ProviderBox className="remediation-plan-providers">
+        {step !== null && <summary>AI provider details</summary>}
         <h4 id={`${id}-destinations`}>Where your content may go</h4>
         <ol aria-labelledby={`${id}-destinations`}>{configured.map((step, index) => <li key={step.step_id || index}>
           <ProviderMark provider={step.provider} />
@@ -131,7 +133,7 @@ export default function RemediationPlanChoices({ step = null, answers, policy, d
             : 'Provider permission not confirmed'}</small>
         </li>)}</ol>
         <p>Later steps run only after an empty or incomplete suggestion. Provider selection is an application setting, not a per-run choice.</p>
-      </div>}
+      </ProviderBox>}
       {policy.ai > 0 && !localOnly && <div className="simple-remediation-budget">
         <label htmlFor={`${id}-budget`}>AI spending limit for this run (USD)</label>
         <input id={`${id}-budget`} type="number" min="0" max="1000000" step="0.01"
@@ -142,11 +144,11 @@ export default function RemediationPlanChoices({ step = null, answers, policy, d
           ? 'AI pauses when the remaining budget cannot cover a request. Rule-based fixes continue. $0 permits no paid AI requests. Infrastructure costs are separate.'
           : 'Spending limits are not available on this server. Choose Rules only if you need a firm cap.'}</p>
       </div>}
-    {policy.ai > 0 && localOnly && <p>Ollama drafts wait for your review. Cloud AI review and fallback models are off. Unavailable or unsupported local drafts remain for manual attention.</p>}
-    {(step === null || (policy.ai > 0 && !localOnly)) && <RemediationAutoApproval policy={policy} onChange={onChange} disabled={disabled}
+    {step === null && policy.ai > 0 && localOnly && <p>Ollama drafts wait for your review. Cloud AI review and fallback models are off. Unavailable or unsupported local drafts remain for manual attention.</p>}
+    {step === null && <RemediationAutoApproval policy={policy} onChange={onChange} disabled={disabled}
       supported={standingApprovalSupported && budgetSupported} reason={standingApprovalReason} />}
-    {policy.ai > 0 && !localOnly && <RemediationGenerationChain policy={policy} options={generationChainOptions} disabled={disabled} budgetSupported={budgetSupported} onChange={onChange} />}
-    {policy.ai > 0 && !localOnly && reviewSupported && <details><summary>Optional AI review and approval threshold</summary><RemediationReviewPolicy value={policy.ai_review} onChange={value => onChange('ai_review', value)}
+    {step === null && policy.ai > 0 && !localOnly && <RemediationGenerationChain policy={policy} options={generationChainOptions} disabled={disabled} budgetSupported={budgetSupported} onChange={onChange} />}
+    {step === null && policy.ai > 0 && !localOnly && reviewSupported && <details><summary>Optional AI review and approval threshold</summary><RemediationReviewPolicy value={policy.ai_review} onChange={value => onChange('ai_review', value)}
       disabled={disabled || !budgetSupported} supported={reviewSupported} automaticSupported={automaticReviewSupported} standingApprovalEnabled={policy.auto_approve_ai === true}
       automaticReason={automaticReviewReason} administratorFloor={reviewAdministratorFloor} eligibleFamilies={reviewEligibleFamilies} /></details>}
     </div>

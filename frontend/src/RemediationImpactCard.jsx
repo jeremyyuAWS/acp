@@ -1,3 +1,4 @@
+import RemediationPlanImpact from './RemediationPlanImpact.jsx'
 import RemediationFileItems from './RemediationFileItems.jsx'
 import useForecastDeltas from './useForecastDeltas.js'
 import Drawer from './Drawer.jsx'
@@ -130,7 +131,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   }
   // Loading a plan offers this default; only starting it authorizes the run.
   // Refresh the forecast with the exact policy before enabling the start action.
-  const automaticDefault = selected.auto_approve_ai === undefined
+  const automaticDefault = !requireAnswers && selected.auto_approve_ai === undefined
     && data?.capabilities?.ai_standing_approval?.supported === true
     && selected.ai_zone !== 'local' && selected.ai === 1 && Number(selected.ai_budget_usd) > 0
     && selected.ai_review?.enabled === true
@@ -138,7 +139,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     if (automaticDefault) setPolicy({ ...selected, auto_approve_ai: true })
   }, [automaticDefault, runId])
   const chainProblem = generationChainProblem(selected, data?.capabilities?.generation_chain, data?.capabilities?.ai_budget === true)
-  const ready = !automaticDefault && !chainProblem && !!data && !loading && !error && data.integrity?.complete === true
+  const ready = !automaticDefault && !chainProblem && !!data && estimateResponse?.key === estimateKey && !loading && !error && data.integrity?.complete === true
   const countDeltas = useForecastDeltas({
     identity: JSON.stringify([runId, scopeKey]), ready,
     policyKey: JSON.stringify([data?.policy?.rule_based, data?.policy?.ai, data?.policy?.ai_budget_usd, data?.policy?.ai_review, data?.policy?.generation_chain, data?.policy?.auto_approve_ai]),
@@ -147,10 +148,9 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       ? data.lanes.review.findings + data.lanes.manual.findings : undefined,
   })
   const budgetValid = selected.ai === 0 || selected.ai_zone === 'local' || data?.capabilities?.ai_budget !== true || (selected.ai_budget_usd !== undefined && validBudget(selected))
-  const questionsComplete = !requireAnswers || (budgetValid && answers.rule_based && answers.tools && releaseAnswered
-    && (selected.ai === 0 || selected.ai_zone === 'local' || answers.aiConfirmed === JSON.stringify(selected)))
+  const questionsComplete = !requireAnswers || (budgetValid && answers.rule_based && answers.tools && releaseAnswered)
   const change = (key, value) => {
-    setAnswers(current => ({ ...current, [key]: true, ...(['ai', 'ai_mode'].includes(key) ? { tools: true, aiConfirmed: null } : {}) }))
+    setAnswers(current => ({ ...current, [key]: true, ...(['ai', 'ai_mode'].includes(key) ? { tools: true } : {}) }))
     if (key === 'ai_mode') {
       const next = { ...selected, ai: 1, ai_zone: value, auto_approve_ai: false }
       if (value === 'local') {
@@ -203,10 +203,10 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     finally { setSaving(false) }
   }
 
-  const stepNames = ['Changes', 'Tools', selected.ai > 0 && selected.ai_zone !== 'local' ? 'Budget, review & publishing' : 'Review & publishing']
+  const stepNames = ['Changes', 'Tools', selected.ai > 0 && selected.ai_zone !== 'local' ? 'Spending & publishing' : 'Publishing']
   const startButton = <button type="button" className="remediation-impact__run" disabled={!questionsComplete || readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
     onClick={() => { if (questionsComplete && ready) onRun(selected, data) }}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>
-  return <section data-wizard={requireAnswers || undefined} id="remediation-plan" tabIndex={-1} className="remediation-impact" aria-labelledby={titleId} aria-busy={loading}>
+  return <section data-wizard={requireAnswers || undefined} data-step={requireAnswers ? step : undefined} id="remediation-plan" tabIndex={-1} className="remediation-impact" aria-labelledby={titleId} aria-busy={loading}>
     <header className="remediation-impact__header"><div><span className="remediation-impact__eyebrow">{scopeKey === null ? 'Remediation planner' : 'Selected remediation scope'} · Preview only</span>
       <h2 id={titleId}>Choose your remediation plan</h2>
       <p>{ready ? <><strong>{number(data.open?.findings)} unresolved findings</strong> across <strong>{number(data.open?.files)} files</strong>.</> : 'Preview the current assessment before applying changes.'}</p>
@@ -223,6 +223,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     {requireAnswers && <h3 ref={stepHeading} tabIndex={-1} className="plan-step-heading">Step {step + 1} of 3 · {stepNames[step]}</h3>}
     <div className="remediation-impact__split"><div className="remediation-impact__settings">
     {chainProblem && <p role="alert">{chainProblem}</p>}
+    {requireAnswers && <div hidden={step !== 1}><RemediationPlanImpact identity={JSON.stringify([runId, scopeKey])} data={data} ready={ready} loading={loading} policyKey={JSON.stringify(selected)} /></div>}
     <RemediationPlanChoices step={requireAnswers ? step : null} answers={requireAnswers ? answers : undefined} generationChainOptions={data?.capabilities?.generation_chain} policy={selected} providers={data?.providers}
       disabled={readOnly || !runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true}
       standingApprovalSupported={data?.capabilities?.ai_standing_approval?.supported === true}
@@ -233,21 +234,16 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       automaticReviewReason={data?.capabilities?.ai_review?.reason || data?.capabilities?.ai_automatic_reason || ''}
       reviewAdministratorFloor={data?.capabilities?.ai_review?.administrator_floor ?? null} />
     <div hidden={requireAnswers && step !== 2}>
-    {requireAnswers && selected.ai > 0 && selected.ai_zone !== 'local' && <label>
-      <input type="checkbox" checked={answers.aiConfirmed === JSON.stringify(selected)} disabled={readOnly || runBusy || !ready}
-        onChange={event => setAnswers(current => ({ ...current, aiConfirmed: event.target.checked ? JSON.stringify(selected) : null }))} />
-      I confirm the AI providers, spending limit, and review and approval settings above.
-    </label>}
     {releaseOption}
-    {requireAnswers && <p><strong>Your plan:</strong> {selected.rule_based === 0 ? 'Review every change' : 'Apply rule-based fixes automatically'} · {selected.ai === 0 ? 'Rules only' : selected.ai_zone === 'local' ? 'Ollama only · Human review' : `Cloud AI · ${data?.capabilities?.ai_budget === true ? `$${selected.ai_budget_usd} limit` : 'Spending cap unavailable'} · ${selected.auto_approve_ai ? 'Eligible AI fixes auto-approved' : 'Review AI before applying'}`}</p>}
+    {requireAnswers && (loading || error || !ready) && <p role="status">{loading ? 'Updating plan…' : error ? `Preview unavailable. ${error}` : 'Plan unavailable. Check your selections.'}</p>}
     {requireAnswers && !budgetValid && <p role="alert">Enter a spending limit from $0 to $1,000,000.</p>}
-    {!questionsComplete && <p role="status">Answer the changes, tools, and publishing questions, and confirm any cloud AI settings to start.</p>}
-    <RemediationEstimateDisclosure estimate={estimateResponse?.key === estimateKey ? estimateResponse.value : null}
+    {!questionsComplete && <p role="status">Answer the changes, tools, and publishing questions to start.</p>}
+    {!requireAnswers && <RemediationEstimateDisclosure estimate={estimateResponse?.key === estimateKey ? estimateResponse.value : null}
       aiEnabled={selected.ai > 0 && Number(selected.ai_budget_usd ?? 1) > 0}
-      loading={loading || !!error || estimateResponse?.key !== estimateKey} />
+      loading={loading || !!error || estimateResponse?.key !== estimateKey} />}
     {ready && data?.capabilities?.execute !== true && <p>Execution unavailable: {data?.capabilities?.execute_reason || data?.capabilities?.reason || 'This preview cannot currently be executed.'}</p>}
 
-    <div className="remediation-impact__actions">
+    <div hidden={requireAnswers} className="remediation-impact__actions">
       <button type="button" disabled={!validPolicy(data?.active_policy) || runBusy} onClick={() => { setPolicy({ ...data.active_policy }); setFilter(null); setImpactDetails(null); if (requireAnswers) { setAnswers({}); setStep(0); setReached(0) } }}>Reset to active</button>
       <button type="button" disabled={readOnly || !ready || data?.capabilities?.save_future !== true || saving || runBusy} onClick={save}>{saving ? 'Saving…' : 'Save as default for future runs'}</button>
     </div>
@@ -260,7 +256,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     </div>
     {data?.capabilities?.ai_automatic !== true && <p className="remediation-impact__note">{data?.capabilities?.ai_automatic_reason || 'Automatic application of AI proposals is not available on this execution path. Drafting depends on AI settings and a usable connection.'}</p>}
     </details>
-    <p className="remediation-impact__guard">These controls change remediation permissions, not assessment results or provider credentials. Human-only and subjective decisions stay protected.</p>
+    <p hidden={requireAnswers} className="remediation-impact__guard">These controls change remediation permissions, not assessment results or provider credentials. Human-only and subjective decisions stay protected.</p>
     <details hidden={requireAnswers} className="remediation-impact__providers"><summary>AI connections and model details</summary>
       {data?.providers && <ul>{[['text', 'Text drafting'], ['vision', 'Image drafting']].map(([key, label]) =>
         <li key={key}>{label}: {data.providers[key]?.provider || 'Not yet available'}
@@ -269,7 +265,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       <p>Text and image drafting use their separately configured providers. A drafting opportunity is not a guaranteed resolution.</p>
       {data?.capabilities?.reason && <p>{data.capabilities.reason}</p>}
     </details>
-    </div></div><div hidden={requireAnswers && step !== 2} className="remediation-impact__results">
+    </div></div><div hidden={requireAnswers} className="remediation-impact__results">
     {renderAssessment?.({
       findings: ready ? data.findings : null,
       scopeFiles,

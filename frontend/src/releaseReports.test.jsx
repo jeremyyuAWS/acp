@@ -33,3 +33,10 @@ it('waits briefly for report creation after the last file publishes',async()=>{
  vi.useFakeTimers();const read=vi.fn().mockResolvedValue({status:'not_started',reports:[]})
  await mount({read,publishedCount:2});await act(async()=>vi.advanceTimersByTimeAsync(130000));expect(read).toHaveBeenCalledTimes(12)
 })
+it('offers a report-only PDF refresh for completed legacy reports', async () => {
+ const read = vi.fn().mockResolvedValue({ status: 'completed', reports: [{ name: 'old.html', content_type: 'text/html' }] })
+ const retry = vi.fn().mockResolvedValue({})
+ const c = await mount({ read, retry })
+ await act(async () => [...c.querySelectorAll('button')].find(b => b.textContent === 'Generate PDF reports').click())
+ expect(retry).toHaveBeenCalledWith('scan')
+})

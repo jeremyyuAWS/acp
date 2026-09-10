@@ -7,5 +7,5 @@ export default function RemediationCategoryPill({ category, count, unit = 'findi
   </span>
 }
 export function RemediationCategoryLegend() {
-  return <div className="remediation-category-legend" aria-label="Remediation category legend"><strong>Legend</strong>{REMEDIATION_CATEGORIES.map(([key, label]) => <span key={key}><RemediationCategoryPill category={key} /> {label}</span>)}</div>
+  return <details><summary>Category legend</summary><div className="remediation-category-legend" aria-label="Remediation category legend"><strong>Legend</strong>{REMEDIATION_CATEGORIES.map(([key, label]) => <span key={key}><RemediationCategoryPill category={key} /> {label}</span>)}</div></details>
 }

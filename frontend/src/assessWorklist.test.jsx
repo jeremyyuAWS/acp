@@ -119,8 +119,8 @@ describe('one row per document, in the order the module gave', () => {
     const c = await mount({ files: ESTATE })
     const row = named(c, 'handbook.docx')
     expect(cell(row, 'findings')).toBe('3')
-    expect(cell(row, 'auto'), '1.3.1 is deterministic on docx, twice').toBe('2')
-    expect(cell(row, 'person'), 'the assisted 1.1.1 draft needs judgement').toBe('1')
+    expect(row.querySelector('.col-category').textContent).toContain('Auto 2')
+    expect(row.querySelector('.col-category').textContent).toContain('AI 1')
   })
 
   it('names the checks that could not run against this format', async () => {
@@ -151,7 +151,7 @@ describe('the severity partition sums to the row it sits in', () => {
     const c = await mount({ files: ESTATE })
     const row = named(c, 'handbook.docx')
     expect(row.querySelector('.col-category').textContent).toContain('AI 1')
-    expect(cell(row, 'person')).toBe('1')
+    expect(row.querySelector('.col-person')).toBeNull()
   })
 
   it('says None rather than four zeros where there is nothing to partition', async () => {
@@ -180,7 +180,7 @@ describe('the order is what needs a person, not what looks worst', () => {
     const c = await mount({ files: [MACHINE, HUMAN] })
     const row = named(c, 'machine.pptx')
     expect(cell(row, 'findings')).toBe('2')
-    expect(cell(row, 'auto')).toBe('2')
+    expect(row.querySelector('.col-auto')).toBeNull()
     expect(row.querySelector('.col-category').textContent).toMatch(/Auto 2/)
     expect(c.textContent).toMatch(/3 findings · 2 auto-fix · 1 needing a person/)
   })
@@ -318,24 +318,14 @@ describe('A19 severity filter and A24 auto-fixable toggle — narrow, never hide
       .toMatch(/Across all 6: 6 findings · 3 auto-fix · 3 needing a person/)
   })
 
-  it('shows only auto-fixable documents when toggled, carrying its own denominator', async () => {
+  it('retires the automatic-only filter while preserving its counts and the complete document list', async () => {
     const c = await mount({ files: ESTATE })
-    // 3 of the 6 findings are deterministic, across 2 of the 3 attention documents.
-    expect(c.querySelector('.worklist-autoonly').textContent)
-      .toMatch(/3 of 6 findings · 2 of 3 documents/)
-    await act(async () => { autoInput(c).click() })
-    // handbook (2 auto) and deck (1 auto) can be cleared without a person; board.pdf (0 auto) cannot.
-    expect(order(c)).toEqual(['handbook.docx', 'deck.pptx'])
-    expect(c.textContent).toMatch(/Across all 6:/)
-  })
-
-  it('ANDs remediation category and auto-fixable when both are set', async () => {
-    const c = await mount({ files: ESTATE })
-    await act(async () => { refineBtn(c, /AI suggestion needed/).click() })
-    await act(async () => { autoInput(c).click() })
-    // serious AND auto-fixable: handbook keeps its place; board is serious-but-manual, deck is
-    // auto-but-not-serious. Only the intersection survives.
-    expect(order(c)).toEqual(['handbook.docx'])
+    expect(c.querySelector('.worklist-autoonly')).toBeNull()
+    expect(c.querySelector('.worklist-auto-counts').textContent).toContain('3 of 6 findings · 2 of 3 documents')
+    expect(c.querySelector('.col-auto')).toBeNull()
+    expect(c.querySelector('.col-person')).toBeNull()
+    expect(order(c)).toContain('board.pdf')
+    expect(c.querySelector('.remediation-category-legend').closest('details').open).toBe(false)
   })
 
   it('offers an empty remediation category but does not let it be chosen', async () => {
