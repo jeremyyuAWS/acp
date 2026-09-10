@@ -520,7 +520,7 @@ describe('AssessSummary — completed run with findings', () => {
     expect(v, fmtViolations(v)).toHaveLength(0)
   })
 
-  it('findings severity is communicated by text, not colour alone', async () => {
+  it('assessment status is communicated by text after category panels are retired', async () => {
     const { container, root } = createTestRoot()
     await act(async () => {
       root.render(createElement(AssessSummary, {
@@ -533,10 +533,8 @@ describe('AssessSummary — completed run with findings', () => {
         onRunDetails: () => {},
       }))
     })
-    await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent.includes('AI suggestion needed')).click())
-    const text = container.textContent
-    // CRITICAL findings must appear as a text label, not only as a colour swatch
-    expect(text).toMatch(/critical|CRITICAL/i)
+    expect(container.querySelector('[aria-label="Remediation categories"]')).toBeNull()
+    expect(container.textContent).toContain('Needs attention')
   })
 })
 

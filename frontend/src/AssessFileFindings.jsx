@@ -1,3 +1,5 @@
+import RemediationCategoryPill, { RemediationCategoryLegend } from './RemediationCategoryPill.jsx'
+import { REMEDIATION_CATEGORIES, remediationCategory } from './remediationCategories.js'
 import { documentRow, findingsByCriterion, SEVERITIES, SEVERITY_LABEL } from './assessMetrics.js'
 import { criterionOf } from './wcagFinding.js'
 import { RULE_DETAILS } from './ruleDetails.js'
@@ -136,7 +138,10 @@ function Group({ group, fmt }) {
                   background: 'var(--surface)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 15px',
                     borderBottom: '1px solid var(--line)', flexWrap: 'wrap' }}>
-        <SevTag severity={group.severity} />
+        <div>{REMEDIATION_CATEGORIES.map(([category]) => {
+          const count = group.findings.filter(finding => remediationCategory(finding) === category).length
+          return count > 0 && <RemediationCategoryPill fullLabel key={category} category={category} count={count} />
+        })}</div>
         <div style={{ minWidth: 180 }}>
           <div style={{ fontSize: 13.5, fontWeight: 650 }}>
             {group.sc}{c ? ` ${c.name}` : ''}
@@ -163,7 +168,7 @@ function Group({ group, fmt }) {
             <span style={{ flex: '1 1 240px' }}>{describe(x, group.sc)}</span>
             {/* A statement, never a control. Nothing on this screen applies or approves a fix. */}
             <span className="muted" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>
-              {FIX_MODE_ROW[modeOf(x)]}
+              <RemediationCategoryPill fullLabel category={remediationCategory(x)} /> {FIX_MODE_ROW[modeOf(x)]}
             </span>
           </div>
         )
@@ -285,17 +290,11 @@ export default function AssessFileFindings({ row, file, cap, assessment, criteri
           <div style={bigNum}>{r.totalFindings}</div>
         </div>
         <div>
-          <div style={kicker}>Severity</div>
-          <div style={{ marginTop: 6, fontSize: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            {SEVERITIES.map((s) => (
-              <span key={s} style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
-                                     fontVariantNumeric: 'tabular-nums' }}>
-                <SevDot severity={s} /><b>{r.bySeverity[s]}</b> {SEVERITY_LABEL[s]}
-              </span>
-            ))}
-            {/* Never dropped: a severity that vanished would break the printed sum silently. */}
-            {r.bySeverity.UNKNOWN > 0 && <span><b>{r.bySeverity.UNKNOWN}</b> unclassified</span>}
-          </div>
+          <div style={kicker}>Remediation categories</div>
+          <div>{REMEDIATION_CATEGORIES.map(([category]) => {
+            const count = r.findings.filter(finding => remediationCategory(finding) === category).length
+            return count > 0 && <RemediationCategoryPill key={category} category={category} count={count} />
+          })}</div>
         </div>
         <div>
           <div style={kicker}>Auto-fix available</div>
@@ -343,7 +342,7 @@ export default function AssessFileFindings({ row, file, cap, assessment, criteri
         title="ACP fixes these in remediation"
         note={'Deterministic: same input, same output, no model call and no judgement. Listed after '
               + 'the work above because remediation clears them, not because they are less severe — '
-              + 'each group keeps its own severity and every finding is listed.'}
+              + 'each group shows its remediation category and every finding is listed.'}
         groups={deterministic}
         fmt={r.fmt}
       />

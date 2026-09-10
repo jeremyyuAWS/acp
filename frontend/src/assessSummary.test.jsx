@@ -75,7 +75,7 @@ describe('the three facts that replace the score', () => {
     const c = await mount({ files: ESTATE })
     // The board-4 explainer cell says "No accessibility score" by name; that is a declaration of
     // absence, not a leak. What must never appear is an actual score VALUE.
-    expect(c.textContent).toMatch(/Why there is no overall score/)
+    expect(c.textContent).not.toMatch(/Why there is no overall score/)
     expect(c.textContent, 'a score is back on the summary').not.toMatch(/\bscore[d:]?\s*[:=]?\s*\d/i)
     expect(c.textContent).not.toMatch(/\/\s*100\b/)
   })
@@ -127,27 +127,27 @@ describe('“no findings” never travels alone', () => {
   })
 })
 
-describe('the arithmetic is on the page, not just in a test', () => {
-  it('prints the finding partition', async () => {
+describe('remediation panels deliberately retired from Assess', () => {
+  it('omits the retired finding partition', async () => {
     const c = await mount({ files: ESTATE })
-    expect(c.textContent).toMatch(/1 auto-fixable \+ 2 needing review = 3 findings/)
+    expect(c.textContent).not.toMatch(/1 auto-fixable \+ 2 needing review = 3 findings/)
   })
 
-  it('prints the check partition with both factors of the denominator', async () => {
+  it('omits the retired check equation', async () => {
     const c = await mount({ files: ESTATE })
-    expect(c.textContent).toMatch(/= 6 selected checks \(3 documents × 2 criteria\)/)
+    expect(c.textContent).not.toMatch(/= 6 selected checks \(3 documents × 2 criteria\)/)
   })
 
-  it('shows remediation categories instead of severity', async () => {
+  it('keeps the remediation category summary out of Assess', async () => {
     const c = await mount({ files: ESTATE })
-    expect(c.textContent).toContain('Fully automated · 1')
-    expect(c.textContent).toContain('AI suggestion needed · 2')
+    expect(c.textContent).not.toContain('Fully automated · 1')
+    expect(c.textContent).not.toContain('AI suggestion needed · 2')
     expect(c.textContent).not.toContain('How serious are the issues')
   })
 
-  it('prints the remediation category total', async () => {
+  it('does not mount the retired remediation category total', async () => {
     const c = await mount({ files: ESTATE })
-    expect(c.querySelector('.remediation-category-total').textContent).toContain('3 findings across remediation categories')
+    expect(c.querySelector('.remediation-category-total')).toBeNull()
   })
 
   it('A6 · prints no equation when there is nothing to add', async () => {
@@ -254,7 +254,7 @@ describe('one primary action', () => {
 })
 
 describe('the seven screen states — a run that did not complete never reads as one that did', () => {
-  const gridShown = (c) => /Remediation categories/.test(c.textContent)
+  const gridShown = (c) => /Documents assessed/.test(c.textContent)
 
   describe('state 6 · assessment failed', () => {
     it('renders no metric grid — not even zeros — for an errored run', async () => {
@@ -357,8 +357,8 @@ describe('board 7 state 5 — a gap named at the top, not only in the list at th
 describe('board 4 · the 8th cell names what the score would have been', () => {
   it('states the absence by name, in the metrics grid', async () => {
     const c = await mount({ files: ESTATE })
-    expect(c.textContent).toMatch(/Why there is no overall score/)
-    expect(c.textContent).toMatch(/A single score could hide an important issue/)
+    expect(c.textContent).not.toMatch(/Why there is no overall score/)
+    expect(c.textContent).not.toMatch(/A single score could hide an important issue/)
   })
 })
 

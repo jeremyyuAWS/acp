@@ -76,7 +76,7 @@ it('closes with Escape or Close and restores focus to the tile; a different run 
 it('omits the incomplete-check tile when all selected checks ran', async () => {
   const { container } = await mount({ files: [files[31]] })
   expect(tile(container)).toBeUndefined()
-  expect(container.textContent).toContain('2 checks evaluated + 0 unable to assess = 2 selected checks')
+  expect(container.textContent).toContain('2 of 2 selected criteria evaluated')
   expect(breakdown(container)).toBeNull()
 })
 

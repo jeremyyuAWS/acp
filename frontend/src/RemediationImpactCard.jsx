@@ -54,6 +54,10 @@ function PolicySlider({ title, question, stops, value, onChange, disabled, maxLe
 
 export default function RemediationImpactCard({ runId, onRun, runBusy = false, myEmail = '', readOnly = false, refreshKey = 0, scopeFiles, renderAssessment, releaseOption, requireAnswers = false, releaseAnswered = true }) {
   const [answers, setAnswers] = useState({})
+  const [step, setStep] = useState(0)
+  const [reached, setReached] = useState(0)
+  const stepHeading = useRef(null)
+  useEffect(() => { if (requireAnswers && stepHeading.current?.closest('dialog')?.open) stepHeading.current.focus() }, [step, requireAnswers])
   const titleId = useId()
   const assigneeId = useId()
   const [assignmentOpen, setAssignmentOpen] = useState(false)
@@ -63,7 +67,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const [assignmentResult, setAssignmentResult] = useState(null)
   const [assignmentError, setAssignmentError] = useState('')
   const scopeKey = Array.isArray(scopeFiles) ? JSON.stringify([...scopeFiles].sort()) : null
-  useEffect(() => { setAnswers({}) }, [runId, scopeKey])
+  useEffect(() => { setAnswers({}); setStep(0); setReached(0) }, [runId, scopeKey])
   const [selectedFile, setSelectedFile] = useState(null)
   const [impactDetails, setImpactDetails] = useState(null)
   const closeImpactDetails = useCallback(() => setImpactDetails(null), [])
@@ -142,10 +146,11 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     human: Number.isFinite(data?.lanes?.review?.findings) && Number.isFinite(data?.lanes?.manual?.findings)
       ? data.lanes.review.findings + data.lanes.manual.findings : undefined,
   })
-  const questionsComplete = !requireAnswers || (answers.rule_based && answers.tools && releaseAnswered
+  const budgetValid = selected.ai === 0 || selected.ai_zone === 'local' || data?.capabilities?.ai_budget !== true || (selected.ai_budget_usd !== undefined && validBudget(selected))
+  const questionsComplete = !requireAnswers || (budgetValid && answers.rule_based && answers.tools && releaseAnswered
     && (selected.ai === 0 || selected.ai_zone === 'local' || answers.aiConfirmed === JSON.stringify(selected)))
   const change = (key, value) => {
-    setAnswers(current => ({ ...current, [key]: true, ...(['ai', 'ai_mode'].includes(key) ? { tools: true } : {}) }))
+    setAnswers(current => ({ ...current, [key]: true, ...(['ai', 'ai_mode'].includes(key) ? { tools: true, aiConfirmed: null } : {}) }))
     if (key === 'ai_mode') {
       const next = { ...selected, ai: 1, ai_zone: value, auto_approve_ai: false }
       if (value === 'local') {
@@ -198,7 +203,10 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     finally { setSaving(false) }
   }
 
-  return <section id="remediation-plan" tabIndex={-1} className="remediation-impact" aria-labelledby={titleId} aria-busy={loading}>
+  const stepNames = ['Changes', 'Tools', selected.ai > 0 && selected.ai_zone !== 'local' ? 'Budget, review & publishing' : 'Review & publishing']
+  const startButton = <button type="button" className="remediation-impact__run" disabled={!questionsComplete || readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
+    onClick={() => { if (questionsComplete && ready) onRun(selected, data) }}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>
+  return <section data-wizard={requireAnswers || undefined} id="remediation-plan" tabIndex={-1} className="remediation-impact" aria-labelledby={titleId} aria-busy={loading}>
     <header className="remediation-impact__header"><div><span className="remediation-impact__eyebrow">{scopeKey === null ? 'Remediation planner' : 'Selected remediation scope'} · Preview only</span>
       <h2 id={titleId}>Choose your remediation plan</h2>
       <p>{ready ? <><strong>{number(data.open?.findings)} unresolved findings</strong> across <strong>{number(data.open?.files)} files</strong>.</> : 'Preview the current assessment before applying changes.'}</p>
@@ -210,12 +218,12 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
         <span>{ready ? `${number(data.lanes?.automatic?.findings)} automatic · ${number(data.lanes?.review?.findings)} to approve · ${number(data.lanes?.manual?.findings)} manual · ${number(data.lanes?.blocked?.findings)} blocked` : 'Review the current preview before starting.'}</span>
         <span>{selected.ai > 0 && selected.ai_zone === 'local' ? 'Ollama only · Human review · No cloud AI charges' : selected.ai > 0 ? `${selected.auto_approve_ai ? 'Auto-approval on · Manual exceptions only' : 'AI drafts need approval'} · Up to ${generationSteps(selected, data?.capabilities?.generation_chain).length || 2} models${data?.capabilities?.ai_budget === true ? ` · AI limit $${selected.ai_budget_usd}` : ' · Spending cap unavailable'}` : 'Rules only · No new AI suggestions'}</span>
       </div>
-      <button type="button" className="remediation-impact__run" disabled={!questionsComplete || readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
-      onClick={() => { if (questionsComplete && ready) onRun(selected, data) }}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>
+      {!requireAnswers && startButton}
     </div>
+    {requireAnswers && <h3 ref={stepHeading} tabIndex={-1} className="plan-step-heading">Step {step + 1} of 3 · {stepNames[step]}</h3>}
     <div className="remediation-impact__split"><div className="remediation-impact__settings">
     {chainProblem && <p role="alert">{chainProblem}</p>}
-    <RemediationPlanChoices answers={requireAnswers ? answers : undefined} generationChainOptions={data?.capabilities?.generation_chain} policy={selected} providers={data?.providers}
+    <RemediationPlanChoices step={requireAnswers ? step : null} answers={requireAnswers ? answers : undefined} generationChainOptions={data?.capabilities?.generation_chain} policy={selected} providers={data?.providers}
       disabled={readOnly || !runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true}
       standingApprovalSupported={data?.capabilities?.ai_standing_approval?.supported === true}
       standingApprovalReason={data?.capabilities?.ai_standing_approval?.reason || ''}
@@ -224,12 +232,15 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       reviewEligibleFamilies={data?.capabilities?.ai_review?.eligible_families || []}
       automaticReviewReason={data?.capabilities?.ai_review?.reason || data?.capabilities?.ai_automatic_reason || ''}
       reviewAdministratorFloor={data?.capabilities?.ai_review?.administrator_floor ?? null} />
+    <div hidden={requireAnswers && step !== 2}>
     {requireAnswers && selected.ai > 0 && selected.ai_zone !== 'local' && <label>
       <input type="checkbox" checked={answers.aiConfirmed === JSON.stringify(selected)} disabled={readOnly || runBusy || !ready}
         onChange={event => setAnswers(current => ({ ...current, aiConfirmed: event.target.checked ? JSON.stringify(selected) : null }))} />
       I confirm the AI providers, spending limit, and review and approval settings above.
     </label>}
     {releaseOption}
+    {requireAnswers && <p><strong>Your plan:</strong> {selected.rule_based === 0 ? 'Review every change' : 'Apply rule-based fixes automatically'} · {selected.ai === 0 ? 'Rules only' : selected.ai_zone === 'local' ? 'Ollama only · Human review' : `Cloud AI · ${data?.capabilities?.ai_budget === true ? `$${selected.ai_budget_usd} limit` : 'Spending cap unavailable'} · ${selected.auto_approve_ai ? 'Eligible AI fixes auto-approved' : 'Review AI before applying'}`}</p>}
+    {requireAnswers && !budgetValid && <p role="alert">Enter a spending limit from $0 to $1,000,000.</p>}
     {!questionsComplete && <p role="status">Answer the changes, tools, and publishing questions, and confirm any cloud AI settings to start.</p>}
     <RemediationEstimateDisclosure estimate={estimateResponse?.key === estimateKey ? estimateResponse.value : null}
       aiEnabled={selected.ai > 0 && Number(selected.ai_budget_usd ?? 1) > 0}
@@ -237,10 +248,10 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     {ready && data?.capabilities?.execute !== true && <p>Execution unavailable: {data?.capabilities?.execute_reason || data?.capabilities?.reason || 'This preview cannot currently be executed.'}</p>}
 
     <div className="remediation-impact__actions">
-      <button type="button" disabled={!validPolicy(data?.active_policy) || runBusy} onClick={() => { setPolicy({ ...data.active_policy }); setFilter(null); setImpactDetails(null) }}>Reset to active</button>
+      <button type="button" disabled={!validPolicy(data?.active_policy) || runBusy} onClick={() => { setPolicy({ ...data.active_policy }); setFilter(null); setImpactDetails(null); if (requireAnswers) { setAnswers({}); setStep(0); setReached(0) } }}>Reset to active</button>
       <button type="button" disabled={readOnly || !ready || data?.capabilities?.save_future !== true || saving || runBusy} onClick={save}>{saving ? 'Saving…' : 'Save as default for future runs'}</button>
     </div>
-    <details className="remediation-impact__advanced"><summary>Advanced: individual fix permissions</summary>
+    <details hidden={requireAnswers} className="remediation-impact__advanced"><summary>Advanced: individual fix permissions</summary>
     <div className="remediation-impact__controls">
       <PolicySlider title="Rule-based fixes" question="What rule-based fixes may ACP apply without approval?" stops={RULE_STOPS}
         value={selected.rule_based} onChange={value => change('rule_based', value)} disabled={!validPolicy(data?.policy) || runBusy} />
@@ -250,7 +261,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     {data?.capabilities?.ai_automatic !== true && <p className="remediation-impact__note">{data?.capabilities?.ai_automatic_reason || 'Automatic application of AI proposals is not available on this execution path. Drafting depends on AI settings and a usable connection.'}</p>}
     </details>
     <p className="remediation-impact__guard">These controls change remediation permissions, not assessment results or provider credentials. Human-only and subjective decisions stay protected.</p>
-    <details className="remediation-impact__providers"><summary>AI connections and model details</summary>
+    <details hidden={requireAnswers} className="remediation-impact__providers"><summary>AI connections and model details</summary>
       {data?.providers && <ul>{[['text', 'Text drafting'], ['vision', 'Image drafting']].map(([key, label]) =>
         <li key={key}>{label}: {data.providers[key]?.provider || 'Not yet available'}
           {' · '}{data.providers[key]?.model || 'Model not reported'}{' · Connection not tested'}</li>)}</ul>}
@@ -258,7 +269,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       <p>Text and image drafting use their separately configured providers. A drafting opportunity is not a guaranteed resolution.</p>
       {data?.capabilities?.reason && <p>{data.capabilities.reason}</p>}
     </details>
-    </div><div className="remediation-impact__results">
+    </div></div><div hidden={requireAnswers && step !== 2} className="remediation-impact__results">
     {renderAssessment?.({
       findings: ready ? data.findings : null,
       scopeFiles,
@@ -382,5 +393,14 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
           onBack={() => setSelectedFile(null)} />}
       </div></Drawer>}
     </>}
+    {requireAnswers && <footer className="plan-wizard-footer">
+      <button type="button" disabled={step === 0 || runBusy} onClick={() => setStep(current => current - 1)}>Back</button>
+      <nav aria-label="Remediation plan questions" className="plan-wizard-dots">{stepNames.map((name, index) => <button type="button" key={index}
+        aria-label={`Question ${index + 1}: ${name}`} aria-current={step === index ? 'step' : undefined}
+        disabled={runBusy || index > reached || (index > 0 && !answers.rule_based) || (index > 1 && !answers.tools)}
+        onClick={() => setStep(index)}><span aria-hidden="true" /></button>)}</nav>
+      {step < 2 ? <button type="button" disabled={readOnly || runBusy || !(step === 0 ? answers.rule_based : answers.tools)}
+        onClick={() => { setStep(step + 1); setReached(current => Math.max(current, step + 1)) }}>Next</button> : startButton}
+    </footer>}
   </section>
 }

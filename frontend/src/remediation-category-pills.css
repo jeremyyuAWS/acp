@@ -1,0 +1,14 @@
+.remediation-category-pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px; border: 1px solid currentColor; font-size: 12px; line-height: 1.4; white-space: nowrap; margin: 2px; }
+.remediation-category-pill--automatic { color: #23612d; background: #e5f4e6; }
+.remediation-category-pill--approval { color: #7b4600; background: #fff0d1; }
+.remediation-category-pill--suggestion { color: #603295; background: #f1e7ff; }
+.remediation-category-pill--manual { color: #943650; background: #ffe8ef; }
+.remediation-category-pill--unsupported { color: #454957; background: #eceef2; }
+.remediation-category-pill--blocked { color: #9d2626; background: #ffe6e6; }
+.remediation-category-pill--applied { color: #075e80; background: #def4fc; }
+.remediation-category-pill--verified { color: #006353; background: #d8f5eb; }
+.remediation-category-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 12px 0; font-size: 12px; }
+.col-category { vertical-align: middle; }
+.remediation-category-filter { background: transparent; color: var(--ink); border: 1px solid transparent; padding: 2px; border-radius: 999px; }
+.remediation-category-filter[aria-pressed="true"] { border-color: var(--ink); outline: 1px solid var(--ink); outline-offset: 1px; }
+.remediation-category-filter:disabled { opacity: .55; }

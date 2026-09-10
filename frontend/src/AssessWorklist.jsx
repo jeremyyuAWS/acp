@@ -1,3 +1,4 @@
+import RemediationCategoryPill, { RemediationCategoryLegend } from './RemediationCategoryPill.jsx'
 import { useState } from 'react'
 import { REMEDIATION_CATEGORIES, remediationCategory } from './remediationCategories.js'
 import { documentRows, SEVERITIES, SEVERITY_LABEL } from './assessMetrics.js'
@@ -231,6 +232,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
       {/* A19 severity filter + A24 auto-fixable toggle. Shown only when there is finding work in
           scope to narrow — a run with nothing to fix has nothing for either control to do. Every
           chip keeps its count whether selected or not, so a narrowed view still says what it hid. */}
+      <RemediationCategoryLegend />
       {(scopedFindings > 0 || scopedChanges.length > 0) && (
         <div className="worklist-refine" style={{ display: 'flex', alignItems: 'center', gap: 16,
                                                   flexWrap: 'wrap', marginTop: 10 }}>
@@ -239,7 +241,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
             {REMEDIATION_CATEGORIES.map(([key, label]) => {
               const count = stateScoped.reduce((n, row) => n + (row.findings || []).filter(finding => remediationCategory(finding) === key).length, 0)
               const changes = scopedChanges.filter(change => change.category === key).length
-              return <button key={key} type="button" disabled={!count && !changes} aria-pressed={categoryChosen === key} onClick={() => setCategoryChosen(key)}>{label} {count}{changes > 0 && ` findings · ${changes} change records`}</button>
+              return <button key={key} className="remediation-category-filter" type="button" disabled={!count && !changes} aria-pressed={categoryChosen === key} onClick={() => setCategoryChosen(key)}><RemediationCategoryPill category={key} count={count} />{changes > 0 && ` · ${changes} change records`}</button>
             })}
           </div>
           <label className="worklist-autoonly" style={{ display: 'inline-flex', alignItems: 'center',
@@ -260,7 +262,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
       {/* The ordering, said out loud. A list whose order carries a judgement and does not name it
           is one people re-sort by hand because they assume it is arbitrary. */}
       <p className="muted" style={{ fontSize: 12, margin: '8px 0 0', lineHeight: 1.6 }}>
-        Grouped by remediation capability. Open a document’s categories to see its success criteria. The accepted plan determines what can run without approval.
+        Grouped by remediation capability. Open a document to see its success criteria. The accepted plan determines what can run without approval.
       </p>
 
       {/* A28 bulk select + bulk action. Only offers the deterministic fixes in the selection — see
@@ -347,9 +349,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
                     {renderProgress?.(row)}
                     {REMEDIATION_CATEGORIES.map(([key, label]) => {
                       const items = row.findings.filter(finding => remediationCategory(finding) === key)
-                      return items.length > 0 && <details key={key}><summary>{label} · {items.length}</summary><ul>
-                        {items.map((finding, index) => <li key={index}>SC {finding.sc} — {finding.detail || 'Finding recorded'}<br /><small>Severity: {finding.severity}</small></li>)}
-                      </ul></details>
+                      return items.length > 0 && <RemediationCategoryPill key={key} category={key} count={items.length} />
                     })}
                   </td>
                   <td className="col-auto"

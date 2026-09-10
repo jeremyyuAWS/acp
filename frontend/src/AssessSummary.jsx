@@ -293,7 +293,7 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
         </div>
       )}
 
-      {/* Assessment metrics, plan previews, and the current review queue use distinct units. */}
+      {/* Remediation-only panels are deliberately retired from Assess; keep them available in plan previews. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
                     gap: 12, marginTop: 16 }}>
 
@@ -319,11 +319,11 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           Issues found across the documents. The same type of issue can appear more than once.
         </Metric>
 
-        <div style={card}><RemediationCategoryBreakdown rows={categoryRows}
-          note={remediationForecast ? (Array.isArray(remediationForecast.findings) ? 'Current plan findings. Completion still requires application and verification.' : 'Current plan categories are not yet available.') : 'Based on remediation capability. Starting a run requires a plan; approval and availability can change the route.'} /></div>
+        {remediationForecast && <div style={card}><RemediationCategoryBreakdown rows={categoryRows}
+          note={remediationForecast ? (Array.isArray(remediationForecast.findings) ? 'Current plan findings. Completion still requires application and verification.' : 'Current plan categories are not yet available.') : 'Based on remediation capability. Starting a run requires a plan; approval and availability can change the route.'} /></div>}
 
       </div>
-      <div role="group" aria-label="Plan findings breakdown" style={grid}>
+      {remediationForecast && <div role="group" aria-label="Plan findings breakdown" style={grid}>
         <Metric label={remediationForecast ? "Can be fixed automatically · plan preview" : "Can be fixed automatically"} value={remediationForecast ? remediationForecast.automatic?.toLocaleString() : m.autoFixAvailable} tone="#2F7D32"
                 onClick={remediationForecast?.onAutomatic} delta={remediationForecast?.automaticDelta}>
           {remediationForecast ? <>Issues this plan can fix using set rules, without asking you to approve each change. These fixes have not been applied yet. {remediationForecast.onAutomatic && <b>View details →</b>}</> : <>Issues with a rule-based fix available. AI suggestions are counted under review instead.</>}
@@ -342,7 +342,7 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
         {outsidePreview > 0 && <Metric label="Outside this preview" value={outsidePreview} onClick={event => { outsideTrigger.current = event.currentTarget; setOutsideOpen(value => !value) }} expanded={outsideOpen}>
           Assessment findings not represented in the current plan. This can reflect scope or changed results; it does not prove they were fixed.
         </Metric>}
-      </div>
+      </div>}
       {remediationForecast && <div className="muted" style={{ fontSize: 12, marginTop: 12 }}>
         {forecastCounts ? <>
           <div>{remediationForecast.automatic.toLocaleString()} automatic + {remediationForecast.human.toLocaleString()} needing your review + {remediationForecast.blocked.toLocaleString()} blocked = {remediationForecast.total.toLocaleString()} findings in this plan</div>
@@ -350,8 +350,8 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           {outsidePreview < 0 && <div>The current preview and assessment cover different finding populations. Current plan findings cannot be added to the historical assessment.</div>}
         </> : 'The plan breakdown is not yet available.'}
       </div>}
-      <div role="group" aria-label="Separate counts: review items and checks" style={{ marginTop: 16 }}>
-      <div style={{ ...lab, fontWeight: 600 }}>Separate counts · not added to findings</div>
+      {(remediationForecast || m.unableToAssess > 0) && <div role="group" aria-label="Separate counts: review items and checks" style={{ marginTop: 16 }}>
+      {remediationForecast && <div style={{ ...lab, fontWeight: 600 }}>Separate counts · not added to findings</div>}
       <div style={grid}>
         {Number.isInteger(reviewSummary?.pendingItems) && reviewSummary.pendingItems >= 0 && (
           <Metric label="Review queue items" value={reviewSummary.pendingItems.toLocaleString()}
@@ -377,7 +377,7 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
             A reader who has seen a compliance dashboard expects a score; its absence is a decision,
             and naming the decision on the screen is what stops "where's the percentage?" becoming a
             request to reinstate one. No value — this cell is an explanation, not a metric. */}
-        <div style={{ ...card, background: 'transparent', borderStyle: 'dashed' }}>
+        {remediationForecast && <div style={{ ...card, background: 'transparent', borderStyle: 'dashed' }}>
           <div style={lab}>Why there is no overall score</div>
           <div style={{ fontSize: 13, marginTop: 8, lineHeight: 1.5 }}>
             A single score could hide an important issue.
@@ -385,10 +385,10 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           <div style={sub}>
             We show issues and unfinished checks separately so you can see what still needs attention.
           </div>
-        </div>
+        </div>}
       </div>
 
-      </div>
+      </div>}
 
       {outsideOpen && outsidePreview > 0 && <section aria-label="Outside this plan" style={{ marginTop: 16 }}>
         <h3 ref={outsideHeading} tabIndex={-1}>Outside this plan · {outsidePreview} findings</h3>
@@ -402,11 +402,11 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
       {checksOpen && m.unableToAssess > 0 && <AssessIncompleteChecks id={checksId} rows={m.rows} assessment={assessment} onClose={closeChecks} />}
 
       {/* ── The arithmetic, printed. Either it holds on screen or it is a visible bug. ───── */}
-      <div className="muted" style={{ fontSize: 12, marginTop: 12, paddingTop: 10,
+      {remediationForecast && <div className="muted" style={{ fontSize: 12, marginTop: 12, paddingTop: 10,
                                       borderTop: '1px solid var(--line)', lineHeight: 1.6 }}>
         <div>{remediationForecast ? 'Assessment totals above are historical. The automatic-fix and review previews cover the selected scope; the Review queue tile shows current items for this run. Changing permissions does not change assessment results.' : r.findings.line}</div>
         <div>{r.checks.line}</div>
-      </div>
+      </div>}
 
       {/* ── Named, not dropped ───────────────────────────────────────────────────────────── */}
       {m.documentsUnopened.length > 0 && (

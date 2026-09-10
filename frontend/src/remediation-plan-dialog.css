@@ -9,3 +9,21 @@
 .remediation-fix-detail { padding: 12px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .remediation-fix-detail dl { display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 8px; }
 .remediation-fix-detail dd { margin: 0; white-space: pre-wrap; }
+.remediation-plan-dialog { width: min(820px, 94vw); }
+.remediation-plan-dialog:has([data-wizard]) { overflow: hidden; }
+.remediation-plan-dialog [data-wizard] { display: flex; flex-direction: column; max-height: calc(90dvh - 185px); margin: 0; }
+.remediation-plan-dialog [data-wizard] > .remediation-impact__header,
+.remediation-plan-dialog [data-wizard] > .remediation-impact__startbar { display: none; }
+.remediation-plan-dialog [data-wizard] > .remediation-impact__split { overflow-y: auto; min-height: 0; display: block; }
+.remediation-plan-dialog [data-wizard] [hidden] { display: none !important; }
+.plan-step-heading { margin: 8px 0 16px; }
+.plan-wizard-footer { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 0 0; margin-top: 16px; border-top: 1px solid var(--line); background: var(--surface, white); }
+.plan-wizard-dots { display: flex; gap: 2px; }
+.plan-wizard-dots button { width: 32px; height: 36px; padding: 8px; border: 0; background: transparent; display: grid; place-items: center; }
+.plan-wizard-dots button span { width: 10px; height: 10px; border: 2px solid #705381; border-radius: 50%; }
+.plan-wizard-dots button[aria-current="step"] span { background: #705381; outline: 2px solid #705381; outline-offset: 3px; }
+.plan-wizard-dots button:disabled { opacity: .4; }
+@media (max-width: 540px) { .remediation-plan-dialog { padding: 16px; } .plan-wizard-footer { flex-wrap: wrap; } .plan-wizard-footer > .remediation-impact__run { flex: 1; } }
+.remediation-plan-dialog[open]:has([data-wizard]) { display: flex; flex-direction: column; gap: 8px; }
+.remediation-plan-dialog [data-wizard] { flex: 1; min-height: 0; max-height: none; }
+.remediation-plan-dialog:has([data-wizard]) > details { flex-shrink: 0; max-height: 25dvh; overflow: auto; }
