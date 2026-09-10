@@ -180,3 +180,14 @@ it('keeps confirmed activity on the selected model after stable model IDs replac
   expect(container.querySelector('[data-stage=next]').classList.contains('wf-graph-node-active')).toBe(true)
   expect(container.querySelector('[data-stage=first]').classList.contains('wf-graph-node-active')).toBe(false)
 })
+
+it('labels disabled AI separately from a running overall run', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot({state:'running'})} activity={{view:{...activity.view, ai_enabled:false}}} />))
+  await act(async () => container.querySelector('[data-stage=first]').click())
+  const drawer = document.querySelector('[role=dialog]')
+  expect(drawer.querySelector('.waterfall-visual-drawer__status').textContent).toBe('AI off for this run')
+  expect(drawer.textContent).toContain('AI wasn’t enabled for this run')
+  expect(drawer.textContent).not.toContain('Chart scope unavailable')
+  expect(drawer.textContent).toContain('Overall run · in progress')
+})

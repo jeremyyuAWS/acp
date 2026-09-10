@@ -53,3 +53,22 @@ it('clears denied data and does not poll completed runs', async () => {
  await act(async () => vi.advanceTimersByTimeAsync(30000))
  expect(getWaterfallDrawerMetrics).toHaveBeenCalledTimes(reads)
 })
+
+it('explains disabled AI without loading charts or implying the stage is running', async () => {
+ const {root,container}=createTestRoot()
+ await act(async()=>root.render(<WaterfallDrawerOverview {...props} aiEnabled={false} snapshot={{fixes:{verified:175},review:{items:68}}}/>))
+ expect(container.textContent).toContain('AI wasn’t enabled for this run')
+ expect(container.textContent).not.toContain('Chart scope unavailable')
+ expect(container.textContent).toContain('Overall run · in progress')
+ expect(container.textContent).toContain('175')
+ expect(container.textContent).toContain('68')
+ expect(getWaterfallDrawerMetrics).not.toHaveBeenCalled()
+ await act(async()=>container.querySelector('button').click())
+ expect(props.selectTab).toHaveBeenCalledWith('Evidence')
+})
+it('does not replace rules with the disabled AI state', async()=>{
+ const {root,container}=createTestRoot()
+ await act(async()=>root.render(<WaterfallDrawerOverview {...props} aiEnabled={false} role="rules" selectedModel={null}/>))
+ expect(container.textContent).not.toContain('AI wasn’t enabled')
+ expect(container.textContent).toContain('Verified changes')
+})
