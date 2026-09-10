@@ -1,3 +1,4 @@
+import './remediation-evidence.css'
 import { useEffect, useRef } from 'react'
 import { criterionOf } from './wcagFinding.js'
 import { REMEDIATION_CATEGORIES, remediationCategory } from './remediationCategories.js'
@@ -36,10 +37,10 @@ export default function RemediationFileDetail({ row, changes, loading, unavailab
           const count = group.findings.filter(finding => remediationCategory(finding) === category).length
           return count > 0 && <RemediationCategoryPill key={category} category={category} count={count} />
         })}</div><div><h4>SC {sc}{criterion ? ` ${criterion.name}` : ''}{criterion?.level && <span className="muted"> · Level {criterion.level}</span>}</h4><p className="muted">{criterion?.req}</p></div><small>{group.findings.length} findings · {group.changes.length} change records</small></header>
-        {group.findings.map((finding, index) => <div className="remediation-sc-row" key={`finding-${index}`}><span>{finding.detail || 'Finding recorded'}</span><RemediationCategoryPill fullLabel category={remediationCategory(finding)} /></div>)}
+        {group.findings.map((finding, index) => <div className="remediation-sc-row" key={`finding-${index}`}><span className="remediation-evidence remediation-evidence--description">{finding.detail || 'Finding recorded'}</span><RemediationCategoryPill fullLabel category={remediationCategory(finding)} /></div>)}
         {group.changes.map((change, index) => <div className="remediation-sc-change" key={change.id || index}>
           <h4>Change {index + 1}{change.page != null ? ` · Page ${change.page}` : ''} <RemediationCategoryPill fullLabel category={change.verified === true ? 'verified' : 'applied'} /></h4>
-          <dl><dt>Before</dt><dd>{text(change.before)}</dd><dt>After</dt><dd>{text(change.after ?? change.value ?? change.approved_value)}</dd></dl>
+          <dl><dt>Before</dt><dd className="remediation-evidence">{text(change.before)}</dd><dt>After</dt><dd className="remediation-evidence">{text(change.after ?? change.value ?? change.approved_value)}</dd></dl>
           <p>Verification: {change.verified === true ? 'Verified' : 'Not reported in this record'}</p>{change.reason && <p>{text(change.reason)}</p>}
         </div>)}
       </article>

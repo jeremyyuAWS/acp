@@ -32,7 +32,7 @@ it('shows readable original, current and outcome equations and clickable unfinis
   expect(container.textContent).toContain('0 fixed + 3 not yet verified fixed = 3 starting findings')
   expect(container.textContent).toContain('2 automatic + 1 other = 3 findings')
   expect(container.textContent).toContain('1 + 0 + 2 + 0 + 0 + 0 = 3')
-  expect(container.textContent).toContain('339')
+  expect(container.textContent).toContain('Verified changes: 339 · View details')
   await act(async () => container.querySelector('button[aria-controls]').click())
   expect(container.querySelectorAll('tbody tr')).toHaveLength(1)
   expect(container.textContent).toContain('WCAG 1.1.1')
@@ -106,7 +106,7 @@ it('does not present a contradictory zero baseline or a grid of unavailable coun
   expect(container.textContent).not.toContain('Originally: 0 automatic')
   expect(container.textContent).not.toContain('Unavailable')
   expect(container.textContent).toContain('Finding totals need reconciliation')
-  expect(container.textContent).toContain('Verified changes · all origins')
+  expect(container.textContent).not.toContain('Verified changes · all origins')
 })
 it('shows real zero outcomes when a zero assessment and its empty ledger reconcile', async () => {
   const { container } = await mount(snap({ assessed: 0, original_assessment: [],
@@ -120,4 +120,11 @@ it('explains prematurely sealed historical assessments without trusting even mat
   expect(container.textContent).toContain('saved before its document checks finished')
   expect(container.textContent).not.toContain('0 starting findings')
   expect(container.textContent).not.toContain('Unavailable')
+})
+
+it('deliberately leaves the retired review, change, and processing tiles unmounted', async () => {
+  const { container } = await mount({ ...snap(), review: { items: 5 }, fixes: { verified: 4 }, documents: { processing: 0 } })
+  expect(container.querySelector('.rap-separate')).toBeNull()
+  for (const label of ['Review items · not findings', 'Verified changes · all origins', 'Documents processing', 'shown separately below']) expect(container.textContent).not.toContain(label)
+  expect(container.textContent).toContain('Assessment findings · remediation progress')
 })

@@ -1,3 +1,4 @@
+import RemediationCountDetails from './RemediationCountDetails.jsx'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { assessMetrics } from './assessMetrics.js'
 import { scOf } from './fixSummary.js'
@@ -87,6 +88,8 @@ function RemainingCount({ value, identity, paused }) {
 }
 
 export default function RemediationAssessmentProgress({ snapshot, assessmentContext, identity, paused = false }) {
+  const [countDetail, setCountDetail] = useState(null)
+  useEffect(() => setCountDetail(null), [identity])
   const math = findingMath(snapshot)
   const { rec, exact, total, fixed, remaining } = math
   const latest = useMemo(() => assessmentContext ? assessMetrics(assessmentContext.files, assessmentContext) : null, [assessmentContext])
@@ -124,7 +127,7 @@ export default function RemediationAssessmentProgress({ snapshot, assessmentCont
       {tile('Not yet verified fixed', remaining, 'Includes review, unfinished work, exclusions, and replaced findings.')}
     </dl>}
     {exact ? <p className="rap-equation">{n(fixed)} fixed + {n(remaining)} not yet verified fixed = {n(total)} starting findings</p>
-      : <div role="status" className="rap-equation"><strong>Finding totals need reconciliation</strong><p>{valid(total) ? `${n(total)} starting findings · outcome breakdown unavailable.` : (rec.baseline_valid === false ? 'This assessment was saved before its document checks finished. Run a new assessment to capture an auditable starting total.' : 'The saved assessment total does not yet match the finding records for this run.')} Verified changes and review items are shown separately below; neither can replace the original finding count.</p></div>}
+      : <div role="status" className="rap-equation"><strong>Finding totals need reconciliation</strong><p>{valid(total) ? `${n(total)} starting findings · outcome breakdown unavailable.` : (rec.baseline_valid === false ? 'This assessment was saved before its document checks finished. Run a new assessment to capture an auditable starting total.' : 'The saved assessment total does not yet match the finding records for this run.')} Change records and review tasks cannot replace the original finding count.</p></div>}
     {exact && !original && <p>The original automatic-eligibility breakdown is unavailable for this recorded assessment.</p>}
     {exact && original && <>
       <dl className="rap-grid">
@@ -140,10 +143,24 @@ export default function RemediationAssessmentProgress({ snapshot, assessmentCont
     </>}
     {exact && <><h4 className="rap-subheading">What makes up the remaining {n(remaining)} findings?</h4><dl className="rap-grid rap-outcomes">{FINDING_BUCKETS.slice(1).map(([key, label]) => <div className="rap-tile" key={key}><dt>{label}</dt><dd>{count(rec[key])}</dd></div>)}</dl>
       <p className="rap-equation">{FINDING_BUCKETS.slice(1).map(([key]) => n(rec[key])).join(' + ')} = {n(remaining)} not yet verified fixed</p></>}
+    {/* Compact drill-down links replace the retired three-tile presentation. */}
+    <nav aria-label="Explore scan records" style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 12 }}>
+      <button type="button" disabled={!snapshot.review?.items || snapshot.integrity?.affected?.includes('review')} onClick={() => setCountDetail('review')}>Review tasks: {n(snapshot.review?.items)} · View details</button>
+      <button type="button" disabled={!snapshot.fixes?.verified || snapshot.integrity?.affected?.includes('fixes')} onClick={() => setCountDetail('fixes')}>Verified changes: {n(snapshot.fixes?.verified)} · View details</button>
+    </nav>
+    {countDetail && <RemediationCountDetails scanId={snapshot.scan_id || snapshot.run_id} kind={countDetail}
+      expected={countDetail === 'review' ? snapshot.review?.items : snapshot.fixes?.verified} revision={revision} onClose={() => setCountDetail(null)} />}
+  </section>
+}
+
+// Deliberately unmounted: the owner removed these three secondary tiles from Live.
+export function RetiredRemediationProgressTiles({ snapshot, identity, paused = false }) {
+  const tile = (label, value, detail) => <div className="rap-tile"><dt>{label}</dt><dd><WaterfallCount value={value} identity={identity} paused={paused} /><p>{detail}</p></dd></div>
+  return (
     <dl className="rap-grid rap-separate">
       {tile('Review items · not findings', snapshot.integrity?.affected?.includes('review') ? null : snapshot.review?.items, 'Grouped review tasks; one item can cover several findings. Not added to the finding totals.')}
       {tile('Verified changes · all origins', snapshot.integrity?.affected?.includes('fixes') ? null : snapshot.fixes?.verified, 'Recorded corrections from rules and AI. Not the number of original findings resolved.')}
       {tile('Documents processing', snapshot.integrity?.affected?.includes('documents') ? null : snapshot.documents?.processing, 'Document activity, separate from finding totals.')}
     </dl>
-  </section>
+  )
 }

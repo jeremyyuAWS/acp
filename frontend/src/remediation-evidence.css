@@ -1,0 +1,19 @@
+.remediation-evidence {
+  font-family: var(--font-mono, ui-monospace), SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-subtle, #f7f5f9);
+  color: var(--ink, #302735);
+}
+.remediation-evidence--description {
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
