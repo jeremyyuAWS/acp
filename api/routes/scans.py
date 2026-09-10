@@ -3621,7 +3621,19 @@ def publish_files(sid: str, request: Request, body: dict):
         sid, owner, source, len(eligible), **execution_options)
     release_id = release["id"]
     if "expected_destination" in body and release.get("parent_folder_id") != (body["expected_destination"] or {}).get("folder_id"):
-        raise HTTPException(409, "The authorized Release destination changed; confirm again")
+        # A worker or another tab may have frozen this execution after the UI
+        # loaded its preview. Keep the authorization guard, but return the saved
+        # destination so the caller can present it for a fresh confirmation.
+        saved_parent = release.get("parent_folder_id")
+        raise HTTPException(409, detail={
+            "code": "release_destination_changed",
+            "message": "This release has a saved destination. Review it and confirm publishing again.",
+            "release_id": release_id,
+            "release_folder_name": release["folder_name"],
+            "destination": ({"provider": source, "folder_id": saved_parent,
+                             "folder_name": release.get("parent_folder_name") or "Saved release location"}
+                            if saved_parent else None),
+        })
     created_at = release["created_at"]
     folder_name = release["folder_name"]
     drive_token = request.headers.get("x-drive-token")

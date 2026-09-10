@@ -56,6 +56,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [destinationPending, setDestinationPending] = useState(true)
   const [settingsPending, setSettingsPending] = useState(true)
   const frozenDestination = useRef(undefined)
+  const currentRunId = useRef(run?.id)
+  currentRunId.current = run?.id
   const [preserveHierarchy, setPreserveHierarchy] = useState(true)
   const [includeManifest, setIncludeManifest] = useState(true)
   const [includeVerificationReport, setIncludeVerificationReport] = useState(false)
@@ -86,7 +88,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     setAllowRemainingIssues(false); setDone({}); setReleaseResults({}); setPubUrls({}); setReleaseId(null)
     setReleaseFolder(null); setReleaseFolders([]); setReleasePreview(null); setPackagePreview(null)
     setSelectedFiles(new Set()); selectionInitialized.current = false
-    setConfirm(null); setSel(null); setBuilderStep(1); setReleaseAnnouncement('')
+    setConfirm(null); setSel(null); setBuilderStep(1); setReleaseAnnouncement(''); setReleaseError(null)
   }, [run?.id])
   useEffect(() => {
     let live = true
@@ -456,6 +458,44 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       setReleaseError({ summary: 'The corrected copy could not be released.', details: error?.message || 'The release service did not complete the request.', retry: () => publish(file) })
     }
   }
+  const recoverReleaseDestination = async (error, fileNames) => {
+    const code = error?.detail?.code || error?.code
+    const mismatch = code === 'release_destination_changed' || /authorized Release destination changed/i.test(error?.message || '')
+    if (error?.status !== 409 || (!mismatch && code !== 'release_destination_not_ready')) return false
+    const scanId = run?.id
+    setDestinationPending(true)
+    try {
+      const status = await getReleaseStatus(scanId)
+      if (currentRunId.current !== scanId) return true
+      if (!status?.release_id && !mismatch) { setDestinationPending(false); return false }
+      if (!status?.release_id) throw new Error('The saved release destination is not available yet.')
+      if (!mismatch && (status.parent_folder_id || null) === (releaseDestination?.folder_id || null)) {
+        setDestinationPending(false)
+        return false
+      }
+      applyReleaseStatus(status)
+      setDestinationPending(false)
+      if (fileNames.every(name => {
+        const file = releaseFiles.find(item => item.file === name)
+        const result = status.documents?.find(item => item.file === name)
+        return file && result && deliveryIsCurrent(file, result)
+      })) {
+        setReleaseError(null)
+        setReleaseAnnouncement('The selected copies have already been published. Open the published folder below.')
+        return true
+      }
+      setReleaseError({ summary: 'Saved release destination restored',
+        details: 'This release started with a different destination. The saved folder is now shown above. Confirm it before publishing the remaining selected copies.',
+        retryFiles: fileNames })
+    } catch {
+      if (currentRunId.current !== scanId) return true
+      if (!mismatch) { setDestinationPending(false); return false }
+      setReleaseError({ summary: 'Refresh the saved release destination',
+        details: 'The destination changed, but its saved details could not be loaded. Refresh them before publishing; no retry has been sent.',
+        retry: () => recoverReleaseDestination(error, fileNames), retryLabel: 'Refresh saved destination' })
+    }
+    return true
+  }
   const publishAll = async (fileNames = null, preferredFolderName = '', exact = false) => {
     if (publishing || readOnly || destinationPending || (settingsPending && !destinationLocked)) return
     setPublishing(true)
@@ -477,7 +517,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       }
       successful.forEach((row) => onPublish?.(row.file))
     } catch (error) {
-      setReleaseError({ summary: 'The selected copies could not be released.', details: error?.message || 'The release service did not complete the request.', retry: () => publishAll(fileNames, preferredFolderName, exact) })
+      if (!await recoverReleaseDestination(error, pending)) setReleaseError({ summary: 'The selected copies could not be released.', details: error?.detail?.message || error?.detail?.preflight?.message || error?.message || 'The release service did not complete the request.', retry: () => publishAll(fileNames, preferredFolderName, exact) })
     }
     setPublishing(false)
   }
@@ -771,7 +811,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             <details><summary>View details</summary><p>Scan {run?.id || 'unknown'} · {sourceProduct}. Completed copies remain safe and original files are unchanged.</p></details>
           </div>
           <div className="release-recovery__actions">
-            <button disabled={!releaseError.retry} onClick={() => { const retry = releaseError.retry; setReleaseError(null); retry?.() }}>Retry</button>
+            {releaseError.retryFiles ? <button disabled={readOnly || publishing || destinationPending || !selectableReady.some(file => !done[file.file] && releaseError.retryFiles.includes(file.file))}
+              onClick={() => { const names = releaseError.retryFiles; setReleaseError(null); publishAll(names, releaseFolder?.name || releaseFolderName, true) }}>Publish to saved destination</button>
+              : <button disabled={!releaseError.retry || publishing} onClick={() => { const retry = releaseError.retry; setReleaseError(null); retry?.() }}>{releaseError.retryLabel || 'Retry'}</button>}
             <button className="ghost" onClick={() => document.getElementById('workflow-tab-liveops')?.click()}>Open Live Operations</button>
             <button className="ghost" onClick={() => setReleaseError(null)}>Dismiss</button>
           </div>

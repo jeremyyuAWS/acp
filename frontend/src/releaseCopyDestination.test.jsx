@@ -27,3 +27,9 @@ it('exposes every library destination and makes no SharePoint promise for manage
   const managed = await mount({ provider: 'upload' })
   expect(managed.textContent).toBe('')
 })
+it('distinguishes a parent named Remediated from the generated release subfolder', async () => {
+  const c = await mount({ provider: 'sharepoint', destination: { folder_name: 'Remediated' } })
+  expect(c.textContent).toContain('Selected parent: SharePoint / Remediated')
+  expect(c.textContent).toContain('Release subfolder inside this parent: Remediated / Timestamp + user email')
+  expect(c.textContent).not.toContain('Remediated / Remediated')
+})

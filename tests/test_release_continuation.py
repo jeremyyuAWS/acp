@@ -257,3 +257,50 @@ def test_normal_publish_refuses_a_changed_frozen_destination_or_artifact(isolate
         scans.publish_files('reader-scan', request, {'files': ['one.pdf'], 'expected_destination': None})
     assert destination.value.status_code == 409
     assert st.get_file_record('reader-scan', 'one.pdf')['published_at'] is None
+
+
+@pytest.mark.parametrize('saved_parent,requested_parent', [
+    ('lib/frozen', None),
+    (None, 'lib/stale'),
+])
+def test_publish_reports_frozen_destination_when_release_starts_after_status_read(
+        isolated_store, monkeypatch, saved_parent, requested_parent):
+    """A worker may freeze a destination after the browser loaded Release."""
+    import core
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+    from routes import scans
+    from test_release_artifact_readers import seed
+    st = isolated_store
+    seed(st, b'A')
+    with st._db.cursor() as cur:
+        st._db.execute(cur, 'UPDATE scan_runs SET source=%s WHERE id=%s',
+                       ('sharepoint', 'reader-scan'))
+    monkeypatch.setattr(core, 'store', st)
+    monkeypatch.setattr(scans, '_preflight_release_destination', lambda *args: {'ready': True})
+    provider_calls = []
+    monkeypatch.setattr(scans, '_register_scan_tokens', lambda *args, **kwargs: provider_calls.append(kwargs))
+    request = SimpleNamespace(state=SimpleNamespace(user_email='reader@example.com'),
+                              headers={'x-sp-token': 'test-token'})
+    assert scans.get_release_status('reader-scan', request)['release_id'] is None
+    frozen = st.ensure_release_execution(
+        'reader-scan', 'reader@example.com', 'sharepoint', 1,
+        preferred_folder_name='2026-09-10 01-04 UTC - reader@example.com',
+        parent_folder_id=saved_parent, parent_folder_name='Frozen parent' if saved_parent else None)
+    requested = ({'provider': 'sharepoint', 'folder_id': requested_parent,
+                  'folder_name': 'Stale parent'} if requested_parent else None)
+    with pytest.raises(HTTPException) as conflict:
+        scans.publish_files('reader-scan', request, {
+            'files': ['one.pdf'], 'destination': requested, 'expected_destination': requested})
+    assert conflict.value.status_code == 409
+    detail = conflict.value.detail
+    assert detail['code'] == 'release_destination_changed'
+    assert detail['release_id'] == frozen['id']
+    assert detail['release_folder_name'] == frozen['folder_name']
+    assert detail['destination'] == (
+        {'provider': 'sharepoint', 'folder_id': saved_parent, 'folder_name': 'Frozen parent'}
+        if saved_parent else None)
+    assert 'confirm' in detail['message'].lower()
+    assert provider_calls == []
+    assert st.get_file_record('reader-scan', 'one.pdf')['published_at'] is None
+    assert st.release_for_scan('reader-scan', 'reader@example.com')['documents'] == []

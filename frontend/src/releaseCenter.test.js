@@ -103,7 +103,8 @@ describe('Release Center: confirmation before a release', () => {
   it('shows actionable recovery controls instead of hiding release errors', () => {
     const s = pub()
     expect(s).toMatch(/className="release-recovery" role="alert"/)
-    expect(s).toMatch(/>Retry<\/button>/)
+    expect(s).toContain("releaseError.retryLabel || 'Retry'")
+    expect(s).toContain('Publish to saved destination')
     expect(s).toMatch(/<summary>View details<\/summary>/)
     expect(s).toMatch(/Open Live Operations/)
     expect(s).toMatch(/workflow-tab-liveops/)
