@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act } from 'react'
-import { createRoot } from 'react-dom/client'
+import { createTestRoot, unmountAll } from './testRoots.js'
+afterEach(unmountAll)
 
 const calls = vi.hoisted(() => ({ put: [], apply: [], validate: [], override: [], del: 0, get: 0, putResult: null }))
 vi.mock('./api.js', () => ({
@@ -16,7 +17,7 @@ import CapacitySchedule from './CapacitySchedule.jsx'
 const SNAP = { enabled: true, timezone: 'America/Los_Angeles', days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '06:00', end: '20:00', business_hours: { web: 1, discovery: 2, assess: 4, remediate: 4, gpu: 1 }, off_hours: { web: 1, discovery: 1, assess: 1, remediate: 1, gpu: 0 }, maximums: { web: 3, discovery: 4, assess: 10, remediate: 10, gpu: 1 }, effective_mode: 'business_hours', effective_floors: {}, version: 7, applied: true, application_configured: true, override: null, reconciliation: { state: 'applied', completed_at: '2026-09-07T16:00:00Z', failures: 0 }, validation: { blocked: false, findings: [] }, scalers: {}, observed: {}, drift: [], drift_evaluated: true, azure_configured: true, holidays: ['2026-12-25'], attribution: {} }
 const button = (c, text) => [...c.querySelectorAll('button')].find((b) => b.textContent.trim() === text)
 const setValue = (el, value) => { const proto = el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })) }
-async function mount({ admin = true, snapshot = SNAP } = {}) { calls.snapshot = snapshot; const host = document.createElement('div'); document.body.appendChild(host); await act(async () => { createRoot(host).render(<CapacitySchedule me={{ is_admin: admin }} />) }); await act(async () => { await Promise.resolve() }); return host }
+async function mount({ admin = true, snapshot = SNAP } = {}) { calls.snapshot = snapshot; const { container: host, root } = createTestRoot(); await act(async () => { root.render(<CapacitySchedule me={{ is_admin: admin }} />) }); await act(async () => { await Promise.resolve() }); return host }
 async function open(c, name = 'Edit schedule') { await act(async () => { button(c, name).click() }) }
 async function review(c) { await act(async () => { button(c, 'Continue').click() }); await act(async () => { button(c, 'Continue').click() }) }
 
