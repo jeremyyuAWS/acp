@@ -6,6 +6,7 @@ Keep XMP and PDF document information synchronized: viewers may prefer either.
 from datetime import datetime, timezone
 from io import BytesIO
 import os
+import re
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile, ZIP_DEFLATED
@@ -14,6 +15,7 @@ TOOL = "Mova.io ACP"
 CUSTOM_NS = "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
 VT_NS = "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
 CP_NS = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+DC_NS = "http://purl.org/dc/elements/1.1/"
 DCT_NS = "http://purl.org/dc/terms/"
 
 
@@ -61,6 +63,14 @@ def stamp_office_entries(entries, applied=None, *, now=None, version=None):
     entries["_rels/.rels"] = ET.tostring(rels, encoding="utf-8", xml_declaration=True)
     if "docProps/core.xml" in entries:
         core = ET.fromstring(entries["docProps/core.xml"])
+        description = core.find(f"{{{DC_NS}}}description")
+        if description is None:
+            description = ET.SubElement(core, f"{{{DC_NS}}}description")
+        comments = description.text or ""
+        # Only replace our complete first-line stamp; preserve the author's comments.
+        comments = re.sub(r"\AMova-io ACP [^\n]+ · \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z(?:\n\n|\n|$)", "", comments, count=1)
+        stamp = f"Mova-io ACP {version or _version()} · {timestamp}"
+        description.text = stamp + ("\n\n" + comments if comments else "")
         for tag, value in ((f"{{{CP_NS}}}lastModifiedBy", TOOL), (f"{{{DCT_NS}}}modified", timestamp)):
             el = core.find(tag)
             if el is None:
@@ -84,10 +94,10 @@ def stamp_output(data: bytes, filename: str, *, now=None) -> bytes:
         import pikepdf
         with pikepdf.open(BytesIO(data)) as pdf:
             with pdf.open_metadata(set_pikepdf_as_editor=False, update_docinfo=False) as xmp:
-                xmp["pdf:Producer"] = f"{TOOL} {_version()}"
+                xmp["pdf:Producer"] = f"Mova-io ACP {_version()} · {timestamp}"
                 xmp["xmp:ModifyDate"] = timestamp
                 xmp["xmp:MetadataDate"] = timestamp
-            pdf.docinfo["/Producer"] = f"{TOOL} {_version()}"
+            pdf.docinfo["/Producer"] = f"Mova-io ACP {_version()} · {timestamp}"
             pdf.docinfo["/RemediatedBy"] = TOOL
             pdf.docinfo["/ACPVersion"] = _version()
             pdf.docinfo["/RemediationDate"] = timestamp

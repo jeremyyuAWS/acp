@@ -13,27 +13,58 @@ NOW = datetime(2026, 9, 10, 4, 5, 6, tzinfo=timezone.utc)
 def test_pdf_refreshes_xmp_and_docinfo_without_changing_content(monkeypatch):
     monkeypatch.setenv("ACP_BUILD_VERSION", "2026.9.10.7")
     pdf = pikepdf.Pdf.new()
-    pdf.add_blank_page()
+    page = pdf.add_blank_page()
+    content = b"q 0.2 0.4 0.6 rg 20 30 100 80 re f Q\n"
+    page.Contents = pikepdf.Stream(pdf, content)
     pdf.docinfo["/Title"] = "Original title"
+    pdf.docinfo["/Author"] = "Original author"
+    pdf.docinfo["/Creator"] = "Original application"
     pdf.docinfo["/Producer"] = "Old Adobe"
     with pdf.open_metadata(set_pikepdf_as_editor=False) as metadata:
         metadata["pdf:Producer"] = "Adobe PDF Library 9.9"
         metadata["xmp:ModifyDate"] = "2020-02-26T10:35:57Z"
         metadata["dc:title"] = "Original title"
+        metadata["dc:creator"] = ["Original author"]
+        metadata["xmp:CreatorTool"] = "Original application"
     original = BytesIO()
     pdf.save(original)
     stamped = stamp_output(original.getvalue(), "test.pdf", now=NOW)
     with pikepdf.open(BytesIO(stamped)) as result:
-        assert str(result.docinfo["/Producer"]) == "Mova.io ACP 2026.9.10.7"
+        assert str(result.docinfo["/Producer"]) == "Mova-io ACP 2026.9.10.7 · 2026-09-10T04:05:06Z"
         assert str(result.docinfo["/ACPVersion"]) == "2026.9.10.7"
         assert str(result.docinfo["/RemediationDate"]) == "2026-09-10T04:05:06Z"
         assert str(result.docinfo["/ModDate"]) == "D:20260910040506Z"
         assert str(result.docinfo["/Title"]) == "Original title"
+        assert str(result.docinfo["/Author"]) == "Original author"
+        assert str(result.docinfo["/Creator"]) == "Original application"
         assert len(result.pages) == 1
+        assert result.pages[0].Contents.read_bytes() == content
         with result.open_metadata() as metadata:
-            assert metadata["pdf:Producer"] == "Mova.io ACP 2026.9.10.7"
+            assert metadata["pdf:Producer"] == "Mova-io ACP 2026.9.10.7 · 2026-09-10T04:05:06Z"
             assert metadata["xmp:ModifyDate"] == "2026-09-10T04:05:06Z"
             assert metadata["dc:title"] == "Original title"
+            assert metadata["dc:creator"] == ["Original author"]
+            assert metadata["xmp:CreatorTool"] == "Original application"
+
+
+def test_pdf_restamp_replaces_visible_stamp_in_both_metadata_stores(monkeypatch):
+    pdf = pikepdf.Pdf.new()
+    pdf.add_blank_page()
+    original = BytesIO()
+    pdf.save(original)
+    monkeypatch.setenv("ACP_BUILD_VERSION", "old")
+    stamped = stamp_output(original.getvalue(), "test.pdf", now=NOW)
+    monkeypatch.setenv("ACP_BUILD_VERSION", "new")
+    later = datetime(2026, 9, 11, 12, 13, 14, tzinfo=timezone.utc)
+    stamped = stamp_output(stamped, "test.pdf", now=later)
+    expected = "Mova-io ACP new · 2026-09-11T12:13:14Z"
+    with pikepdf.open(BytesIO(stamped)) as result:
+        assert str(result.docinfo["/Producer"]) == expected
+        assert str(result.docinfo["/ACPVersion"]) == "new"
+        assert str(result.docinfo["/RemediationDate"]) == "2026-09-11T12:13:14Z"
+        with result.open_metadata() as metadata:
+            assert metadata["pdf:Producer"] == expected
+            assert metadata["xmp:ModifyDate"] == "2026-09-11T12:13:14Z"
 
 
 @pytest.mark.parametrize("ext", ["docx", "xlsx", "pptx"])
