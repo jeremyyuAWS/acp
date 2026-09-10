@@ -191,7 +191,11 @@ def test_later_actual_retry_can_recover_after_failed_verification(store):
 
 def test_later_lane_regression_cannot_credit_earlier_lane_against_final_artifact(store,monkeypatch):
     import core, handlers
+    import output_provenance
     from proposals import Verification
+    # This bookkeeping fixture uses sentinel bytes; real stamped artifact hashes are
+    # exercised by test_apply_approved_values and test_output_provenance.
+    monkeypatch.setattr(output_provenance, 'stamp_output', lambda data, filename: data)
     run,item=seed_exact_writer(store)
     monkeypatch.setattr(core,'store',store)
     monkeypatch.setattr(handlers,'_verify_residual',lambda data,file: Verification(True,set()))
