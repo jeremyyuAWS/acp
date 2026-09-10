@@ -29,6 +29,15 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
     {domain?.buckets?.length > 0 && <dl className="workflow-sse-card__metrics">
       {domain.buckets.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{shown(value)}</dd></div>)}
     </dl>}
+    {findingAccounting && missingOutcomes > 0 && <p className="workflow-sse-card__notice">
+      {shown(done)} with recorded outcomes + {shown(missingOutcomes)} awaiting an outcome = {shown(total)} assessed findings.
+    </p>}
+    {snapshot.omitted_assessment_groups?.length > 0 && <details>
+      <summary>Findings not in the remediation breakdown — by file and SC</summary>
+      <ul>{snapshot.omitted_assessment_groups.map(({ file, sc, count }) => <li key={`${file}:${sc}`}>
+        <b>{file}</b> · SC {sc || 'not recorded'} · {shown(count)} {count === 1 ? 'finding' : 'findings'}
+      </li>)}</ul>
+    </details>}
     {!model.integrityOk && <p className="workflow-sse-card__notice"><b>Accounting is reconciling.</b> {missingOutcomes > 0 ? `${missingOutcomes} assessed finding${missingOutcomes === 1 ? '' : 's'} still lack a recorded outcome. This is not a count of fixes completed.` : 'Durable totals remain visible while ACP verifies this snapshot.'}</p>}
   </section>
 }

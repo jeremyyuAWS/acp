@@ -168,3 +168,31 @@ def test_new_remediation_batch_seeds_the_same_finding_population_as_sealed_asses
     assert reconciliation['assessed'] == 8
     assert reconciliation['accounted'] == 8
     assert reconciliation['exact'] is True
+
+
+def test_review_findings_stay_in_assessment_and_remediation_population(isolated_store):
+    store = isolated_store
+    _scan(store)
+    with store._db.cursor() as cur:
+        for rule, outcome, count in [('1.1.1', 'FAIL', 29), ('1.4.1', 'REVIEW', 3), ('1.4.4', 'NOT_EVALUATED', 2)]:
+            store._db.execute(cur, 'INSERT INTO scan_rule_traces(scan_id,file,rule_id,outcome,finding_count) VALUES(%s,%s,%s,%s,%s)',
+                              ('stage-scan', 'a.docx', rule, outcome, count))
+    batch = _execution(store)
+    for job in batch['job_ids']:
+        claim = _hold(store, job)
+        store._start_stage_attempt(store.get_job(job))
+        store.publish_worker_stage_event(job, claim['worker_id'], claim['attempt'], 'attempt.started')
+        assert store.complete_job(job, **claim)
+    snapshot = store.stage_execution_snapshot(batch['batch_id'])
+    assert snapshot['assessment_summary']['findings_recorded'] == 32
+    manifest = snapshot['output_manifest_id']
+    remediation = store.enqueue_stage_batch('stage-scan', 'remediate', 'remediate_file', [{'file': 'a.docx'}],
+        snapshot_id=manifest, input_manifest_id=manifest, request_fingerprint='include-review')
+    rows = store.seed_finding_dispositions('stage-scan', remediation['batch_id'])
+    assert len(rows) == 32
+    assert sum(row['assessment_status'] == 'review' for row in rows) == 3
+    assert store.finding_reconciliation('stage-scan', remediation['batch_id'])['assessed'] == 32
+    # Verification cannot reduce the immutable original population.
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "UPDATE scan_rule_traces SET outcome='PASS',finding_count=0 WHERE scan_id=%s", ('stage-scan',))
+    assert store.finding_reconciliation('stage-scan', remediation['batch_id'])['assessed'] == 32

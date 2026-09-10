@@ -3472,8 +3472,8 @@ def clear_scan_tokens(sid: str, request: Request):
 
 def _release_timezone(owner: str) -> str:
     """Read the preference; minimal/older adapters use the product's US Central default."""
-    getter = getattr(core.store, "get_user_setting", None)
-    return (getter(owner, "release_timezone") if callable(getter) else None) or "America/Chicago"
+    from publish import user_release_timezone
+    return user_release_timezone(core.store, owner)
 
 
 def _release_destination(source: str, raw: object) -> dict | None:

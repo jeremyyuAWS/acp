@@ -1,3 +1,4 @@
+import { scOf } from './fixSummary.js'
 import { STATE_LABELS, stageDefinition, validStageActions } from './stageDefinitions.js'
 import { canonicalStageViewModels } from './stageAccountingModel.js'
 
@@ -84,7 +85,9 @@ export function canonicalStageCardModel(snapshot, context = {}) {
     && !['cancelled', 'failed', 'succeeded'].includes(snapshot.state)
   const definition = stageDefinition(snapshot.stage)
   const views = canonicalStageViewModels(snapshot, context)
-  const stateLabel = stopping ? 'Stopping safely' : (STATE_LABELS[snapshot.state] || 'Status unavailable')
+  const stateLabel = stopping ? 'Stopping safely'
+    : snapshot.stage === 'remediate' && ['processing_complete', 'succeeded'].includes(snapshot.state)
+      ? 'Processing complete' : (STATE_LABELS[snapshot.state] || 'Status unavailable')
   return {
     stage: snapshot.stage,
     stageLabel: definition?.label || 'Stage',
@@ -140,4 +143,54 @@ export function currentCanonicalStage(lineage) {
       .localeCompare(String(left.last_durable_update_at || ''))
     return updated || Number(right.revision || 0) - Number(left.revision || 0)
   })[0]
+}
+
+// Display the same population as Assess without rewriting a historical ledger or
+// granting outcomes to findings that were never enrolled in that ledger.
+export function alignRemediationAssessment(snapshot, assessmentTotal) {
+  const domain = snapshot?.domain_reconciliation
+  if (snapshot?.stage !== 'remediate' || !domain?.buckets) return snapshot
+  const valid = value => Number.isSafeInteger(value) && value >= 0
+  if (!valid(domain.total) || !valid(domain.accounted) || domain.accounted > domain.total) return snapshot
+  const values = Object.values(domain.buckets)
+  if (!values.every(valid) || values.reduce((sum, value) => sum + value, 0) !== domain.accounted) return snapshot
+  const total = valid(assessmentTotal) ? Math.max(domain.total, assessmentTotal) : domain.total
+  const missing = domain.total - domain.accounted
+  const additional = total - domain.total
+  if (!missing && !additional) return snapshot
+  return { ...snapshot, domain_reconciliation: { ...domain, total,
+    unaccounted: total - domain.accounted, exact: false,
+    buckets: { ...domain.buckets, ...(missing ? { awaiting_recorded_outcome: missing } : {}),
+      ...(additional ? { not_in_remediation_breakdown: additional } : {}) },
+  } }
+}
+
+// Only identify omitted groups when the immutable baseline and current per-file
+// evidence reconcile exactly. Never guess which findings make up a missing count.
+export function omittedAssessmentGroups(snapshot, audit, rows) {
+  const baseline = snapshot?.domain_reconciliation?.total
+  if (!Array.isArray(rows) || !Array.isArray(audit?.finding_groups) || audit.valid === false
+      || audit.findings_recorded !== baseline) return []
+  const counts = new Map()
+  const key = (file, sc) => JSON.stringify([file, sc])
+  for (const row of rows) {
+    for (const finding of row.findings || []) {
+      const id = key(row.file, finding.sc)
+      counts.set(id, (counts.get(id) || 0) + 1)
+    }
+  }
+  let enrolled = 0
+  for (const group of audit.finding_groups) {
+    const count = group.finding_count
+    if (!Number.isSafeInteger(count) || count < 0) return []
+    enrolled += count
+    const id = key(group.file, scOf(group.rule_id))
+    if ((counts.get(id) || 0) < count) return []
+    counts.set(id, (counts.get(id) || 0) - count)
+  }
+  if (enrolled !== baseline) return []
+  return [...counts].filter(([, count]) => count > 0).map(([id, count]) => {
+    const [file, sc] = JSON.parse(id)
+    return { file, sc, count }
+  })
 }

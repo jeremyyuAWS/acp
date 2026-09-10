@@ -74,10 +74,10 @@ def plan(store, sid, owner, files, destination, folder_name):
         folder_name = existing['folder_name']
     if not existing and scan['run'].get('source') == 'sharepoint':
         import publish
-        folder_name = publish.sharepoint_release_name(folder_name, owner)
+        folder_name = publish.sharepoint_release_name(folder_name, owner, timezone_name=publish.user_release_timezone(store, owner))
     elif not folder_name:
         import publish
-        folder_name = publish.release_folder_name(owner_email=owner)
+        folder_name = publish.release_folder_name(timezone_name=publish.user_release_timezone(store, owner), owner_email=owner)
     # The previous per-file helper decoded the entire review queue again for
     # every document (177 full queue reads on the observed legacy run).
     records = store.get_file_records(sid, owner=owner)

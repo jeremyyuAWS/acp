@@ -5,7 +5,7 @@ import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import WorkflowStageActivityCard from './WorkflowStageActivityCard.jsx'
 import { canonicalStageCardModel, canonicalWorkflowStages, currentCanonicalStage,
-  stageNeedsAttention } from './canonicalStageCard.js'
+  stageNeedsAttention, alignRemediationAssessment, omittedAssessmentGroups } from './canonicalStageCard.js'
 
 const STAGES = ['discover', 'assess', 'remediate', 'release']
 const destination = { discover: 'discover', assess: 'assess', remediate: 'remediate', release: 'publish' }
@@ -29,7 +29,7 @@ function primaryOutcome(model) {
 /** The sole outer shell for all four workflow stages. Detail nodes stay mounted under `hidden`
  * so disclosure changes do not end live subscriptions or reset rolling heartbeat history. */
 export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = null,
-  stageDetails = {}, activeStage = null, assessmentActivity = null }) {
+  stageDetails = {}, activeStage = null, assessmentActivity = null, assessmentFindings = null }) {
   const snapshots = useMemo(() => canonicalWorkflowStages(lineage), [lineage])
   const current = useMemo(() => currentCanonicalStage(lineage), [lineage])
   const key = storageKey(lineage)
@@ -38,7 +38,17 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
   useEffect(() => { setOverrides({}) }, [key, activeStage])
 
   if (!snapshots.length) return null
-  const byStage = new Map(snapshots.map((snapshot) => [snapshot.stage, snapshot]))
+  const assessStage = snapshots.find(snapshot => snapshot.stage === 'assess')
+  const byStage = new Map(snapshots.map((snapshot) => {
+    const sameAssessment = assessmentFindings?.scanId === lineage?.scan_id
+      && (!snapshot.input_manifest_id || !assessStage?.output_manifest_id || snapshot.input_manifest_id === assessStage.output_manifest_id)
+    const aligned = alignRemediationAssessment(snapshot, sameAssessment ? assessmentFindings?.total : null)
+    const omitted = sameAssessment && snapshot.stage === 'remediate'
+      ? omittedAssessmentGroups(snapshot, assessStage?.assessment_summary, assessmentFindings?.rows) : []
+    const omittedTotal = omitted.reduce((sum, group) => sum + group.count, 0)
+    return [snapshot.stage, omittedTotal > 0 && omittedTotal === aligned.domain_reconciliation?.buckets?.not_in_remediation_breakdown
+      ? { ...aligned, omitted_assessment_groups: omitted } : aligned]
+  }))
 
   return (
     <section className="workflow-stage-stack" aria-label="Workflow stages"
@@ -48,7 +58,7 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
         const isCurrent = Boolean(snapshot && stage === current?.stage
           && snapshot.execution_id === current?.execution_id)
         const model = snapshot ? canonicalStageCardModel(snapshot, { isCurrent }) : null
-        const attention = Boolean(snapshot && stageNeedsAttention(snapshot))
+        const attention = Boolean(snapshot && (stageNeedsAttention(snapshot) || !model.integrityOk))
         const assessment = assessmentStageActivity(snapshot, assessmentActivity, lineage?.scan_id)
         const displayState = assessment?.state || snapshot.state
         const isCompleted = completed(displayState)

@@ -163,3 +163,15 @@ def test_legacy_release_name_is_not_renamed_by_new_email_policy(isolated_store):
     retry = isolated_store.ensure_release_execution('legacy-folder', owner, 'sharepoint', 2, preferred_folder_name='New label')
     assert retry['id'] == original['id']
     assert retry['folder_name'] == '2026-09-01 10-00 UTC'
+
+
+def test_folder_uses_owner_timezone_and_retry_preserves_original(isolated_store, monkeypatch):
+    owner = 'owner@example.com'
+    _scan(isolated_store, 'local-folder', owner)
+    isolated_store.set_user_setting(owner, 'release_timezone', 'America/Los_Angeles')
+    monkeypatch.setattr(isolated_store, '_now', lambda: '2026-09-11T01:35:00+00:00')
+    first = isolated_store.ensure_release_execution('local-folder', owner, 'sharepoint', 2)
+    assert first['folder_name'] == '2026-09-10 18-35 PDT - owner@example.com'
+    isolated_store.set_user_setting(owner, 'release_timezone', 'Asia/Kolkata')
+    retry = isolated_store.ensure_release_execution('local-folder', owner, 'sharepoint', 2)
+    assert retry['folder_name'] == first['folder_name']
