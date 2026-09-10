@@ -46,6 +46,7 @@ def stamp_office_entries(entries, applied=None, *, now=None, version=None):
           else ET.Element(f"{{{ct_ns}}}Types"))
     if not any(p.get("PartName") == "/docProps/custom.xml" for p in ct):
         ET.SubElement(ct, f"{{{ct_ns}}}Override", {"PartName": "/docProps/custom.xml", "ContentType": "application/vnd.openxmlformats-officedocument.custom-properties+xml"})
+    ET.register_namespace("", ct_ns)
     entries["[Content_Types].xml"] = ET.tostring(ct, encoding="utf-8", xml_declaration=True)
     rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
     rels = ET.fromstring(entries["_rels/.rels"]) if "_rels/.rels" in entries else ET.Element(f"{{{rel_ns}}}Relationships")
@@ -56,6 +57,7 @@ def stamp_office_entries(entries, applied=None, *, now=None, version=None):
         while rid in ids:
             rid += "_"
         ET.SubElement(rels, f"{{{rel_ns}}}Relationship", {"Id": rid, "Type": rel_type, "Target": custom_path})
+    ET.register_namespace("", rel_ns)
     entries["_rels/.rels"] = ET.tostring(rels, encoding="utf-8", xml_declaration=True)
     if "docProps/core.xml" in entries:
         core = ET.fromstring(entries["docProps/core.xml"])

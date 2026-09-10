@@ -55,6 +55,8 @@ def test_office_stamp_updates_owned_properties_and_preserves_content(ext, monkey
         assert len({p.get("pid") for p in props}) == 3
         assert archive.read("document.xml") == b"unchanged document contents"
         ET.fromstring(archive.read("docProps/core.xml"))
+        assert b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"' in archive.read("[Content_Types].xml")
+        assert b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"' in archive.read("_rels/.rels")
         rels = ET.fromstring(archive.read("_rels/.rels"))
         assert len(rels) == 1
 
@@ -79,3 +81,12 @@ def test_office_preserves_customer_properties_and_existing_fix_summary():
     assert values["Fixes Applied"] == "Set language"
     assert values["ACP Version"] == "new"
     assert len(props) == 6
+
+
+def test_office_package_parts_keep_default_namespaces_for_dotnet():
+    """System.IO.Packaging rejects prefixed OPC Types/Relationships roots."""
+    from output_provenance import stamp_office_entries
+    entries = {}
+    stamp_office_entries(entries, now=NOW)
+    assert b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"' in entries["[Content_Types].xml"]
+    assert b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"' in entries["_rels/.rels"]
