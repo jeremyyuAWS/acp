@@ -955,6 +955,11 @@ export default function RemediationInbox({
   )
   return (
     <div className="rinbox-wrap">
+      {!bulkPreviewOpen && !readOnly && onPublish && <div style={{ padding: '14px 22px', borderBottom: '1px solid var(--line)' }}>
+        <button type="button" className="primary" disabled={savingId != null} onClick={onPublish}>Skip inspection and publish →</button>
+        <p className="muted" style={{ margin: '8px 0 0' }}>Choose verified copies or publish saved copies with remaining issues on the next screen. This does not approve pending suggestions or mark anything inspected.</p>
+      </div>}
+
       {/* Screen-reader announcer: the selected finding and its place in the queue, updated on every
           selection change — manual, keyboard, or the auto-advance after a decision. Visually hidden. */}
       <div aria-live="polite" role="status"
@@ -1176,10 +1181,6 @@ export default function RemediationInbox({
           onBusy={busy => setSavingId(busy ? 'selected-batch' : null)}
           onDecide={onDecide} onResult={batchResult} />
       </div>
-      {!bulkPreviewOpen && !readOnly && onPublish && <div style={{ padding: '14px 22px', borderTop: '1px solid var(--line)' }}>
-        <button type="button" className="primary" disabled={savingId != null} onClick={onPublish}>Skip inspection and publish →</button>
-        <p className="muted" style={{ margin: '8px 0 0' }}>Choose verified copies or publish saved copies with remaining issues on the next screen. This does not approve pending suggestions or mark anything inspected.</p>
-      </div>}
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
       {!bulkPreviewOpen && <WorkspaceFooter position={position} total={visIds.length} onPrev={goPrev} onNext={goNext}
                        activeStep={selected ? workflowStepIndex(selected, decisions) : null} />}
