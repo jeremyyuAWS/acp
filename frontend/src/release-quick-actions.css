@@ -24,7 +24,7 @@
 .release-quick-file:last-child { border-bottom:0; }
 .release-quick-file > span { flex:1; min-width:0; overflow-wrap:anywhere; }
 .release-quick-file small { color:var(--muted); }
-.release-quick-proposals { padding:16px; background:var(--bg-subtle); border-radius:10px; }
+.release-quick-proposals { padding:16px; background:var(--bg-subtle, #f8f6f9); border-radius:10px; }
 .release-quick .release-quick-action > button { background:var(--plum); color:#fff; border:1px solid var(--plum); }
 .release-quick .release-quick-action > button:disabled { opacity:.55; }
 @media(max-width:600px) { .release-quick-step { padding:12px; } .release-quick-file { flex-wrap:wrap; } .release-quick-file small { width:100%; padding-left:28px; } }
