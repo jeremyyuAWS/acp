@@ -424,3 +424,51 @@ it('shows completion if the background release already delivered the requested c
   expect(c.querySelector('.release-recovery')).toBeNull()
   expect(publishAllFiles).toHaveBeenCalledTimes(1)
 })
+
+
+it('locks repeated publish clicks and confirms the delivered copies beside the action', async () => {
+  let finish
+  publishAllFiles.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const c = await mount({ run, files: [verified('ready.pdf', { corrected_sha256: 'current' })] })
+  const publish = button(c, 'Publish ready files (1)')
+  await act(async () => { publish.click(); publish.click() })
+  expect(publishAllFiles).toHaveBeenCalledTimes(1)
+  expect(button(c, 'Publishing copies…').disabled).toBe(true)
+  expect(c.querySelector('.release-quick-action [role="status"]').textContent).toContain('Please wait for confirmation')
+  await act(async () => finish({ release_id: 'release', published: [{ file: 'ready.pdf', status: 'published', artifact_digest: 'sha256:current', published_at: '2026-09-10T10:00:00Z' }] }))
+  await flush()
+  expect(button(c, 'All files published ✓').disabled).toBe(true)
+  await click(button(c, 'All files published ✓'))
+  expect(publishAllFiles).toHaveBeenCalledTimes(1)
+  expect(c.querySelector('[aria-label="Delivery receipt"] [aria-label="Release reports"]')).not.toBeNull()
+})
+
+
+it('waits for the selected SharePoint file instead of mistaking another delivery for completion', async () => {
+  const c = await mount({ run: { ...run, source: 'sharepoint' }, files: [verified('ready.pdf')] })
+  publishAllFiles.mockResolvedValueOnce({ release_id: 'release', queued: 1, published: [] })
+  getReleaseStatus.mockResolvedValueOnce({ release_id: 'release', documents: [{ file: 'other.pdf', status: 'published' }] })
+    .mockResolvedValue({ release_id: 'release', documents: [{ file: 'ready.pdf', status: 'published' }] })
+  await act(async () => button(c, 'Publish ready files (1)').click())
+  await flush()
+  expect(button(c, 'Publishing copies…').disabled).toBe(true)
+  await act(async () => new Promise(resolve => setTimeout(resolve, 2100)))
+  await flush()
+  expect(button(c, 'All files published ✓').disabled).toBe(true)
+  expect(publishAllFiles).toHaveBeenCalledTimes(1)
+})
+
+
+it('does not apply an old publish response after changing scans', async () => {
+  let finish
+  publishAllFiles.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const props = { run, files: [verified('ready.pdf')], onPublish: vi.fn() }
+  const c = await mount(props)
+  await act(async () => button(c, 'Publish ready files (1)').click())
+  await c.rerender({ ...props, run: { ...run, id: 'another' } })
+  await act(async () => finish({ release_id: 'old-release', published: [{ file: 'ready.pdf', status: 'published' }] }))
+  await flush()
+  expect(button(c, 'Publish ready files (1)').disabled).toBe(false)
+  expect(c.querySelector('[aria-label="Delivery receipt"]')).toBeNull()
+  expect(props.onPublish).not.toHaveBeenCalled()
+})

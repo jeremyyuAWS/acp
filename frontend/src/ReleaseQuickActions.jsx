@@ -3,7 +3,7 @@ import { planReleaseContinuation, authorizeReleaseContinuation, getReleaseContin
 import './release-quick-actions.css'
 
 export default function ReleaseQuickActions({ runId, files = [], ready = [], destination, folderName = '', destinationLabel,
-  destinationPicker, destinationContent, destinationLocked = false, destinationPending = false, readOnly, publishing, releaseOptions, allowRemainingIssues = false, readyReasons = [], fileStates = {}, publishedFolders = [], providerLabel = 'the destination', onReady, onProgress }) {
+  announcement, destinationPicker, destinationContent, destinationLocked = false, destinationPending = false, readOnly, publishing, releaseOptions, allowRemainingIssues = false, readyReasons = [], fileStates = {}, publishedFolders = [], providerLabel = 'the destination', onReady, onProgress }) {
   const reasonId = useId()
   const [excluded, setExcluded] = useState(new Set())
   useEffect(() => { setExcluded(new Set()) }, [runId])
@@ -131,20 +131,21 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
       {destinationLocked && <p className="muted">This release has started. Further copies and retries use this saved destination.</p>}
       {!readOnly && !destinationLocked && <details><summary>Change destination</summary>{destinationPicker}</details>}
     </section>
-    {!allDelivered && <section className="release-quick-step" aria-labelledby={`${reasonId}-publish`}>
-      <h4 id={`${reasonId}-publish`}><span className="release-step-number">3</span> Publish copies</h4>
+    <section className="release-quick-step" aria-labelledby={`${reasonId}-publish`}>
+      <h4 id={`${reasonId}-publish`}><span className="release-step-number">3</span> {allDelivered ? 'Publication complete' : 'Publish copies'}</h4>
       <p>Saved copies are published with a scan summary and a per-file checklist of remaining work. Publishing does not certify accessibility.</p>
       <div className="release-quick-buttons">
       <div className="release-quick-action">
-        <button disabled={Boolean(readyReason)} aria-describedby={readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(selectedReady.map(f => f.file))}>
-          {publishing ? 'Publishing copies…' : allowRemainingIssues ? `Publish saved copies (${selectedReady.length})` : `Publish ready files (${selectedReady.length})`}
+        <button disabled={allDelivered || Boolean(readyReason)} aria-describedby={!allDelivered && readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(selectedReady.map(f => f.file))}>
+          {allDelivered ? 'All files published ✓' : publishing ? 'Publishing copies…' : allowRemainingIssues ? `Publish saved copies (${selectedReady.length})` : `Publish ready files (${selectedReady.length})`}
         </button>
-        {readyReason && <div id={`${reasonId}-ready`}><p>{readyReason}</p>
+        {announcement && <p role="status">{announcement}</p>}
+        {!allDelivered && readyReason && <div id={`${reasonId}-ready`}><p>{readyReason}</p>
           {!readOnly && !ready.length && readyReasons.slice(0, 3).map(reason => <p key={reason}>{reason}</p>)}
         </div>}
       </div>
       </div>
-    </section>}
+    </section>
     <details className="release-quick-proposals"><summary>Optional: apply more proposed changes before publishing</summary>
       <p>This separate action applies eligible proposals across the full scope shown above. Your saved-copy selection does not change this proposal batch.</p>
       <div className="release-quick-action">

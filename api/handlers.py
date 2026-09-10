@@ -1508,6 +1508,9 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
                 return
             fixed_bytes = _Path(out_path).read_bytes()
 
+    from output_provenance import stamp_output
+    fixed_bytes = stamp_output(fixed_bytes, filename)
+
     # ADR 0010: Blob is now the PRIMARY, must-succeed write -- no per-user token needed
     # (managed identity), so this no longer hard-fails for orgs that only granted
     # read-only Drive access. Drive becomes a best-effort MIRROR below: failure there no
@@ -5054,6 +5057,9 @@ def _apply_one_value_kind(
                            f"nothing written; every {noun} locator was unresolved"
                            + unresolved_note, regressions=None)
         return working, False
+
+    from output_provenance import stamp_output
+    fixed = stamp_output(fixed, filename)
 
     _phase(job, f"re-verifying the corrected copy ({noun})")
     verification = _verify_residual(fixed, filename)

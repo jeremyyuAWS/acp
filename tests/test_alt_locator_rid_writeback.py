@@ -48,7 +48,7 @@ def _pkg(part: str, xml: str) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr(part, xml)
-        z.writestr("docProps/core.xml", "<cp:coreProperties/>")
+        z.writestr("docProps/core.xml", "<cp:coreProperties xmlns:cp='http://schemas.openxmlformats.org/package/2006/metadata/core-properties'/>")
     return buf.getvalue()
 
 

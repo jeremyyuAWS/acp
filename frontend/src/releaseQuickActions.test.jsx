@@ -162,7 +162,7 @@ it('replaces the empty publish action with completion and the recorded folder li
   expect(v.container.querySelector('.release-published-message a').href).toBe('https://example.test/published')
   expect(v.container.querySelector('.release-published-message a').textContent).toContain('SharePoint')
   expect(v.container.querySelector('.release-quick-file--delivered input').disabled).toBe(true)
-  expect(v.button('Publish ready files')).toBeUndefined()
+  expect(v.button('All files published').disabled).toBe(true)
   expect(v.props.onReady).not.toHaveBeenCalled()
 })
 it('mutes only delivered files and keeps unfinished files selectable', async () => {
@@ -173,4 +173,12 @@ it('mutes only delivered files and keeps unfinished files selectable', async () 
   expect(v.container.textContent).toContain('folder link is not available yet')
   await click(v.button('Publish ready files (1)'))
   expect(v.props.onReady).toHaveBeenCalledWith(['ready.pdf'])
+})
+
+it('shows publication feedback beside the disabled in-flight action', async () => {
+  const v = await mount({ publishing: true, announcement: 'Publishing your selected copies. Please wait for confirmation.' })
+  expect(v.button('Publishing copies').disabled).toBe(true)
+  expect(v.container.querySelector('.release-quick-action [role="status"]').textContent).toContain('Please wait for confirmation')
+  await click(v.button('Publishing copies'))
+  expect(v.props.onReady).not.toHaveBeenCalled()
 })

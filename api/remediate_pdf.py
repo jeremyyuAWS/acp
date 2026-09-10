@@ -556,6 +556,8 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
     except Exception as e:
         _unlink(mid_path)
         return None, [], skipped + [f"could not write PDF metadata: {type(e).__name__}"]
+    from output_provenance import stamp_output
+    out_path.write_bytes(stamp_output(out_path.read_bytes(), path.name))
     _unlink(mid_path)
     return out_path, applied, skipped
 
