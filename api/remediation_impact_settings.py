@@ -47,6 +47,15 @@ def normalize_policy(policy):
         local_review = normalize_review_policy(policy.get('ai_review'))
         if policy.get('generation_chain') or local_review['enabled']:
             raise ValueError('Local-only Ollama does not permit cloud review or fallback chains.')
+    if "document_wide_ai" in policy:
+        value = policy['document_wide_ai']
+        if type(value) is not bool:
+            raise ValueError('document_wide_ai must be a boolean.')
+        if value and (result['ai'] != 1 or 'ai_budget_usd' not in result):
+            raise ValueError('Document-wide AI requires AI enabled and an explicit run spending limit.')
+        if value and result.get('ai_zone') == 'local':
+            raise ValueError('Document-wide AI is currently available only with Cloud AI. Local Ollama remains available for individual suggestions.')
+        result['document_wide_ai'] = value
     if "auto_approve_ai" in policy:
         from ai_standing_approval import normalize
         result['auto_approve_ai'] = normalize(policy['auto_approve_ai'])

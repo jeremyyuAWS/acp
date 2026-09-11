@@ -533,7 +533,7 @@ it('starts cloud plans with explicit choices without an extra confirmation or ex
   await act(async () => choice('Rules + Cloud AI').click())
   await act(async () => button(container, 'Next').click())
   expect(container.textContent).not.toContain('I confirm the AI providers')
-  expect(container.querySelector('.remediation-plan-choices input[type=checkbox]')).toBeNull()
+  expect([...container.querySelectorAll('.remediation-plan-choices input[type=checkbox]')].filter(node => !node.closest('[hidden]'))).toHaveLength(0)
   expect(button(container, 'Approve plan and start').disabled).toBe(false)
   await act(async () => button(container, 'Approve plan and start').click())
   expect(onRun.mock.calls[0][0].auto_approve_ai).toBe(false)
@@ -573,4 +573,14 @@ it.each(['any', 'local'])('automatic release previews and submits AI application
   expect(onRun.mock.calls[0][0]).toMatchObject({ rule_based: 2, auto_approve_ai: true, ai_zone: zone })
   await act(async () => root.render(createElement(RemediationImpactCard, { runId: 'run-1', onRun, automaticRelease: false })))
   expect(getRemediationImpact.mock.calls.at(-1)[1].auto_approve_ai).toBe(false)
+})
+
+
+it.each(['Rules only', 'Rules + Ollama · Local only'])('clears document-wide consent when choosing %s', async label => {
+  const initial = { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '1.00', document_wide_ai: true }
+  getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || initial), capabilities: { ...result().capabilities, ai_budget: true } }))
+  const { container } = await mount()
+  const option = [...container.querySelectorAll('label')].find(node => node.querySelector('strong')?.textContent === label)
+  await act(async () => option.querySelector('input').click())
+  expect(getRemediationImpact.mock.calls.at(-1)[1].document_wide_ai).toBe(false)
 })

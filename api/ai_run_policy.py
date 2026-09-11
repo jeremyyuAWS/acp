@@ -48,6 +48,8 @@ def normalize_run_policy(snapshot):
     if not isinstance(snapshot, dict):
         raise BudgetError("invalid remediation policy snapshot")
     if "ai_budget_usd" not in snapshot:
+        if snapshot.get("document_wide_ai"):
+            raise BudgetError("Document-wide AI requires a managed run spending limit")
         if snapshot.get("auto_approve_ai"):
             raise BudgetError("Standing approval requires a managed run spending limit")
         if "generation_chain" in snapshot:
@@ -66,6 +68,13 @@ def normalize_run_policy(snapshot):
     result = {"ai": ai, "ai_budget_usd": amount, "cap_units": cap, "currency": "USD"}
     if 'ai_zone' in snapshot:
         result['ai_zone'] = _zone(snapshot['ai_zone'])
+    if 'document_wide_ai' in snapshot:
+        value = snapshot['document_wide_ai']
+        if type(value) is not bool or (value and ai != 1):
+            raise BudgetError('Document-wide AI requires a boolean and AI enabled')
+        if value and snapshot.get('ai_zone') == 'local':
+            raise BudgetError('Document-wide AI is currently available only with Cloud AI. Local Ollama remains available for individual suggestions.')
+        result['document_wide_ai'] = value
     if 'auto_approve_ai' in snapshot:
         from ai_standing_approval import normalize
         result['auto_approve_ai'] = normalize(snapshot['auto_approve_ai'])

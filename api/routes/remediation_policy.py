@@ -24,6 +24,8 @@ class ImpactPreviewRequest(BaseModel):
     ai_budget_usd: StrictStr | None = Field(default=None, pattern=r'^\d{1,7}(?:\.\d{1,2})?$', max_length=10)
     ai_review: dict | None = None
     auto_approve_ai: StrictBool | None = None
+    document_wide_ai: StrictBool | None = None
+    ai_zone: StrictStr | None = None
     generation_chain: dict | None = None
 
 

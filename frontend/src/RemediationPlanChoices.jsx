@@ -112,6 +112,18 @@ export default function RemediationPlanChoices({ step = null, answers, policy, d
           <RemediationOptionHelp label="AI waterfall">Cloud models draft and review supported suggestions. Later models run after an empty or incomplete suggestion. Your approval choice and spending limit apply throughout the run.</RemediationOptionHelp>
         </div>
       </div>
+      {policy.ai > 0 && <details className="remediation-document-wide">
+        <summary>Advanced AI options</summary>
+        <label>
+          <input type="checkbox" checked={policy.document_wide_ai === true}
+            disabled={disabled || !budgetSupported || localOnly}
+            onChange={event => onChange('document_wide_ai', event.target.checked)}
+            aria-describedby={`${id}-document-wide-note`} />
+          <span>Document-wide AI fixes (preview)</span>
+        </label>
+        <p id={`${id}-document-wide-note`}>Give AI document context and the selected assessment findings together. Initially supports PDF form-field names. Word image descriptions need visual evidence and are not supported by this preview. Other findings continue through the usual process. Your spending limit and approval choice still apply.</p>
+        {localOnly && <p>Document-wide AI is currently available only with Cloud AI. Local Ollama continues to support individual suggestions; no document is sent to a cloud provider.</p>}
+      </details>}
     </fieldset>
     <div hidden={step !== null && step !== 2}>
       {/* Where content actually goes, before Start. Read from the server's verified
