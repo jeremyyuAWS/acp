@@ -31,6 +31,7 @@ def setup(monkeypatch, *, status='pending', stale=False):
         remediation_source_revision=lambda sid: 'revision',
         get_file_record=lambda *a: current,
         transaction=lambda: nullcontext(),
+        get_stage_execution=lambda *a,**kw:{'owner_email':'owner','scan_id':'scan','stage':'remediate','is_current':True,'state':'processing','input_snapshot_id':'revision'},
         list_finding_dispositions=lambda *a:[{'finding_id':'real-finding','file':'file.pdf','rule_id':'4.1.2'}],
         list_hitl_queue=lambda **kw: [{'file':'file.pdf', 'rule_id':'4.1.2', 'status':status}],
         enqueue_proposals=lambda *a, **kw: queued.append((a,kw)),
@@ -164,3 +165,20 @@ def test_ai_only_document_still_stores_working_copy(monkeypatch):
     with pytest.raises(Stored):
         handlers._remediate_file_with_policy({'scan_id':'scan','file':'file.docx','source':'local',
             'remediation_impact_policy':{'rule_based':0,'ai':1},'remediation_impact_allowed_rules':[]},{})
+
+
+def test_cancelled_after_provider_response_does_not_enqueue(monkeypatch):
+    store,ctx,calls,logs,queued=setup(monkeypatch)
+    import document_wide_provider
+    original=document_wide_provider.generate_document
+    def generate(*args,**kwargs):
+        result=original(*args,**kwargs)
+        store.get_stage_execution=lambda *a,**kw:{'owner_email':'owner','scan_id':'scan',
+            'stage':'remediate','is_current':True,'state':'processing','input_snapshot_id':'revision',
+            'cancel_requested_at':'now'}
+        return result
+    monkeypatch.setattr(document_wide_provider,'generate_document',generate)
+    workflow.process_file(store,ctx)
+    assert len(calls)==1
+    assert not queued
+    assert 'cancelled, replaced' in logs[-1][1]['detail']

@@ -94,6 +94,17 @@ def process_file(store, context):
         _record(store, context, 'generated', result)
     canonical_rows = store.list_finding_dispositions(sid, context.run_id)
     with store.transaction():
+        # A provider call can outlive cancellation or a replacement run. Re-check
+        # the accepted execution at the persistence boundary, including cached replies.
+        stage = store.get_stage_execution(context.run_id, owner=context.owner_id) or {}
+        if (stage.get('owner_email') != context.owner_id or stage.get('scan_id') != sid
+                or stage.get('stage') != 'remediate' or not stage.get('is_current')
+                or stage.get('cancel_requested_at')
+                or stage.get('state') not in {'accepted', 'queued', 'processing'}
+                or stage.get('input_snapshot_id') != revision):
+            _record(store, context, 'deferred', {'request_id': request_id,
+                    'reason': 'The remediation run was cancelled, replaced, or is no longer active.'})
+            return
         if (store.remediation_source_revision(sid) != revision or
                 (store.get_file_record(sid, filename) or {}).get('corrected_sha256') != digest):
             _record(store, context, 'deferred', {'request_id': request_id, 'reason': 'The assessment or corrected artifact changed during generation.'})
