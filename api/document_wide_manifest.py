@@ -10,7 +10,7 @@ from experiments.document_wide_ai.contracts.v1 import Evidence, EvidenceKind, Ex
 from experiments.document_wide_ai.packaging.manifest_builder import build_docx_manifest, build_pdf_manifest
 from experiments.document_wide_ai.packaging.limits import ExtractionLimits
 
-LIMITS = ExtractionLimits(max_text_chars=60000, max_pages=100, max_images=8, max_findings=100)
+LIMITS = ExtractionLimits(max_text_chars=60000, max_pages=100, max_images=8, max_findings=20)
 
 
 def criterion(value):

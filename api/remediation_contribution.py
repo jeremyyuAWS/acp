@@ -118,6 +118,33 @@ def chain_contribution(attempt, rows, *, source_sha256, assessment_revision, fin
         return None
 
 
+def _document_candidate_hash(db, cur, *, owner, scan_id, run_id, file, rule_id, proposal, revision):
+    """Derived inputs need the exact durable server receipt; SOURCE stays original."""
+    request_id, candidate = proposal.get('document_wide_request_id'), proposal.get('source_sha256')
+    if not request_id or not candidate or proposal.get('assessment_revision') != revision:
+        return None
+    db.execute(cur, "SELECT corrected_sha256 FROM file_records WHERE scan_id=%s AND file=%s", (scan_id, file))
+    artifact = db.fetchone(cur) or {}
+    if artifact.get('corrected_sha256') != candidate:
+        return None
+    db.execute(cur, "SELECT input_snapshot_id,is_current,cancel_requested_at FROM stage_executions WHERE execution_id=%s AND owner_email=%s AND scan_id=%s AND stage='remediate'", (run_id, owner, scan_id))
+    stage = db.fetchone(cur) or {}
+    if not stage.get('is_current') or stage.get('cancel_requested_at') or stage.get('input_snapshot_id') != revision:
+        return None
+    db.execute(cur, "SELECT detail FROM decision_log WHERE scan_id=%s AND file=%s AND actor='system' AND action='document_wide.generated' ORDER BY ts DESC", (scan_id, file))
+    for row in db.fetchall(cur):
+        try:
+            receipt = json.loads(row['detail'])
+        except (TypeError, ValueError):
+            continue
+        if (receipt.get('owner_id'), receipt.get('run_id'), receipt.get('request_id')) != (owner, run_id, request_id):
+            continue
+        for saved in (receipt.get('proposals') or {}).get(rule_id, []):
+            if proposal_digest(saved) == proposal_digest(proposal):
+                return candidate
+    return None
+
+
 def capture(db, cur, ctx, *, snapshot_id, proposal, scan_id, file, rule_id, item_id, attempt_id):
     """Capture only usable structured values with exact source and baseline links."""
     from remediation_run_insights import _ctx
@@ -143,6 +170,12 @@ def capture(db, cur, ctx, *, snapshot_id, proposal, scan_id, file, rule_id, item
     ids = sorted(set(supplied))
     if not set(ids) <= {row['finding_id'] for row in candidates}:
         raise ValueError('proposal finding membership outside immutable baseline')
+    source_hash = source[2]
+    if proposal.get('document_wide_request_id'):
+        source_hash = _document_candidate_hash(db, cur, owner=owner, scan_id=scan_id,
+            run_id=run, file=file, rule_id=rule_id, proposal=proposal, revision=baseline['snapshot_id'])
+        if source_hash is None:
+            return
     origin, operation = None, None
     if attempt_id:
         db.execute(cur, '''SELECT * FROM ai_attempt_history
@@ -159,7 +192,7 @@ def capture(db, cur, ctx, *, snapshot_id, proposal, scan_id, file, rule_id, item
                     (owner, scan_id, run, file, operation))
                 chain_rows = db.fetchall(cur)
                 settled_attempt = next((r for r in chain_rows if r['attempt_id'] == attempt_id), attempt)
-                origin = chain_contribution(settled_attempt, chain_rows, source_sha256=source[2],
+                origin = chain_contribution(settled_attempt, chain_rows, source_sha256=source_hash,
                     assessment_revision=baseline['snapshot_id'], finding_ids=ids, locator=locator)
                 if result.get('text') != value:
                     origin = None
@@ -179,7 +212,7 @@ def capture(db, cur, ctx, *, snapshot_id, proposal, scan_id, file, rule_id, item
         (owner_id,scan_id,run_id,proposal_id,proposal_sha256,source_sha256,assessment_revision,file,rule_id,item_id,
          finding_ids_json,origin,attempt_id,operation_id,created_at)
         VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
-        (owner, scan_id, run, snapshot_id, proposal_digest(proposal), source[2], baseline['snapshot_id'], file, rule_id,
+        (owner, scan_id, run, snapshot_id, proposal_digest(proposal), source_hash, baseline['snapshot_id'], file, rule_id,
          item_id, encoded(ids), origin, attempt_id, operation, now()))
 
 

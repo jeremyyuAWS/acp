@@ -5082,6 +5082,13 @@ def _apply_one_value_kind(
     # every locator failed to resolve: nothing of it was written, so the re-scan says nothing
     # about it and it must not inherit a verified_cleared from its neighbours.
     lane_items = list(review_item_ids)
+    semantic_review = False
+    if (residual_state or {}).get('retain_unverified'):
+        for item_id in lane_items:
+            item = core.store.get_hitl_item(item_id) or {}
+            if (str(item.get('last_decision_request_id') or '').startswith('standing:')
+                    and any(p.get('requires_semantic_review') is True for p in item.get('proposals', []))):
+                semantic_review = True
     from remediation_contribution import writer_tickets, record_writer_result
     from hashlib import sha256 as _proof_sha256
     import uuid as _proof_uuid
@@ -5203,11 +5210,14 @@ def _apply_one_value_kind(
                     'source_sha256': _proof_sha256(working).hexdigest(),
                     'baseline_residual': sorted(baseline.residual) if baseline is not None and baseline.ok else None,
                     'changes': applied, 'outcome': outcome, 'reason': reason,
-                    'verification': 'not_verified'}))
+                    'verification': 'not_verified', 'requires_semantic_review': semantic_review}))
             _model_outcome(outcome, reason + unresolved_note, regressions=regressions)
         pending_credits.append(commit_unverified)
         residual_state['verification'] = verification
         return fixed, True
+
+    if semantic_review:
+        return preserve_unverified('could_not_verify', 'AI text was applied; meaning and accuracy require human review. Structural presence alone is not semantic verification.')
 
     if not verification.ok:
         # COULD NOT VERIFY — the document was unreadable, the scan errored or timed out, an

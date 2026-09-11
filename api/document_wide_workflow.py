@@ -81,7 +81,7 @@ def process_file(store, context):
                 'locator': ((edit.locator.part_name + '#' + edit.locator.element_ref)
                             if edit.locator.part_name else edit.locator.element_ref), 'before': edit.expected_original_value,
                 'proposed_value': edit.proposed_value, 'rationale': edit.rationale,
-                'source': 'ai', 'model': response.get('model'),
+                'source': 'ai', 'requires_semantic_review': True, 'model': response.get('model'),
                 'model_call_id': response.get('model_call_id'),
                 'finding_ids': list(edit.finding_ids), 'baseline_finding_ids': list(edit.finding_ids), 'document_wide_request_id': request_id,
                 'source_sha256': digest, 'assessment_revision': manifest.assessment_revision,

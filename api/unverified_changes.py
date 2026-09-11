@@ -72,6 +72,8 @@ def record_verification(store, scan_id, filename, data, verification):
             return 0
         diffs=list(store.get_remediation_diffs(scan_id, filename) or [])
         for entry in pending_records(store, scan_id, filename):
+            if entry.get('requires_semantic_review') is True:
+                continue  # Presence-only scans cannot certify model-generated meaning.
             baseline=entry.get('baseline_residual')
             if not verification.cleared({entry['rule_id']}) or (verification.residual - set(baseline or ())):
                 continue
