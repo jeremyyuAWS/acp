@@ -38,3 +38,11 @@ it('uses the page font for labels and shared monospace for every saved value', (
   expect(css).toMatch(/@media \(max-width: 600px\)[\s\S]*grid-template-columns: 1fr/)
   expect(css).not.toContain('minmax(8rem, 1fr)')
 })
+
+ it('shows native PDF input only when recorded in the accepted plan', () => {
+  const html = render({ policy: { rule_based: 2, ai: 1, ai_zone: 'any', document_wide_ai: true, document_wide_input_mode: 'native_pdf' } })
+  expect(html).toContain('Full PDF · advanced preview')
+  const legacy = render({ policy: { rule_based: 2, ai: 1, ai_zone: 'any', document_wide_ai: true } })
+  expect(legacy).toContain('Document context · extracted text and supported images')
+  expect(legacy).not.toContain('Full PDF · advanced preview')
+})

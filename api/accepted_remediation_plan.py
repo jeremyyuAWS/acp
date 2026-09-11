@@ -2,7 +2,7 @@
 import json
 
 _KEYS = frozenset({'rule_based', 'ai', 'ai_zone', 'ai_budget_usd', 'auto_approve_ai',
-                   'document_wide_ai', 'generation_chain', 'ai_review'})
+                   'document_wide_ai', 'document_wide_input_mode', 'generation_chain', 'ai_review'})
 
 def read_accepted_plan(store, owner, scan_id, run_id):
     stage = store.get_stage_execution(run_id, owner=owner)

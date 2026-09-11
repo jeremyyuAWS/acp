@@ -41,3 +41,17 @@ it('reflects previously selected consent without changing approval settings', as
   expect(container.querySelectorAll('.remediation-document-wide input')[1].checked).toBe(true)
   expect(onChange).not.toHaveBeenCalled()
 })
+it('offers explicit full-PDF consent without silently upgrading old choices', async () => {
+  const { container, onChange } = await mount({ ...base, document_wide_ai: true })
+  const choices = container.querySelectorAll('.remediation-document-input input')
+  expect(choices[0].checked).toBe(true)
+  expect(choices[1].checked).toBe(false)
+  expect(container.textContent).toContain('Full PDF — advanced preview')
+  expect(container.textContent).toContain('Other file formats keep using extracted context')
+  await act(async () => choices[1].click())
+  expect(onChange).toHaveBeenCalledWith('document_wide_input_mode', 'native_pdf')
+})
+it('cannot select full-PDF processing without a positive budget', async () => {
+  const { container } = await mount({ ...base, document_wide_ai: true, ai_budget_usd: '0.00' })
+  expect(container.querySelectorAll('.remediation-document-input input')[1].disabled).toBe(true)
+})

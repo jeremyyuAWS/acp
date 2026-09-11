@@ -53,3 +53,35 @@ def test_requires_managed_budget():
 def test_api_preserves_local_only_consent():
     policy = ImpactPreviewRequest(**BASE, ai_zone='local').model_dump(exclude_none=True, exclude={'scope'})
     assert normalize_policy(policy)['ai_zone'] == 'local'
+
+
+@pytest.mark.parametrize('mode', ['extracted', 'native_pdf'])
+def test_document_input_mode_roundtrips_and_freezes(isolated_store, mode):
+    request = ImpactPreviewRequest(**BASE, ai_zone='any', document_wide_ai=True,
+                                   document_wide_input_mode=mode)
+    policy = request.model_dump(exclude_none=True, exclude={'scope'})
+    save_impact_policy(isolated_store, 'owner', 'owner', policy, 0)
+    snapshot = snapshot_impact_policy(isolated_store, 'owner')
+    assert read_impact_policy(isolated_store, 'owner')['document_wide_input_mode'] == mode
+    assert normalize_run_policy(snapshot)['document_wide_input_mode'] == mode
+    alternate = {**policy, 'document_wide_input_mode': 'native_pdf' if mode == 'extracted' else 'extracted'}
+    assert snapshot_impact_policy(isolated_store, 'owner', alternate)['snapshot_id'] != snapshot['snapshot_id']
+
+
+def test_old_document_policy_stays_byte_compatible():
+    old = {**BASE, 'document_wide_ai': True, 'ai_zone': 'any'}
+    assert 'document_wide_input_mode' not in normalize_policy(old)
+    assert 'document_wide_input_mode' not in normalize_run_policy(old)
+
+
+@pytest.mark.parametrize('change', [
+    {'document_wide_input_mode': 'url'}, {'document_wide_input_mode': True},
+    {'document_wide_ai': False}, {'ai': 0}, {'ai_zone': 'local'},
+    {'ai_zone': None}, {'ai_budget_usd': '0.00'},
+])
+def test_invalid_document_input_consent_is_rejected(change):
+    policy = {**BASE, 'document_wide_ai': True, 'ai_zone': 'any',
+              'document_wide_input_mode': 'native_pdf', **change}
+    for normalize in (normalize_policy, normalize_run_policy):
+        with pytest.raises((ValueError, BudgetError)):
+            normalize(policy)
