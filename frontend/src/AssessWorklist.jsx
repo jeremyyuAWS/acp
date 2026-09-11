@@ -1,3 +1,4 @@
+import './document-findings-table.css'
 import RemediationCategoryPill, { RemediationCategoryLegend } from './RemediationCategoryPill.jsx'
 import { useState } from 'react'
 import { REMEDIATION_CATEGORIES, remediationCategory } from './remediationCategories.js'
@@ -272,7 +273,8 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
         </div>
       )}
 
-      <table style={{ marginTop: 10 }}>
+      <div className="document-findings-scroll" role="region" aria-label="Document findings table" tabIndex={0}>
+      <table className="document-findings-table" style={{ marginTop: 10 }}>
         <thead>
           <tr>
             {/* A28 · a select-all only when there is something selectable on the page — a header
@@ -283,10 +285,10 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
                        aria-label={allSelectableShown ? 'Deselect all shown' : 'Select all shown with an automatic fix'} />
               )}
             </th>
-            <th scope="col" style={{ width: '36%' }}>Document</th>
-            <th scope="col">WCAG criteria with issues</th>
-            <th scope="col">Total findings</th>
-            <th scope="col" style={{ width: '40%' }}>Remediation categories</th>
+            <th scope="col" style={{ width: '30%' }}>Document</th>
+            <th scope="col" className="findings-criteria-heading">WCAG criteria <br />with issues</th>
+            <th scope="col" className="findings-total-heading">Total <br />findings</th>
+            <th scope="col" style={{ width: '32%' }}>Remediation categories</th>
             <th scope="col"><span className="vh">Action</span></th>
           </tr>
         </thead>
@@ -360,6 +362,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
           ))}
         </tbody>
       </table>
+      </div>
 
       {/* A11 · what the PAGE is not showing, distinct from what the FILTER is not showing below.
           Named with the same units the columns are in, exactly as the filter's own "not showing"

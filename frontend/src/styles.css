@@ -1,4 +1,9 @@
 :root {
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --text-body: 14px;
+  --text-small: 12px;
+  --text-control: 14px;
+  --text-metric: 24px;
   --plum: #46303F;
   --amber: #F5B400;
   --ink: #2b2330;
@@ -89,9 +94,18 @@ textarea:focus-visible, [tabindex]:focus-visible, [role="button"]:focus-visible,
 }
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-ui);
+  font-size: var(--text-body);
+  line-height: 1.5;
   background: var(--bg);
   color: var(--ink);
+}
+/* Native form controls otherwise use browser-specific typefaces and sizes.
+   Component-specific compact variants may keep their deliberate hierarchy. */
+input, select, textarea {
+  font: inherit;
+  font-size: var(--text-control);
+  line-height: 1.5;
 }
 .app { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
 .scopedot { width: 7px; height: 7px; border-radius: 50%; background: #639922; display: inline-block; }
@@ -129,7 +143,7 @@ button.ghost { background: #fff; color: var(--plum); border: 1px solid var(--lin
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 22px 0; }
 .metric { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
 .metric span { display: block; color: var(--muted); font-size: 13px; }
-.metric b { font-size: 26px; font-weight: 600; }
+.metric b { font-family: var(--font-mono); font-size: var(--text-metric); font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; margin: 16px 0; position: relative; }
 .insighteye { position: absolute; top: 14px; right: 14px; background: none; border: none; color: #b7afbd; cursor: pointer; padding: 4px; border-radius: 6px; line-height: 0; }

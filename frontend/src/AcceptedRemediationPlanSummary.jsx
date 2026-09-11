@@ -22,7 +22,7 @@ export default function AcceptedRemediationPlanSummary({ policy, authorization, 
       <div><dt>Tools</dt><dd>{tools}</dd></div>
       {usesAI && <>
         <div><dt>AI suggestions</dt><dd>{policy.auto_approve_ai === true ? 'Apply supported suggestions automatically' : 'Review before applying'}</dd></div>
-        <div><dt>Document-wide AI</dt><dd>{policy.document_wide_ai === true ? 'Enabled · PDF field names and Word image descriptions' : 'Off'}</dd></div>
+        <div><dt>Document-wide AI</dt><dd>{policy.document_wide_ai === true ? 'Enabled · PDF form-field names, tagged PDF image descriptions, and Word image descriptions' : 'Off'}</dd></div>
         {policy.ai_zone !== 'local' && <div><dt>AI spending limit</dt><dd>{typeof policy.ai_budget_usd === 'string' ? `$${policy.ai_budget_usd} USD` : 'Not recorded'}</dd></div>}
       </>}
       <div><dt>Publishing</dt><dd>{publishing}</dd></div>
