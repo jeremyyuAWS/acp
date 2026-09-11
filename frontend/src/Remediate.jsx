@@ -581,7 +581,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [runDetailsOpen, setRunDetailsOpen] = useState(false)  // the Run details disclosure (PRD §11)
   const [acceptedLaunch, setAcceptedLaunch] = useState(null)
   const [acceptedPlan, setAcceptedPlan] = useState(null)
-  const { batchId: acceptedBatchId, authorization: acceptedAuthorization } = useAcceptedRemediationIdentity({
+  const { batchId: acceptedBatchId, authorization: acceptedAuthorization, scopedSnapshot } = useAcceptedRemediationIdentity({
     scanId: runId, snapshot: runStream?.snapshot, launch: acceptedLaunch, clearLaunch: setAcceptedLaunch, releaseState: automaticReleaseState,
   })
   useEffect(() => {

@@ -14,5 +14,5 @@ export default function useAcceptedRemediationIdentity({ scanId, snapshot, launc
     ? releaseState.authorization
     : sameReleaseRun && releaseState.runId === batchId && releaseState.authorization === null
       ? { run_id: batchId, allow_remaining_issues: false } : undefined
-  return { batchId, authorization }
+  return { batchId, authorization, scopedSnapshot }
 }

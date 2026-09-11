@@ -7,9 +7,9 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 afterEach(unmountAll)
 function Harness({ scanId = 'scan', snapshot, initialLaunch, releaseState }) {
   const [launch, setLaunch] = useState(initialLaunch)
-  const { batchId, authorization } = useIdentity({ scanId, snapshot, launch, clearLaunch: setLaunch, releaseState })
+  const { batchId, authorization, scopedSnapshot } = useIdentity({ scanId, snapshot, launch, clearLaunch: setLaunch, releaseState })
   return createElement('div', null,
-    createElement('output', null, batchId || 'none'),
+    createElement('output', { 'data-snapshot': scopedSnapshot?.batch_id || 'none' }, batchId || 'none'),
     createElement(Summary, { policy: { ai: 0, rule_based: 2 }, authorization }))
 }
 async function mount(props) {
@@ -40,8 +40,10 @@ it('ignores stale launch and snapshot after scan switches, including no scan', a
   const props = { scanId: 'other', initialLaunch: { scanId: 'scan', batchId: 'new' }, snapshot: { scan_id: 'scan', batch_id: 'old' } }
   const { container, render } = await mount(props)
   expect(container.querySelector('output').textContent).toBe('none')
+  expect(container.querySelector('output').dataset.snapshot).toBe('none')
   await render({ ...props, scanId: null })
   expect(container.querySelector('output').textContent).toBe('none')
+  expect(container.querySelector('output').dataset.snapshot).toBe('none')
 })
 
 it.each([
