@@ -1,6 +1,6 @@
 """Native PDF requests use fake HTTP and synthetic prices; no cloud calls."""
 import base64
-from dataclasses import replace
+from dataclasses import asdict, replace
 import hashlib
 from io import BytesIO
 import json
@@ -219,3 +219,21 @@ def test_native_actual_usage_overrun_is_reported_not_clamped(pdf_request, specs)
         kw['json']['model'], usage={'input_tokens': 40000, 'output_tokens': 10})))
     result = native_pdf_transport(generator, request, data, VISION_MODELS).generate_text(model, 'JSON')
     assert result['bounds_exceeded'] and result['cost_usd'] == '0.04002'
+
+
+def test_native_pdf_does_not_authorize_ungrounded_figure_edits(pdf_request):
+    from experiments.document_wide_ai.contracts.v1 import AllowedOperation
+    request, _ = pdf_request
+    finding = replace(request.manifest.findings[0], success_criterion='1.1.1',
+                      locator=replace(request.manifest.findings[0].locator, element_ref='pdf:fig:1:1'))
+    manifest = replace(request.manifest, findings=(finding,), selected_criteria=('1.1.1',),
+                       allowed_operations=(AllowedOperation('set_pdf_figure_alt_text', request.manifest.document_format),),
+                       evidence=())
+    request = build_request(manifest, request_id='ungrounded-native')
+    raw = response(request, unresolved=[], edits=[{
+        'edit_id': 'figure1', 'finding_ids': ['finding1'],
+        'locator': asdict(finding.locator), 'operation': 'set_pdf_figure_alt_text',
+        'proposed_value': 'Invented description', 'expected_original_value': None,
+        'rationale': 'Native file does not establish a target mapping'}])
+    with pytest.raises(ValueError, match='invalid_required_structure'):
+        provider._decode(request, json.dumps(raw))
