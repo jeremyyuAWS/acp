@@ -105,7 +105,7 @@ function eligibleShare(eligible, listed) {
 }
 
 export default function LastSuccessfulScanSummary({
-  run = null, scope = null, runAt = null, files = null, inventory = null,
+  run = null, scope = null, runAt = null, files = null, inventory = null, inventoryCount = null,
 }) {
   // Assessment/remediation advance the run beyond the literal "discovered" status. The durable
   // discovery timestamp is the proof that a listing succeeded; terminal failure states without
@@ -123,6 +123,13 @@ export default function LastSuccessfulScanSummary({
   // their difference; the headline here always prefers the recorded whole-estate denominator.
   const discovered = result.estateListed ?? result.discovered
 
+  const valid = n => Number.isSafeInteger(n) && n >= 0
+  const excluded = inventory?.by_status?.excluded
+  const hasInventory = valid(inventoryCount)
+  const reconciled = hasInventory && valid(excluded) && inventoryCount + excluded === discovered
+  const eligible = result.assessable
+  const remaining = hasInventory && valid(eligible) && eligible <= inventoryCount ? inventoryCount - eligible : null
+
   return (
     <section aria-labelledby="last-successful-scan-heading" style={{ marginTop: 14 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
@@ -136,11 +143,14 @@ export default function LastSuccessfulScanSummary({
                     gap: 10 }}>
         <ResultTile label="Discovered" value={nf.format(discovered)}
                     detail={`${plural(discovered, 'file', 'files')} discovered · this scan`} />
+        {hasInventory && <ResultTile label="Inventoried" value={nf.format(inventoryCount)} detail="saved files · matches Discover above" />}
+        {valid(excluded) && <ResultTile label="Excluded" value={nf.format(excluded)} detail="ACP-generated outputs or policy exclusions; not assessed again" />}
         <ResultTile label="Eligible" value={result.assessable == null ? '—' : nf.format(result.assessable)}
                     detail={result.assessable == null
                       ? 'Assessable count was not recorded'
                       : eligibleShare(result.assessable, result.estateListed)}
                     color={STAT_COLOR.assessable} />
+        {remaining != null && <ResultTile label="Not eligible for assessment" value={nf.format(remaining)} detail="inventory files outside supported assessment formats" color={STAT_COLOR.unreadable} />}
         {result.archive != null && (
           <ResultTile label="Archive review" value={nf.format(result.archive)}
                       detail="tagged by lifecycle rules" color={STAT_COLOR.archive} />
@@ -152,6 +162,11 @@ export default function LastSuccessfulScanSummary({
         <ResultTile label="Could not be read" value={nf.format(result.unreadable)}
                     detail="listed, but no recommendation produced" color={STAT_COLOR.unreadable} />
       </div>
+      {hasInventory && <p className="muted" style={{fontSize:12}}>
+        {reconciled ? `${nf.format(inventoryCount)} inventoried + ${nf.format(excluded)} excluded = ${nf.format(discovered)} files found at the source.` : 'Source listing and saved inventory counts are not yet reconciled; exclusions must not be inferred from the difference.'}
+        {remaining != null && ` ${nf.format(eligible)} eligible + ${nf.format(remaining)} not eligible = ${nf.format(inventoryCount)} inventoried files.`}
+        {' '}Assess counts the eligible files selected for assessment. Remediate counts findings within those files, not files. Lifecycle review counts are separate and may overlap these groups.
+      </p>}
       <details style={{ marginTop: 10, border: '1px solid var(--line)', borderRadius: 10,
                         background: 'var(--card)' }}>
         <summary style={{ cursor: 'pointer', padding: '11px 14px', fontSize: 13,
