@@ -158,7 +158,7 @@ def test_images_use_native_payload_and_same_measured_budget(setup, request_packa
         return Response(dict(model=payload['model'], id='anthropic-call',
             usage=dict(input_tokens=100, output_tokens=10),
             content=[dict(type='text', text=json.dumps(response(request_package)))]))
-    generator = StrictTextGenerator(tuple(replace(s, model=m, provider=vendor) for s,m in zip(specs, models)),
+    generator = StrictTextGenerator(tuple(replace(s, model=m, provider=vendor, context_token_limit=32768) for s,m in zip(specs, models)),
         provider_module=Config, post=post)
     monkeypatch.setattr(provider, 'configured_generator', lambda: generator)
     with run_context(store, job['payload'], job):
@@ -284,3 +284,21 @@ def test_larger_output_reservation_still_honors_run_cap(isolated_store, request_
     with run_context(isolated_store, job['payload'], job):
         generated = provider.generate_document(request_package)
     assert generated['reason'] == 'budget_admission_denied' and not calls
+
+
+def test_combined_image_context_rejects_before_http_and_releases_reservation(setup, request_package, specs, monkeypatch):
+    from ai_run_policy import read_run_budget
+    store, job, calls, _ = setup
+    request_package, images = image_package(request_package)
+    names = ('gpt-4.1-mini-2025-04-14', 'gpt-4.1-2025-04-14')
+    # Text alone fits 8192, but image + text + output cannot fit.
+    generator = StrictTextGenerator(tuple(replace(s, model=name) for s,name in zip(specs,names)),
+        provider_module=FakeProviders, post=lambda *a, **kw: calls.append(kw) or pytest.fail('must not send'))
+    monkeypatch.setattr(provider, 'configured_generator', lambda: generator)
+    with run_context(store, job['payload'], job) as ctx:
+        generated = provider.generate_document(request_package, images=images)
+        budget = read_run_budget(store, ctx.owner_id, ctx.scan_id, ctx.run_id)
+        history = AttemptHistory(store._db).list_run(ctx.owner_id,ctx.scan_id,ctx.run_id)
+    assert generated['reason'] == 'request_rejected_before_dispatch' and not calls
+    assert budget['held_units'] == budget['spent_units'] == 0
+    assert len(history) == 1 and history[0]['spending_state'] == 'released'

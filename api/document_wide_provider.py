@@ -17,7 +17,7 @@ from dataclasses import replace
 from experiments.document_wide_ai.contracts.v1 import parse_edit_response
 from experiments.document_wide_ai.validation.validator import validate_edit_response
 from experiments.document_wide_ai.application.allowlist import operation_spec
-from llm_waterfall_provider import configured_generator, managed_context, managed_generate_attempts
+from llm_waterfall_provider import configured_generator, managed_context, managed_generate_attempts, PreDispatchRejected
 
 _SCHEMA = '''Return JSON only: {"contract_version":"document-wide-ai.v1",
 "request_id":<exact request id>,"source_sha256":<exact manifest hash>,
@@ -156,7 +156,18 @@ def _image_transport(generator, request, images):
     def post(endpoint, **kwargs):
         payload = copy.deepcopy(kwargs['json'])
         spec = generator.specs[payload['model']]
-        blocks = [{'type': 'text', 'text': payload['messages'][0]['content']}]
+        # Conservative bound for the allowlisted <=1568px images, verified
+        # against official patch/tile rules on 2026-09-11: GPT4.1mini <=3890
+        # (49*49*1.62), GPT4.1 <=2805 (16*170+85), Claude <=3136
+        # (56*56). 8192/image additionally covers per-image labels/framing.
+        # Sources: OpenAI images-vision and Anthropic vision docs above.
+        # This runs after reservation but before HTTP; rejection releases the
+        # confirmed unspent reservation through the existing managed path.
+        content = payload['messages'][0]['content']
+        combined = len(content.encode('utf-8')) + 1024 + 8192 * len(prepared)
+        if combined + spec.output_token_limit > spec.context_token_limit:
+            raise PreDispatchRejected('document_wide_combined_context_limit')
+        blocks = [{'type': 'text', 'text': content}]
         for ref, mime, encoded in prepared:
             blocks.append({'type': 'text', 'text': 'Untrusted image evidence ' + ref})
             if spec.provider == 'anthropic':
