@@ -97,7 +97,7 @@ describe('the estate summary and its reconciliations add up on screen', () => {
   it('prints the by-file-type total, and it equals the number discovered', async () => {
     await render({ files: ESTATE })
     const rows = [...container.querySelectorAll('.critrow')]
-    const counts = rows.map((r) => Number(r.lastElementChild.textContent.replace(/,/g, '')))
+    const counts = rows.map((r) => Number(r.lastElementChild.textContent.split(' · ')[0].replace(/,/g, '')))
     expect(counts.reduce((a, b) => a + b, 0)).toBe(ESTATE.length)
     expect(text()).toContain('every type, added up')
     // The sum is rendered, not merely computed — a reader can check the partition.
@@ -112,16 +112,16 @@ describe('the estate summary and its reconciliations add up on screen', () => {
     await render({ files: ESTATE, inventory: { discovered: 9006, by_format: { docx: 2, pdf: 1, image: 9000, other: 3 } } })
     expect(text()).toContain('the whole estate listing')
     const rows = [...container.querySelectorAll('.critrow')]
-    const counts = rows.map((r) => Number(r.lastElementChild.textContent.replace(/,/g, '')))
+    const counts = rows.map((r) => Number(r.lastElementChild.textContent.split(' · ')[0].replace(/,/g, '')))
     expect(counts.reduce((a, b) => a + b, 0)).toBe(9006)
     const imageRow = rows.find((r) => r.firstElementChild.textContent === 'Images')
-    expect(imageRow.lastElementChild.textContent).toBe('9,000')
+    expect(imageRow.lastElementChild.textContent).toBe('9,000 · 99.9%')
   })
 
   it('by-file-type falls back to the scanned rows when there is no inventory to read', async () => {
     await render({ files: ESTATE, inventory: { discovered: 12408 } })   // no by_format
     const rows = [...container.querySelectorAll('.critrow')]
-    const counts = rows.map((r) => Number(r.lastElementChild.textContent.replace(/,/g, '')))
+    const counts = rows.map((r) => Number(r.lastElementChild.textContent.split(' · ')[0].replace(/,/g, '')))
     expect(counts.reduce((a, b) => a + b, 0)).toBe(ESTATE.length)
   })
 
@@ -192,4 +192,18 @@ describe('lifecycle review surfaces', () => {
     await render({ files: ESTATE })
     expect(container.querySelector('input[type=checkbox]')).toBeNull()
   })
+})
+
+it('labels each chart base and scales bars to that base, retaining unknown metadata', async () => {
+  const rows=[{file:'a.docx',doc_class:'text-document',size_kb:10,parent_folder:'Docs',source_modified:'2026-01-01'}, {file:'b.bin',doc_class:'other'}]
+  await render({files:rows,invRows:rows,inventory:{discovered:3,assessment_eligible:1,
+    by_format:{docx:2,other:1},by_status:{excluded:1}}})
+  expect(text()).toContain('Base: 3 source files · includes 1 excluded')
+  expect(text()).toContain('Base: 2 inventoried files')
+  expect(text()).toContain('Base: 1 inventoried files in supported document formats')
+  expect(text()).toContain('Size not recorded')
+  expect(text()).toContain('2 · 66.7%')
+  const typePanel=[...container.querySelectorAll('h2')].find(h=>h.textContent==='BY FILE TYPE').parentElement
+  expect(parseFloat(typePanel.querySelector('.track i').style.width)).toBeCloseTo(66.666,2)
+  expect(text()).not.toContain('was read. Nothing was skipped')
 })

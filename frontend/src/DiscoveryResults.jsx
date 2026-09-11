@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import DiscoveryPopulationChart from './DiscoveryPopulationChart.jsx'
 import { supportedDiscoveryRow } from './DiscoveryLifecycleResults.jsx'
 import DiscoveryFolderLabel from './DiscoveryFolderLabel.jsx'
 import Term from './Term.jsx'
@@ -8,7 +9,7 @@ import {
 } from './discoveryRecommendations.js'
 import { contentTypeBreakdown } from './contentTypeBreakdown.js'
 import { ageBucketDistribution, sizeBucketDistribution, folderDistribution } from './discoveryDistributions.js'
-import BreakdownBars from './BreakdownBars.jsx'
+import BreakdownBars, { chartPercent } from './BreakdownBars.jsx'
 import { formatMembers, groupBy } from './bucketMembers.js'
 
 // The Discovery results screen (approved design board `DiscoverResults.dc.html`).
@@ -151,7 +152,8 @@ export default function DiscoveryResults({
   // returned, not just what got opened and scored) — see estateTypeReconciliation's own header
   // for why typeReconciliation(files) cannot show them. Falls back only when there is no
   // inventory to read (a local scan, or one predating the field).
-  const types = estateTypeReconciliation(inventory) || typeReconciliation(files)
+  const estateTypes = estateTypeReconciliation(inventory)
+  const types = estateTypes || typeReconciliation(files)
   // null on every source but SharePoint today, and null there too unless the tenant actually
   // returned a content type — see contentTypeBreakdown.js for why that is the honest default.
   const contentTypes = contentTypeBreakdown(files)
@@ -323,18 +325,20 @@ export default function DiscoveryResults({
         </p>
       )}
 
+      <DiscoveryPopulationChart inventory={inventory} />
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap', marginTop: 8 }}>
         {types && (
           <div className="panel" style={{ flex: '1 1 380px' }}>
             <h2>BY FILE TYPE</h2>
+            <p className="muted" style={{fontSize:12}}>Base: {types.total.toLocaleString()} {estateTypes ? 'source files' : 'files represented here'}{estateTypes && Number.isSafeInteger(inventory?.by_status?.excluded) ? ` · includes ${inventory.by_status.excluded.toLocaleString()} excluded` : ''}. Full bar = 100% of this base.</p>
             <BreakdownBars
-              buckets={types.buckets} columns="110px 1fr 56px" idPrefix="type-files"
+              buckets={types.buckets} denominator={types.total} columns="110px minmax(30px, 1fr) 100px" idPrefix="type-files"
               colorOf={(b) => (b.assessable ? BAR_COLOR.assessable : BAR_COLOR.other)}
               membersOf={(b) => typeMembers.get(b.key)} />
             <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 56px', gap: 12,
                           marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line)',
                           fontSize: 13, fontWeight: 600 }} role="status">
-              <span>{types.balanced ? 'Total' : '⚠ Total'}</span>
+              <span>{types.balanced ? 'Chart total' : '⚠ Chart total'}</span>
               <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>
                 every type, added up — {types.population}
               </span>
@@ -354,8 +358,9 @@ export default function DiscoveryResults({
         {contentTypes && (
           <div className="panel" style={{ flex: '1 1 380px' }}>
             <h2>BY CONTENT TYPE <span className="muted" style={{ fontWeight: 400 }}>· from SharePoint</span></h2>
+            <p className="muted" style={{fontSize:12}}>Base: {contentTypes.total.toLocaleString()} files represented here. Full bar = 100% of this base.</p>
             <BreakdownBars
-              buckets={contentTypes.buckets} columns="160px 1fr 56px" idPrefix="ctype-files"
+              buckets={contentTypes.buckets} denominator={contentTypes.total} columns="minmax(100px, 1fr) minmax(30px, 1fr) 100px" idPrefix="ctype-files"
               colorOf={(b) => (b.known ? BAR_COLOR.assessable : BAR_COLOR.other)}
               membersOf={(b) => contentTypeMembers.get(b.key)} />
             <p className="muted" style={{ fontSize: 11.5, margin: '12px 0 0', lineHeight: 1.5 }}>
@@ -369,13 +374,14 @@ export default function DiscoveryResults({
         {ageDist && (
           <div className="panel" style={{ flex: '1 1 340px' }}>
             <h2>BY AGE <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>· last modified</span></h2>
+            <p className="muted" style={{fontSize:12}}>Base: {ageDist.total.toLocaleString()} inventoried files{Number.isSafeInteger(inventory?.by_status?.excluded) && inventory.discovered === ageDist.total + inventory.by_status.excluded ? ` · excludes ${inventory.by_status.excluded.toLocaleString()}` : ''}. Full bar = 100% of this base. Missing dates stay in a separate bucket.</p>
             <BreakdownBars
-              buckets={ageDist.buckets} columns="140px 1fr 56px" idPrefix="age-files"
+              buckets={ageDist.buckets} denominator={ageDist.total} columns="minmax(90px, 1fr) minmax(30px, 1fr) 100px" idPrefix="age-files"
               colorOf={() => BAR_COLOR.assessable} membersOf={(b) => b.rows} />
             <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 56px', gap: 12,
                           marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line)',
                           fontSize: 13, fontWeight: 600 }} role="status">
-              <span>{ageDist.balanced ? 'Total' : '⚠ Total'}</span>
+              <span>{ageDist.balanced ? 'Chart total' : '⚠ Chart total'}</span>
               <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>{ageDist.population}</span>
               <span style={{ textAlign: 'right' }}>{ageDist.sum.toLocaleString()}</span>
             </div>
@@ -385,13 +391,14 @@ export default function DiscoveryResults({
         {sizeDist && (
           <div className="panel" style={{ flex: '1 1 340px' }}>
             <h2>BY SIZE</h2>
+            <p className="muted" style={{fontSize:12}}>Base: {sizeDist.total.toLocaleString()} inventoried files{Number.isSafeInteger(inventory?.by_status?.excluded) && inventory.discovered === sizeDist.total + inventory.by_status.excluded ? ` · excludes ${inventory.by_status.excluded.toLocaleString()}` : ''}. Full bar = 100% of this base. Missing sizes stay in a separate bucket.</p>
             <BreakdownBars
-              buckets={sizeDist.buckets} columns="140px 1fr 56px" idPrefix="size-files"
+              buckets={sizeDist.buckets} denominator={sizeDist.total} columns="minmax(90px, 1fr) minmax(30px, 1fr) 100px" idPrefix="size-files"
               colorOf={() => BAR_COLOR.other} membersOf={(b) => b.rows} />
             <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 56px', gap: 12,
                           marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line)',
                           fontSize: 13, fontWeight: 600 }} role="status">
-              <span>{sizeDist.balanced ? 'Total' : '⚠ Total'}</span>
+              <span>{sizeDist.balanced ? 'Chart total' : '⚠ Chart total'}</span>
               <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>{sizeDist.population}</span>
               <span style={{ textAlign: 'right' }}>{sizeDist.sum.toLocaleString()}</span>
             </div>
@@ -401,24 +408,25 @@ export default function DiscoveryResults({
         {folderDist && (
           <div className="panel" style={{ flex: '1 1 380px' }}>
             <h2>BY FOLDER</h2>
+            <p className="muted" style={{fontSize:12}}>Base: {folderDist.total.toLocaleString()} inventoried files in supported document formats. Full bar = 100% of this base; other formats are excluded from this chart.</p>
             {folderDist.buckets.map((b) => (
-              <div className="critrow" key={b.key} style={{ gridTemplateColumns: '1fr 1fr 56px' }}>
+              <div className="critrow" key={b.key} style={{ gridTemplateColumns: 'minmax(100px, 1fr) minmax(30px, 1fr) 100px' }}>
                 <span className="critlabel" title={b.label}
                       style={{ fontSize: 12, overflow: 'hidden',
                                textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   <DiscoveryFolderLabel folder={b.label} source={source} />
                 </span>
                 <span className="track">
-                  <i style={{ width: `${(b.count / Math.max(1, ...folderDist.buckets.map((x) => x.count))) * 100}%`,
+                  <i style={{ width: `${(b.count / Math.max(1, folderDist.total)) * 100}%`,
                               background: BAR_COLOR.assessable }} />
                 </span>
-                <span style={{ textAlign: 'right', fontSize: 13 }}>{b.count.toLocaleString()}</span>
+                <span style={{ textAlign: 'right', fontSize: 13 }}>{b.count.toLocaleString()} · {chartPercent(b.count, folderDist.total)}%</span>
               </div>
             ))}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 56px', gap: 12,
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(100px, 1fr) minmax(30px, 1fr) 100px', gap: 12,
                           marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line)',
                           fontSize: 13, fontWeight: 600 }} role="status">
-              <span>{folderDist.balanced ? 'Total' : '⚠ Total'}</span>
+              <span>{folderDist.balanced ? 'Chart total' : '⚠ Chart total'}</span>
               <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>{folderDist.population}</span>
               <span style={{ textAlign: 'right' }}>{folderDist.sum.toLocaleString()}</span>
             </div>
@@ -427,7 +435,7 @@ export default function DiscoveryResults({
 
         {unread && (
           <div className="panel" style={{ flex: '1 1 340px' }}>
-            <h2>COULD NOT BE READ</h2>
+            <h2>COULD NOT BE READ · metadata</h2>
             {unread.total === 0 ? (
               <p className="muted" style={{ fontSize: 12.5, margin: 0, lineHeight: 1.5 }}>
                 {summary.discovered === 0
@@ -435,7 +443,7 @@ export default function DiscoveryResults({
                   // no read to report on, and the NOTHING WAS FOUND panel above has already said
                   // what happened.
                   ? 'No files were listed, so there was nothing to read.'
-                  : `Every one of the ${summary.discovered.toLocaleString()} files on this screen was read. Nothing was skipped.`}
+                  : `No metadata-reading failures are recorded among the ${summary.discovered.toLocaleString()} files represented here. Discovery does not assess document contents.`}
               </p>
             ) : (
               <>
