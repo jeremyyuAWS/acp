@@ -12,6 +12,7 @@ import { changeSentence, isContrastFinding } from './remediationEvidence.js'
 import WorkspaceProgress from './WorkspaceProgress.jsx'
 import WorkspaceFooter from './WorkspaceFooter.jsx'
 import './RemediationInbox.css'
+import CompletionDrain from './CompletionDrain.jsx'
 import MatchingReviewPreview from './MatchingReviewPreview.jsx'
 import BatchReviewSelection from './BatchReviewSelection.jsx'
 import { remediationReviewCounts } from './remediationCountSummary.js'
@@ -659,7 +660,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 
 export default function RemediationInbox({
   queue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false,
-  initialSort = 'priority', initialTab = 'all', initialGroup = 'document', scanId = null,
+  initialSort = 'priority', initialTab = 'active', initialGroup = 'document', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
   // belong beside the selected finding, but this component must not import them: it already owns
@@ -759,7 +760,7 @@ export default function RemediationInbox({
       (!q || rowModel(f, decisions).issue.toLowerCase().includes(q) || String(f.file).toLowerCase().includes(q)))
     const sorted = sortQueue(filtered, sort)
     const order = { 'needs-review': 0, manual: 0, blocked: 1, 'awaiting-validation': 2, completed: 3 }
-    return tab === 'all' ? sorted.sort((a, b) => order[workflowStatusOf(a, decisions)] - order[workflowStatusOf(b, decisions)]) : sorted
+    return tab === 'all' || tab === 'active' ? sorted.sort((a, b) => order[workflowStatusOf(a, decisions)] - order[workflowStatusOf(b, decisions)]) : sorted
   }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail, priorityFilter, formatFilter, sourceFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep a valid selection: default to the first unresolved visible row.
@@ -975,6 +976,7 @@ export default function RemediationInbox({
         <span style={{ flex: 1, fontSize: 12 }}>{queue.length} items · {counts['awaiting-validation'] || 0} awaiting verification · {counts.completed || 0} completed</span>
         <select aria-label="Filter by status" value={tab} disabled={savingId != null}
           onChange={event => { setBulkPreviewOpen(false); setBatchScopeIds(null); setTab(event.target.value) }}>
+          <option value="active">Remaining ({queue.length - (counts.completed || 0)})</option>
           <option value="all">All statuses ({queue.length})</option>
           {WORKFLOW_TABS.map(status => <option key={status} value={status}>{WORKFLOW_LABELS[status]} {counts[status] || 0}</option>)}
         </select>
@@ -994,6 +996,7 @@ export default function RemediationInbox({
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       {!bulkPreviewOpen && <>
         <p className="remediation-category-help">{{
+          active: 'Verified fixes move to Completed automatically. Changes awaiting verification remain Pending.',
           all: 'Select an item to approve a proposal, make a manual correction, or check its result. Items awaiting automatic verification do not need another approval.',
           'needs-review': 'AI suggestions have proposed changes you can approve. Already-applied changes are available for individual review.',
           manual: 'These issues need your input. Select an issue to see the required edit and instructions for fixing the source document.',
@@ -1047,7 +1050,7 @@ export default function RemediationInbox({
               <span>↑/↓ or J/K: move · Home/End: first/last · Enter: open selected item</span>
             </details>
           </div>
-          {(tab === 'all' || tab === 'needs-review') && <button type="button" className="ghost" aria-expanded={bulkPreviewOpen}
+          {(tab === 'active' || tab === 'all' || tab === 'needs-review') && <button type="button" className="ghost" aria-expanded={bulkPreviewOpen}
                   disabled={savingId != null}
                   onClick={() => { setBatchScopeIds(null); setBulkPreviewOpen(open => !open) }}
                   style={{ marginTop: 8, fontWeight: 700 }}>
@@ -1090,6 +1093,7 @@ export default function RemediationInbox({
         </div>
         <div ref={listRef} onKeyDown={onQueueKey} aria-label="Findings — use Up and Down arrow keys to move between them"
              style={{ flex: '1 1 auto', overflowY: 'auto' }}>
+          <CompletionDrain queue={queue} decisions={decisions} scanId={scanId} active={tab !== 'completed' && tab !== 'all'} />
           {visible.length === 0 ? (
             <div className="muted" style={{ padding: 16, fontSize: 13 }}>
               {queue.length === 0 || queueComplete

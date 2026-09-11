@@ -229,6 +229,8 @@ export function workflowStatusOf(f, decisions = {}) {
   const st = String(f?.status || '').toLowerCase()
   const d = decisions[f?.id] ?? decisions[f?.file]
   const lane = laneOf(f)
+  if (st === 'verified' || st === 'resolved_verified' || f?.verified === true || (f?.validated && (f?.autoApplied || f?.applied || st === 'resolved'))) return 'completed'
+  if (f?.autoApplied || f?.applied) return 'awaiting-validation'
 
   // ── The decision recorded ON THE ROW (hitl_queue.status), which outlives this browser session.
   // `decisions` only holds what THIS session did, so without these branches a row the reviewer
@@ -271,6 +273,7 @@ export function workflowStatusOf(f, decisions = {}) {
 }
 
 export function matchesWorkflow(f, tab, decisions = {}) {
+  if (tab === 'active') return workflowStatusOf(f, decisions) !== 'completed'
   if (tab === 'all') return true
   return workflowStatusOf(f, decisions) === tab
 }
@@ -405,6 +408,7 @@ export function autoFixRows(fixes = [], nameOf = (sc) => sc, { aiApplicationReco
       after: a.after ?? a.value ?? a.approved_value ?? null,
       autoApplied: true,
       aiApplicationRecord: aiApplicationRecords,
+      validated: a.verified === true || a.validated === true || a.status === 'resolved_verified' || a.disposition === 'resolved_verified',
       severity: null,
       effortSec: 5,
     }

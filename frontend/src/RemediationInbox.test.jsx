@@ -9,11 +9,11 @@ const { default: RemediationInbox } = await import('./RemediationInbox.jsx')
 
 // Filenames are prefixed a-/b- so the document sort (alphabetical by file, then id) yields a
 // stable order for the interaction assertions below. Workflow stages under the top tabs:
-//   id1 autoApplied       → Needs review (an unconfirmed auto-fix — the reviewer confirms the change)
+//   id1 automatic record  → Needs review (legacy record without durable application evidence)
 //   id2 hasProposal       → Needs review (a fresh AI draft, untouched)
 //   id3 manual (no draft) → Manual fixes (needs a human to hand-edit)
 const QUEUE = [
-  { id: 1, file: 'a-brief.docx', title: 'DOCX · Heading contrast is too low', page: 1, severity: 'SERIOUS', autoApplied: true, before: '#D9D9D9', after: '#2F6FED' },
+  { id: 1, file: 'a-brief.docx', title: 'DOCX · Heading contrast is too low', page: 1, severity: 'SERIOUS', rec: { action: 'auto' }, before: '#D9D9D9', after: '#2F6FED' },
   { id: 2, file: 'a-brief.docx', title: 'DOCX · Image needs alt text', page: 3, severity: 'CRITICAL', hasProposal: true, after: 'A bar chart of revenue' },
   { id: 3, file: 'b-policy.pdf', title: 'PDF · Scanned page, no text', rule_id: '1.1.1', severity: 'SERIOUS' },
 ]
@@ -149,7 +149,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     await render({ queue: QUEUE, decisions: {},
       onDecide: (f, d) => { seen.push([f.id, d.state]); return Promise.reject(new Error('The server rejected it.')) } })
     expect(detailHeading()).toBe('Heading contrast is too low')     // id1
-    await click(btnByText('Mark inspected \u2192'))
+    await click(btnByText('Save and continue \u2192'))
     expect(seen).toEqual([[1, 'accepted']])
     // Still on the SAME finding — the queue did not move on.
     expect(detailHeading()).toBe('Heading contrast is too low')
@@ -160,19 +160,19 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(alert.textContent).toContain('The server rejected it.')
     expect(alert.textContent).toContain('still waiting for your decision')
     // The decision controls are live again so the reviewer can retry.
-    expect(btnByText('Mark inspected \u2192').disabled).toBe(false)
+    expect(btnByText('Save and continue \u2192').disabled).toBe(false)
   })
 
   it('advances and shows no error when the decision saves', async () => {
     await render({ queue: QUEUE, decisions: {}, onDecide: () => Promise.resolve() })
-    await click(btnByText('Mark inspected \u2192'))
+    await click(btnByText('Save and continue \u2192'))
     expect(detailHeading()).toBe('Image needs alt text')            // moved to id2
     expect(container.querySelector('[role=alert]')).toBeNull()
   })
 
   it('clears a failed decision\u2019s error when the reviewer moves to another finding', async () => {
     await render({ queue: QUEUE, decisions: {}, onDecide: () => Promise.reject(new Error('nope')) })
-    await click(btnByText('Mark inspected \u2192'))
+    await click(btnByText('Save and continue \u2192'))
     expect(container.querySelector('[role=alert]')).toBeTruthy()
     await click(btnByText('Image needs alt text'))
     // The message belonged to that decision, not to the page.
@@ -324,7 +324,7 @@ describe('RemediationInbox — workflow-status queue', () => {
   })
 
   it('a queue row leads with the issue, shows the SC number as a compact pill, and the lane state quiet', async () => {
-    await render({ queue: [{ id: 1, file: 'Clinical-Newsletter-79.docx', title: 'DOCX · Contrast minimum', page: 2, rule_id: '1.4.3', autoApplied: true }], decisions: {} })
+    await render({ queue: [{ id: 1, file: 'Clinical-Newsletter-79.docx', title: 'DOCX · Contrast minimum', page: 2, rule_id: '1.4.3', autoApplied: true }], initialTab: 'awaiting-validation', decisions: {} })
     const row = container.querySelector('.rinbox-row')
     expect(row.textContent).toContain('Contrast minimum')             // the issue is the dominant text
     expect(row.textContent).toContain('1.4.3')                        // the compact WCAG pill
