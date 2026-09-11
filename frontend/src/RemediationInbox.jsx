@@ -13,6 +13,7 @@ import WorkspaceProgress from './WorkspaceProgress.jsx'
 import WorkspaceFooter from './WorkspaceFooter.jsx'
 import './RemediationInbox.css'
 import CompletionDrain from './CompletionDrain.jsx'
+import ReviewQueueTabs from './ReviewQueueTabs.jsx'
 import MatchingReviewPreview from './MatchingReviewPreview.jsx'
 import BatchReviewSelection from './BatchReviewSelection.jsx'
 import { remediationReviewCounts } from './remediationCountSummary.js'
@@ -664,7 +665,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 
 export default function RemediationInbox({
   queue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false,
-  initialSort = 'priority', initialTab = 'active', initialGroup = 'document', scanId = null,
+  initialSort = 'priority', initialTab = 'review', initialGroup = 'document', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
   // belong beside the selected finding, but this component must not import them: it already owns
@@ -980,6 +981,7 @@ export default function RemediationInbox({
         <span style={{ flex: 1, fontSize: 12 }}>{queue.length} items · {counts['awaiting-validation'] || 0} awaiting verification · {counts.completed || 0} completed</span>
         <select aria-label="Filter by status" value={tab} disabled={savingId != null}
           onChange={event => { setBulkPreviewOpen(false); setBatchScopeIds(null); setTab(event.target.value) }}>
+          <option value="review">Needs review ({(counts['needs-review'] || 0) + (counts.manual || 0) + (counts.blocked || 0)})</option>
           <option value="active">Remaining ({queue.length - (counts.completed || 0)})</option>
           <option value="all">All statuses ({queue.length})</option>
           {WORKFLOW_TABS.map(status => <option key={status} value={status}>{WORKFLOW_LABELS[status]} {counts[status] || 0}</option>)}
@@ -1000,6 +1002,7 @@ export default function RemediationInbox({
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       {!bulkPreviewOpen && <>
         <p className="remediation-category-help">{{
+          review: 'Approve a suggestion to move it to Processing. Completed contains recorded outcomes; approval alone does not verify a fix.',
           active: 'Verified fixes move to Completed automatically. Changes awaiting verification remain Pending.',
           all: 'Select an item to approve a proposal, make a manual correction, or check its result. Items awaiting automatic verification do not need another approval.',
           'needs-review': 'AI suggestions have proposed changes you can approve. Already-applied changes are available for individual review.',
@@ -1017,6 +1020,8 @@ export default function RemediationInbox({
                     display: narrow && narrowPane !== 'queue' ? 'none' : 'flex', flexDirection: 'column', minHeight: 480 }}>
         <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Review queue</div>
+          <ReviewQueueTabs queue={queue} decisions={decisions} scanId={scanId} value={tab} disabled={savingId != null}
+            onChange={value => { setBulkPreviewOpen(false); setBatchScopeIds(null); setTab(value) }} />
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <input type="search" value={search} onChange={(e) => setSearch(e.target.value)}
                    placeholder="Search documents" aria-label="Search documents"
@@ -1054,7 +1059,7 @@ export default function RemediationInbox({
               <span>↑/↓ or J/K: move · Home/End: first/last · Enter: open selected item</span>
             </details>
           </div>
-          {(tab === 'active' || tab === 'all' || tab === 'needs-review') && <button type="button" className="ghost" aria-expanded={bulkPreviewOpen}
+          {(tab === 'review' || tab === 'active' || tab === 'all' || tab === 'needs-review') && <button type="button" className="ghost" aria-expanded={bulkPreviewOpen}
                   disabled={savingId != null}
                   onClick={() => { setBatchScopeIds(null); setBulkPreviewOpen(open => !open) }}
                   style={{ marginTop: 8, fontWeight: 700 }}>

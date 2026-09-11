@@ -64,7 +64,7 @@ it('uses authoritative full totals and labels legacy or malformed completeness a
 
 it('labels actual already-applied rows as inspection without changing the decision contract', async () => {
   const { root, container } = createTestRoot()
-  await act(async () => root.render(createElement(Inbox, { queue: applied.slice(0, 1), decisions: {}, scanId: 'fixture' })))
+  await act(async () => root.render(createElement(Inbox, { queue: applied.slice(0, 1), initialTab: 'awaiting-validation', decisions: {}, scanId: 'fixture' })))
   expect(container.textContent).toContain('Inspecting this applied change does not approve or apply another change')
   expect([...container.querySelectorAll('button')].some(button => button.textContent === 'Mark inspected →')).toBe(true)
   expect(container.textContent).not.toContain('then approve it')

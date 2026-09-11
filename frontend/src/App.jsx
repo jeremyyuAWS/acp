@@ -426,7 +426,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [myDataOpen, setMyDataOpen] = useState(false)
   const accountMenuRef = useRef(null)
-  useAutoDismissDetails(accountMenuRef, 5000)
+  useAutoDismissDetails(accountMenuRef, 3000)
   const [scanList, setScanList] = useState([])
   // true only when the user explicitly picked an older scan from the time-travel picker —
   // distinguishes "user went back in time" from "a new scan arrived while they were reading".
@@ -994,6 +994,7 @@ export default function App() {
   // state; and `justAssessed` is compared by id (`justAssessed === run?.id`), so a value left
   // over from another scan can never match. Add to this function only what does NOT self-correct.
   const resetScanScopedState = () => {
+    setHitlCount(0)
     setDecisions({}); setTriage({}); setAssignees({})
     setCertifiedDocs([]); setPublishedFiles([])
   }

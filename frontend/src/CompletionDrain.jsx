@@ -8,10 +8,10 @@ export default function CompletionDrain({ queue, decisions, scanId, active }) {
   useEffect(() => {
     const statuses = new Map(queue.map(row => [row.id, workflowStatusOf(row, decisions)]))
     const changed = previous.current.scanId === scanId
-      ? queue.filter(row => statuses.get(row.id) === 'completed'
-        && previous.current.statuses.has(row.id) && previous.current.statuses.get(row.id) !== 'completed') : []
+      ? queue.filter(row => ['completed', 'awaiting-validation'].includes(statuses.get(row.id))
+        && previous.current.statuses.has(row.id) && previous.current.statuses.get(row.id) !== statuses.get(row.id)) : []
     previous.current = { scanId, statuses }
-    if (changed.length) setMoved(changed)
+    if (changed.length) setMoved(changed.map(row => ({ ...row, destination: statuses.get(row.id) === 'completed' ? 'Completed' : 'Processing' })))
   }, [queue, decisions, scanId])
   useEffect(() => {
     if (!moved.length) return undefined
@@ -20,6 +20,6 @@ export default function CompletionDrain({ queue, decisions, scanId, active }) {
   }, [moved])
   if (!active || !moved.length) return null
   return <div className="rinbox-completion-drain" role="status" aria-live="polite">
-    {moved.length === 1 ? `${issueLabel(moved[0])} moved to Completed` : `${moved.length} items moved to Completed`}
+    {moved.length === 1 ? `${issueLabel(moved[0])} moved to ${moved[0].destination}` : `${moved.length} items moved to Processing or Completed`}
   </div>
 }
