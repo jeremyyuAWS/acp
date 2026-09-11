@@ -65,12 +65,11 @@ def test_the_frozen_scope_passed_in_governs_not_any_live_global(monkeypatch):
         "the frozen scope argument must govern the reused score, independent of the live global")
 
 
-def test_it_returns_only_the_score_keys():
-    """`issues`, `engine`, `acp_stamped` and everything else reused must pass through untouched —
-    this overwrites a scored fdict, it does not rebuild one."""
-    out = scanner.rescore_reused(ISSUES, "a.docx", scope=None)
-    assert set(out) <= {"score", "compliant", "skipped_rules"}
-    assert "issues" not in out and "engine" not in out
+def test_reused_findings_and_score_share_scope():
+    out = scanner.rescore_reused(ISSUES, "a.docx", scope=NARROW)
+    assert out["issues"] == [ISSUES[0]]
+    assert "engine" not in out
+    assert scanner.rescore_reused(ISSUES, "a.docx", scope=None)["issues"] == ISSUES
 
 
 def test_an_errored_file_is_not_scored_as_a_successful_one():

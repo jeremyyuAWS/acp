@@ -26,8 +26,11 @@
 // its exception type and message recorded as data, and the batch completes.
 using DigitalA11y.Analysers.DotNet;
 using DigitalA11y.Analysers.DotNet.Docx;
+using DigitalA11y.Analysers.DotNet.Docx.Rules;
 using DigitalA11y.Analysers.DotNet.Pptx;
+using DigitalA11y.Analysers.DotNet.Pptx.Rules;
 using DigitalA11y.Analysers.DotNet.Xlsx;
+using DigitalA11y.Analysers.DotNet.Xlsx.Rules;
 using DigitalA11y.Core.Models.Manifest;
 using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
@@ -42,6 +45,7 @@ if (args.Length < 2)
 var inDir = args[0];
 var outPath = args[1];
 
+var allowedRules = args.Length > 2 ? JsonSerializer.Deserialize<Dictionary<string, HashSet<string>>>(args[2]) : null;
 var results = new List<object>();
 var failures = new List<string>();
 
@@ -99,8 +103,19 @@ async Task Run()
 {
     var sp = new ServiceCollection().AddDotNetAnalysers().BuildServiceProvider();
     var docx = sp.GetRequiredService<DocxAnalyser>();
+    var docxRules = sp.GetServices<IDocxRule>().Select(r => r.RuleId).ToArray();
     var pptx = sp.GetRequiredService<PptxAnalyser>();
+    var pptxRules = sp.GetServices<IPptxRule>().Select(r => r.RuleId).ToArray();
     var xlsx = sp.GetRequiredService<XlsxAnalyser>();
+    var xlsxRules = sp.GetServices<IXlsxRule>().Select(r => r.RuleId).ToArray();
+
+    string[]? Disabled(string[] ruleIds, string filename)
+    {
+        if (allowedRules is null) return null;
+        var selected = allowedRules.GetValueOrDefault(filename) ?? allowedRules.GetValueOrDefault("*");
+        // A supplied selection never defaults to running everything for an unknown file.
+        return ruleIds.Where(id => selected is null || !selected.Contains(id)).ToArray();
+    }
 
     foreach (var path in Directory.GetFiles(inDir))
     {
@@ -113,9 +128,9 @@ async Task Run()
         {
             AnalyserResult? r = ext switch
             {
-                ".docx" => await docx.AnalyseAsync(path, id, name, name),
-                ".pptx" => await pptx.AnalyseAsync(path, id, name, name),
-                ".xlsx" => await xlsx.AnalyseAsync(path, id, name, name),
+                ".docx" => await docx.AnalyseAsync(path, id, name, name, Disabled(docxRules, name)),
+                ".pptx" => await pptx.AnalyseAsync(path, id, name, name, Disabled(pptxRules, name)),
+                ".xlsx" => await xlsx.AnalyseAsync(path, id, name, name, Disabled(xlsxRules, name)),
                 _ => null,
             };
             if (r is null) continue;

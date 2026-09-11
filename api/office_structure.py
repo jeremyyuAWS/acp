@@ -164,6 +164,8 @@ _BYLINE_NOT_A_NAME = {"the", "a", "an", "all", "any", "our", "its", "region", "d
 _MAX_CAPS_FRAGMENT = 4          # "ACME", "FY26" — a wordmark or label, not a section name
 
 
+from assessment_selection import criteria, enabled as sc_enabled
+
 def looks_like_heading_furniture(text: str) -> bool:
     """True when text set like a heading is really page furniture: a bare figure, a pull
     quote, a short all-caps wordmark, a byline. Text-only, so every caller can use it —
@@ -407,6 +409,8 @@ def _duplicate_href_findings(links: list[tuple[str, str]], rule_id: str, wcag: s
     NOT other links that merely share one of those URLs (a distinctly-labelled
     link pointing at the same target as an ambiguous pair is fine, and flagging
     it was a false positive found in review)."""
+    if not sc_enabled(wcag.split()[0]):
+        return []
     groups: dict[str, set[str]] = {}
     for text, href in links:
         key = text.strip().lower()
@@ -486,6 +490,8 @@ def _vague_link_findings(texts: list[str], rule_id: str, wcag: str,
     `detail` — computing them separately is how a chip comes to point at a different link than
     the one the reviewer is reading about.
     """
+    if not sc_enabled(wcag.split()[0]):
+        return []
     pairs = [(s, (wheres[i] if wheres and i < len(wheres) else None))
              for i, t in enumerate(texts)
              if (s := (t or "").strip()) and _is_vague_link_text(s)]
@@ -525,6 +531,7 @@ def _docx_hyperlinks(zf: zipfile.ZipFile, doc_xml: str) -> list[tuple[str, str]]
     return links
 
 
+@criteria('1.3.1', '1.3.2', '2.4.4', '2.4.6', '2.4.9', '3.3.2', '4.1.2', '2.4.10', '1.4.8')
 def docx_checks(path: Path) -> list[dict]:
     findings: list[dict] = []
     try:
@@ -539,61 +546,63 @@ def docx_checks(path: Path) -> list[dict]:
             # when it was several. `prev_level` advances to the level actually in the document
             # (not the clamped prev+1), which is what keeps H1→H3→H4 a single finding — the
             # outline has one gap there, and the H3→H4 step is well-formed.
-            prev_level = 0
-            for ordinal, m in enumerate(_HEADING_STYLE.finditer(doc), start=1):
-                level = int(m.group(1))
-                if prev_level > 0 and level > prev_level + 1:
-                    f = _finding("DOCX_HEADING_SKIP", "2.4.6 Headings and Labels", "MODERATE")
-                    # Carry the actual levels so the review card can show the before/after outline
-                    # (H{prev} → H{level}, should be H{prev} → H{prev+1}) — real, not illustrative.
-                    # The ordinal keeps two identical gaps (two separate H1→H3s) distinguishable.
-                    f["detail"] = (f"Heading {ordinal}: level jumps from H{prev_level} to H{level} "
-                                   f"(should step to H{prev_level + 1})")
-                    findings.append(f)
-                prev_level = level
+            if sc_enabled("2.4.6"):
+                prev_level = 0
+                for ordinal, m in enumerate(_HEADING_STYLE.finditer(doc), start=1):
+                    level = int(m.group(1))
+                    if prev_level > 0 and level > prev_level + 1:
+                        f = _finding("DOCX_HEADING_SKIP", "2.4.6 Headings and Labels", "MODERATE")
+                        # Carry the actual levels so the review card can show the before/after outline
+                        # (H{prev} → H{level}, should be H{prev} → H{prev+1}) — real, not illustrative.
+                        # The ordinal keeps two identical gaps (two separate H1→H3s) distinguishable.
+                        f["detail"] = (f"Heading {ordinal}: level jumps from H{prev_level} to H{level} "
+                                       f"(should step to H{prev_level + 1})")
+                        findings.append(f)
+                    prev_level = level
 
-            # 2.4.6 — a heading with NO TEXT. The outline walk above reads pStyle refs and never
-            # the heading's content, so an empty Heading paragraph passed through every check
-            # ACP has: it is in the outline (so no pseudo-heading finding), it breaks no level
-            # sequence (so no skip finding), and it has no runs to fail contrast on.
-            #
-            # It is a real defect and a specifically nasty one. Screen readers offer a heading
-            # list as the primary way to navigate a long document; an empty entry is an
-            # announcement of nothing — the user is told a section exists, cannot tell what it
-            # is, and cannot tell whether they have missed content. On a 25-page benefits
-            # handbook that is a navigation dead end, not a cosmetic slip.
-            #
-            # Deliberately narrow. Only a heading-styled paragraph whose text is empty or
-            # whitespace, and only when it holds no drawing — a heading whose content is an image
-            # has a different problem (1.1.1's, if the image lacks alt text), and reporting it
-            # here would report one defect twice under two criteria.
-            for ordinal, p in enumerate(_PARA.findall(doc), start=1):
-                if not _HEADING_ANY.search(p):
-                    continue
-                if "<w:drawing" in p or "<w:pict" in p:
-                    continue
-                if "".join(_WT.findall(p)).strip():
-                    continue
-                f = _finding("DOCX_HEADING_EMPTY", "2.4.6 Headings and Labels", "MODERATE")
-                lvl = _HEADING_STYLE.search(p)
-                f["detail"] = (
-                    f"Heading {ordinal}"
-                    + (f" (H{lvl.group(1)})" if lvl else "")
-                    + " has no text — a screen reader announces it in the heading list with "
-                      "nothing to announce, so the section cannot be identified or skipped")
-                findings.append(f)
+                # 2.4.6 — a heading with NO TEXT. The outline walk above reads pStyle refs and never
+                # the heading's content, so an empty Heading paragraph passed through every check
+                # ACP has: it is in the outline (so no pseudo-heading finding), it breaks no level
+                # sequence (so no skip finding), and it has no runs to fail contrast on.
+                #
+                # It is a real defect and a specifically nasty one. Screen readers offer a heading
+                # list as the primary way to navigate a long document; an empty entry is an
+                # announcement of nothing — the user is told a section exists, cannot tell what it
+                # is, and cannot tell whether they have missed content. On a 25-page benefits
+                # handbook that is a navigation dead end, not a cosmetic slip.
+                #
+                # Deliberately narrow. Only a heading-styled paragraph whose text is empty or
+                # whitespace, and only when it holds no drawing — a heading whose content is an image
+                # has a different problem (1.1.1's, if the image lacks alt text), and reporting it
+                # here would report one defect twice under two criteria.
+                for ordinal, p in enumerate(_PARA.findall(doc), start=1):
+                    if not _HEADING_ANY.search(p):
+                        continue
+                    if "<w:drawing" in p or "<w:pict" in p:
+                        continue
+                    if "".join(_WT.findall(p)).strip():
+                        continue
+                    f = _finding("DOCX_HEADING_EMPTY", "2.4.6 Headings and Labels", "MODERATE")
+                    lvl = _HEADING_STYLE.search(p)
+                    f["detail"] = (
+                        f"Heading {ordinal}"
+                        + (f" (H{lvl.group(1)})" if lvl else "")
+                        + " has no text — a screen reader announces it in the heading list with "
+                          "nothing to announce, so the section cannot be identified or skipped")
+                    findings.append(f)
 
             # 1.3.1 — a paragraph visually styled as a heading (large/bold) but left in a
             # body style, so it isn't in the heading outline AT navigates by. One per doc.
-            for p in _PARA.findall(doc):
-                text = "".join(_WT.findall(p)).strip()
-                szs = [int(s) for s in _W_SZ.findall(p)]
-                if looks_like_pseudo_heading(
-                        text, bold=bool(_W_BOLD.search(p)),
-                        max_half_pt=max(szs) if szs else 0,
-                        styled_heading=bool(_HEADING_ANY.search(p))):
-                    findings.append(_finding("DOCX_PSEUDO_HEADING", "1.3.1 Info and Relationships", "MODERATE"))
-                    break
+            if sc_enabled("1.3.1"):
+                for p in _PARA.findall(doc):
+                    text = "".join(_WT.findall(p)).strip()
+                    szs = [int(s) for s in _W_SZ.findall(p)]
+                    if looks_like_pseudo_heading(
+                            text, bold=bool(_W_BOLD.search(p)),
+                            max_half_pt=max(szs) if szs else 0,
+                            styled_heading=bool(_HEADING_ANY.search(p))):
+                        findings.append(_finding("DOCX_PSEUDO_HEADING", "1.3.1 Info and Relationships", "MODERATE"))
+                        break
 
             # 2.4.4 — link text that conveys nothing about its destination, and 2.4.9 — display
             # text reused for a different destination. The partner engine's DOCX-LINK-001 is
@@ -639,20 +648,22 @@ def docx_checks(path: Path) -> list[dict]:
             # label as much as one in the body. _docx_name_role reads the same part set, so 3.3.2
             # here and the 4.1.2 it delegates below stay over identical populations.
             from formats.docx.detectors.name_role_value import detect as _docx_name_role
-            for story_xml in _docx_story_xmls(zf):
-                for sdt_inner in _SDT.findall(story_xml):
-                    pr_m = _SDT_PR.search(sdt_inner)
-                    if not pr_m or not _SDT_INPUT_TYPE.search(pr_m.group(1)):
-                        continue
-                    alias_m = _SDT_ALIAS.search(pr_m.group(1))
-                    if not alias_m or not alias_m.group(1).strip():
-                        findings.append(_finding("DOCX_FORM_FIELD_NO_LABEL", "3.3.2 Labels or Instructions", "SERIOUS"))
-            findings += _docx_name_role(path)
+            if sc_enabled("3.3.2"):
+                for story_xml in _docx_story_xmls(zf):
+                    for sdt_inner in _SDT.findall(story_xml):
+                        pr_m = _SDT_PR.search(sdt_inner)
+                        if not pr_m or not _SDT_INPUT_TYPE.search(pr_m.group(1)):
+                            continue
+                        alias_m = _SDT_ALIAS.search(pr_m.group(1))
+                        if not alias_m or not alias_m.group(1).strip():
+                            findings.append(_finding("DOCX_FORM_FIELD_NO_LABEL", "3.3.2 Labels or Instructions", "SERIOUS"))
+            if sc_enabled("4.1.2"):
+                findings += _docx_name_role(path)
 
             # 2.4.10 — a document long enough to need section structure that uses
             # no heading styles at all. A short letter/memo legitimately has none,
             # so this only fires past a text-bearing-paragraph floor.
-            if not _HEADING_STYLE.search(doc):
+            if sc_enabled("2.4.10") and not _HEADING_STYLE.search(doc):
                 text_paras = sum(
                     1 for p in _PARA.findall(doc) if "".join(_WT.findall(p)).strip()
                 )
@@ -661,25 +672,27 @@ def docx_checks(path: Path) -> list[dict]:
 
             # 1.4.8 — blocks of body text set justified (both margins). Narrow but
             # unambiguous: justified alignment is one of the SC's explicit failures.
-            justified = sum(
-                1 for p in _PARA.findall(doc)
-                if _JC_BOTH.search(p) and "".join(_WT.findall(p)).strip()
-            )
-            if justified >= _MIN_JUSTIFIED_PARAS:
-                findings.append(_finding("DOCX_JUSTIFIED_TEXT", "1.4.8 Visual Presentation", "MODERATE"))
+            if sc_enabled("1.4.8"):
+                justified = sum(
+                    1 for p in _PARA.findall(doc)
+                    if _JC_BOTH.search(p) and "".join(_WT.findall(p)).strip()
+                )
+                if justified >= _MIN_JUSTIFIED_PARAS:
+                    findings.append(_finding("DOCX_JUSTIFIED_TEXT", "1.4.8 Visual Presentation", "MODERATE"))
 
             # 1.3.2 — floating text (DrawingML / VML text boxes, positioned frames) is read by
             # assistive tech at its anchor point, which need not match the visual order. Fires
             # only when the document actually contains text-bearing floating objects (conservative,
             # so an ordinary linear document never trips it).
-            floating = sum(
-                1 for inner in _TXBX_CONTENT.findall(doc) if "".join(_WT.findall(inner)).strip()
-            ) + len(_FRAMEPR.findall(doc))
-            if floating:
-                f = _finding("DOCX_READING_ORDER_RISK", "1.3.2 Meaningful Sequence", "MODERATE")
-                f["detail"] = (f"{floating} floating text box(es)/frame(s) — a screen reader may read "
-                               "them out of the visual reading order")
-                findings.append(f)
+            if sc_enabled("1.3.2"):
+                floating = sum(
+                    1 for inner in _TXBX_CONTENT.findall(doc) if "".join(_WT.findall(inner)).strip()
+                ) + len(_FRAMEPR.findall(doc))
+                if floating:
+                    f = _finding("DOCX_READING_ORDER_RISK", "1.3.2 Meaningful Sequence", "MODERATE")
+                    f["detail"] = (f"{floating} floating text box(es)/frame(s) — a screen reader may read "
+                                   "them out of the visual reading order")
+                    findings.append(f)
     except Exception:
         swallowed("office_structure.docx_checks: running the docx structure checks failed")
     return findings
@@ -754,6 +767,7 @@ def _xlsx_sheet_titles(zf: zipfile.ZipFile) -> dict[str, str]:
     return out
 
 
+@criteria('2.4.4', '2.4.6')
 def xlsx_structure_checks(path: Path) -> list[dict]:
     """2.4.4 Link Purpose (In Context) — cell hyperlinks whose display text is vague or a
     raw URL. 2.4.6 Headings and Labels — uninformative structure labels (multiple default 'SheetN'
@@ -802,31 +816,33 @@ def xlsx_structure_checks(path: Path) -> list[dict]:
 
             # 2.4.6 — uninformative labels. A lone default 'Sheet1' is normal, so require either
             # several default sheet tabs or a default table-column header before flagging.
-            wb = _read(zf, "xl/workbook.xml") or ""
-            default_sheets = [nm for nm in _WB_SHEET.findall(wb) if _DEFAULT_SHEET.match(nm.strip())]
-            default_cols: list[str] = []
-            for n in names:
-                if re.fullmatch(r"xl/tables/table\d+\.xml", n):
-                    default_cols += [c for c in _TBL_COL.findall(_read(zf, n) or "")
-                                     if _DEFAULT_COL.match(c.strip())]
-            if len(default_sheets) >= 2 or default_cols:
-                f = _finding("XLSX_DEFAULT_LABELS", "2.4.6 Headings and Labels", "MODERATE")
-                bits = []
-                if len(default_sheets) >= 2:
-                    bits.append(f"{len(default_sheets)} default sheet tabs ({', '.join(default_sheets[:3])})")
-                if default_cols:
-                    bits.append(f"{len(default_cols)} default table column label(s) (e.g. “{default_cols[0]}”)")
-                f["detail"] = "Uninformative labels: " + "; ".join(bits)
-                # The tabs ARE the location here — the finding is about them, not about
-                # something sitting on one of them.
-                if (where := _where([f"Sheet “{nm}”" for nm in default_sheets])):
-                    f["location"] = where
-                findings.append(f)
+            if sc_enabled("2.4.6"):
+                wb = _read(zf, "xl/workbook.xml") or ""
+                default_sheets = [nm for nm in _WB_SHEET.findall(wb) if _DEFAULT_SHEET.match(nm.strip())]
+                default_cols: list[str] = []
+                for n in names:
+                    if re.fullmatch(r"xl/tables/table\d+\.xml", n):
+                        default_cols += [c for c in _TBL_COL.findall(_read(zf, n) or "")
+                                         if _DEFAULT_COL.match(c.strip())]
+                if len(default_sheets) >= 2 or default_cols:
+                    f = _finding("XLSX_DEFAULT_LABELS", "2.4.6 Headings and Labels", "MODERATE")
+                    bits = []
+                    if len(default_sheets) >= 2:
+                        bits.append(f"{len(default_sheets)} default sheet tabs ({', '.join(default_sheets[:3])})")
+                    if default_cols:
+                        bits.append(f"{len(default_cols)} default table column label(s) (e.g. “{default_cols[0]}”)")
+                    f["detail"] = "Uninformative labels: " + "; ".join(bits)
+                    # The tabs ARE the location here — the finding is about them, not about
+                    # something sitting on one of them.
+                    if (where := _where([f"Sheet “{nm}”" for nm in default_sheets])):
+                        f["location"] = where
+                    findings.append(f)
     except Exception:
         return []
     return findings
 
 
+@criteria('2.4.4', '2.4.6', '2.4.9')
 def pptx_checks(path: Path) -> list[dict]:
     findings: list[dict] = []
     try:
@@ -849,7 +865,7 @@ def pptx_checks(path: Path) -> list[dict]:
                 # was left empty (blank-layout slides with no title slot at all
                 # are a legitimate design choice, not flagged).
                 title_ph = _PPTX_TITLE_PH.search(xml)
-                if title_ph:
+                if sc_enabled("2.4.6") and title_ph:
                     # Text of the shape containing the title placeholder — a
                     # reasonable approximation is: does *any* <a:t> appear after
                     # the placeholder marker, before the next shape?
@@ -1030,6 +1046,7 @@ def min_contrast_recolor(fg_hex: str, bg_hex: str, target: float = 4.5) -> str:
     return best
 
 
+@criteria('1.4.3', '1.4.6')
 def pptx_contrast_checks(path: Path) -> list[dict]:
     """1.4.3 / 1.4.6 Contrast for pptx — explicit run colour on an explicit shape
     solid fill only (see the narrow-scope note above).
@@ -1069,13 +1086,14 @@ def pptx_contrast_checks(path: Path) -> list[dict]:
     ratio, text_hex, bg_hex = worst
     detail = f"Text #{text_hex} on #{bg_hex} is {ratio:.1f}:1 (needs 4.5:1)"
     findings: list[dict] = []
-    if ratio < 3.0:
+    if sc_enabled("1.4.3") and ratio < 3.0:
         f = _finding("PPTX_LOW_CONTRAST_AA", "1.4.3 Contrast (Minimum)", "SERIOUS")
         f["detail"] = detail
         findings.append(f)
-    f = _finding("PPTX_LOW_CONTRAST_AAA", "1.4.6 Contrast (Enhanced)", "MODERATE")
-    f["detail"] = detail
-    findings.append(f)
+    if sc_enabled("1.4.6"):
+        f = _finding("PPTX_LOW_CONTRAST_AAA", "1.4.6 Contrast (Enhanced)", "MODERATE")
+        f["detail"] = detail
+        findings.append(f)
     return findings
 
 
@@ -1153,6 +1171,7 @@ def _cap_note(pages_total: int, cap: int) -> str:
     return ""
 
 
+@criteria('1.4.11')
 def pdf_nontext_contrast_checks(path: Path) -> list[dict]:
     """1.4.11 Non-text Contrast (Review) for PDF (ADR 0025) — the lowest-contrast bordered rectangle
     (its stroke colour against its own fill, < 3:1). The PDF analogue of the docx/pptx solid
@@ -1206,6 +1225,7 @@ def _bbox_overlap_frac(cx0: float, ctop: float, cx1: float, cbot: float,
     return (ox * oy) / ca
 
 
+@criteria('1.4.3')
 def pdf_text_over_image_checks(path: Path) -> list[dict]:
     """1.4.3 Contrast (Minimum), text-over-image case (Review) for PDF (ADR 0025). `pdf_contrast_checks`
     resolves each char's background from page STRUCTURE (fill rects, page default) — which can answer a
@@ -1252,6 +1272,7 @@ _SCANNED_MAX_CHARS = 5          # a page with this few extractable chars is trea
 _SCANNED_MIN_IMAGE_AREA_FRAC = 0.8   # an image covering this much of the page reads as "the whole page"
 
 
+@criteria('1.4.5')
 def pdf_scanned_page_checks(path: Path) -> list[dict]:
     """1.4.5 Images of Text (Review) for PDF — a cheap, deterministic pre-OCR heuristic (ADR 0025
     style): a page with near-zero extractable text AND one image covering most of the page is very
@@ -1469,6 +1490,7 @@ def _pdf_contrast_scan(path_or_bytes):
     return rows, pages_total, pages_read, pages_capped
 
 
+@criteria('1.4.3', '1.4.6')
 def pdf_contrast_checks(path: Path) -> list[dict]:
     """1.4.3 / 1.4.6 Contrast for PDF — a REAL WCAG contrast ratio per glyph: its declared
     fill colour against the background structurally resolved behind it, at the bar its font
@@ -1486,9 +1508,9 @@ def pdf_contrast_checks(path: Path) -> list[dict]:
             continue
         ratio = _contrast_ratio(fg, bg)
         aa_req, aaa_req = _pdf_required_ratios(ch)
-        if ratio < aa_req and (worst_aa is None or ratio < worst_aa[0]):
+        if sc_enabled("1.4.3") and ratio < aa_req and (worst_aa is None or ratio < worst_aa[0]):
             worst_aa = (ratio, fg, bg, aa_req)
-        if ratio < aaa_req and (worst_aaa is None or ratio < worst_aaa[0]):
+        if sc_enabled("1.4.6") and ratio < aaa_req and (worst_aaa is None or ratio < worst_aaa[0]):
             worst_aaa = (ratio, fg, bg, aaa_req)
     note = _pdf_char_cap_note(pages_total, pages_read, pages_capped)
     findings: list[dict] = []
@@ -1563,6 +1585,7 @@ _MIN_LINES_FOR_SPACING = 4     # need a few lines before judging line pitch
 _TIGHT_LINE_PITCH = 1.15       # pitch below this × font size = cramped (single-spacing is ~1.2×)
 
 
+@criteria('1.4.12')
 def pdf_text_spacing_checks(path: Path) -> list[dict]:
     """1.4.12 Text Spacing (Review) for PDF (ADR 0025 Tier A). A flattened PDF can't honour a
     reader's line-spacing override, so genuinely TIGHT line pitch is a fixed legibility risk.
@@ -1654,6 +1677,7 @@ def _pdf_link_has_underline(page, link: dict) -> bool:
     return False
 
 
+@criteria('1.4.1')
 def pdf_use_of_color_checks(path: Path) -> list[dict]:
     """1.4.1 Use of Color (Review) for PDF (ADR 0025 Tier A) — a hyperlink distinguished ONLY by a
     chromatic text colour, with no underline, relies on colour alone to signal it is a link.
@@ -1709,6 +1733,7 @@ def pdf_use_of_color_checks(path: Path) -> list[dict]:
 _MIN_PAGES_FOR_OUTLINE = 5
 
 
+@criteria('2.4.1')
 def pdf_bypass_blocks_check(path: Path) -> list[dict]:
     """2.4.1 Bypass Blocks — a PDF's bookmark/outline tree is the direct analog
     of an HTML skip-link: without it, a screen-reader or keyboard user has no
@@ -1731,6 +1756,7 @@ def pdf_bypass_blocks_check(path: Path) -> list[dict]:
 _PDF_HEADING_TAGS = {"/H", "/H1", "/H2", "/H3", "/H4", "/H5", "/H6", "/Title"}
 
 
+@criteria('2.4.6')
 def pdf_headings_labels_check(path: Path) -> list[dict]:
     """2.4.6 Headings and Labels — a TAGGED PDF (has a structure tree) that contains no heading
     structure elements at all: assistive tech then has no headings to navigate by. Untagged PDFs
@@ -1768,6 +1794,7 @@ def pdf_headings_labels_check(path: Path) -> list[dict]:
     return [_finding("PDF_NO_HEADINGS", "2.4.6 Headings and Labels", "MODERATE")]
 
 
+@criteria('2.4.4')
 def pdf_link_purpose_check(path: Path) -> list[dict]:
     """2.4.4 Link Purpose (In Context) — two complementary checks via pdfplumber's hyperlinks:
 
@@ -1941,6 +1968,7 @@ def _xlsx_fill_color(fill_xml: str, theme_colors: list[str | None] | None = None
     return _explicit_rgb(fg_m.group(1)) or (_theme_rgb(fg_m.group(1), theme_colors) if theme_colors else None)
 
 
+@criteria('1.4.3', '1.4.6')
 def xlsx_contrast_checks(path: Path) -> list[dict]:
     """1.4.3 / 1.4.6 Contrast — see module docstring for the deliberately
     narrow resolution scope (direct RGB only; theme/indexed/patterned fills
@@ -1985,9 +2013,9 @@ def xlsx_contrast_checks(path: Path) -> list[dict]:
                         continue
                     f6, b6 = colors[0][-6:], colors[1][-6:]
                     ratio = _contrast_ratio(f6, b6)
-                    if ratio < 7.0:
+                    if sc_enabled("1.4.6") and ratio < 7.0:
                         seen_aaa = True
-                    if ratio < 4.5:
+                    if sc_enabled("1.4.3") and ratio < 4.5:
                         seen_aa = True
                     if ratio < 7.0 and (worst is None or ratio < worst[0]):
                         worst = (ratio, f6, b6)
@@ -2037,6 +2065,7 @@ def _pdf_page_has_widget(page, pikepdf) -> bool:
     return page_has_widget(page, pikepdf)
 
 
+@criteria('4.1.2')
 def pdf_form_field_checks(path: Path) -> list[dict]:
     """4.1.2 findings per interactive form field. Implementation: formats/pdf/detectors/
     name_role_value.py — registered as PARTIAL coverage (AcroForm fields only)."""
@@ -2044,6 +2073,7 @@ def pdf_form_field_checks(path: Path) -> list[dict]:
     return detect(path)
 
 
+@criteria('2.4.3')
 def pdf_focus_order_checks(path: Path) -> list[dict]:
     """2.4.3 Focus Order for PDF. Implementation: formats/pdf/detectors/focus_order.py —
     registered as HEURISTIC coverage (/Tabs = /S is a proxy, not a proof)."""
@@ -2051,6 +2081,7 @@ def pdf_focus_order_checks(path: Path) -> list[dict]:
     return detect(path)
 
 
+@criteria('1.3.5')
 def docx_input_purpose_checks(path: Path) -> list[dict]:
     """1.3.5 Identify Input Purpose — DOCX. Implementation: formats/docx/detectors/input_purpose.py.
 
@@ -2065,6 +2096,7 @@ def docx_input_purpose_checks(path: Path) -> list[dict]:
         return []
 
 
+@criteria('1.3.5')
 def pdf_input_purpose_checks(path: Path) -> list[dict]:
     """1.3.5 Identify Input Purpose — PDF. Implementation: formats/pdf/detectors/input_purpose.py.
 
@@ -2078,6 +2110,7 @@ def pdf_input_purpose_checks(path: Path) -> list[dict]:
         return []
 
 
+@criteria('2.5.3')
 def pdf_label_in_name_checks(path: Path) -> list[dict]:
     """2.5.3 Label in Name — PDF. Implementation: formats/pdf/detectors/label_in_name.py.
 
@@ -2093,6 +2126,7 @@ def pdf_label_in_name_checks(path: Path) -> list[dict]:
         return []
 
 
+@criteria('1.1.1')
 def pdf_non_text_content_checks(path: Path) -> list[dict]:
     """1.1.1 findings per tagged /Figure with no /Alt. Implementation: formats/pdf/detectors/
     non_text_content.py.
@@ -2106,6 +2140,7 @@ def pdf_non_text_content_checks(path: Path) -> list[dict]:
     return detect(path)
 
 
+@criteria('1.1.1')
 def office_non_text_content_checks(path: Path, ext: str) -> list[dict]:
     """1.1.1 findings per docx/pptx/xlsx image with no usable alt text. Implementations:
     formats/<fmt>/detectors/non_text_content.py, one per format (the rules index reads a
@@ -2245,6 +2280,7 @@ _AV_EXTS = (".mp4", ".mov", ".avi", ".mkv", ".webm",
             ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg")
 
 
+@criteria('1.2.1', '1.2.2')
 def media_caption_checks(path: Path) -> list[dict]:
     """1.2.1/1.2.2 findings for a media file, via the registry-backed detector.
 
@@ -2286,6 +2322,7 @@ _AUTOPLAY_COND = re.compile(r'<p:cond[^>]*\bdelay="0"')
 _ONCLICK_COND = re.compile(r'<p:cond[^>]*\bevt="onClick"')
 
 
+@criteria('1.4.2')
 def pptx_audio_autoplay_checks(path: Path) -> list[dict]:
     """One 1.4.2 finding per slide whose embedded audio auto-starts. Never raises —
     structural checks must not fail a scan."""
@@ -2397,6 +2434,7 @@ def _controls_phrase(controls: list[dict]) -> str:
 _NAME_ROLE_PROVEN = {".docx": {"interactive content control"}}
 
 
+@criteria('2.1.2', '4.1.2')
 def office_control_review_checks(path: Path, ext: str) -> list[dict]:
     """REVIEW findings for 2.1.2 + 4.1.2 when a document embeds interactive controls
     (ADR 0023). Advisory only — carries the concrete control evidence, never a pass,
@@ -2405,7 +2443,9 @@ def office_control_review_checks(path: Path, ext: str) -> list[dict]:
     if not controls:
         return []
     phrase = _controls_phrase(controls)
-    out = [_review_finding(
+    out = []
+    if sc_enabled("2.1.2"):
+        out = [_review_finding(
         "OFFICE_INTERACTIVE_CONTROL_KEYBOARD", "2.1.2 No Keyboard Trap",
         f"document embeds {phrase} — verify keyboard focus can move away from every "
         "control (no keyboard trap); ACP can't confirm this statically")]
@@ -2421,7 +2461,7 @@ def office_control_review_checks(path: Path, ext: str) -> list[dict]:
     # precise check that replaced it.
     proven = _NAME_ROLE_PROVEN.get((ext or "").lower(), set())
     unproven = [c for c in controls if c["type"] not in proven]
-    if unproven:
+    if sc_enabled("4.1.2") and unproven:
         out.append(_review_finding(
             "OFFICE_INTERACTIVE_CONTROL_NAME_ROLE", "4.1.2 Name, Role, Value",
             f"document embeds {_controls_phrase(unproven)} — verify each control exposes an "
@@ -2440,6 +2480,7 @@ _CF_RULE = re.compile(r"<cfRule\b[^>]*>")
 _W_U_NONE = re.compile(r'<w:u\b[^>]*w:val="none"')
 
 
+@criteria('1.4.1')
 def office_color_only_checks(path: Path, ext: str) -> list[dict]:
     """REVIEW findings for 1.4.1 when colour appears to carry meaning on its own. Never raises."""
     ext = (ext or "").lower()
@@ -2518,6 +2559,7 @@ def office_color_only_checks(path: Path, ext: str) -> list[dict]:
 # placeholder precedes the TITLE placeholder in that order, assistive tech reaches the slide's
 # content before its heading — a focus/reading-order anomaly. Advisory: a human confirms the
 # intended order (some layouts are legitimately title-last).
+@criteria('2.4.3')
 def pptx_focus_order_checks(path: Path) -> list[dict]:
     """One REVIEW finding for 2.4.3 per slide whose title placeholder is not the first
     placeholder in document order. Never raises."""
@@ -2551,6 +2593,7 @@ def pptx_focus_order_checks(path: Path) -> list[dict]:
 # invisible boundary — a 1.4.11 risk IF the shape conveys meaning (a human confirms it isn't
 # purely decorative). Border-vs-fill is fully determined by explicit colours, so no fragile
 # slide-background assumption is needed; both are measured with the same WCAG math as 1.4.3.
+@criteria('1.4.11')
 def pptx_nontext_contrast_checks(path: Path) -> list[dict]:
     """One REVIEW finding for 1.4.11 for the lowest-contrast solid outline-on-fill shape (<3:1).
     Never raises."""
@@ -2592,6 +2635,7 @@ def pptx_nontext_contrast_checks(path: Path) -> list[dict]:
                   "required": 3.0, "unit": ":1"})]
 
 
+@criteria('1.4.11')
 def docx_nontext_contrast_checks(path: Path) -> list[dict]:
     """1.4.11 Non-text Contrast (Review) for docx — the lowest-contrast solid outline-on-fill
     DrawingML shape (<3:1). Word's shapes carry the SAME `<a:ln>` outline + `<a:solidFill>` under
@@ -2641,6 +2685,7 @@ def docx_nontext_contrast_checks(path: Path) -> list[dict]:
 _XDR_SPPR = re.compile(r"<(?:xdr:)?spPr\b.*?</(?:xdr:)?spPr>", re.S)
 
 
+@criteria('1.4.11')
 def xlsx_nontext_contrast_checks(path: Path) -> list[dict]:
     """1.4.11 Non-text Contrast (Review) for xlsx — the lowest-contrast solid outline-on-fill
     DrawingML shape (<3:1) across every worksheet's drawing part. Mirrors
@@ -2735,6 +2780,7 @@ def _narrowest_column_fraction(cols: int, widths: list[int]) -> float | None:
     return min(widths) / total
 
 
+@criteria('1.4.10')
 def office_reflow_checks(path: Path, ext: str) -> list[dict]:
     """1.4.10 Reflow (Review) — a table too wide to reflow to a narrow viewport without 2-D
     scrolling. Wide is a structural fact (grid-column count); whether it actually needs scrolling
@@ -2807,6 +2853,7 @@ def _min_exact_line_height_ratio(xml: str, fmt: str) -> float | None:
     return min(ratios) if ratios else None
 
 
+@criteria('1.4.12')
 def office_text_spacing_checks(path: Path, ext: str) -> list[dict]:
     """1.4.12 Text Spacing (Review) — exact (fixed) line spacing blocks the user's spacing
     override, which can clip text. Exact spacing is a deterministic attribute; whether it clips is
@@ -2872,6 +2919,7 @@ def resize_text_locators(src) -> list[dict]:
     return out
 
 
+@criteria('1.4.4')
 def pptx_resize_text_checks(path: Path) -> list[dict]:
     """1.4.4 Resize Text (Review) — a fixed-size text box (auto-fit OFF) holding a lot of text may
     clip when text is enlarged to 200%. no-autofit is deterministic; the clip is a rendered
@@ -2926,6 +2974,7 @@ def hybrid_contrast_locators(src) -> list[dict]:
     return out
 
 
+@criteria('1.4.3')
 def pptx_complex_bg_contrast_checks(path: Path) -> list[dict]:
     """1.4.3 Contrast — HYBRID review tier (ADR 0024). The deterministic core certifies text over
     an explicit SOLID fill; this flags text over a PICTURE or GRADIENT fill, whose effective
