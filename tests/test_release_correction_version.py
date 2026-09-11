@@ -75,11 +75,28 @@ def test_legacy_published_without_exact_digest_stays_unresolved_on_repeated_retr
     assert not any(isinstance(event, tuple) and event[0] == 'receipt' for event in store.events)
 
 
+def _drive_worker_delivery(store, monkeypatch, digest):
+    """Exercise execution-time guards rather than the now-asynchronous submission route."""
+    import core
+    import handlers
+    status = store.release_status
+    store.release_status = lambda *args: {**status(*args), 'scan_id': 'scan-1'}
+    store.stage_work_item_for_job = lambda *args: {'work_item_id': 'work-1'}
+    monkeypatch.setattr(core, 'get_scan_tokens', lambda *args: {'drive': 'fixture-token'})
+    def run():
+        return handlers._publish_file_guarded(
+            {'scan_id': 'scan-1', 'release_id': 'release-1', 'owner': 'owner@example.com',
+             'file': 'one.pdf', 'artifact_digest': 'sha256:' + digest(), 'remediated_at': 'now'},
+            {'id': 'job-1', 'batch_id': 'execution-1', 'attempts': 1, 'max_attempts': 5})
+    return run
+
+
 def test_stale_source_and_revoked_approval_prevent_provider_effects(monkeypatch):
     import core
     import handlers
     import publish
-    from routes import scans
+    import pytest
+    from worker import FatalJobError
     from types import SimpleNamespace
     store = _RouteStore('drive')
     state = {'compliant': 1, 'modified': '2026-09-02', 'revoke_on_read': False}
@@ -93,12 +110,15 @@ def test_stale_source_and_revoked_approval_prevent_provider_effects(monkeypatch)
     monkeypatch.setattr(core, 'store', store)
     monkeypatch.setattr(handlers, '_drive_client', lambda token: service)
     monkeypatch.setattr(publish, 'remediated_content_digest', lambda *args: 'sha256-content')
+    deliver = _drive_worker_delivery(store, monkeypatch, lambda: "sha256-content")
     for revoke in (False, True):
         if revoke:
             state.update(modified='2026-09-01', revoke_on_read=True)
-        result = scans.publish_files('scan-1', _request({'x-drive-token': 'fixture-token'}), {'files': ['one.pdf']})
-        assert result['published'][0]['status'] == 'failed'
-        assert 'Approval' in result['published'][0]['explanation'] if revoke else 'Source changed' in result['published'][0]['explanation']
+        explanation = 'Approval' if revoke else 'Source changed'
+        with pytest.raises(FatalJobError, match=explanation):
+            deliver()
+        assert store.document['status'] == 'failed'
+        assert explanation in store.document['explanation']
     assert 'publish' not in store.events
     assert not any(isinstance(event, tuple) and event[0] in {'receipt', 'reserve'} for event in store.events)
 
@@ -120,7 +140,8 @@ def test_new_correction_retry_reuses_completed_effect_after_persistence_failure(
     import core
     import handlers
     import publish
-    from routes import scans
+    import pytest
+    from worker import ReservationRetryError
     store = _RouteStore('drive')
     artifact = {'bytes': b'A'}
     digest = lambda: hashlib.sha256(artifact['bytes']).hexdigest()
@@ -134,7 +155,8 @@ def test_new_correction_retry_reuses_completed_effect_after_persistence_failure(
         key = kwargs['content_digest']
         if key in effects:
             return {'reused': True, 'status': 'completed', 'receipt': effects[key]}
-        return {'acquired': True, 'effect_id': key, 'reservation_token': key}
+        return {'acquired': True, 'effect_id': key, 'reservation_token': key,
+                'receipt': {'planned_provider_id': 'copy-' + key}}
     store.reserve_side_effect = reserve
     store.finalize_side_effect = lambda effect, token, receipt: effects.update({effect: receipt})
     original_save = store.record_release_document
@@ -153,16 +175,20 @@ def test_new_correction_retry_reuses_completed_effect_after_persistence_failure(
         uploads.append(artifact['bytes'])
         return {'id': digest(), 'url': 'https://example.test/copy', 'checksum': 'provider-md5', 'created': True}
     monkeypatch.setattr(publish, 'archive_copy_publish', upload)
-    request = _request({'x-drive-token': 'fixture'})
-    scans.publish_files('scan-1', request, {'files': ['one.pdf']})
-    scans.publish_files('scan-1', request, {'files': ['one.pdf']})
+    deliver = _drive_worker_delivery(store, monkeypatch, digest)
+    deliver()
+    deliver()
     assert uploads == [b'A']
     artifact['bytes'] = b'B'; fail['once'] = True
-    result = scans.publish_files('scan-1', request, {'files': ['one.pdf']})
-    assert result['published'][0]['status'] == 'queued'  # preserve uncertain-outcome recovery
+    with pytest.raises(ReservationRetryError, match='unconfirmed'):
+        deliver()
+    # The queue retries; B's completed side effect must be reused even though saving its
+    # document receipt failed and the previous version remains the last published row.
+    assert effects[digest()]['provider_id'] == digest()
+    assert store.document['artifact_digest'] == 'sha256:' + hashlib.sha256(b'A').hexdigest()
     assert uploads == [b'A', b'B']
-    scans.publish_files('scan-1', request, {'files': ['one.pdf']})
-    scans.publish_files('scan-1', request, {'files': ['one.pdf']})
+    deliver()
+    deliver()
     assert uploads == [b'A', b'B']
     assert store.document['artifact_digest'] == 'sha256:' + digest()
 
