@@ -5,13 +5,13 @@ import Choices from './RemediationPlanChoices.jsx'
 import { createTestRoot, unmountAll } from './testRoots.js'
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 afterEach(unmountAll)
-it('shows only two questions and an honest disabled budget when AI is enabled', async () => {
+it('shows the document review choice and an honest disabled budget when AI is enabled', async () => {
   const { root, container } = createTestRoot()
   const changed = vi.fn()
   const render = async ai => act(async () => root.render(createElement(Choices, { policy: { rule_based: 0, ai }, onChange: changed })))
   await render(1)
-  expect([...container.querySelectorAll('legend')].map(n => n.textContent)).toEqual(['1. Which changes may ACP apply?', '2. Which tools may ACP use?'])
-  expect(container.querySelectorAll('input[type=radio]')).toHaveLength(5)
+  expect([...container.querySelectorAll('legend')].map(n => n.textContent)).toEqual(['1. Which changes may ACP apply?', '2. Which tools may ACP use?', 'How should AI review your findings?'])
+  expect(container.querySelectorAll('input[type=radio]')).toHaveLength(7)
   expect(container.querySelector('input[type=number]').disabled).toBe(true)
   expect(container.textContent).toContain('Spending limits are not available on this server')
   expect(container.textContent).not.toContain('Your remediation plan')

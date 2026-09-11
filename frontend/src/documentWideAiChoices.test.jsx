@@ -12,15 +12,15 @@ async function mount(policy = base) {
   await act(async () => root.render(createElement(RemediationPlanChoices, { step: 1, policy, onChange, budgetSupported: true })))
   return { container, onChange }
 }
-it('shows a collapsed, opt-in preview with honest support scope and an associated description', async () => {
+it('offers individual or document review with honest support scope', async () => {
   const { container, onChange } = await mount()
   const advanced = container.querySelector('.remediation-document-wide')
-  expect(advanced.open).toBe(false)
-  expect(advanced.textContent).toContain('Initially supports PDF form-field names')
-  expect(advanced.textContent).toContain('Word image descriptions with available image evidence')
-  const checkbox = advanced.querySelector('input')
+  expect(advanced.tagName).toBe('FIELDSET')
+  expect(advanced.textContent).toContain('PDF form-field names')
+  expect(advanced.textContent).toContain('Word image descriptions')
+  const checkbox = advanced.querySelectorAll('input')[1]
   expect(checkbox.checked).toBe(false)
-  expect(checkbox.closest('label').textContent).toContain('Document-wide AI fixes (preview)')
+  expect(checkbox.closest('label').textContent).toContain('Review the document together')
   expect(container.querySelector(`[id="${checkbox.getAttribute('aria-describedby')}"]`)).toBeTruthy()
   await act(async () => checkbox.click())
   expect(onChange).toHaveBeenCalledWith('document_wide_ai', true)
@@ -31,11 +31,11 @@ it('hides the option for rules only', async () => {
 })
 it('explains local-only unavailability and prevents selecting cloud processing', async () => {
   const { container } = await mount({ ...base, ai_zone: 'local' })
-  expect(container.querySelector('.remediation-document-wide input').disabled).toBe(true)
-  expect(container.querySelector('.remediation-document-wide').textContent).toContain('no document is sent to a cloud provider')
+  expect(container.querySelectorAll('.remediation-document-wide input')[1].disabled).toBe(true)
+  expect(container.querySelector('.remediation-document-wide').textContent).toContain('Choose Cloud AI to review the document together')
 })
 it('reflects previously selected consent without changing approval settings', async () => {
   const { container, onChange } = await mount({ ...base, document_wide_ai: true, auto_approve_ai: true })
-  expect(container.querySelector('.remediation-document-wide input').checked).toBe(true)
+  expect(container.querySelectorAll('.remediation-document-wide input')[1].checked).toBe(true)
   expect(onChange).not.toHaveBeenCalled()
 })

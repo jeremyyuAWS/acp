@@ -145,3 +145,17 @@ def remediation_plan_estimate(sid: str, body: ImpactPreviewRequest, request: Req
     from remediation_cohort_estimates import read_plan_estimate
     preview = remediation_impact_preview(sid, body, request, response)
     return read_plan_estimate(core.store, _impact_owner(request), preview)
+
+
+@router.get('/scans/{sid}/remediation/accepted-plan/{run_id}')
+def accepted_remediation_plan(sid: str, run_id: str, request: Request, response: Response):
+    import core
+    from accepted_remediation_plan import read_accepted_plan
+    owner = _impact_owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, 'scan not found')
+    result = read_accepted_plan(core.store, owner, sid, run_id)
+    if result is None:
+        raise HTTPException(404, 'Accepted remediation run not found')
+    response.headers['Cache-Control'] = 'no-store'
+    return result

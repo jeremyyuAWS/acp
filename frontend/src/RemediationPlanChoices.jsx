@@ -112,18 +112,25 @@ export default function RemediationPlanChoices({ step = null, answers, policy, d
           <RemediationOptionHelp label="AI waterfall">Cloud models draft and review supported suggestions. Later models run after an empty or incomplete suggestion. Your approval choice and spending limit apply throughout the run.</RemediationOptionHelp>
         </div>
       </div>
-      {policy.ai > 0 && <details className="remediation-document-wide">
-        <summary>Advanced AI options</summary>
-        <label>
-          <input type="checkbox" checked={policy.document_wide_ai === true}
-            disabled={disabled || !budgetSupported || localOnly}
-            onChange={event => onChange('document_wide_ai', event.target.checked)}
-            aria-describedby={`${id}-document-wide-note`} />
-          <span>Document-wide AI fixes (preview)</span>
-        </label>
-        <p id={`${id}-document-wide-note`}>Give AI document context and the selected assessment findings together. Initially supports PDF form-field names and Word image descriptions with available image evidence. Other findings continue through the usual process. Your spending limit and approval choice still apply.</p>
-        {localOnly && <p>Document-wide AI is currently available only with Cloud AI. Local Ollama continues to support individual suggestions; no document is sent to a cloud provider.</p>}
-      </details>}
+      {policy.ai > 0 && (answers === undefined || answers.tools) && <fieldset className="remediation-document-wide">
+        <legend>How should AI review your findings?</legend>
+        <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
+          <label className={!policy.document_wide_ai ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-document-mode`} checked={!policy.document_wide_ai}
+              onChange={() => onChange('document_wide_ai', false)} />
+            <span><strong>Fix findings individually</strong><span>Send the relevant text or image for each supported issue.</span></span>
+          </label>
+          <label className={policy.document_wide_ai ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-document-mode`} checked={policy.document_wide_ai === true}
+              disabled={disabled || !budgetSupported || localOnly}
+              onChange={() => onChange('document_wide_ai', true)} aria-describedby={`${id}-document-wide-note`} />
+            <span><strong>Review the document together</strong><span>Send document context and selected findings together for a coordinated set of suggestions. Preview · Cloud AI</span></span>
+          </label>
+        </div>
+        <p id={`${id}-document-wide-note`}>Document review sends extracted text and supported images, rather than uploading the original file. It currently supports Word image descriptions and PDF form-field names, within extraction and spending limits. Other findings follow the usual process. Document review uses the primary model and at most one fallback.</p>
+        {policy.document_wide_ai && <p>Your approval choice still applies. AI-written content stays marked as needing verification until its meaning is reviewed.</p>}
+        {localOnly && <p>Choose Cloud AI to review the document together. Local Ollama can provide individual suggestions.</p>}
+      </fieldset>}
     </fieldset>
     <div hidden={step !== null && step !== 2}>
       {/* Where content actually goes, before Start. Read from the server's verified

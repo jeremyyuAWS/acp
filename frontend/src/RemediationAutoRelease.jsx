@@ -7,7 +7,7 @@ import './remediation-auto-release.css'
 const ACTIVE = new Set(['active', 'waiting', 'processing', 'publishing', 'blocked'])
 const FILE_STATUS = { published: 'Delivered', publishing: 'Checking delivery', processing: 'Publishing', waiting: 'Waiting', blocked: 'Needs attention', failed: 'Needs attention', stopped: 'Stopped' }
 const defaultClient = { get: getAutomaticRelease, enable: enableAutomaticRelease, stop: stopAutomaticRelease, resume: resumeAutomaticRelease }
-export default function RemediationAutoRelease({ scanId, files = [], readOnly = false, client = defaultClient, onStatus }) {
+export default function RemediationAutoRelease({ scanId, files = [], readOnly = false, client = defaultClient, onStatus, statusOnly = false }) {
   const descriptionId = useId()
   const [state, setState] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -67,6 +67,7 @@ export default function RemediationAutoRelease({ scanId, files = [], readOnly = 
       if (currentKey.current === frozenKey) { setUnconfirmed(true); setError(e?.message || 'The change was not confirmed. Refresh status before trying again.') }
     } finally { lock.current = false; setBusy(false) }
   }
+  if (statusOnly) return null
   return <section className="rem-auto-release" aria-label="Automatic release">
     <label className="rem-auto-release-option">
       <input type="checkbox" checked={enabled} disabled={loading || busy || unconfirmed || readOnly || (!enabled && (!state?.available || !scope.length))}
