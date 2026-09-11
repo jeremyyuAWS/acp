@@ -97,6 +97,45 @@ def _register_scan_tokens(scan_id: str, *, drive: str | None = None,
 logger = logging.getLogger(__name__)
 
 
+def _log_release_provider_error(exc: Exception, *, scan_id: str, file: str,
+                                release_id: str, provider: str, uncertain: bool) -> dict:
+    """Log allowlisted metadata, never exception text or provider response bodies.
+
+    Google HTTP errors expose ``resp``; requests/Graph errors commonly expose
+    ``response``. Only numeric HTTP codes and named correlation headers are read.
+    """
+    diagnostic = {"error_type": type(exc).__name__[:80]}
+    for response in (getattr(exc, "resp", None), getattr(exc, "response", None), exc):
+        if response is None:
+            continue
+        status = getattr(response, "status_code", None)
+        if status is None:
+            status = getattr(response, "status", None)
+        if isinstance(status, (str, int)) and not isinstance(status, bool):
+            status_text = str(status)
+            if re.fullmatch(r"[1-5][0-9]{2}", status_text):
+                diagnostic.setdefault("http_status", int(status_text))
+        headers = getattr(response, "headers", None)
+        if headers is None and hasattr(response, "get"):
+            headers = response
+        if headers is not None and hasattr(headers, "get"):
+            for name in ("request-id", "x-request-id", "x-goog-request-id",
+                         "x-guploader-uploadid"):
+                value = headers.get(name) or headers.get(name.title())
+                if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value):
+                    diagnostic.setdefault("provider_request_id", value)
+    from telemetry import document_id
+    document_key = document_id(scan_id, file)
+    # Follow telemetry's HMAC convention; omit document identity without its salt.
+    logger.warning("release_provider_error %s", _json.dumps({
+        "scan_id": str(scan_id)[:128],
+        **({"document_id": document_key} if document_key else {}),
+        "release_id": str(release_id)[:128], "provider": provider,
+        "outcome_uncertain": uncertain, **diagnostic,
+    }, ensure_ascii=True, sort_keys=True))
+    return diagnostic
+
+
 def _enqueue_stage_batch(*args, **kwargs) -> dict:
     """Enqueue one stage execution, presenting the store's single-flight fence as API state."""
     try:
@@ -3950,31 +3989,45 @@ def publish_files(sid: str, request: Request, body: dict):
             finish_synchronous(f, "failed", result)
         except PermissionError as exc:
             uncertain = bool(reservation and reservation.get("acquired"))
+            diagnostic = _log_release_provider_error(
+                exc, scan_id=sid, file=f, release_id=release_id,
+                provider=source, uncertain=uncertain)
+            status_hint = (f" (HTTP {diagnostic['http_status']})"
+                           if "http_status" in diagnostic else "")
             result = {"file": f, "source_document_id": record.get("drive_file_id") or f,
                             "original_relative_path": source_path,
                             "released_relative_path": None,
                             "status": "queued" if uncertain else "failed",
                             **({} if uncertain else {
                                 "failure_category": "provider_permission_denied"}),
-                            "explanation": ("The provider outcome is uncertain; Release will "
-                                            "verify or retry after the reservation expires."
-                                            if uncertain else str(exc)), "created": False}
+                            "explanation": (("The provider outcome is uncertain. Access was denied; "
+                                             "check the connection and destination permissions. "
+                                             "Verify the existing copy before retrying."
+                                             if uncertain else "Access to the release destination was denied. "
+                                             "Reconnect the provider and check destination permissions.")
+                                            + status_hint), "created": False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
             if not uncertain:
                 finish_synchronous(f, "failed", result)
-        except Exception:
+        except Exception as exc:
             uncertain = bool(reservation and reservation.get("acquired"))
+            diagnostic = _log_release_provider_error(
+                exc, scan_id=sid, file=f, release_id=release_id,
+                provider=source, uncertain=uncertain)
+            status_hint = (f" (HTTP {diagnostic['http_status']})"
+                           if "http_status" in diagnostic else "")
             result = {"file": f, "source_document_id": record.get("drive_file_id") or f,
                             "original_relative_path": source_path,
                             "released_relative_path": None,
                             "status": "queued" if uncertain else "failed",
                             **({} if uncertain else {
                                 "failure_category": "provider_write_failed"}),
-                            "explanation": ("The provider outcome is uncertain; Release will "
-                                            "verify or retry after the reservation expires."
-                                            if uncertain else "The corrected copy could not be "
-                                            "verified at the release destination. Retry this document."),
+                            "explanation": (("The provider outcome is uncertain. Delivery could not be "
+                                             "confirmed; verify the existing copy before retrying."
+                                             if uncertain else "The corrected copy could not be "
+                                             "verified at the release destination. Retry this document.")
+                                            + status_hint),
                             "created": False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
