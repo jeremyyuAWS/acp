@@ -1012,6 +1012,8 @@ export default function RemediationInbox({
           completed: 'These issues are complete. Select an item to inspect its recorded result.',
         }[tab]}</p>
         <WorkspaceProgress queue={queue} decisions={decisions} selected={selected} />
+        <ReviewQueueTabs queue={queue} decisions={decisions} scanId={scanId} value={tab} disabled={savingId != null}
+          onChange={value => { setBulkPreviewOpen(false); setBatchScopeIds(null); setTab(value) }} />
       </>}
       <div className="rinbox" data-layout="two-column" data-narrow={narrow ? narrowPane : undefined} ref={rowRef} style={{ display: bulkPreviewOpen ? 'none' : 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: '0 0 12px 12px', overflow: 'hidden', minHeight: 480 }}>
       {/* ── Left: the work queue — find and select the next finding (resizable) ── */}
@@ -1020,8 +1022,6 @@ export default function RemediationInbox({
                     display: narrow && narrowPane !== 'queue' ? 'none' : 'flex', flexDirection: 'column', minHeight: 480 }}>
         <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Review queue</div>
-          <ReviewQueueTabs queue={queue} decisions={decisions} scanId={scanId} value={tab} disabled={savingId != null}
-            onChange={value => { setBulkPreviewOpen(false); setBatchScopeIds(null); setTab(value) }} />
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <input type="search" value={search} onChange={(e) => setSearch(e.target.value)}
                    placeholder="Search documents" aria-label="Search documents"
