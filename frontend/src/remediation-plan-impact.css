@@ -12,3 +12,7 @@
 @keyframes plan-delta { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .plan-impact__delta { animation: none; } }
 @media (max-width: 560px) { .plan-impact__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.plan-impact__outside { grid-column: 1 / -1; color: #765000; background: #fff8e6; }
+.plan-impact__outside > span:first-child { min-height: auto; }
+.plan-impact__outside p { margin: 6px 0 0; }
