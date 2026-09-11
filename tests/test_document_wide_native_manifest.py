@@ -1,6 +1,6 @@
 from dataclasses import replace
 from io import BytesIO
-from types import SimpleNamespace
+from types import MappingProxyType
 
 import pikepdf
 import pytest
@@ -36,7 +36,11 @@ def manifest_for(store, monkeypatch, data, mode='native_pdf'):
     rows = setup_manifest(store, monkeypatch, data, 'a.pdf', '1.1.1', ['pdf:fig:1:0', 'pdf:fig:1:1'])
     import llm_waterfall_provider
     context = llm_waterfall_provider.managed_context()
-    context.policy = SimpleNamespace(document_wide_input_mode=mode)
+    from ai_run_policy import RunContext
+    from ai_spending_budget import BudgetLedger
+    context = RunContext(BudgetLedger(store._db), context.owner_id, context.scan_id, context.run_id,
+                         MappingProxyType({'document_wide_input_mode': mode}), file=context.file)
+    monkeypatch.setattr(llm_waterfall_provider, 'managed_context', lambda: context)
     return build_manifest(store, 'scan', 'a.pdf', data), rows
 
 
@@ -101,7 +105,7 @@ def test_native_run_keeps_docx_extracted_image_context(isolated_store, monkeypat
     import llm_waterfall_provider
     data = make_docx()
     setup_manifest(isolated_store, monkeypatch, data, 'a.docx', '1.1.1', ['aggregate-instance:s:1'])
-    llm_waterfall_provider.managed_context().policy = SimpleNamespace(document_wide_input_mode='native_pdf')
+    llm_waterfall_provider.managed_context().policy = {'document_wide_input_mode': 'native_pdf'}
     manifest = build_manifest(isolated_store, 'scan', 'a.docx', data)
     assert manifest.document_format.value == 'docx'
     assert len(manifest.findings) == 1 and len(package_images(data, manifest)) == 1

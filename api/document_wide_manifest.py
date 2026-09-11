@@ -74,7 +74,7 @@ def build_manifest(store, scan_id, filename, data):
     ctx = managed_context()
     if ctx is None or ctx.scan_id != scan_id or ctx.file != filename:
         raise ValueError('document_context_missing')
-    input_mode = getattr(getattr(ctx, 'policy', None), 'document_wide_input_mode', 'extracted')
+    input_mode = (getattr(ctx, 'policy', None) or {}).get('document_wide_input_mode', 'extracted')
     if input_mode not in {'extracted', 'native_pdf'}:
         raise ValueError('document_input_mode_unsupported')
     if input_mode == 'native_pdf' and not filename.lower().endswith('.pdf'):
