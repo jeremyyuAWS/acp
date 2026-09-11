@@ -4542,7 +4542,23 @@ class Store:
             self._bump_scan_revision(cur, scan_id)
         return True
 
-    def find_by_checksum(self, scan_id: str, checksum: str) -> dict | None:
+    def _analysis_covers_scope(self, prior_scan_id: str, prior_file: str,
+                               scan_id: str, filename: str) -> bool:
+        """Reuse only analysis that measured every criterion selected for this file.
+
+        Folder-specific selections can differ inside one scan. Newly selected criteria
+        require fresh assessment, even when the document bytes have not changed.
+        """
+        from assessment_selection import selected_for_file
+        prior = selected_for_file(self.scope_for_file(
+            prior_scan_id, prior_file, self.get_scan_scope(prior_scan_id)), prior_file)
+        current = selected_for_file(self.scope_for_file(
+            scan_id, filename, self.get_scan_scope(scan_id)), filename)
+        if _file_format(prior_file) != _file_format(filename):
+            return False
+        return prior is None or (current is not None and current <= prior)
+
+    def find_by_checksum(self, scan_id: str, checksum: str, *, filename: str | None = None) -> dict | None:
         """Look up an already-analysed file in THIS scan with the same Drive md5Checksum —
         i.e. a byte-identical duplicate uploaded under a different name/folder. Returns a
         dict shaped for save_file_result (ruleId-keyed issues, pii in detect_file's shape)
@@ -4557,6 +4573,8 @@ class Store:
                 (scan_id, checksum))
             row = self._db.fetchone(cur)
             if not row:
+                return None
+            if filename and not self._analysis_covers_scope(scan_id, row["file"], scan_id, filename):
                 return None
             self._db.execute(cur,
                 "SELECT rule_id,wcag,severity,detail,page,location,hf_provenance "
@@ -4592,7 +4610,8 @@ class Store:
                "dedup_of": row["file"]}
 
     def find_prior_analysis(self, owner: str | None, drive_file_id: str | None,
-                            checksum: str | None, rubric_hash: str | None) -> dict | None:
+                            checksum: str | None, rubric_hash: str | None, *,
+                            scan_id: str | None = None, filename: str | None = None) -> dict | None:
         """ADR 0011: reuse a file's analysis from an EARLIER scan (not just this one --
         see find_by_checksum above for the narrower within-scan version). Gated on the
         SAME owner + SAME drive_file_id (stable Drive identity, survives rename) + SAME
@@ -4617,6 +4636,9 @@ class Store:
             if not row:
                 return None
             prior_scan_id = row["scan_id"]
+            if scan_id and filename and not self._analysis_covers_scope(
+                    prior_scan_id, row["file"], scan_id, filename):
+                return None
             self._db.execute(cur,
                 "SELECT rule_id,wcag,severity,detail,page,location,hf_provenance "
                 "FROM issue_records WHERE scan_id=%s AND file=%s",
@@ -10804,12 +10826,21 @@ class Store:
         props = [p for p in (row.get("proposals") or []) if isinstance(p, dict)]
         return bool(props) and all(Store.companion_name(p.get("companion_file")) for p in props)
 
+    def _selected_sc(self, scan_id: str, file: str, rule_id: str) -> bool:
+        from assessment_selection import selected_for_file
+        codes = selected_for_file(self.scope_for_file(
+            scan_id, file, self.get_scan_scope(scan_id)), file)
+        sc = _extract_sc(rule_id)
+        return codes is None or sc in codes
+
     def _approved_unapplied_rows(self, scan_id: str, file: str) -> list[dict]:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT * FROM hitl_queue WHERE scan_id=%s AND file=%s AND status='approved' "
                 "AND (applied IS NULL OR applied=0)", (scan_id, file))
-            return [self._decode_proposals(r) for r in self._db.fetchall(cur)]
+            rows = self._db.fetchall(cur)
+        return [self._decode_proposals(r) for r in rows
+                if self._selected_sc(scan_id, file, r.get("rule_id") or "")]
 
     def count_unapplied_approved_values(self, scan_id: str, file: str) -> int:
         """Approved items holding content the document does not yet carry.
@@ -10847,6 +10878,8 @@ class Store:
                 "SELECT * FROM hitl_queue WHERE scan_id=%s AND status='approved' "
                 "AND (applied IS NULL OR applied=0)", (scan_id,))
             for r in self._db.fetchall(cur):
+                if not self._selected_sc(scan_id, r.get("file") or "", r.get("rule_id") or ""):
+                    continue
                 row = self._decode_proposals(r)
                 owes_nothing = self._row_owes_no_document_content(row)
                 legacy = "" if owes_nothing else (row.get("approved_value") or "").strip()
