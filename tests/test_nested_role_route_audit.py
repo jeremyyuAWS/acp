@@ -51,3 +51,17 @@ def test_normalized_route_descriptors_are_audited_alongside_nested_routers():
     routes = [*nested_app().routes, SimpleNamespace(path='/normalized/new', methods={'POST'})]
     assert capmap.unmapped_routes(routes) == [
         ('GET', '/outer/nested/secret/{item}'), ('POST', '/normalized/new')]
+
+
+def test_real_raw_app_routes_include_framework_docs_without_false_blockers(monkeypatch):
+    from app import app
+    # Exactly the shape the production Settings readiness endpoint passes.
+    assert capmap.unmapped_routes(app.routes) == []
+    monkeypatch.setattr(core, '_PROTECTED_ROUTES', core.enumerate_api_routes(app))
+    for path in ('/docs', '/docs/oauth2-redirect', '/openapi.json', '/redoc'):
+        assert core.is_public(path) is True  # preserve existing authentication behavior
+        assert capmap.is_exempt('GET', path)
+        assert not capmap.is_exempt('POST', path)
+    from types import SimpleNamespace
+    assert capmap.unmapped_routes([*app.routes, SimpleNamespace(path='/new-private-api', methods={'GET'})]) == [
+        ('GET', '/new-private-api')]

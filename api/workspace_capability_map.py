@@ -506,6 +506,13 @@ _map_many([("GET", "/scans/{sid}/remediation/accepted-plan/{run_id}")], {"remedi
 # Each entry says WHY. An exemption without one is indistinguishable from an oversight, and the
 # completeness test refuses a route that is in neither table.
 EXEMPT: dict[tuple[str, str], str] = {
+    # FastAPI framework routes are Starlette Routes, not APIRoutes. They are
+    # already outside core's protected API enumeration and publicly served.
+    # A raw route audit must account for them without changing that auth policy.
+    ("GET", "/docs"): "existing public framework API documentation, no customer records",
+    ("GET", "/docs/oauth2-redirect"): "existing public Swagger OAuth redirect helper",
+    ("GET", "/openapi.json"): "existing public API schema, no customer records",
+    ("GET", "/redoc"): "existing public framework API documentation, no customer records",
     ("GET", "/healthz"): "liveness probe — must answer before anything is configured",
     ("GET", "/readyz"): "readiness probe — same",
     ("GET", "/probe/readyz"): "readiness probe — same",
