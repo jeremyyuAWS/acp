@@ -7248,6 +7248,26 @@ class Store:
                 "value=EXCLUDED.value,source=EXCLUDED.source,thumb=EXCLUDED.thumb,created_at=EXCLUDED.created_at",
                 (scan_id, file, rule_id, seq, value, source, thumb, now))
 
+    def scan_ai_activity(self, scan_id: str) -> dict:
+        """Bounded recorded responses, distinct from configured providers or call reservations.
+
+        Failed rows include pre-transport blocks (for example circuit_open), so only successful
+        responses prove a provider answered. Never label all telemetry rows as requests made.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT zone,provider,model,COUNT(*) AS records,COALESCE(SUM(ok),0) AS succeeded "
+                "FROM ai_calls WHERE scan_id=%s GROUP BY zone,provider,model ORDER BY zone,provider,model",
+                (scan_id,))
+            groups = [dict(r) for r in self._db.fetchall(cur)]
+            self._db.execute(cur,
+                "SELECT reason,COUNT(*) AS records FROM ai_calls WHERE scan_id=%s AND ok=0 "
+                "GROUP BY reason ORDER BY records DESC", (scan_id,))
+            reasons = [dict(r) for r in self._db.fetchall(cur)]
+        return {"available": True, "groups": groups, "reasons": reasons,
+                "records": sum(r["records"] for r in groups),
+                "succeeded": sum(r["succeeded"] for r in groups)}
+
     def record_ai_call(self, *, surface: str, provider: str, model: str, zone: str,
                        latency_ms: int, ok: bool, scan_id: str | None = None,
                        file: str | None = None, cost_usd: float = 0.0,
@@ -14552,6 +14572,12 @@ class Store:
                                "total": domain_reconciliation.get("total"),
                                "accounted": domain_reconciliation.get(
                                    "accounted", domain_reconciliation.get("partitioned"))})
+        ai_activity = None
+        if execution["stage"] == "assess" and execution.get("scan_id"):
+            try:
+                ai_activity = self.scan_ai_activity(execution["scan_id"])
+            except Exception:
+                ai_activity = {"available": False}
         return {
             "workflow_id": execution["workflow_id"],
             "workflow_revision": int(execution["workflow_revision"]),
@@ -14591,6 +14617,7 @@ class Store:
             },
             "domain_reconciliation": domain_reconciliation,
             "assessment_summary": assessment_summary,
+            "ai_activity": ai_activity,
             "integrity": {"ok": not violations,
                           "affected": sorted({violation["code"] for violation in violations}),
             "violations": violations},

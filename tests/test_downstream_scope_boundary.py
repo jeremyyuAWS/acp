@@ -89,3 +89,15 @@ def test_image_text_proposer_does_not_run_unselected_strict_check(monkeypatch):
         out=proposals.propose_images_of_text(Path('a.docx'),'.docx')
     assert thresholds == [ocr._MIN_PIXELS]
     assert out[0]['sc']=='1.4.5'
+
+
+def test_ai_activity_reports_only_recorded_same_scan_evidence(monkeypatch,tmp_path):
+    monkeypatch.setattr(store_mod,'_SQLITE_PATH',tmp_path/'activity.db')
+    st=store_mod.Store()
+    for sid,ok,reason in [('scan',True,None),('scan',False,'circuit_open'),('another',True,None)]:
+        st.record_ai_call(surface='vision',provider='ollama',model='llava',zone='cloud',
+                          latency_ms=0,ok=ok,reason=reason,scan_id=sid)
+    activity=st.scan_ai_activity('scan')
+    assert activity['records']==2 and activity['succeeded']==1
+    assert activity['reasons']==[{'reason':'circuit_open','records':1}]
+    assert activity['groups'][0]['provider']=='ollama'

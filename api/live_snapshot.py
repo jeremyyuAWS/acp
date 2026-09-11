@@ -218,7 +218,7 @@ def build_snapshot(store, scan_id: str, owner: str | None = None, now_iso: str |
     visibility_scope = None
     if isinstance(raw_scope, dict):
         visibility_scope = {key: raw_scope[key] for key in (
-            "kind", "folder_name", "folders", "site", "site_name", "sites",
+            "kind", "folder_name", "folders", "site", "site_name", "sites", "scan_scope",
         ) if key in raw_scope}
 
     snap = {
@@ -267,6 +267,12 @@ def build_snapshot(store, scan_id: str, owner: str | None = None, now_iso: str |
     second_opinion = _second_opinion_block(store, scan_id)
     if second_opinion is not None:
         snap["second_opinion"] = second_opinion
+    usage_reader = getattr(store, "scan_ai_activity", None)
+    if callable(usage_reader):
+        try:
+            snap["ai_activity"] = usage_reader(scan_id)
+        except Exception:
+            snap["ai_activity"] = {"available": False}
     return snap
 
 

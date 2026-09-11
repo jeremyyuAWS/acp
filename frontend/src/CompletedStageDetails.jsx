@@ -56,6 +56,7 @@ export function completedAssessSnapshot(snapshot) {
       ...(hasFindings ? { findings_so_far: findings } : {}) },
     kpis_pending: [...(hasFindings ? [] : ['findings_so_far']), 'need_attention', 'unable_to_assess'],
     source: snapshot?.source || null, scope: snapshot?.scope || null,
+    ai_activity: snapshot?.ai_activity || null,
     _live: { measuredAt: snapshot?.last_durable_update_at || snapshot?.generated_at || null,
       mode: 'complete' },
   }

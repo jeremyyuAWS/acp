@@ -43,7 +43,7 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
   const byStage = new Map(snapshots.map((snapshot) => {
     const sameAssessment = assessmentFindings?.scanId === lineage?.scan_id
       && (!snapshot.input_manifest_id || !assessStage?.output_manifest_id || snapshot.input_manifest_id === assessStage.output_manifest_id)
-    const scoped = snapshot.stage === 'discover' && discoveryScope?.scanId === lineage?.scan_id && discoveryScope?.scope
+    const scoped = ['discover', 'assess'].includes(snapshot.stage) && discoveryScope?.scanId === lineage?.scan_id && discoveryScope?.scope
       ? { ...snapshot, scope: discoveryScope.scope } : snapshot
     const aligned = alignRemediationAssessment(scoped, sameAssessment ? assessmentFindings?.total : null)
     const omitted = sameAssessment && snapshot.stage === 'remediate'
