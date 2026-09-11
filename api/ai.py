@@ -134,7 +134,9 @@ def _leave_vision_capacity() -> None:
 def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs) -> dict:
     """Run one provider request inside the shared GPU admission limit."""
     from llm_waterfall_provider import managed_context, defer_managed
-    if managed_context() is not None:
+    _run = managed_context()
+    from providers import OllamaVisionProvider
+    if _run is not None and not (getattr(_run, 'local_drafting', False) and isinstance(provider, OllamaVisionProvider)):
         defer_managed('legacy_ai_path_not_budgeted', kind='_bounded_vision_generate')
         return {'ok': False, 'text': None, 'reason': 'vision_pricing_not_verified', 'model': 'not-dispatched'}
     if not _enter_vision_capacity():
@@ -567,7 +569,8 @@ def vision_is_available() -> bool:
     Distinct from is_available(): a text-only Ollama is 'available' but cannot describe
     images, so the alt-text remediator must gate genuine captioning on this, not is_available."""
     from llm_waterfall_provider import managed_context, defer_managed
-    if managed_context() is not None:
+    _run = managed_context()
+    if _run is not None and not getattr(_run, 'local_drafting', False):
         defer_managed('vision_pricing_not_verified', kind='vision')
         return False
     _maybe_refresh_endpoint()
@@ -592,7 +595,8 @@ def vision_unavailable_reason() -> str | None:
     store knows that.
     """
     from llm_waterfall_provider import managed_context, defer_managed
-    if managed_context() is not None:
+    _run = managed_context()
+    if _run is not None and not getattr(_run, 'local_drafting', False):
         defer_managed('vision_pricing_not_verified', kind='vision')
         return 'Vision is deferred: no verified spending bound for this run'
     _maybe_refresh_endpoint()
@@ -771,7 +775,8 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     genuine cross-check). `clean=False` returns the raw reply (the validator parses its own format
     rather than an alt string)."""
     from llm_waterfall_provider import managed_context, defer_managed
-    if managed_context() is not None:
+    _run = managed_context()
+    if _run is not None and not getattr(_run, 'local_drafting', False):
         defer_managed('legacy_ai_path_not_budgeted', kind='_vision_generate')
         return None
     import time as _t
@@ -781,7 +786,9 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     # provider/zone/cost it reports is what flows into the trace, so a cloud adapter records its
     # real cost and zone here without touching this function again. generate() never raises.
     import providers as _providers
-    prov = _providers.active_vision_provider()
+    # A local-only plan must not inherit a configured paid vision provider.
+    prov = (_providers.OllamaVisionProvider(OLLAMA_BASE_URL, OLLAMA_VISION_MODEL)
+            if _run is not None else _providers.active_vision_provider())
     mdl = model or getattr(prov, "model", None) or OLLAMA_VISION_MODEL
     endpoint = (getattr(prov, "base_url", None) or getattr(prov, "url", None)
                 or getattr(prov, "endpoint", None) or "")
@@ -1452,7 +1459,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
         from ai_generation_adapter import current_generation_adapter
         if current_generation_adapter() is not None:
             scan_id, file = _managed_run.scan_id, _managed_run.file
-    if _managed_run is not None and rule_id == "1.1.1":
+    if _managed_run is not None and rule_id == "1.1.1" and not getattr(_managed_run, "local_drafting", False):
         defer_managed('vision_pricing_not_verified', kind='alt_text')
         return None
     if rule_id == "1.1.1" and image_bytes:
