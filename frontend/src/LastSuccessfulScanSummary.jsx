@@ -144,7 +144,7 @@ export default function LastSuccessfulScanSummary({
         <ResultTile label="Discovered" value={nf.format(discovered)}
                     detail={`${plural(discovered, 'file', 'files')} discovered · this scan`} />
         {hasInventory && <ResultTile label="Inventoried" value={nf.format(inventoryCount)} detail="saved files · matches Discover above" />}
-        {valid(excluded) && <ResultTile label="Excluded" value={nf.format(excluded)} detail="ACP-generated outputs or policy exclusions; not assessed again" />}
+        {valid(excluded) && <ResultTile label="Excluded" value={nf.format(excluded)} detail={run.source === 'drive' ? 'ACP-generated files excluded from rescanning' : 'Excluded from assessment by the source listing policy'} />}
         <ResultTile label="Eligible" value={result.assessable == null ? '—' : nf.format(result.assessable)}
                     detail={result.assessable == null
                       ? 'Assessable count was not recorded'

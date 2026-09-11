@@ -439,7 +439,9 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
         const valid = value => Number.isSafeInteger(value) && value >= 0
         if (valid(summary.discovered) && valid(buckets.excluded)) {
           sublines.push(`${n(summary.discovered)} files found at the source`)
-          sublines.push(`${n(buckets.excluded)} excluded — ACP-generated outputs or policy exclusions`)
+          sublines.push((source === 'drive' || scope?.kind === 'drive')
+            ? `${n(buckets.excluded)} ACP-generated files excluded from rescanning`
+            : `${n(buckets.excluded)} excluded — see the recorded source exclusion policy`)
           if (summary.discovered === filesFound + buckets.excluded) {
             sublines.push(`${n(filesFound)} inventoried + ${n(buckets.excluded)} excluded = ${n(summary.discovered)} found`)
           } else {
