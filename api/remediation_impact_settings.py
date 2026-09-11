@@ -45,20 +45,15 @@ def normalize_policy(policy):
     if result.get('ai_zone') == 'local':
         from ai_review_policy import normalize_review_policy
         local_review = normalize_review_policy(policy.get('ai_review'))
-        if policy.get('generation_chain') or local_review['enabled'] or policy.get('auto_approve_ai'):
-            raise ValueError('Local-only Ollama drafts require human review; cloud review and fallback chains are not permitted.')
+        if policy.get('generation_chain') or local_review['enabled']:
+            raise ValueError('Local-only Ollama does not permit cloud review or fallback chains.')
     if "auto_approve_ai" in policy:
         from ai_standing_approval import normalize
         result['auto_approve_ai'] = normalize(policy['auto_approve_ai'])
-        if result['auto_approve_ai'] and (result['ai'] != 1 or Decimal(result.get('ai_budget_usd', '0')) <= 0):
-            raise ValueError('Automatic approval requires AI enabled and a positive run spending limit.')
-        # Nothing downstream shows an auto-approved proposal to a person before it is
-        # applied and released, so the independent second-model review is the only
-        # remaining check on the draft itself and cannot be optional here. Enforced
-        # again at approval time in ai_standing_approval, which fails closed for runs
-        # queued before this rule existed.
-        if result['auto_approve_ai'] and policy.get('ai_review', {}).get('enabled') is not True:
-            raise ValueError('Automatic approval requires the AI reviewer to be enabled.')
+        if result['auto_approve_ai'] and (result['ai'] != 1 or 'ai_budget_usd' not in result):
+            raise ValueError('Automatic approval requires AI enabled and an explicit run spending limit.')
+        # The accepted run is advance user approval. AI review can remain enabled,
+        # but is not an additional mandatory approval gate for this explicit choice.
     if "generation_chain" in policy:
         from ai_generation_chain import normalize_chain
         result['generation_chain'] = normalize_chain(policy['generation_chain'])

@@ -53,7 +53,7 @@ function PolicySlider({ title, question, stops, value, onChange, disabled, maxLe
   </div>
 }
 
-export default function RemediationImpactCard({ runId, onRun, runBusy = false, myEmail = '', readOnly = false, refreshKey = 0, scopeFiles, assessmentTotal, renderAssessment, releaseOption, requireAnswers = false, releaseAnswered = true }) {
+export default function RemediationImpactCard({ runId, onRun, runBusy = false, myEmail = '', readOnly = false, refreshKey = 0, scopeFiles, assessmentTotal, renderAssessment, releaseOption, requireAnswers = false, releaseAnswered = true, automaticRelease = false }) {
   const [answers, setAnswers] = useState({})
   const [step, setStep] = useState(0)
   const [reached, setReached] = useState(0)
@@ -138,8 +138,20 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   useEffect(() => {
     if (automaticDefault) setPolicy({ ...selected, auto_approve_ai: true })
   }, [automaticDefault, runId])
+  const previousRelease = useRef(false)
+  const beforeRelease = useRef(null)
+  useEffect(() => {
+    if (!previousRelease.current && automaticRelease) beforeRelease.current = { rule_based: selected.rule_based, ai_review: selected.ai_review }
+    if (previousRelease.current && !automaticRelease) setPolicy(current => ({ ...(current || selected), ...beforeRelease.current, auto_approve_ai: false }))
+    previousRelease.current = automaticRelease
+  }, [automaticRelease, runId])
+  const releasePolicy = automaticRelease ? { ...selected, rule_based: 2, auto_approve_ai: selected.ai === 1, ai_review: { enabled: false } } : selected
+  const releasePolicyPending = !!data && automaticRelease && JSON.stringify(releasePolicy) !== JSON.stringify(selected)
+  useEffect(() => {
+    if (releasePolicyPending) setPolicy(releasePolicy)
+  }, [releasePolicyPending, automaticRelease, runId, JSON.stringify(releasePolicy)])
   const chainProblem = generationChainProblem(selected, data?.capabilities?.generation_chain, data?.capabilities?.ai_budget === true)
-  const ready = !automaticDefault && !chainProblem && !!data && estimateResponse?.key === estimateKey && !loading && !error && data.integrity?.complete === true
+  const ready = !releasePolicyPending && !automaticDefault && !chainProblem && !!data && estimateResponse?.key === estimateKey && !loading && !error && data.integrity?.complete === true
   const countDeltas = useForecastDeltas({
     identity: JSON.stringify([runId, scopeKey]), ready,
     policyKey: JSON.stringify([data?.policy?.rule_based, data?.policy?.ai, data?.policy?.ai_budget_usd, data?.policy?.ai_review, data?.policy?.generation_chain, data?.policy?.auto_approve_ai]),
@@ -216,7 +228,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       <div className="remediation-impact__start-summary">
         <strong>{ready ? `${number(data.open?.findings)} findings · ${number(data.open?.files)} files` : 'Preview not ready'}</strong>
         <span>{ready ? `${number(data.lanes?.automatic?.findings)} automatic · ${number(data.lanes?.review?.findings)} to approve · ${number(data.lanes?.manual?.findings)} manual · ${number(data.lanes?.blocked?.findings)} blocked` : 'Review the current preview before starting.'}</span>
-        <span>{selected.ai > 0 && selected.ai_zone === 'local' ? 'Ollama only · Human review · No cloud AI charges' : selected.ai > 0 ? `${selected.auto_approve_ai ? 'Auto-approval on · Manual exceptions only' : 'AI drafts need approval'} · Up to ${generationSteps(selected, data?.capabilities?.generation_chain).length || 2} models${data?.capabilities?.ai_budget === true ? ` · AI limit $${selected.ai_budget_usd}` : ' · Spending cap unavailable'}` : 'Rules only · No new AI suggestions'}</span>
+        <span>{selected.ai > 0 && selected.ai_zone === 'local' ? `Ollama only · ${selected.auto_approve_ai ? 'Automatic application' : 'Human review'} · No cloud AI charges` : selected.ai > 0 ? `${selected.auto_approve_ai ? 'Auto-approval on · Manual exceptions only' : 'AI drafts need approval'} · Up to ${generationSteps(selected, data?.capabilities?.generation_chain).length || 2} models${data?.capabilities?.ai_budget === true ? ` · AI limit $${selected.ai_budget_usd}` : ' · Spending cap unavailable'}` : 'Rules only · No new AI suggestions'}</span>
       </div>
       {!requireAnswers && startButton}
     </div>

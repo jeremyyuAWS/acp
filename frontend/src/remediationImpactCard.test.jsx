@@ -562,3 +562,15 @@ it('shows three bottom dots, prevents skipping, and preserves answers through Ba
   await act(async () => dots()[2].click())
   expect(button(container, 'Approve plan and start')).toBeTruthy()
 })
+
+it.each(['any', 'local'])('automatic release previews and submits AI application for %s, and removing it revokes approval', async zone => {
+  const initial = { rule_based: 0, ai: 1, ai_zone: zone, ai_budget_usd: '0.00', auto_approve_ai: false }
+  getRemediationImpact.mockImplementation(async (_id, policy) => result(policy || initial))
+  const onRun = vi.fn()
+  const { container, root } = await mount({ onRun, automaticRelease: true })
+  expect(getRemediationImpact.mock.calls.at(-1)[1]).toMatchObject({ rule_based: 2, auto_approve_ai: true, ai_zone: zone, ai_budget_usd: '0.00' })
+  await act(async () => button(container, 'Approve plan and start').click())
+  expect(onRun.mock.calls[0][0]).toMatchObject({ rule_based: 2, auto_approve_ai: true, ai_zone: zone })
+  await act(async () => root.render(createElement(RemediationImpactCard, { runId: 'run-1', onRun, automaticRelease: false })))
+  expect(getRemediationImpact.mock.calls.at(-1)[1].auto_approve_ai).toBe(false)
+})

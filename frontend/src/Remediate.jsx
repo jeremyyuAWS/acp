@@ -1872,7 +1872,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         runId={runId}
         workspaceRequest={workspaceRequest}
         plan={<>
-          <RemediationImpactCard requireAnswers releaseAnswered={releaseAnswered} key={`${runId || 'current'}:${planRevision}`} runId={runId}
+          <RemediationImpactCard requireAnswers automaticRelease={!!releasePlanIntent} releaseAnswered={releaseAnswered} key={`${runId || 'current'}:${planRevision}`} runId={runId}
             runBusy={remBusy} readOnly={readOnly} myEmail={myEmail}
             assessmentTotal={assessMetrics(files, { cap, assessment }).totalFindings}
             scopeFiles={impactScope.map(file => file.file)}

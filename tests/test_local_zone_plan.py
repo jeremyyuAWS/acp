@@ -13,7 +13,7 @@ def test_local_zone_survives_plan_normalization_and_denies_cloud_even_with_budge
     assert not ctx.enabled
 
 
-@pytest.mark.parametrize('extra', [dict(ai_review={'enabled': True}), dict(auto_approve_ai=True), dict(generation_chain={'steps': []})])
+@pytest.mark.parametrize('extra', [dict(ai_review={'enabled': True}), dict(generation_chain={'steps': []})])
 def test_local_plan_rejects_cloud_review_or_chain(extra):
     with pytest.raises(ValueError, match='Local-only'):
         normalize_policy(dict(rule_based=2, ai=1, ai_zone='local', ai_budget_usd='0.00', **extra))
