@@ -48,7 +48,7 @@ def test_selection_is_per_file_and_thread_local():
 
 def test_scope_read_failure_never_runs_an_engine(monkeypatch, tmp_path):
     import core
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise RuntimeError('scope unavailable')
     monkeypatch.setattr(core.store, 'get_scan_scope', fail)
     with pytest.raises(RuntimeError, match='scope unavailable'):

@@ -67,7 +67,7 @@ describe('the settings panel includes access, worker and AI governance', () => {
     // capacity now, Scheduling says when ACP should hold more of it. It is READ-ONLY — the
     // writable capacity control stays where it is (queuePanelCapacity.test.jsx).
     expect(tabTexts(await render())).toEqual(
-      ['Owners', 'Users', 'Roles', 'My Data', 'My Scope', 'Worker Configuration', 'Scheduling', 'Release', 'AI Governance', 'Review Memory'])
+      ['Owners', 'Users', 'Roles', 'My Data', 'My Scope', 'Scheduling', 'Release', 'AI Governance', 'Review Memory'])
   })
 
   it('no longer offers any of the removed ADMIN-ONLY tabs', async () => {
@@ -105,16 +105,12 @@ describe('the AI Governance tab', () => {
 // workerReplicaControl.test.jsx for that). Deliberately asserts QueuePanel does NOT render here —
 // the live queue view belongs in Monitor → Workers & Queue, not in a configuration surface (see
 // monitorWorkersQueue.test.jsx for that mount).
-describe('the Worker Configuration tab', () => {
-  it('mounts the capacity control, not the live queue view', async () => {
+describe('retired Worker Configuration tab', () => {
+  it('offers only Scheduling for capacity management', async () => {
     const c = await render()
-    const tabs = [...c.querySelectorAll('button[role="tab"]')]
-    const workerTab = tabs.find((b) => b.textContent.trim() === 'Worker Configuration')
-    expect(workerTab, 'no Worker Configuration tab').toBeTruthy()
-    await act(async () => { workerTab.click() })
-    await settle()
-    expect(c.textContent).toMatch(/Warm capacity/)
-    expect(c.textContent).not.toMatch(/Async job queue/)
+    const names = [...c.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent.trim())
+    expect(names).not.toContain('Worker Configuration')
+    expect(names).toContain('Scheduling')
   })
 })
 

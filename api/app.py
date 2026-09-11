@@ -161,20 +161,28 @@ async def _workspace_capability_gate(request, call_next):
     import workspace_rollout as rollout
     import workspace_roles as wr
 
-    # `off` returns before touching the store, so the default path still pays nothing. From
-    # `observe` up the decision is COMPUTED on every mapped request — including the two rungs that
-    # do not act on it, which is the entire point: observe mode buys the answer to "would this
-    # have refused anybody?" and, incidentally, the answer to the per-request cost question the
-    # comment above leaves open, measured on real traffic instead of guessed at.
-    if not rollout.roles_resolved():
-        return await call_next(request)
-
     route = core.match_registered_route(request.scope.get("path", ""), request.method)
     if route is None:
         return await call_next(request)          # not an API route we know; the gate above owns it
     needed = capmap.required_capabilities(request.method, route.path)
     if not needed:
         return await call_next(request)          # exempt by design — capmap says why
+
+    # Public/exempt routes and static assets do not need a role lookup. For
+    # protected routes a durable-mode read failure must refuse the action, while
+    # preserving the existing retryable database-capacity response.
+    try:
+        roles_resolved = rollout.roles_resolved()
+    except Exception as exc:
+        pool_module = globals().get("_pg_pool")
+        if pool_module is not None and isinstance(exc, pool_module.PoolError):
+            return await _db_pool_exhausted(request, exc)
+        return JSONResponse(status_code=503, content={
+            "detail": "role_permissions_unavailable",
+            "message": "Role permissions could not be checked. Please try again.",
+        }, headers={"Retry-After": "5"})
+    if not roles_resolved:
+        return await call_next(request)
 
     email = getattr(request.state, "user_email", None)
     access = wr.access_for_email(core.store, email, owner_email=core.OWNER_EMAIL,

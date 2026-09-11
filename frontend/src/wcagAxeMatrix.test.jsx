@@ -47,6 +47,8 @@ vi.mock('./api.js', () => ({
   getConfig:          vi.fn(() => Promise.resolve({ auth: 'gis', version: 'v2026.0.0' })),
   setLangfuseBase:    vi.fn(),
   getSettings:        vi.fn(() => Promise.resolve({ scope: { formats: [], criteria: [] }, criteria: [] })),
+  getAssessmentScope: vi.fn(() => Promise.resolve({ scan_scope: '' })),
+  putAssessmentScope: vi.fn(() => Promise.resolve({})),
   updateSettings:     vi.fn(() => Promise.resolve({})),
   fetchCodeset:       vi.fn(() => Promise.resolve({ criteria: [], groups: [] })),
   fetchEligibility:   vi.fn(() => Promise.resolve({ eligible: 0, total: 0 })),

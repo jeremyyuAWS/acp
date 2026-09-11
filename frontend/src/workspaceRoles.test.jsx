@@ -27,6 +27,7 @@ const updateWorkspaceRole = vi.fn(async (id, b) => b)
 const deleteWorkspaceRole = vi.fn(async (id) => ({ deleted: id }))
 const getWorkspaceRolePreflight = vi.fn()
 const bootstrapWorkspaceRoles = vi.fn()
+const putRoleEnforcement = vi.fn()
 
 vi.mock('./api.js', async (importActual) => ({
   ...(await importActual()),
@@ -37,6 +38,7 @@ vi.mock('./api.js', async (importActual) => ({
   deleteWorkspaceRole,
   getWorkspaceRolePreflight,
   bootstrapWorkspaceRoles,
+  putRoleEnforcement,
 }))
 
 const { default: WorkspaceRoles } = await import('./WorkspaceRoles.jsx')
@@ -409,5 +411,32 @@ describe('the role drawer renders outside this component', () => {
     const c = await mount()
     await click(buttonIn(rowFor(c, 'Spare'), 'Edit'))
     expect(document.querySelector('.roles-drawer-scrim').textContent).toContain('Spare')
+  })
+})
+
+
+describe('role enforcement switch', () => {
+  it('saves the requested mode with the current mode as a concurrency check', async () => {
+    ROLES = { ...ROLES, can_manage_enforcement: true, rollout: { mode: 'enforce' } }
+    putRoleEnforcement.mockImplementationOnce(async () => {
+      ROLES = { ...ROLES, enforced: false, rollout: { mode: 'off' } }
+      return { rollout: ROLES.rollout }
+    })
+    const c = await mount()
+    await click(c.querySelector('[role="switch"]'))
+    expect(putRoleEnforcement).toHaveBeenCalledWith({ enabled: false, expected_mode: 'enforce' })
+    expect(c.querySelector('[role="switch"]').checked).toBe(false)
+  })
+  it('does not offer enforcement changes without server authorization', async () => {
+    const c = await mount()
+    expect(c.querySelector('[role="switch"]').disabled).toBe(true)
+  })
+  it('keeps the saved state and displays a rejected change', async () => {
+    ROLES = { ...ROLES, can_manage_enforcement: true, rollout: { mode: 'enforce' } }
+    putRoleEnforcement.mockRejectedValueOnce(new Error('The role configuration changed. Refresh and try again.'))
+    const c = await mount()
+    await click(c.querySelector('[role="switch"]'))
+    expect(c.querySelector('[role="switch"]').checked).toBe(true)
+    expect(c.textContent).toContain('Refresh and try again')
   })
 })

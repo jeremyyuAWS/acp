@@ -105,6 +105,6 @@ def test_the_handler_rescores_under_the_frozen_scope_rather_than_trusting_the_st
         "the recomputed score must overwrite the reused one, not be discarded")
     # PHASE 3a — it must pass the scan's FROZEN scope, not the live global. Without this the reuse
     # would drift with a global setting that moved after the scan started.
-    assert "get_scan_scope(scan_id)" in block, (
+    assert "get_scan_scope(scan_id, refresh=True)" in block, (
         "the reuse re-score must be threaded THIS scan's frozen scope (get_scan_scope), "
         "not the live global — otherwise an old scan's reused score moves when the global does")

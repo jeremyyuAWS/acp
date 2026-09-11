@@ -21,7 +21,7 @@ import { getAcrPublication, publishAcr, getAcrRevisions, reviseAcr,
  *      it when one is. Rendering it as an error would make a one-person team unable to publish.
  */
 
-export default function AcrPublish({ reportId, onChange }) {
+export default function AcrPublish({ reportId, onChange, readOnly = false }) {
   const [ready, setReady] = useState(null)
   const [revs, setRevs] = useState(null)
   const [error, setError] = useState(null)
@@ -128,7 +128,7 @@ export default function AcrPublish({ reportId, onChange }) {
       )}
 
       {!published && ready.may_publish && !confirming && (
-        <button type="button" disabled={busy} onClick={() => setConfirming(true)}>
+        <button type="button" disabled={busy || readOnly} onClick={() => setConfirming(true)}>
           Publish revision {ready.revision}
         </button>
       )}
@@ -139,17 +139,17 @@ export default function AcrPublish({ reportId, onChange }) {
             <strong>This cannot be undone.</strong> Revision {ready.revision} will be frozen as an
             immutable record. Corrections are published as a new revision that supersedes it.
           </p>
-          <button type="button" disabled={busy} onClick={() => act(() => publishAcr(reportId))}>
+          <button type="button" disabled={busy || readOnly} onClick={() => act(() => publishAcr(reportId))}>
             Publish permanently
           </button>
-          <button type="button" disabled={busy} onClick={() => setConfirming(false)}>
+          <button type="button" disabled={busy || readOnly} onClick={() => setConfirming(false)}>
             Cancel
           </button>
         </div>
       )}
 
       {published && (
-        <button type="button" disabled={busy} onClick={() => act(() => reviseAcr(reportId))}>
+        <button type="button" disabled={busy || readOnly} onClick={() => act(() => reviseAcr(reportId))}>
           Start a new revision
         </button>
       )}

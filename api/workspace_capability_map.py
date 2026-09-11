@@ -29,8 +29,8 @@ enforcement ships as a pile of 403s for roles the PRD says should work.
 EXEMPT IS NOT "FORGOTTEN". Every exemption carries a reason, and the three kinds are:
   * unauthenticated by design (health, the public verify endpoint, the SPA's config)
   * identity, which must answer before a role can be known (/me, /me/access, the bootstrap)
-  * a DIFFERENT authorization boundary that PRD §3 says not to disturb — every /acr route is
-    governed by acr_authz per report, and workspace roles must not silently start gating them.
+  * identity and public endpoints that cannot depend on an already-resolved role.
+    ACR routes require workspace access AND retain their per-report acr_authz checks.
 """
 from __future__ import annotations
 
@@ -93,10 +93,13 @@ _map_many([
 # management belong to whoever may RUN discovery, since they are that scan's controls.
 _map_many([("POST", "/scans/{sid}/cancel")], {"assess.cancel", "discover.run"})
 _map_many([
-    ("DELETE", "/scans/{sid}"), ("POST", "/scans/{sid}/drive-token"),
-    ("POST", "/scans/{sid}/sp-token"), ("DELETE", "/scans/{sid}/tokens"),
+    ("DELETE", "/scans/{sid}"), ("DELETE", "/scans/{sid}/tokens"),
     ("PUT", "/scans/{sid}/acknowledge"), ("DELETE", "/scans/{sid}/acknowledge"),
 ], {"discover.run"})
+# Existing scan owners may refresh credentials needed to execute their allowed stage.
+# This does not grant token revocation, new discovery, or access to another owner's scan.
+_map_many([("POST", "/scans/{sid}/drive-token"), ("POST", "/scans/{sid}/sp-token")],
+          {"discover.run", "assess.run", "remediate.run"})
 _map_many([("POST", "/scans/{sid}/comments")], _SCAN_READ)   # commenting is part of reviewing
 _map_many([
     ("PUT", "/scans/{sid}/decisions"), ("PUT", "/scans/{sid}/decisions/{filename:path}"),
@@ -108,8 +111,9 @@ _map_many([("POST", "/scope/rules"), ("PATCH", "/scope/rules/{rule_id}"),
            ("DELETE", "/scope/rules/{rule_id}")], {"discover.run"})
 
 # ── Assess ────────────────────────────────────────────────────────────────────
-_map_many([("POST", "/scans/{sid}/assess"), ("POST", "/scans/{sid}/rescore")], {"assess.run"})
+_map_many([("PUT", "/scans/{sid}/assessment-scope"), ("POST", "/scans/{sid}/assess"), ("POST", "/scans/{sid}/rescore")], {"assess.run"})
 _map_many([
+    ("GET", "/scans/{sid}/assessment-scope"),
     ("GET", "/assess/codeset"), ("GET", "/assess/eligibility"),
     ("GET", "/assess/eligibility/scoped"), ("GET", "/scans/{sid}/traces"),
     ("GET", "/scans/{sid}/ai_calls"), ("GET", "/rules"), ("GET", "/capability"),
@@ -378,6 +382,8 @@ _map_many([
 _map_many([("PUT", "/admin/people/{email}/role"),
            ("GET", "/admin/people/{email}/role-impact")], {"people.manage"})
 _map_many([
+    ("GET", "/admin/workspace-roles/enforcement"),
+    ("PUT", "/admin/workspace-roles/enforcement"),
     ("GET", "/admin/roles"), ("GET", "/admin/roles/{role_id}"), ("GET", "/admin/capabilities"),
     ("POST", "/admin/roles"), ("PUT", "/admin/roles/{role_id}"),
     ("DELETE", "/admin/roles/{role_id}"), ("POST", "/admin/workspace-roles/bootstrap"),
@@ -537,17 +543,48 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("GET", "/scans/{sid}/trace/file/{filename:path}"): "same redirect target, per-file form",
 }
 
-# Every /acr route: a DIFFERENT authorization boundary. PRD §3 — "They must not replace or
-# silently change ACR approval roles, which govern a different authorization boundary" — and §14
-# — "Existing ACR roles remain independently enforced". api/acr_authz.py gates these per report;
-# adding a workspace capability on top would mean a workspace role could silently deny an
-# approver their own report, which is exactly the interference the PRD forbids.
-ACR_PREFIX_EXEMPT = "/acr"
+# Knowledge Graph uses the existing owner-scoped scan payload, not a new data API.
+# Add only read routes: the shared scan capability union also backs comment writes.
+for _key, _caps in tuple(ROUTE_CAPABILITIES.items()):
+    if _key[0] == "GET" and _caps == _SCAN_READ:
+        ROUTE_CAPABILITIES[_key] = _caps | {"graph.view"}
+
+# Conformance workspace permission is additional to every existing per-report check.
+_map_many([
+    ('GET', '/acr'),
+    ('GET', '/acr/editions'),
+    ('GET', '/acr/{report_id}'),
+    ('GET', '/acr/{report_id}/criteria'),
+    ('GET', '/acr/{report_id}/criteria/{criterion_num}'),
+    ('GET', '/acr/{report_id}/gaps'),
+    ('GET', '/acr/{report_id}/criteria/{criterion_num}/plans'),
+    ('GET', '/acr/{report_id}/validation'),
+    ('GET', '/acr/{report_id}/audit'),
+    ('GET', '/acr/{report_id}/preview'),
+    ('GET', '/acr/{report_id}/roles'),
+    ('GET', '/acr/{report_id}/publication'),
+    ('GET', '/acr/{report_id}/revisions'),
+    ('GET', '/acr/{report_id}/revisions/{revision}'),
+    ('GET', '/acr/{report_id}/revisions/{revision}/export'),
+], {"acr.view"})
+_map_many([
+    ('POST', '/acr'),
+    ('PATCH', '/acr/{report_id}'),
+    ('POST', '/acr/{report_id}/evidence/axe'),
+    ('POST', '/acr/{report_id}/criteria/{criterion_num}/applicability'),
+    ('POST', '/acr/{report_id}/criteria/{criterion_num}/evidence'),
+    ('POST', '/acr/{report_id}/criteria/{criterion_num}/decision'),
+    ('POST', '/acr/{report_id}/criteria/{criterion_num}/approve'),
+    ('POST', '/acr/{report_id}/criteria/{criterion_num}/plans/start'),
+    ('POST', '/acr/{report_id}/plans/runs/{run_id}/step'),
+    ('POST', '/acr/{report_id}/plans/runs/{run_id}/complete'),
+    ('PUT', '/acr/{report_id}/roles'),
+    ('POST', '/acr/{report_id}/publish'),
+    ('POST', '/acr/{report_id}/revise'),
+], {"acr.operate"})
 
 
 def is_exempt(method: str, path: str) -> bool:
-    if path == ACR_PREFIX_EXEMPT or path.startswith(ACR_PREFIX_EXEMPT + "/"):
-        return True
     return (method.upper(), path) in EXEMPT
 
 

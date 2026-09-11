@@ -29,10 +29,10 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 
 afterEach(unmountAll)
 
-const api = { getSettings: null, updateSettings: null, fetchCodeset: null, fetchEligibility: null }
+const api = { getAssessmentScope: null, putAssessmentScope: null, fetchCodeset: null, fetchEligibility: null }
 vi.mock('./api.js', () => ({
-  getSettings: (...a) => api.getSettings(...a),
-  updateSettings: (...a) => api.updateSettings(...a),
+  getAssessmentScope: (...a) => api.getAssessmentScope(...a),
+  putAssessmentScope: (...a) => api.putAssessmentScope(...a),
   fetchCodeset: (...a) => api.fetchCodeset(...a),
   fetchEligibility: (...a) => api.fetchEligibility(...a),
 }))
@@ -60,12 +60,12 @@ const BOARD = {
 }
 
 async function render(props = {}, { elig = BOARD, scan_scope = '' } = {}) {
-  api.getSettings = vi.fn(async () => ({ scan_scope }))
-  api.updateSettings = vi.fn(async () => ({}))       // not simulated → a real save
+  api.getAssessmentScope = vi.fn(async () => ({ scan_scope }))
+  api.putAssessmentScope = vi.fn(async () => ({}))       // not simulated → a real save
   api.fetchCodeset = vi.fn(async () => CODESET)
   api.fetchEligibility = vi.fn(async () => elig)
   const { root, container } = createTestRoot()
-  await act(async () => { root.render(createElement(AssessSetup, { onRun: vi.fn(), ...props })) })
+  await act(async () => { root.render(createElement(AssessSetup, { scanId: 'scan-own', onRun: vi.fn(), ...props })) })
   await settle()
   return { c: container }
 }
@@ -189,8 +189,8 @@ describe('the conformance target is derived, never selected', () => {
 
 describe('a missing count renders nothing, never 0', () => {
   it('shows no document count at all while the eligibility fetch has produced nothing', async () => {
-    api.getSettings = vi.fn(async () => ({ scan_scope: '' }))
-    api.updateSettings = vi.fn(async () => ({}))
+    api.getAssessmentScope = vi.fn(async () => ({ scan_scope: '' }))
+    api.putAssessmentScope = vi.fn(async () => ({}))
     api.fetchCodeset = vi.fn(async () => CODESET)
     api.fetchEligibility = vi.fn(async () => { throw new Error('no discovery run') })
     const { root, container: c } = createTestRoot()
@@ -286,8 +286,9 @@ describe('the run carries exactly what was decided here', () => {
     await click(ackBox(c))
     await click(runBtn(c))
 
-    expect(api.updateSettings).toHaveBeenCalledTimes(1)
-    const scope = JSON.parse(api.updateSettings.mock.calls.at(-1)[0].scan_scope)
+    expect(api.putAssessmentScope).toHaveBeenCalledTimes(1)
+    expect(api.putAssessmentScope.mock.calls.at(-1)[0]).toBe('scan-own')
+    const scope = JSON.parse(api.putAssessmentScope.mock.calls.at(-1)[1].scan_scope)
     expect(Object.keys(scope).sort()).toEqual(CODESET.map((r) => r.code).sort())
     expect(onSaved).toHaveBeenCalledWith(scope)
     expect(onRun.mock.calls[0][0]).toMatchObject({

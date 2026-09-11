@@ -50,7 +50,7 @@ class _Store:
         else:
             self._frozen[scan_id] = preset_or_map
 
-    def get_scan_scope(self, scan_id):
+    def get_scan_scope(self, scan_id, *, refresh=False):
         return self._frozen.get(scan_id)
 
     def scope_for_file(self, scan_id, filename, scope):

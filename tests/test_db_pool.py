@@ -166,6 +166,8 @@ def test_pool_exhaustion_surfaces_as_a_clean_503_not_a_bare_500(monkeypatch):
     monkeypatch.setattr(core, "E2E_KEY", None, raising=False)
 
     class _ExhaustedStore:
+        def get_setting(self, key, default=None):
+            raise psycopg2.pool.PoolError("connection pool exhausted")
         # /jobs' very first store call — raising here means nothing downstream in the route
         # runs, so this reproduces "pool exhausted before any query" precisely.
         def worker_tier_status(self):

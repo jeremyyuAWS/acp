@@ -161,6 +161,8 @@ PRD_SECTION_7 = {
     "liveops":          ("operate", "view",    "hidden",  "hidden",  "hidden"),
     "analytics":        ("operate", "operate", "view",    "view",    "view"),
     "settings":         ("operate", "hidden",  "hidden",  "hidden",  "hidden"),
+    "graph":            ("operate", "view", "view", "view", "view"),
+    "acr":              ("operate", "operate", "view", "view", "view"),
 }
 _COLUMNS = (rbac.PLATFORM_ADMIN, rbac.COMPLIANCE_MANAGER, rbac.REMEDIATION_REVIEWER,
             rbac.ANALYST, rbac.VIEWER)

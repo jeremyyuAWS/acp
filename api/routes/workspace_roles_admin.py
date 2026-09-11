@@ -77,6 +77,51 @@ def _require_roles_manage(request: Request) -> None:
         raise HTTPException(403, "managing roles requires the roles.manage permission")
 
 
+
+def _require_rollout_manager(request: Request) -> str:
+    # The off-state legacy capability payload grants all users broad access. A
+    # security switch must instead consult the actual assigned role at every mode.
+    actor = _actor(request)
+    if not actor:
+        raise HTTPException(401, "sign in to manage role enforcement")
+    access = wr.planned_access(core.store, actor, owner_email=core.OWNER_EMAIL,
+                               is_suspended=_suspended)
+    if "roles.manage" not in access.get("capabilities", []):
+        raise HTTPException(403, "changing role enforcement requires roles.manage")
+    return actor
+
+
+@router.get("/admin/workspace-roles/enforcement")
+def get_role_enforcement(request: Request):
+    _require_rollout_manager(request)
+    return {"rollout": rollout.describe()}
+
+
+@router.put("/admin/workspace-roles/enforcement")
+def set_role_enforcement(body: dict, request: Request):
+    actor = _require_rollout_manager(request)
+    if (set(body) != {"enabled", "expected_mode"} or type(body.get("enabled")) is not bool
+            or body.get("expected_mode") not in rollout.LADDER):
+        raise HTTPException(422, "enabled must be boolean and expected_mode must name the current mode")
+    previous = rollout.mode()
+    if body["expected_mode"] != previous:
+        raise HTTPException(409, "Role enforcement changed since this screen loaded; refresh and try again")
+    target = rollout.ENFORCE if body["enabled"] else rollout.OFF
+    if target == previous:
+        return {"rollout": rollout.describe()}
+    if target == rollout.ENFORCE:
+        import workspace_preflight
+        report = workspace_preflight.report(
+            core.store, owner_email=core.OWNER_EMAIL, routes=request.app.routes,
+            is_suspended=_suspended)
+        if report["blockers"]:
+            raise HTTPException(409, {"message": "Resolve role readiness issues before enabling enforcement",
+                                      "findings": [f for f in report["findings"] if f["severity"] == "blocker"]})
+    core.store.set_setting(rollout.SETTING_KEY, target)
+    core.store.log_decision(actor, "roles.enforcement_changed",
+                           detail=f"{previous} → {target}")
+    return {"rollout": rollout.describe()}
+
 def _role_out(row: dict, counts: dict[str, int]) -> dict:
     """One role as the Roles list and drawer read it.
 
@@ -190,7 +235,10 @@ def list_roles(request: Request):
     # cannot revert an administrator's edits — it only fills in what is missing.
     wr.seed_builtin_roles(core.store, tenant_id=tenant, actor=_actor(request) or "system")
     return {"roles": [_role_out(r, counts) for r in core.store.list_workspace_roles(tenant_id=tenant)],
-            "enforced": wr.rbac_enabled(), "rollout": rollout.describe()}
+            "enforced": wr.rbac_enabled(), "rollout": rollout.describe(),
+            "can_manage_enforcement": "roles.manage" in wr.planned_access(
+                core.store, _actor(request), owner_email=core.OWNER_EMAIL,
+                is_suspended=_suspended).get("capabilities", [])}
 
 
 @router.get("/admin/roles/{role_id}")

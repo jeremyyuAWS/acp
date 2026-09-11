@@ -26,11 +26,8 @@ export const HIDDEN = 'hidden'
 export const VIEW = 'view'
 export const OPERATE = 'operate'
 
-// Tabs this feature does not govern (PRD §6 lists ten; these are not among them). `acr` is
-// authorized per-report by its own boundary, and `graph` was simply never specified — see
-// UNGOVERNED_TABS in api/workspace_rbac.py, which pins the same two server-side. They are always
-// visible, so a role cannot accidentally hide a surface nobody decided to govern.
-export const UNGOVERNED = new Set(['acr', 'graph'])
+// Every main tab is governed. Conformance still has additional per-report permissions.
+export const UNGOVERNED = new Set()
 
 /** The access level for one tab key: 'hidden' | 'view' | 'operate'. */
 export function levelFor(access, key) {

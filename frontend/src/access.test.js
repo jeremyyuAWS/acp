@@ -60,7 +60,7 @@ const reviewer = {
 
 const nothing = { enforced: true, role: null, tabs: Object.fromEntries(
   ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor',
-   'liveops', 'analytics', 'settings'].map((k) => [k, 'hidden'])), capabilities: [] }
+   'liveops', 'analytics', 'settings', 'graph', 'acr'].map((k) => [k, 'hidden'])), capabilities: [] }
 
 // ── not told vs told no ───────────────────────────────────────────────────────
 
@@ -101,7 +101,7 @@ describe('the two ungoverned tabs stay reachable', () => {
   it('matches the set the server pins', () => {
     // api/workspace_rbac.py's UNGOVERNED_TABS. Two lists, one fact: if they diverge, a tab is
     // governed on one side and not the other, and which one wins depends on where you look.
-    expect([...UNGOVERNED].sort()).toEqual(['acr', 'graph'])
+    expect([...UNGOVERNED]).toEqual([])
   })
 })
 
@@ -171,7 +171,7 @@ describe('firstPermittedTab', () => {
   })
 
   it('finds the ungoverned tab when that is genuinely all there is', () => {
-    expect(firstPermittedTab(nothing, TABS)).toBe('acr')
+    expect(firstPermittedTab(nothing, TABS)).toBe(null)
   })
 })
 
@@ -260,4 +260,12 @@ describe('the settings modal', () => {
     expect(canOpenSettings(null, { tabs: { settings: 'operate' } })).toBe(false)
     expect(canOpenSettings(undefined, null)).toBe(false)
   })
+})
+
+
+it.each(['graph', 'acr'])('respects hidden/view/operate for %s', (key) => {
+  expect(isVisible({ tabs: { [key]: 'hidden' } }, key)).toBe(false)
+  expect(canOperate({ tabs: { [key]: 'view' } }, key)).toBe(false)
+  expect(isVisible({ tabs: { [key]: 'view' } }, key)).toBe(true)
+  expect(canOperate({ tabs: { [key]: 'operate' } }, key)).toBe(true)
 })

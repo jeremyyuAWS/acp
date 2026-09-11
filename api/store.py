@@ -6278,7 +6278,7 @@ class Store:
                 run["discovered_at"] = (self._db.fetchone(cur) or {}).get("at")
             return {"run": run, "files": files}
 
-    def get_scan_scope(self, scan_id: str) -> dict[str, frozenset[str]] | None:
+    def get_scan_scope(self, scan_id: str, *, refresh: bool = False) -> dict[str, frozenset[str]] | None:
         """The criterion→formats scope this scan was FROZEN to at scan-start, rehydrated to
         {sc: frozenset(fmts)}, or None for NO RESTRICTION.
 
@@ -6300,6 +6300,8 @@ class Store:
         _scope_for_listing / _scoped_for_scoring). None is returned ONLY when the row or the
         `scan_scope` key is genuinely absent or empty.
         """
+        if refresh:
+            self._scope_cache.pop(scan_id, None)
         cached = self._scope_cache.get(scan_id, _SCOPE_ABSENT)
         if cached is not _SCOPE_ABSENT:
             return cached
@@ -17291,6 +17293,8 @@ class Store:
             else:
                 scope = {}
             scope.update(facts)
+            if "scan_scope" in facts:
+                self._scope_cache.pop(scan_id, None)
             self._db.execute(cur, "UPDATE scan_runs SET scope=%s WHERE id=%s",
                              (_json.dumps(scope), scan_id))
 

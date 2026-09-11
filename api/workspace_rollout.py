@@ -36,10 +36,12 @@ by silently discarding a legacy variable that IS readable (see mode()).
 from __future__ import annotations
 
 import os
+import sys
 
 # The variable this slice introduces. The legacy one still works; see mode().
 MODE_VAR = "ACP_WORKSPACE_RBAC_MODE"
 LEGACY_VAR = "ACP_WORKSPACE_RBAC_ENABLED"
+SETTING_KEY = "workspace_rbac_mode"
 
 OFF = "off"
 OBSERVE = "observe"
@@ -79,7 +81,8 @@ def mode() -> str:
 
     PRECEDENCE, AND THE ORDER IS THE INTERESTING PART:
 
-      1. A VALID `ACP_WORKSPACE_RBAC_MODE` wins. It is the specific instruction.
+      0. A saved Roles toggle wins across all replicas; invalid/read failures raise.
+      1. Otherwise a VALID `ACP_WORKSPACE_RBAC_MODE` wins. It is the deploy default.
       2. Otherwise `ACP_WORKSPACE_RBAC_ENABLED=1` means `enforce`. This is not a courtesy — it is
          the deployed contract. Slices 1–5 shipped that variable, an operator may already have it
          set, and a release that quietly stopped honouring it would turn enforcement OFF in a
@@ -92,6 +95,17 @@ def mode() -> str:
     still an instruction and is still obeyed. Only when nothing readable remains do we land on
     off — and `invalid_mode()` stays true either way, so the typo is reported rather than absorbed.
     """
+    # The admin toggle is durable and shared across API replicas. Do not cache or
+    # swallow database failures: uncertainty must never silently disable enforcement.
+    core_module = sys.modules.get("core")
+    store = getattr(core_module, "store", None)
+    if store is not None:
+        saved = store.get_setting(SETTING_KEY)
+        if saved is not None:
+            selected = _normalise(saved)
+            if selected is None:
+                raise RuntimeError("Stored workspace role mode is invalid")
+            return selected
     explicit = _normalise(os.environ.get(MODE_VAR))
     if explicit:
         return explicit
@@ -162,8 +176,8 @@ def describe() -> dict:
     return {
         "mode": current,
         "means": DESCRIPTIONS.get(current, ""),
-        "enforcing": enforcement_active(),
-        "navigation": navigation_active(),
+        "enforcing": current == ENFORCE,
+        "navigation": current in (NAVIGATION, ENFORCE),
         "next": next_stage(current),
         "ladder": list(LADDER),
         "invalid_mode": invalid_mode(),

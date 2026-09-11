@@ -103,6 +103,31 @@ def seed_builtin_roles(store, *, tenant_id: str, actor: str | None = None) -> li
     return created
 
 
+def backfill_existing_main_tabs(store, *, tenant_id: str, actor: str) -> list[str]:
+    """One-time rollout maintenance, before enabling the expanded catalog.
+
+    Materialize previously ungoverned access on the existing role snapshot only.
+    Never call from request handling or boot: newly created roles remain hidden
+    when a tab is absent. Explicit choices, grants and assignments are preserved.
+    """
+    changed = []
+    for row in store.list_workspace_roles(tenant_id=tenant_id):
+        permissions = {p["capability"]: p["access_level"] for p in row.get("permissions", [])}
+        missing = [tab for tab in ("graph", "acr") if tab not in permissions]
+        if not missing:
+            continue
+        permissions.update({tab: rbac.OPERATE for tab in missing})
+        store.upsert_workspace_role(
+            tenant_id=tenant_id, role_id=row["id"], name=row["name"],
+            description=row.get("description"), permissions=permissions,
+            is_system=bool(row.get("is_system")), is_protected=bool(row.get("is_protected")),
+            actor=actor, expected_version=int(row["version"]))
+        store.log_decision(actor, "role.tabs_backfilled",
+                           detail=f'{row["id"]} · previously ungoverned: {", ".join(missing)} → operate')
+        changed.append(row["id"])
+    return changed
+
+
 # ── assignment ────────────────────────────────────────────────────────────────
 # The assignment lives on the managed-person record (PRD §12: "extend the existing managed-person
 # record"), which api/store.py keeps as a JSON list in app_settings under `people_records`. Adding

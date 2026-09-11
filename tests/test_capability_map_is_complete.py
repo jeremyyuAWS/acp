@@ -159,21 +159,15 @@ def test_every_registered_stream_route_is_in_the_twin_table(routes):
 
 # ── the ACR boundary must stay separate (PRD §3, §14) ─────────────────────────
 
-def test_no_acr_route_is_governed_by_a_workspace_capability(routes):
-    """PRD §3: workspace roles "must not replace or silently change ACR approval roles, which
-    govern a different authorization boundary." §14 repeats it. An /acr route with a workspace
-    capability would mean a workspace role could deny an ACR approver their own report — the
-    exact interference both sections forbid.
-    """
-    acr = sorted(k for k in capmap.ROUTE_CAPABILITIES if k[1].startswith("/acr"))
-    assert acr == [], f"workspace capabilities were attached to ACR routes: {acr}"
-
-
-def test_the_acr_routes_really_exist_so_the_exemption_is_about_something(routes):
-    """Otherwise the test above passes on a build with no ACR at all, and would keep passing
-    after somebody attached a capability to the first ACR route they added."""
+def test_acr_routes_require_workspace_access_in_addition_to_report_authorization(routes):
     acr = [r for r in routes if r.path.startswith("/acr")]
-    assert len(acr) > 10, f"only {len(acr)} ACR routes found — the exemption guards nothing"
+    assert len(acr) > 10
+    for route in acr:
+        for method in route.methods - {"HEAD", "OPTIONS"}:
+            assert capmap.required_capabilities(method, route.path) == {
+                "acr.view" if method == "GET" else "acr.operate"
+            }
+            assert not capmap.is_exempt(method, route.path)
 
 
 # ── the identity endpoints must stay reachable, or the SPA cannot recover ─────

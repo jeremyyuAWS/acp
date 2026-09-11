@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  getWorkspaceRoles, getRoleCapabilities, createWorkspaceRole,
+  getWorkspaceRoles, getRoleCapabilities, createWorkspaceRole, putRoleEnforcement,
   updateWorkspaceRole, deleteWorkspaceRole,
   getWorkspaceRolePreflight, bootstrapWorkspaceRoles,
 } from './api.js'
@@ -23,6 +23,8 @@ import {
 const LEVEL_LABEL = { hidden: 'Hidden', view: 'View', operate: 'Operate' }
 
 export default function WorkspaceRoles() {
+  const [canManageEnforcement, setCanManageEnforcement] = useState(false)
+  const [changingEnforcement, setChangingEnforcement] = useState(false)
   const [roles, setRoles] = useState([])
   const [catalog, setCatalog] = useState(null)
   const [enforced, setEnforced] = useState(false)
@@ -39,13 +41,24 @@ export default function WorkspaceRoles() {
 
   const load = () => Promise.all([getWorkspaceRoles(), getRoleCapabilities()])
     .then(([r, c]) => { setRoles(r.roles || []); setEnforced(!!r.enforced)
-                    setRollout(r.rollout || null); setCatalog(c) })
+                    setCanManageEnforcement(r.can_manage_enforcement === true); setRollout(r.rollout || null); setCatalog(c) })
     .catch((e) => setError(e.message || 'Could not load roles.'))
     .finally(() => setLoaded(true))
   useEffect(() => { load() }, [])
 
   const afterWrite = (note) => { setMessage(note); setError(''); setEditing(null); load() }
   const fail = (e) => setError(e.message || 'That change could not be saved.')
+
+  const changeEnforcement = async () => {
+    setChangingEnforcement(true); setError(''); setMessage('')
+    try {
+      await putRoleEnforcement({ enabled: !enforced, expected_mode: rollout?.mode || 'off' })
+      await load()
+      window.dispatchEvent(new Event('acp-access-changed'))
+      setMessage(enforced ? 'Role permissions are now disabled. Saved roles are retained.' : 'Role permissions are now enforced.')
+    } catch (e) { fail(e) }
+    finally { setChangingEnforcement(false) }
+  }
 
   const remove = (role) => {
     if (!window.confirm(`Delete the ${role.name} role? This cannot be undone.`)) return
@@ -84,6 +97,21 @@ export default function WorkspaceRoles() {
                                                           tabs: {}, grants: [], version: 0 })}>
         + Create role
       </button>
+    </div>
+
+    <div style={{ marginTop: 16, padding: 16, border: '1px solid var(--line)', borderRadius: 12 }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 12, fontWeight: 600 }}>
+        <input type="checkbox" role="switch" checked={enforced}
+          disabled={!loaded || !canManageEnforcement || changingEnforcement}
+          onChange={changeEnforcement} aria-describedby="role-enforcement-help" />
+        Enforce role permissions
+      </label>
+      <p id="role-enforcement-help" className="muted" style={{ marginBottom: 0 }}>
+        {changingEnforcement ? 'Saving…' : enforced
+          ? 'On — saved roles control which tabs users see and which actions they can perform.'
+          : rollout?.mode === 'navigation' ? 'Navigation only — tabs are hidden by role, but actions are not enforced.'
+          : 'Off — workspace role restrictions do not apply. Saved roles and assignments are kept.'}
+      </p>
     </div>
 
     {/* THE MOST IMPORTANT LINE ON THIS SCREEN when the server is not refusing. Without it an

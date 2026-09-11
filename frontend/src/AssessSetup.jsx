@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { getSettings, updateSettings, fetchCodeset, fetchEligibility } from './api.js'
+import { getAssessmentScope, putAssessmentScope, fetchCodeset, fetchEligibility } from './api.js'
 import { SCOPE_FORMATS } from './scopePresets.js'
 import { parseStoredScope } from './ScanScope.jsx'
 import { scopeImpact, coverageGaps } from './scopeImpact.js'
@@ -99,7 +99,7 @@ const linkBtn = { border: 'none', background: 'none', padding: 0, font: 'inherit
  * @param discoveredAt  optional. The discovery run's timestamp, for the header line. Omitted
  *                      renders no line at all rather than an invented one.
  */
-export default function AssessSetup({ onRun, onSaved, busy = false, discoveredAt = null }) {
+export default function AssessSetup({ scanId, onRun, onSaved, busy = false, discoveredAt = null }) {
   const [codeset, setCodeset] = useState([])            // [{code, name, formats:[...]}] — the Core 17
   const [codes, setCodes] = useState(() => new Set())   // selected criteria (criterion axis)
   const [formats, setFormats] = useState(() => new Set(SCOPE_FORMATS))  // selected doc-types
@@ -120,7 +120,7 @@ export default function AssessSetup({ onRun, onSaved, busy = false, discoveredAt
     let live = true
     Promise.all([
       fetchCodeset().catch(() => []),
-      getSettings().then((s) => parseStoredScope(s?.scan_scope || '')).catch(() => null),
+      getAssessmentScope(scanId).then((s) => parseStoredScope(typeof s?.scan_scope === 'object' ? JSON.stringify(s.scan_scope) : s?.scan_scope || '')).catch(() => null),
     ]).then(([cat, stored]) => {
       if (!live) return
       const rows = Array.isArray(cat) ? cat : []
@@ -134,7 +134,7 @@ export default function AssessSetup({ onRun, onSaved, busy = false, discoveredAt
       }
     }).finally(() => { if (live) setLoaded(true) })
     return () => { live = false }
-  }, [])
+  }, [scanId])
 
   // Live eligible-file count, debounced, keyed on the selected criteria. Read-only — it never
   // starts a scan, so calling it on every selection change is safe.
@@ -233,7 +233,7 @@ export default function AssessSetup({ onRun, onSaved, busy = false, discoveredAt
     if (!ready) return
     setStarting(true); setMsg('')
     try {
-      const res = await updateSettings({ scan_scope: JSON.stringify(scope) })
+      const res = await putAssessmentScope(scanId, { scan_scope: JSON.stringify(scope) })
       // `simulated` is the demo build answering "there is no backend to write to". Nothing was
       // persisted, which is worth saying — but it is not a failure, and refusing to run would
       // leave the offline build with no Assess at all.

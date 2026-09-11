@@ -45,6 +45,7 @@ const AdminLiveTraffic = lazy(() => import('./AdminLiveTraffic.jsx'))
 const LiveOperationsNotifier = lazy(() => import('./LiveOperationsNotifier.jsx'))
 import SignIn from './SignIn.jsx'
 import Settings from './Settings.jsx'
+import MyDataDialog from './MyDataDialog.jsx'
 import Monitor from './Monitor.jsx'
 import QueuePanel from './QueuePanel.jsx'
 import Publish from './Publish.jsx'
@@ -402,9 +403,11 @@ export default function App() {
       getMyAccess().then((next) => { if (next) setAccess(next) }).catch(() => {})
     }
     window.addEventListener('focus', refresh)
+    window.addEventListener('acp-access-changed', refresh)
     document.addEventListener('visibilitychange', refresh)
     return () => {
       window.removeEventListener('focus', refresh)
+      window.removeEventListener('acp-access-changed', refresh)
       document.removeEventListener('visibilitychange', refresh)
     }
   }, [access])
@@ -421,6 +424,7 @@ export default function App() {
   const savedDecRef = useRef({ scanId: null, decisions: {}, triage: {}, assignees: {} })  // last-persisted snapshot
   const hydratingRef = useRef(false)                    // suppress the save effect during hydration
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [myDataOpen, setMyDataOpen] = useState(false)
   const accountMenuRef = useRef(null)
   useAutoDismissDetails(accountMenuRef, 5000)
   const [scanList, setScanList] = useState([])
@@ -701,12 +705,8 @@ export default function App() {
   // would keep rendering the fallback's arithmetic and the fetch would be pointless. Bumped only
   // when something actually changed.
   //
-  // Called from two places: the boot effect below, AND AssessSetup's onSaved (after PUT
-  // /settings writes a new scan_scope). Without the second call site, an operator who edits and
-  // saves a new assessment scope keeps seeing the PREVIOUS scope's "N of 20 in scope" arithmetic
-  // across Overview/ScopeBanner/AssessmentScopeCard/etc. until a full page reload — the exact bug
-  // class applyScopeConfig itself was built to fix (see activeScope.js's own doc comment), just
-  // recurring after a live edit instead of at build time.
+  // Boot adopts the default scope; a successful scan-scoped save adopts that exact selection.
+  // Re-fetching global defaults after a save would overwrite the user's selected criteria.
   const adoptScopeConfig = (c) => { if (applyScopeConfig(c)) setScopeTick((n) => n + 1) }
 
   // Pull the authoritative CalVer once (works pre-auth — /config is public) so the build
@@ -788,11 +788,13 @@ export default function App() {
     // immediately instead of displaying the previous state for up to one polling interval.
     // The server remains authoritative; this is the same owner-scoped read used by the timer.
     window.addEventListener('focus', refresh)
+    window.addEventListener('acp-access-changed', refresh)
     document.addEventListener('visibilitychange', refresh)
     return () => {
       alive = false
       clearInterval(id)
       window.removeEventListener('focus', refresh)
+      window.removeEventListener('acp-access-changed', refresh)
       document.removeEventListener('visibilitychange', refresh)
     }
   }, [me])
@@ -1031,7 +1033,7 @@ export default function App() {
     // has no assessment in flight to report a phase for.
     setAssessPhase('idle'); setJustAssessed(null)
     setOntology(loadPublished())
-    setSettingsOpen(false); setView((p.allow || ['overview'])[0])
+    setSettingsOpen(false); setMyDataOpen(false); setView((p.allow || ['overview'])[0])
     setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label,
       allow: [...new Set([...(p.allow || []), ...ALL_TAB_KEYS])] })
     // Scope editing is owner-only (PUT /settings = _require_admin). GET /me returns the
@@ -1858,6 +1860,7 @@ export default function App() {
                 {void tick}v{platformVersion || __BUILD_VERSION__} PT · {timeAgo(__BUILD_TIME__)}
               </b></div>
               <div className="menu-separator" />
+              <button className="menu-action" onClick={() => setMyDataOpen(true)}>Reset my data</button>
               {canOpenSettings(me, access) && <button className="menu-action" aria-label="Platform settings" onClick={() => setSettingsOpen(true)}>⚙ <span>Settings</span></button>}
           {/* SWITCH ACCOUNT — a full teardown, then the sign-in screen, which now asks Google
               and Microsoft for an account chooser rather than reusing the browser's single
@@ -2380,9 +2383,9 @@ export default function App() {
                 also returns null for a missing value, which is exactly the prop's "omit rather
                 than invent" contract — so the `|| null` this used to carry is redundant. */}
             {!busy && assessPhase === 'idle' && !assessed && (
-              <AssessSetup discoveredAt={fmtStamp(run?.completed_at)} busy={busy}
-                           onRun={startAssessment}
-                           onSaved={() => { getConfig().then(adoptScopeConfig).catch(() => {}) }} />
+              <AssessSetup scanId={run.id} discoveredAt={fmtStamp(run?.completed_at)} busy={busy}
+                           onSaved={(scope) => adoptScopeConfig({ scope: { name: 'Selected criteria', criteria: scope } })}
+                           onRun={startAssessment} />
             )}
             {assessPhase === 'starting' && (
               <section className="panel" role="status" aria-live="polite"
@@ -2495,7 +2498,7 @@ export default function App() {
             scan, and requiring one would make the tab unreachable on a fresh deploy. Every write
             behind it is role-gated server-side (acr_authz) — a read-only visitor sees the report
             and cannot change it, which is the same shape the backend enforces. */}
-        {view === 'acr' && <AcrWorkspace />}
+        {view === 'acr' && <AcrWorkspace readOnly={!canOperate(access, 'acr')} />}
 
         {/* Guided workflow: a "next step" CTA on each workflow tab once a scan exists.
             'discover' is excluded — it owns a sub-step CTA (Inventory → Classify → Actions → Assess). */}
@@ -2548,6 +2551,7 @@ export default function App() {
       {/* onOntologyChange / onPrivilegeChange are gone with the Business ontology and Permissions
           panels. The ontology DATA path below is untouched — App still annotates the corpus from
           whatever was last published; only its editor left Settings. */}
+      {myDataOpen && <MyDataDialog onClose={() => setMyDataOpen(false)} />}
       {settingsOpen && canOpenSettings(me, access) && <Settings files={files} onClose={() => {
         setSettingsOpen(false)
         getMyScope().then((value) => setUserTimezone(value?.release_timezone || 'America/Chicago')).catch(() => {})

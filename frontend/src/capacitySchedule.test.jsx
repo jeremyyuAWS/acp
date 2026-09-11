@@ -232,7 +232,7 @@ describe('permissions and management actions', () => {
   it('sends the reader to Monitor for live counts and Worker Configuration to change capacity', async () => {
     const c = await mount()
     expect(c.textContent).toMatch(/Monitor . Workers & Queue/)
-    expect(c.textContent).toMatch(/Settings . Worker Configuration/)
+    expect(c.textContent).toMatch(/Settings . Scheduling/)
   })
 
   it('reports a failed read as a reporting failure, not as a capacity change', async () => {
@@ -262,7 +262,7 @@ describe('at-a-glance schedule presentation', () => {
   it('shows the authoritative source when scheduling is disabled', async () => {
     const c = await mount()
     expect(c.textContent).toContain('Scheduling disabled')
-    expect(c.textContent).toMatch(/Worker Configuration and queue demand/)
+    expect(c.textContent).toMatch(/Current Azure settings and queue demand/)
   })
 
   it('uses responsive service cards with understandable capacity labels', async () => {

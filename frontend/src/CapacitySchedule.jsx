@@ -1,34 +1,11 @@
 import { useEffect, useState } from 'react'
 import { getCapacitySchedule } from './api.js'
 import CapacityScheduleEditor from './CapacityScheduleEditor.jsx'
+import WorkerReplicaControl from './WorkerReplicaControl.jsx'
 import './capacity-schedule.css'
 
-/**
- * Settings → Scheduling, READ-ONLY (Phase 2 of docs/prd-capacity-scheduling.md).
- *
- * WHY THIS TAB EXISTS BEFORE ANYTHING CAN BE EDITED. The PRD's §5.3 capacity table does not fit
- * the production Postgres server at its own business-hours floors — 152 connections during a
- * revision overlap plus a 15-connection reserve, against a server that has 150. A phase that
- * shipped the editor first would let an administrator save that, and the failure would surface
- * as pool exhaustion during a deploy rather than as a refusal at the point of decision.
- *
- * So the first thing this panel renders is the schedule being refused by its own validation.
- *
- * WHAT IT MUST NOT IMPLY. Three states are easy to render wrongly and each has its own field:
- *   * `applied` — the schedule shown is PROPOSED. Nothing has put it into force, and a panel
- *     that looked the same either way would be the same quiet wrongness as a table of dashes
- *     reporting `configured: true`.
- *   * `drift_evaluated` — production differs from the proposal in every service and NONE of it
- *     is drift, because nothing has drifted from a schedule nobody applied. Showing those
- *     differences as drift would be true arithmetic and a false statement.
- *   * a scaler's `pinned` state — a queue rule on a tier whose floor equals its ceiling is
- *     neither healthy nor broken. It is inert, and AC 10 only had two words for it.
- *
- * NO CONTROLS, deliberately, and not only because the writes do not exist yet. Capacity controls
- * live in Settings → Worker Configuration (queuePanelCapacity.test.jsx holds that), and Live
- * Operations gets a read-only mode strip. Two writable capacity surfaces is the thing this
- * arrangement exists to avoid.
- */
+// Scheduling owns weekly policy, temporary overrides, and the pre-schedule manual control.
+// Desired capacity and actual Azure state remain distinct until application is confirmed.
 
 const MODE_LABEL = { business_hours: 'Business hours', off_hours: 'Off hours' }
 const SERVICES = [
@@ -90,6 +67,7 @@ export default function CapacitySchedule({ me = null } = {}) {
   const [reloads, setReloads] = useState(0)
   const [fastRefreshUntil, setFastRefreshUntil] = useState(0)
   const [workspace, setWorkspace] = useState(null)
+  const [manualOpen, setManualOpen] = useState(false)
   const [confirmation, setConfirmation] = useState(null)
   // `me?.is_admin` is the exact value the backend's _require_admin checks, so the SPA and the API
   // cannot disagree about who sees the editor. It is not the gate — every write endpoint runs
@@ -240,7 +218,7 @@ export default function CapacitySchedule({ me = null } = {}) {
                     <b>{viewerTimestamp(snap.next_transition_at)}</b></>
                 : 'not scheduled'}.</>
             : <>Nothing has applied this schedule. Warm capacity is whatever
-                Settings → Worker Configuration and the queue scalers are currently set to; this
+                the current Azure settings and queue scalers are set to; this
                 tab shows what ACP would intend, and whether that intention is safe to apply.</>}
         </div>
         {snap.enabled && snap.start && (
@@ -251,9 +229,21 @@ export default function CapacitySchedule({ me = null } = {}) {
         )}
       </section>
 
+      {isAdmin && !snap.applied && !workspace && (
+        <details className="panel" style={{ padding: 12 }}
+          onToggle={(event) => setManualOpen(event.currentTarget.open)}>
+          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Adjust current worker capacity</summary>
+          <p className="muted" style={{ fontSize: 12 }}>
+            Before a schedule is applied, adjust the current Azure worker floor here.
+            Once the schedule is applied, use Temporary override for short-term changes.
+          </p>
+          {manualOpen && <WorkerReplicaControl me={me} />}
+        </details>
+      )}
+
       {!snap.enabled ? (
         <div className="panel" style={{ padding: 12, fontSize: 12 }}>
-          <b>No weekly transitions are scheduled.</b>{' '}Worker Configuration and queue demand
+          <b>No weekly transitions are scheduled.</b>{' '}Current Azure settings and queue demand
           currently determine warm capacity.
         </div>
       ) : (
@@ -462,8 +452,7 @@ export default function CapacitySchedule({ me = null } = {}) {
         anything here. Saving a schedule records what ACP intends — schedules saved here do not
         change live Azure replicas yet; applying a published policy is a separate, deliberate
         step. Live replica counts, queue depth and scale events are in Monitor → Workers &amp;
-        Queue, and immediate warm capacity is adjusted in Settings → Worker
-        Configuration.{!isAdmin && ' You have view-only access, so the schedule is shown but cannot be changed.'}
+        Queue. Manage warm capacity here in Settings → Scheduling.{!isAdmin && ' You have view-only access, so the schedule is shown but cannot be changed.'}
       </div>
     </div>
   )
