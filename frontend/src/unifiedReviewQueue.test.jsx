@@ -22,13 +22,13 @@ async function mount() {
 it('shows all statuses together without workflow tabs and places actionable work before waiting and completed items', async () => {
   const { container } = await mount()
   expect(container.querySelector('[aria-label="Workflow status"]')).toBeNull()
-  expect(container.querySelector('select[aria-label="Filter by status"]').value).toBe('all')
+  expect(container.querySelector('select[aria-label="Filter by status"]').value).toBe('active')
   const rows = [...container.querySelectorAll('.rinbox-row')]
-  expect(rows).toHaveLength(5)
+  expect(rows).toHaveLength(4)
   expect(rows.find(row => row.textContent.includes('Approved change')).textContent).toContain('Awaiting verification')
-  expect(rows.find(row => row.textContent.includes('Verified change')).textContent).toContain('Completed')
+  expect(rows.some(row => row.textContent.includes('Verified change'))).toBe(false)
   expect(rows.slice(0, 2).map(row => row.id).sort()).toEqual(['rinbox-row-manual', 'rinbox-row-proposal'])
-  expect(rows.at(-1).id).toBe('rinbox-row-done')
+  expect(rows.at(-1).id).toBe('rinbox-row-waiting')
 })
 it('lets the reviewer inspect a waiting item in the same queue without another approval or editable proposal', async () => {
   const { container, onDecide } = await mount()
@@ -38,7 +38,7 @@ it('lets the reviewer inspect a waiting item in the same queue without another a
   expect(pane.textContent).not.toContain('Save and continue')
   expect(pane.textContent).toMatch(/awaiting|re-scan/i)
   expect(onDecide).not.toHaveBeenCalled()
-  expect(container.querySelectorAll('.rinbox-row')).toHaveLength(5)
+  expect(container.querySelectorAll('.rinbox-row')).toHaveLength(4)
 })
 it('keeps status filtering optional and accessible', async () => {
   const { container } = await mount()

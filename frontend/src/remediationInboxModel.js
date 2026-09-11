@@ -230,7 +230,8 @@ export function workflowStatusOf(f, decisions = {}) {
   const d = decisions[f?.id] ?? decisions[f?.file]
   const lane = laneOf(f)
   if (st === 'verified' || st === 'resolved_verified' || f?.verified === true || (f?.validated && (f?.autoApplied || f?.applied || st === 'resolved'))) return 'completed'
-  if (f?.autoApplied || f?.applied) return 'awaiting-validation'
+  if ((f?.autoApplied || f?.applied) && !['blocked', 'rejected', 'skipped'].includes(st)
+      && !f?.rejectedFix && !['assigned', 'deferred', 'rejected', 'not_applicable'].includes(d?.state)) return 'awaiting-validation'
 
   // ── The decision recorded ON THE ROW (hitl_queue.status), which outlives this browser session.
   // `decisions` only holds what THIS session did, so without these branches a row the reviewer

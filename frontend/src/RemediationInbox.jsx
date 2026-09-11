@@ -984,7 +984,7 @@ export default function RemediationInbox({
       <section className="run-approval-summary" aria-label="Whole-run approval">
         <div><strong>Review and verify changes</strong>
           {/* Keep approval readiness separate from verification and completed counts. */}
-          <p>{runCounts.ready} ready review items · {runCounts.individual} need proposal information or individual review · {runCounts.inspection} applied changes to confirm · {runCounts.manual} manual review items</p>
+          <p>{runCounts.ready} ready review items · {runCounts.individual} need proposal information or individual review · {runCounts.inspection} applied changes available to inspect · {runCounts.manual} manual review items</p>
           <p>Inspection is optional. Confirm all ready proposals together; writing and verification follow approval.</p>
           {preparingProposals && <p role="status">Preparing proposals — remediation is still processing. Readiness updates as work finishes.</p>}
         </div>

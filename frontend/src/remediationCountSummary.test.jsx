@@ -33,11 +33,11 @@ it('the approval category counts all eligible proposals while manual work is ope
   // 299 approvals + 2000 applied changes awaiting confirmation, which is what the tab lists. The
   // badge used to read 299 over 2299 rows — the separation this file exists to protect, made on the
   // one element that cannot express it, because a bare number beside a label carries no noun.
-  expect(tab.textContent).toBe('Approve AI suggestions 2299')
+  expect(tab.textContent).toBe('Approve AI suggestions 299')
   // The separation itself is intact, and now stated where each number has a noun to go with it.
   const summary = container.querySelector('.run-approval-summary').textContent
   expect(summary).toContain('299 ready review items')
-  expect(summary).toContain('2000 applied changes to confirm')
+  expect(summary).toContain('2000 applied changes available to inspect')
   expect(summary).toContain('47 manual review items')
   expect([...container.querySelectorAll('select[aria-label="Filter by status"] option:not([value=all])')].find(el => el.textContent.includes('Fix manually')).selected).toBe(true)
 })

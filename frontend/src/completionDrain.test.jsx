@@ -30,3 +30,9 @@ it('preserves verification proof when adapting change records', () => {
   expect(workflowStatusOf(verified)).toBe('completed')
   expect(workflowStatusOf(pending)).toBe('awaiting-validation')
 })
+
+it('does not hide a blocker or manual handoff just because a write occurred', () => {
+  expect(workflowStatusOf({id:'a',autoApplied:true,status:'blocked'})).toBe('blocked')
+  expect(workflowStatusOf({id:'a',autoApplied:true,rejectedFix:true})).toBe('manual')
+  expect(workflowStatusOf({id:'a',autoApplied:true},{a:{state:'assigned'}})).toBe('manual')
+})
