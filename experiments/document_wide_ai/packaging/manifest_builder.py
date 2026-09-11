@@ -9,6 +9,7 @@ from __future__ import annotations
 from experiments.document_wide_ai.application.allowlist import (
     SET_OFFICE_IMAGE_ALT_TEXT,
     SET_PDF_FIELD_ACCESSIBLE_NAME,
+    SET_PDF_FIGURE_ALT_TEXT,
     allowed_operations_for_manifest,
 )
 from experiments.document_wide_ai.contracts.v1 import (
@@ -63,13 +64,23 @@ def build_pdf_manifest(
                     success_criterion="4.1.2",
                     locator=Locator(
                         format=DocumentFormat.PDF,
-                        page_index=None,
+                        page_index=fld.page_index,
                         part_name=None,
                         element_ref=fld.locator,
                         fingerprint=fingerprint_value(fld.current_tu),
                     ),
                 )
             )
+
+    if "1.1.1" in selected_criteria:
+        for i, figure in enumerate(packaged.figures):
+            if not figure.current_alt:
+                findings.append(Finding(
+                    finding_id=f"pdf-figure-{i}", rule_id="pdf.figure-missing-alt",
+                    success_criterion="1.1.1", locator=Locator(
+                        DocumentFormat.PDF, figure.page_index, None, figure.locator,
+                        fingerprint_value(figure.current_alt)),
+                    evidence_text="Existing tagged Figure; semantic accuracy requires review."))
 
     check_limits(
         text_chars=len(packaged.text_context),
@@ -90,7 +101,9 @@ def build_pdf_manifest(
         selected_criteria=selected_criteria,
         findings=tuple(findings),
         allowed_operations=tuple(
-            op for op in allowed_operations_for_manifest() if op.op == SET_PDF_FIELD_ACCESSIBLE_NAME
+            op for op in allowed_operations_for_manifest()
+            if (op.op == SET_PDF_FIELD_ACCESSIBLE_NAME and "4.1.2" in selected_criteria)
+            or (op.op == SET_PDF_FIGURE_ALT_TEXT and "1.1.1" in selected_criteria)
         ),
         text_context=packaged.text_context,
         extraction_issues=packaged.extraction_issues,
