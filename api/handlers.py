@@ -330,7 +330,7 @@ def _remediation_scope(filename: str, scan_id: str):
     inability to resolve authorization must never authorize every fixer.
     """
     from assessment_selection import selected_for_file
-    scope = core.store.scope_for_file(scan_id, filename, core.store.get_scan_scope(scan_id))
+    scope = core.store.scope_for_file(scan_id, filename, core.store.get_scan_scope(scan_id, refresh=True))
     codes = selected_for_file(scope, filename)
     return None if codes is None else lambda sc: sc in codes
 
@@ -373,7 +373,7 @@ def _verify_residual_scs(fixed_bytes: bytes, filename: str):
 
 def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_enabled: bool) -> None:
     from assessment_selection import selected_for_file, selection
-    scope = core.store.scope_for_file(scan_id, filename, core.store.get_scan_scope(scan_id))
+    scope = core.store.scope_for_file(scan_id, filename, core.store.get_scan_scope(scan_id, refresh=True))
     from ai_run_policy import optional_current_run_context
     from document_wide_workflow import suppressed_criteria
     selected = selected_for_file(scope, filename)
@@ -821,7 +821,7 @@ def _propose_media_captions(scan_id: str, filename: str, drive_file_id: str,
             p = _P(d) / filename
             p.write_bytes(data)
             from assessment_selection import selected_for_file, selection
-            scope = core.store.scope_for_file(scan_id, filename, core.store.get_scan_scope(scan_id))
+            scope = core.store.scope_for_file(scan_id, filename, core.store.get_scan_scope(scan_id, refresh=True))
             with selection(selected_for_file(scope, filename)):
                 props = _prop.propose_captions(p, p.suffix)
     except Exception:
@@ -4029,7 +4029,7 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
                 fdict.update(rescore_reused(fdict.get("issues") or [], name,
                                             fdict.get("status"),
                                             scope=core.store.scope_for_file(
-                                                scan_id, name, core.store.get_scan_scope(scan_id))))
+                                                scan_id, name, core.store.get_scan_scope(scan_id, refresh=True))))
             except Exception as exc:
                 raise RuntimeError(f"cannot safely project reused assessment for {name}") from exc
             if reused_from_scan and pinfo and pinfo.get("total"):

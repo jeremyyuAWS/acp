@@ -5122,7 +5122,7 @@ def _with_assessment_scope(fn):
         scope = None
         if scan_id:
             import core
-            scope = core.store.get_scan_scope(scan_id)
+            scope = core.store.get_scan_scope(scan_id, refresh=True)
             scope = core.store.scope_for_file(scan_id, name, scope)
         codes = selected_for_file(scope, name) if scan_id else _selected_scs()
         with selection(codes):

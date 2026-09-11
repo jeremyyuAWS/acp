@@ -78,24 +78,17 @@ TABS: tuple[tuple[str, str], ...] = (
     ("monitor", "Monitor"),
     ("liveops", "Live Operations"),
     ("analytics", "Scan Analytics"),
+    ("graph", "Knowledge Graph"),
+    ("acr", "Conformance"),
     ("settings", "Settings"),
 )
 
 TAB_KEYS: tuple[str, ...] = tuple(k for k, _ in TABS)
 TAB_LABELS: dict[str, str] = dict(TABS)
 
-# TWO TABS THE SPA RENDERS ARE NOT GOVERNED HERE, and that is a decision rather than an oversight:
-#
-#   `acr`   (Conformance / VPAT) — authorized by acr_authz per report, a different boundary that
-#           PRD §3 explicitly says this feature must not replace or silently change.
-#   `graph` (Knowledge Graph) — simply not in PRD §6's list. Left ungoverned rather than given an
-#           invented default, because guessing an access level for a tab nobody specified is how a
-#           surface ends up hidden from the people who need it, or shown to people who should not
-#           see it, with no decision anywhere to point at.
-#
-# Both stay reachable exactly as they are today. Recorded here so the gap is visible at the point
-# of use; UNGOVERNED_TABS is asserted in tests so this comment cannot quietly become false.
-UNGOVERNED_TABS: frozenset[str] = frozenset({"acr", "graph"})
+# All current main tabs are now governed. ACR capabilities are an additional
+# workspace boundary; per-report acr_authz remains independently required.
+UNGOVERNED_TABS: frozenset[str] = frozenset()
 
 
 # ── the capability catalog (PRD §11) ──────────────────────────────────────────
@@ -133,6 +126,10 @@ TAB_CAPABILITIES: dict[str, tuple[str, str]] = {
     "monitor.view":       ("monitor",      VIEW),
     "operations.view":    ("liveops",      VIEW),
     "analytics.view":     ("analytics",    VIEW),
+    "graph.view":         ("graph",        VIEW),
+    "graph.operate":      ("graph",        OPERATE),
+    "acr.view":           ("acr",          VIEW),
+    "acr.operate":        ("acr",          OPERATE),
     "settings.view":      ("settings",     VIEW),
 }
 
@@ -254,7 +251,7 @@ BUILTIN_ROLES: dict[str, dict] = {
         "tabs": {"overview": OPERATE, "integrations": OPERATE, "discover": OPERATE,
                  "assess": OPERATE, "remediate": OPERATE, "publish": OPERATE,
                  "monitor": OPERATE, "liveops": OPERATE, "analytics": OPERATE,
-                 "settings": OPERATE},
+                 "settings": OPERATE, "graph": OPERATE, "acr": OPERATE},
         "grants": frozenset(),
         "is_protected": False,
     },
@@ -264,7 +261,7 @@ BUILTIN_ROLES: dict[str, dict] = {
         "tabs": {"overview": OPERATE, "integrations": OPERATE, "discover": OPERATE,
                  "assess": OPERATE, "remediate": OPERATE, "publish": OPERATE,
                  "monitor": OPERATE, "liveops": VIEW, "analytics": OPERATE,
-                 "settings": HIDDEN},
+                 "settings": HIDDEN, "graph": VIEW, "acr": OPERATE},
         "grants": frozenset({"reports.export", "release.publish", "sources.manage"}),
         "is_protected": False,
     },
@@ -273,7 +270,7 @@ BUILTIN_ROLES: dict[str, dict] = {
         "description": "Reviews automated fixes and prepares approved files for release.",
         "tabs": {"overview": VIEW, "integrations": VIEW, "discover": VIEW, "assess": VIEW,
                  "remediate": OPERATE, "publish": VIEW, "monitor": VIEW,
-                 "liveops": HIDDEN, "analytics": VIEW, "settings": HIDDEN},
+                 "liveops": HIDDEN, "analytics": VIEW, "settings": HIDDEN, "graph": VIEW, "acr": VIEW},
         "grants": frozenset({"reports.export"}),
         "is_protected": False,
     },
@@ -282,7 +279,7 @@ BUILTIN_ROLES: dict[str, dict] = {
         "description": "Discovers and assesses content without changing files.",
         "tabs": {"overview": VIEW, "integrations": VIEW, "discover": OPERATE, "assess": OPERATE,
                  "remediate": VIEW, "publish": HIDDEN, "monitor": VIEW,
-                 "liveops": HIDDEN, "analytics": VIEW, "settings": HIDDEN},
+                 "liveops": HIDDEN, "analytics": VIEW, "settings": HIDDEN, "graph": VIEW, "acr": VIEW},
         "grants": frozenset(),
         "is_protected": False,
     },
@@ -291,7 +288,7 @@ BUILTIN_ROLES: dict[str, dict] = {
         "description": "Read-only dashboards, results, and monitoring.",
         "tabs": {"overview": VIEW, "integrations": HIDDEN, "discover": HIDDEN, "assess": VIEW,
                  "remediate": VIEW, "publish": VIEW, "monitor": VIEW,
-                 "liveops": HIDDEN, "analytics": VIEW, "settings": HIDDEN},
+                 "liveops": HIDDEN, "analytics": VIEW, "settings": HIDDEN, "graph": VIEW, "acr": VIEW},
         "grants": frozenset(),
         "is_protected": False,
     },

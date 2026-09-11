@@ -14,24 +14,24 @@ WIDE = {**NARROW, '1.3.1': frozenset({'docx'})}
 
 @pytest.mark.parametrize('prior,current,expected', [(NARROW,WIDE,False),(WIDE,NARROW,True),(NARROW,None,False),(None,NARROW,True),(NARROW,NARROW,True)])
 def test_reuse_requires_measured_scope(prior,current,expected):
-    st = SimpleNamespace(get_scan_scope=lambda sid: prior if sid == 'old' else current,
+    st = SimpleNamespace(get_scan_scope=lambda sid, **kwargs: prior if sid == 'old' else current,
                          scope_for_file=lambda sid,name,scope: scope)
     assert store_mod.Store._analysis_covers_scope(st,'old','a.docx','new','a.docx') is expected
 
 
 def test_same_scan_different_folder_selection_is_not_duplicate():
-    st = SimpleNamespace(get_scan_scope=lambda sid: WIDE,
+    st = SimpleNamespace(get_scan_scope=lambda sid, **kwargs: WIDE,
                          scope_for_file=lambda sid,name,scope: NARROW if name == 'a.docx' else WIDE)
     assert not store_mod.Store._analysis_covers_scope(st,'same','a.docx','same','b.docx')
 
 
 def test_remediation_respects_file_scope_and_fails_closed(monkeypatch):
-    st = SimpleNamespace(get_scan_scope=lambda sid: WIDE,
+    st = SimpleNamespace(get_scan_scope=lambda sid, **kwargs: WIDE,
                          scope_for_file=lambda sid,name,scope: NARROW)
     monkeypatch.setattr(handlers.core,'store',st)
     allows = handlers._remediation_scope('a.docx','scan')
     assert allows('1.1.1') and not allows('1.3.1')
-    st.get_scan_scope = lambda sid: (_ for _ in ()).throw(RuntimeError('unavailable'))
+    st.get_scan_scope = lambda sid, **kwargs: (_ for _ in ()).throw(RuntimeError('unavailable'))
     with pytest.raises(RuntimeError):
         handlers._remediation_scope('a.docx','scan')
 

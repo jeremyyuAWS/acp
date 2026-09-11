@@ -1450,6 +1450,41 @@ async def confirm_review_criterion(sid: str, filename: str, request: Request):
         core.store, sid, filename, (body.get("sc") or "").strip(), owner, body.get("note"))
 
 
+@router.get("/scans/{sid}/assessment-scope")
+def get_assessment_scope(sid: str, request: Request):
+    """Read the selected scope without exposing administrative settings."""
+    from assessment_policy import scope_as_json
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    scope = core.store.get_scan_scope(sid, refresh=True)
+    return {"scan_id": sid, "scan_scope": (scope_as_json(scope) if scope is not None
+                                           else core.store.get_setting("scan_scope", "") or "")}
+
+
+@router.put("/scans/{sid}/assessment-scope")
+def set_assessment_scope(sid: str, body: dict, request: Request):
+    """Save this scan's exact selected criteria; never change platform defaults."""
+    from assessment_policy import parse_scope_setting, scope_as_json
+    owner = _owner(request)
+    scan = core.store.get_scan(sid, owner=owner)
+    if scan is None:
+        raise HTTPException(404, "scan not found")
+    if set(body) != {"scan_scope"} or not isinstance(body["scan_scope"], (str, dict)):
+        raise HTTPException(422, "scan_scope must be the only field and contain a scope")
+    if any(w.get("scan_id") == sid for w in core.store.active_workflows(owner)):
+        raise HTTPException(409, "Wait for this scan's active work to finish before changing its criteria")
+    raw = _json.dumps(body["scan_scope"]) if isinstance(body["scan_scope"], dict) else body["scan_scope"]
+    scope, problem = parse_scope_setting(raw)
+    if problem or not scope:
+        raise HTTPException(422, f"scan_scope: {problem or 'select at least one criterion'}")
+    frozen = scope_as_json(scope)
+    core.store.merge_scan_scope(sid, {"scan_scope": frozen})
+    if core.store.get_scan_scope(sid, refresh=True) != scope:
+        raise HTTPException(409, "The scan scope could not be saved; reload this scan")
+    core.store.log_decision(owner, "assessment.scope_selected", detail=f"{sid} · {len(scope)} criteria")
+    return {"scan_id": sid, "scan_scope": frozen}
+
+
 @router.post("/scans/{sid}/assess")
 def assess(sid: str, request: Request, level: str = Query("AA"),
            include_lifecycle_flagged: bool = Query(False)):
@@ -1480,7 +1515,7 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
         # Phase 3a freeze: if no scope was captured at discover time (operator configured it
         # after the discover ran), freeze the current operator scope NOW before enqueuing so
         # _scan_assess / analyse_and_assess read the intended criteria, not an open slate.
-        if core.store.get_scan_scope(sid) is None:
+        if core.store.get_scan_scope(sid, refresh=True) is None:
             from assessment_policy import active_scope as _active_scope, scope_as_json as _scope_as_json
             _live = _active_scope(core.store)
             if _live:

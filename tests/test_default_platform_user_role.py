@@ -169,7 +169,7 @@ def test_the_backfill_takes_nothing_away(st):
 # which is the exact thing it exists to prevent.
 TABS_THE_DEFAULT_ROLE_WAS_GRANTED = {
     "overview", "integrations", "discover", "assess", "remediate",
-    "publish", "monitor", "liveops", "analytics", "settings",
+    "publish", "monitor", "liveops", "analytics", "settings", "graph", "acr",
 }
 
 

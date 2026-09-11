@@ -182,7 +182,7 @@ def test_predraft_skipped_for_dedup(monkeypatch):
     monkeypatch.setattr(core.store, "upsert_document", lambda *a, **kw: None)
     monkeypatch.setattr(core.store, "get_ai_enabled", lambda: True)
     monkeypatch.setattr(core.store, "scope_for_file", lambda *a, **kw: None)
-    monkeypatch.setattr(core.store, "get_scan_scope", lambda *a: None)
+    monkeypatch.setattr(core.store, "get_scan_scope", lambda *a, **kw: None)
     monkeypatch.setattr(handlers, "_emit_realtime_file_assess", lambda *a, **kw: None)
     monkeypatch.setattr(handlers, "_assess_level", lambda *a: "summary")
 
