@@ -27,3 +27,15 @@ describe('machine-value typography across workflow tabs', () => {
     expect(card.match(/className="machine-value"/g)).toHaveLength(3)
   })
 })
+
+
+describe('shared page and native control typography', () => {
+  it('gives every mounted tab the same inherited page and form baseline', () => {
+    const css = fs.readFileSync(path.join(root, 'styles.css'), 'utf8')
+    expect(css).toMatch(/body\s*\{[^}]*font-family:\s*var\(--font-ui\)[^}]*font-size:\s*var\(--text-body\)[^}]*line-height:\s*1.5/s)
+    expect(css).toMatch(/input, select, textarea\s*\{[^}]*font:\s*inherit[^}]*font-size:\s*var\(--text-control\)/s)
+    expect(css).toMatch(/\.metric b\s*\{[^}]*font-family:\s*var\(--font-mono\)[^}]*font-variant-numeric:\s*tabular-nums/s)
+    const entry = fs.readFileSync(path.join(root, 'main.jsx'), 'utf8')
+    expect(entry).toContain("import './styles.css'")
+  })
+})
