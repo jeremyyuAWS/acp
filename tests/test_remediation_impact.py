@@ -60,6 +60,8 @@ def test_verified_requires_evidence_and_protected_stays_manual():
 
 
 class Facts:
+    def get_setting(self, key, default=None):
+        return default
     def get_ai_enabled(self):
         return True
     def get_scan(self, sid, owner=None):
