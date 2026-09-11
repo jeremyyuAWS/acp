@@ -108,3 +108,52 @@ def test_report_rejects_regressions_in_saved_candidate():
     report = build_report(manifest, envelope, validation, None, regression)
     assert report.candidate_rejected_reason
     assert report.outcomes[0].outcome == Outcome.CANDIDATE_REJECTED
+
+
+def test_form_values_are_not_exposed_in_model_context():
+    with pikepdf.open(BytesIO(make_pdf(field_names=('Text1',)))) as pdf:
+        pdf.Root.AcroForm.Fields[0].V = pikepdf.String('PRIVATE_PATIENT_VALUE_123')
+        out = BytesIO(); pdf.save(out)
+    package = package_pdf(out.getvalue(), max_text_chars=10000)
+    assert not package.extraction_issues
+    assert 'PRIVATE_PATIENT_VALUE_123' not in package.text_context
+    assert package.form_fields[0].preserved_state_sha256
+
+
+def test_form_state_changes_cannot_hide_behind_an_authorized_name_edit(tmp_path):
+    with pikepdf.open(BytesIO(make_pdf(field_names=('Text1',)))) as pdf:
+        pdf.Root.AcroForm.Fields[0].V = pikepdf.String('Alice Patient')
+        out = BytesIO(); pdf.save(out); original = out.getvalue()
+    baseline = package_pdf(original, max_text_chars=10000)
+    mutations = ('delete_value', 'change_value', 'change_type', 'move_widget')
+    for mutation in mutations:
+        with pikepdf.open(BytesIO(original)) as pdf:
+            field = pdf.Root.AcroForm.Fields[0]
+            field.TU = pikepdf.String('Patient name')
+            if mutation == 'delete_value':
+                del field['/V']
+            elif mutation == 'change_value':
+                field.V = pikepdf.String('Someone else')
+            elif mutation == 'change_type':
+                field.FT = pikepdf.Name('/Btn')
+            else:
+                field.Rect = pikepdf.Array([1, 2, 3, 4])
+            out = BytesIO(); pdf.save(out)
+        result = recheck_pdf(tmp_path / mutation, out.getvalue(), baseline,
+                             frozenset({'pdf:field:1:0'}), max_text_chars=10000)
+        assert result.reopened_ok, mutation
+        assert 'pdf:field:1:0' in result.unexpected_changes, mutation
+
+
+def test_name_edit_preserves_existing_form_value(tmp_path):
+    with pikepdf.open(BytesIO(make_pdf(field_names=('Text1',)))) as pdf:
+        pdf.Root.AcroForm.Fields[0].V = pikepdf.String('Alice Patient')
+        out = BytesIO(); pdf.save(out); original = out.getvalue()
+    baseline = package_pdf(original, max_text_chars=10000)
+    candidate = apply_edits(original, DocumentFormat.PDF, [
+        edit('set_pdf_field_accessible_name', 'pdf:field:1:0', 'Patient name')])
+    result = recheck_pdf(tmp_path, candidate.candidate_bytes, baseline,
+                         frozenset({'pdf:field:1:0'}), max_text_chars=10000)
+    assert result.reopened_ok
+    assert not result.unexpected_changes
+    assert not result.still_failing_locators

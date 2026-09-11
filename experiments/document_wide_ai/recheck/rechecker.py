@@ -57,8 +57,14 @@ def recheck_pdf(
     disappeared = set(baseline_by_loc) - set(reopened_by_loc)
     still_failing = (authorized_locators & reopened_missing) | (authorized_locators - set(reopened_by_loc))
     new_failures = (reopened_missing - baseline_missing) | disappeared
+    baseline_field_state = {f.locator: f.preserved_state_sha256 for f in baseline.form_fields}
+    changed_field_state = {
+        f.locator for f in reopened.form_fields
+        if f.locator in baseline_field_state
+        and f.preserved_state_sha256 != baseline_field_state[f.locator]
+    }
     unexpected = tuple(sorted(
-        disappeared | (set(reopened_by_loc) - set(baseline_by_loc)) |
+        changed_field_state | disappeared | (set(reopened_by_loc) - set(baseline_by_loc)) |
         {loc for loc, value in reopened_by_loc.items()
          if loc not in authorized_locators and loc in baseline_by_loc and value != baseline_by_loc[loc]}
     ))

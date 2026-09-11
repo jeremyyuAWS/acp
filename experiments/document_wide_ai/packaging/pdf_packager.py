@@ -29,6 +29,7 @@ class PdfFormField:
     field_type: str = ""
     rectangle: tuple[float, ...] = ()
     nearby_text: tuple[str, ...] = ()
+    preserved_state_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,52 @@ def _rectangle(field):
         return values if len(values) == 4 and all(math.isfinite(v) for v in values) else ()
     except (TypeError, ValueError):
         return ()
+
+
+def _field_state_fingerprint(fld) -> str:
+    """Hash non-editable form state without sending filled-in values to the model.
+
+    /TU is the only allowed field mutation. Resolve inherited value/type fields and
+    snapshot widget rectangles/states; ignore object numbers, which change on save.
+    Unreadable or cyclic data fails extraction instead of silently weakening the check.
+    """
+    def primitive(value, depth=0):
+        if depth > 16:
+            raise ValueError("form value nesting exceeds preservation limit")
+        if isinstance(value, pikepdf.Stream):
+            return {"stream_sha256": sha256_hex(value.read_bytes())}
+        if isinstance(value, pikepdf.Dictionary):
+            return {str(k): primitive(v, depth + 1) for k, v in value.items()}
+        if isinstance(value, pikepdf.Array):
+            return [primitive(v, depth + 1) for v in value]
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, pikepdf.Name):
+            return {"name": str(value)}
+        if isinstance(value, pikepdf.String):
+            return {"string_bytes": bytes(value).hex()}
+        # Decimal numbers preserve their textual value.
+        return str(value)
+
+    def inherited(key):
+        current = fld
+        for _ in range(16):
+            if key in current:
+                return {"present": True, "value": primitive(current[key])}
+            parent = current.get('/Parent')
+            if parent is None:
+                return {"present": False}
+            current = parent
+        raise ValueError("form parent chain exceeds preservation limit")
+
+    state = {key: inherited(key) for key in (
+        '/FT', '/Ff', '/V', '/DV', '/Opt', '/I', '/MaxLen', '/T', '/TM',
+    )}
+    widgets = list(fld.get('/Kids', [])) or [fld]
+    state['widgets'] = [{key: primitive(widget.get(key))
+                         for key in ('/Rect', '/AS', '/F')}
+                        for widget in widgets]
+    return sha256_hex(json.dumps(state, sort_keys=True, ensure_ascii=True).encode('utf-8'))
 
 
 def package_pdf(source_bytes: bytes, *, max_text_chars: int) -> PackagedPdf:
@@ -123,7 +170,8 @@ def package_pdf(source_bytes: bytes, *, max_text_chars: int) -> PackagedPdf:
                                   if y0-40 <= y <= y1+40 and x0-250 <= x <= x1+30]
                     nearby = tuple(text[:500] for _, text in sorted(candidates)[:4])
                 form_fields.append(PdfFormField(loc, current_tu or None, page_index,
-                    str(fld.get('/T', '')), str(fld.get('/FT', '')), rectangle, nearby))
+                    str(fld.get('/T', '')), str(fld.get('/FT', '')), rectangle, nearby,
+                    _field_state_fingerprint(fld)))
             raw_figures = collect_pdf_figures(pdf.Root.get('/StructTreeRoot'))
             locators = pdf_figure_locators(raw_figures, pdf)
             figures = [PdfFigure(locators[id(fig)], pdf_figure_alt(fig),
