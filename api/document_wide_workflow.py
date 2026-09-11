@@ -18,7 +18,9 @@ _NATIVE_REASONS = {
 }
 
 
-def _reason(value):
+def _reason(value, input_mode=None):
+    if input_mode == 'native_pdf' and value == 'request_rejected_before_dispatch':
+        return 'The full PDF could not be sent within the current model settings and limits. Try Document context or review your cloud model settings.'
     return _NATIVE_REASONS.get(value, value)
 
 
@@ -113,7 +115,7 @@ def process_file(store, context):
             payload = {'images': package_images(data, manifest)}
         response = generate_document(build_request(manifest, request_id=request_id), **payload)
         if not response.get('envelope'):
-            _record(store, context, 'deferred', {'request_id': request_id, 'reason': _reason(response.get('reason', 'No valid AI response was returned.'))})
+            _record(store, context, 'deferred', {'request_id': request_id, 'reason': _reason(response.get('reason', 'No valid AI response was returned.'), input_mode)})
             return
         validation = validate_edit_response(manifest, response['envelope'])
         by_id = {f.finding_id: f for f in manifest.findings}
