@@ -250,3 +250,15 @@ def test_native_preparation_failure_defers_without_provider_or_queue(monkeypatch
     workflow.process_file(store, ctx)
     assert not calls and not queued
     assert 'document_wide_pdf_hash_mismatch' in logs[0][1]['detail']
+
+
+def test_native_provider_limit_is_explained_without_claiming_a_fix(monkeypatch):
+    store, ctx, calls, logs, queued = setup(monkeypatch)
+    ctx.policy['document_wide_input_mode'] = 'native_pdf'
+    sys.modules['document_wide_manifest'].package_native_pdf = lambda data, manifest: data
+    sys.modules['document_wide_provider'].generate_document = lambda *args, **kwargs: {
+        'deferred': True, 'reason': 'document_wide_native_pdf_context_limit', 'envelope': None}
+    workflow.process_file(store, ctx)
+    assert not queued
+    assert 'input allowance' in logs[0][1]['detail']
+    assert 'document_wide_native_pdf_context_limit' not in logs[0][1]['detail']

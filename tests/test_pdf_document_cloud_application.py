@@ -17,8 +17,9 @@ from test_document_wide_pdf_context import pdf_context
 import test_ai_standing_approval as base
 
 
+@pytest.mark.parametrize('input_mode', ['extracted', 'native_pdf'])
 @pytest.mark.parametrize('corrupt_writer', [False, True])
-def test_pdf_document_figure_reaches_real_writer_and_exact_saved_delivery(isolated_store, monkeypatch, tmp_path, corrupt_writer):
+def test_pdf_document_figure_reaches_real_writer_and_exact_saved_delivery(isolated_store, monkeypatch, tmp_path, corrupt_writer, input_mode):
     store = isolated_store
     monkeypatch.setattr(base, 'FILE', 'file.pdf')
     original = pdf_context()
@@ -49,7 +50,7 @@ def test_pdf_document_figure_reaches_real_writer_and_exact_saved_delivery(isolat
     token = SOURCE.set(None)
     try:
         with run_context(store, job['payload'], job) as ctx:
-            object.__setattr__(ctx, 'policy', {**ctx.policy, 'document_wide_ai':True})
+            object.__setattr__(ctx, 'policy', {**ctx.policy, 'document_wide_ai':True, 'document_wide_input_mode':input_mode})
             with store._db.cursor() as cur:
                 store._db.execute(cur, 'UPDATE ai_spending_run_policies SET policy_json=%s WHERE run_id=%s', (json.dumps(dict(ctx.policy)), ctx.run_id))
             assert bind_assessed_input(sid, filename, original, original)
@@ -59,7 +60,12 @@ def test_pdf_document_figure_reaches_real_writer_and_exact_saved_delivery(isolat
                 assert len(request.manifest.findings) == 1  # no duplicate aggregate/target
                 f = request.manifest.findings[0]
                 assert f.finding_id == 'assessed-pdf-figure' and f.locator.element_ref == 'pdf:fig:1:0'
-                assert kwargs['images']  # real bounded PDF visual context was supplied
+                if input_mode == 'native_pdf':
+                    assert kwargs == {'pdf_bytes': candidate}
+                    assert sha256(kwargs['pdf_bytes']).hexdigest() == request.manifest.source_sha256
+                    assert kwargs['pdf_bytes'] != original  # retain previous deterministic fixes
+                else:
+                    assert kwargs['images']  # real bounded PDF visual context was supplied
                 p = base.proposal(store, rule='1.1.1', locator=f.locator.element_ref, value='Red circle')
                 with store._db.cursor() as cur:
                     store._db.execute(cur, "UPDATE ai_attempt_history SET status='drafted' WHERE run_id=%s", (ctx.run_id,))

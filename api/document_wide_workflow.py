@@ -7,6 +7,21 @@ import json
 SUPPORTED = {'.docx': ('1.1.1',), '.pdf': ('1.1.1', '4.1.2')}
 
 
+_NATIVE_REASONS = {
+    'document_native_pdf_unreadable_or_over_limit': 'The full PDF must be readable, unencrypted, and no more than 100 pages.',
+    'document_wide_native_pdf_unreadable_or_limit': 'The full PDF could not be read completely within the preview limits.',
+    'document_wide_native_pdf_size_limit': 'The full PDF exceeds the 20 MB preview limit.',
+    'document_wide_native_pdf_hash_mismatch': 'The saved PDF changed before it could be sent. Run remediation again for the current copy.',
+    'document_wide_native_pdf_context_limit': 'The full PDF exceeds the configured model’s input allowance. Choose Document context or a model with a larger allowance.',
+    'document_wide_native_pdf_model_unavailable': 'The configured cloud model does not support this full-PDF preview. Choose Document context or a supported PDF model.',
+    'document_wide_native_pdf_endpoint_unavailable': 'The configured cloud connection does not support native PDF input.',
+}
+
+
+def _reason(value):
+    return _NATIVE_REASONS.get(value, value)
+
+
 def enabled(context, filename):
     return bool(context and context.policy.get('document_wide_ai') is True
                 and any(filename.lower().endswith(ext) for ext in SUPPORTED))
@@ -67,9 +82,9 @@ def process_file(store, context):
             'document_selected_criteria_missing': 'The saved assessment does not identify the selected criteria. Assess the document again.',
             'document_assessment_lineage_missing': 'The saved assessment finding identities are unavailable. Assess the document again.',
         }
-        if str(exc) not in reasons:
+        if str(exc) not in reasons and str(exc) not in _NATIVE_REASONS:
             raise
-        _record(store, context, 'deferred', {'reason': reasons[str(exc)]})
+        _record(store, context, 'deferred', {'reason': reasons.get(str(exc), _reason(str(exc)))})
         return
     input_mode = ('native_pdf' if filename.lower().endswith('.pdf')
                   and context.policy.get('document_wide_input_mode') == 'native_pdf'
@@ -92,13 +107,13 @@ def process_file(store, context):
                 payload = {'pdf_bytes': package_native_pdf(data, manifest)}
             except ValueError as exc:
                 _record(store, context, 'deferred', {'request_id': request_id,
-                    'input_mode': input_mode, 'reason': str(exc)})
+                    'input_mode': input_mode, 'reason': _reason(str(exc))})
                 return
         else:
             payload = {'images': package_images(data, manifest)}
         response = generate_document(build_request(manifest, request_id=request_id), **payload)
         if not response.get('envelope'):
-            _record(store, context, 'deferred', {'request_id': request_id, 'reason': response.get('reason', 'No valid AI response was returned.')})
+            _record(store, context, 'deferred', {'request_id': request_id, 'reason': _reason(response.get('reason', 'No valid AI response was returned.'))})
             return
         validation = validate_edit_response(manifest, response['envelope'])
         by_id = {f.finding_id: f for f in manifest.findings}
