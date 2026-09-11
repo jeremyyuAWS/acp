@@ -50,6 +50,24 @@
   --error-fg:          #B43A2A;  /* 5.8:1 — error text, icons */
   --error-fg-strong:   #A32D2D;  /* 7.0:1 — text on --error-bg */
   --error-bg:          #FBEAEA;  /* red tint background */
+
+  /* ── Live Operations pressure states ──────────────────────────────────────
+     AdminLiveTraffic's four PRESSURE states colour a 12px `.chip` on #fff, so
+     AA normal-text 4.5:1 applies — not the 3:1 non-text threshold.
+
+     These lived as hex literals in the PRESSURE map and reached the DOM through
+     an inline `style={{ color }}`, which no [data-wcag="on"] rule can override:
+     an inline declaration outranks any selector. So the high-contrast toggle
+     silently did nothing here while promising "accessible colours across every
+     tab". Same fix as --muted-fg: the JSX keeps its inline style but names a
+     token, so the toggle propagates without further JSX edits.
+
+     Three of the four standard values already passed. `busy` did not —
+     #A66A16 = 4.47:1, short of 4.5:1 by 0.03 — and is corrected here.        */
+  --pressure-healthy:   #4F7F2A;  /* 4.77:1 */
+  --pressure-busy:      #8A5813;  /* 6.02:1 — was #A66A16 = 4.47:1 (FAILED AA) */
+  --pressure-saturated: #B45309;  /* 5.02:1 */
+  --pressure-stalled:   #B4232F;  /* 6.52:1 */
 }
 * { box-sizing: border-box; }
 
@@ -1425,6 +1443,17 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
   background: #7A5000;  /* #7A5000 on #faf8fb = 6.68:1 */
 }
 /* Rule-breakdown bars: pass bar #5FA83C = 2.78:1 (FAIL 1.4.11); skip bar #C7CCD6 = 1.53:1 (FAIL) */
+/* Live Operations pressure chips. The standard values all pass AA on #fff after the
+   `busy` correction; WCAG mode tightens all four to ≥7:1 while keeping each hue
+   distinguishable from its neighbour, since the four states are told apart by colour
+   plus label and must not collapse into one another. `busy` reuses the #7A5000 amber
+   .livedot and .activedot already adopt in this mode. */
+[data-wcag="on"] {
+  --pressure-healthy:   #2F5310;  /*  8.88:1 (was 4.77:1) */
+  --pressure-busy:      #7A5000;  /*  7.06:1 (was 6.02:1) */
+  --pressure-saturated: #8F3A00;  /*  7.57:1 (was 5.02:1) */
+  --pressure-stalled:   #8A1A24;  /*  9.32:1 (was 6.52:1) */
+}
 [data-wcag="on"] .rb-pass { background: #3D7527; } /* 5.27:1 on --bg */
 [data-wcag="on"] .rb-skip { background: #6B7280; } /* 4.58:1 on --bg */
 /* Icon buttons: color:#b7afbd (currentColor → SVG fill) = 2.13:1 on white (FAIL 1.4.11 ≥3:1).

@@ -23,11 +23,15 @@ const STAGE = {
   release: { label: 'Release', color: '#A66A16' },
 }
 
+// Colours are TOKENS, not literals, so the high-contrast toggle reaches them. Every consumer
+// below puts these in a CSS property context — `color`, and a `border-left` shorthand — where
+// `var()` resolves; none passes them to a canvas or an SVG presentation attribute, which would
+// receive the literal string "var(--pressure-busy)" and paint nothing.
 const PRESSURE = {
-  healthy: { label: 'Capacity available', color: '#4F7F2A' },
-  busy: { label: 'Work waiting', color: '#A66A16' },
-  saturated: { label: 'At capacity', color: '#B45309' },
-  stalled: { label: 'Queue stalled', color: '#B4232F' },
+  healthy: { label: 'Capacity available', color: 'var(--pressure-healthy)' },
+  busy: { label: 'Work waiting', color: 'var(--pressure-busy)' },
+  saturated: { label: 'At capacity', color: 'var(--pressure-saturated)' },
+  stalled: { label: 'Queue stalled', color: 'var(--pressure-stalled)' },
 }
 
 // `bezier` rather than the stepped router this replaced: one continuous curve per line, with no
