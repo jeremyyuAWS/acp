@@ -12,7 +12,7 @@ import './info-tip.css'
 //
 // `label` names what the text is about ("About subfolders"), because "more information" tells a
 // screen-reader user nothing about which of several tips they have landed on.
-export default function InfoTip({ label, children }) {
+export default function InfoTip({ label, children, toggleOnClick = true }) {
   const id = useId()
   const [open, setOpen] = useState(false)
   const wrap = useRef(null)
@@ -28,7 +28,7 @@ export default function InfoTip({ label, children }) {
     <button type="button" aria-label={`About ${label}`} aria-expanded={open}
       aria-describedby={open ? id : undefined}
       onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
-      onClick={() => setOpen(v => !v)}>
+      onClick={() => setOpen(v => toggleOnClick ? !v : true)}>
       <span aria-hidden="true">i</span>
     </button>
     {open && <span id={id} role="tooltip" className="info-tip__text">{children}</span>}
