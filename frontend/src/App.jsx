@@ -469,16 +469,26 @@ export default function App() {
   // so scans that outlast the token don't 401 on their tail. Best-effort; no-op without GIS.
   useEffect(() => {
     if (!hasDriveToken) return
+    let alive = true
     const iv = setInterval(async () => {
       try {
-        const a = await getActiveScan()
-        if (!a?.id) return
-        await refreshDriveToken()
-        await refreshScanDriveToken(a.id)
+        const response = await getActiveWorkflows()
+        let ids = [...new Set((response?.active_workflows || [])
+          .filter(workflow => workflow?.source === 'drive' && workflow?.scan_id)
+          .map(workflow => workflow.scan_id))]
+        if (!ids.length) {
+          const active = await getActiveScan()
+          if (active?.id) ids = [active.id]
+        }
+        if (!ids.length || !alive) return
+        const token = await refreshDriveToken()
+        if (!alive) return
+        setDriveToken(token)
+        await Promise.all(ids.map(id => refreshScanDriveToken(id)))
         setTokenRefreshError(null)
       } catch { setTokenRefreshError('Google Drive session may have expired — files added since then may be skipped. Reconnect Drive to continue.') }
     }, 20 * 60 * 1000)
-    return () => clearInterval(iv)
+    return () => { alive = false; clearInterval(iv) }
   }, [hasDriveToken])
   const [hasSPToken, setHasSPToken] = useState(() => !!sessionStorage.getItem('sp_token'))
   const [tokenRefreshError, setTokenRefreshError] = useState(null)

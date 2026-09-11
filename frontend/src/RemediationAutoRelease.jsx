@@ -1,11 +1,12 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { getAutomaticRelease, enableAutomaticRelease, stopAutomaticRelease } from './api.js'
+import { getAutomaticRelease, enableAutomaticRelease, stopAutomaticRelease, resumeAutomaticRelease } from './api.js'
+import DriveReleaseReconnect from './DriveReleaseReconnect.jsx'
 import LiveCounter from './LiveCounter.jsx'
 import './remediation-auto-release.css'
 
 const ACTIVE = new Set(['active', 'waiting', 'processing', 'publishing', 'blocked'])
 const FILE_STATUS = { published: 'Delivered', publishing: 'Checking delivery', processing: 'Publishing', waiting: 'Waiting', blocked: 'Needs attention', failed: 'Needs attention', stopped: 'Stopped' }
-const defaultClient = { get: getAutomaticRelease, enable: enableAutomaticRelease, stop: stopAutomaticRelease }
+const defaultClient = { get: getAutomaticRelease, enable: enableAutomaticRelease, stop: stopAutomaticRelease, resume: resumeAutomaticRelease }
 export default function RemediationAutoRelease({ scanId, files = [], readOnly = false, client = defaultClient, onStatus }) {
   const descriptionId = useId()
   const [state, setState] = useState(null)
@@ -89,6 +90,9 @@ export default function RemediationAutoRelease({ scanId, files = [], readOnly = 
         <p>{authorization.attention_reason || 'No recent delivery progress. Check the destination and delivery receipt before retrying; a copy may already exist.'}</p>
         {authorization.last_progress_at && Number.isFinite(Date.parse(authorization.last_progress_at)) && <p>Last delivery progress: {new Date(authorization.last_progress_at).toLocaleString()}.</p>}
       </div>}
+      {(authorization.requires_reconnect === true || authorization.can_resume === true) && authorization.resumable !== false && enabled && <DriveReleaseReconnect
+        key={`${scanId}:${authorization.id}`} scanId={scanId} authorizationId={authorization.id} requiresReconnect={authorization.requires_reconnect === true} readOnly={readOnly || busy}
+        onResume={async () => { await client.resume(scanId, authorization.id); setRefresh(n => n + 1) }} />}
       <dl aria-live="off">
         <div><dt>Released</dt><dd><LiveCounter value={progress.published || 0} /></dd></div>
         <div><dt>Waiting</dt><dd>{progress.pending || 0}</dd></div>

@@ -46,6 +46,8 @@ class _Files:
     def create(self, body=None, media_body=None, fields=None):
         self._fake.calls.append(("create", body.get("name") if body else None))
         self._fake.props.append((body or {}).get("properties"))
+        if media_body is not None:
+            self._fake.data = media_body.getbytes(0, media_body.size())
         return _Exec({"id": "new-id", "webViewLink": "https://drive/new"})
 
     # `body` carries the provenance stamp on an upsert — the real Drive API takes it
@@ -53,13 +55,19 @@ class _Files:
     def update(self, fileId=None, body=None, media_body=None, fields=None):
         self._fake.calls.append(("update", fileId))
         self._fake.props.append((body or {}).get("properties"))
+        if media_body is not None:
+            self._fake.data = media_body.getbytes(0, media_body.size())
         return _Exec({"id": fileId, "webViewLink": "https://drive/updated"})
+
+    def get_media(self, fileId=None):
+        return _Exec(self._fake.data)
 
 
 class _FakeSvc:
     def __init__(self, list_result=None):
         self.list_result = list_result or []
         self.calls = []
+        self.data = b""
         self.props = []          # `properties` dict passed on each create/update
 
     def files(self):
@@ -197,6 +205,7 @@ def test_idempotent_upload_reuses_existing_document_without_overwrite():
     svc = _FakeSvc(list_result=[{
         "id": "published-1", "webViewLink": "https://drive/existing"
     }])
+    svc.data = b"fixed"
     result = publish.upload_published(
         svc, "release-folder", "report.pdf", b"fixed",
         idempotency_key="stable-key", return_details=True)

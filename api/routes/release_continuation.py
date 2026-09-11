@@ -18,7 +18,11 @@ def public_state(row):
     if row is None:
         return None
     intent = row['intent']
-    return {**row, 'intent': {**intent, 'files': {
+    pending = any(isinstance(entry, dict) and entry.get('state') in {'failed', 'publishing', 'ready', 'applying'}
+                  for entry in row.get('progress', {}).values())
+    reconnect = (intent.get('source') == 'drive' and pending
+                 and not core.get_scan_tokens(row['scan_id']).get('drive'))
+    return {**row, 'requires_reconnect': reconnect, 'intent': {**intent, 'files': {
         file: {**entry, 'rows': [item for item in entry['rows'] if item['authorize']]}
         for file, entry in intent['files'].items()}}}
 

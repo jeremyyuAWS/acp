@@ -2627,3 +2627,8 @@ export const downloadReleaseReport = async (scanId, bundleId, assetIndex, name) 
   const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
+
+export const resumeAutomaticRelease = (scanId, authorizationId) => fetch(
+  `${BASE}/scans/${encodeURIComponent(scanId)}/release/automatic/${encodeURIComponent(authorizationId)}/resume`, {
+    method: 'POST', headers: headers(),
+  }).then(j)

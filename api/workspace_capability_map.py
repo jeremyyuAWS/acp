@@ -234,7 +234,8 @@ _map_many([("GET", "/ai/suggest"), ("GET", "/ai/explain"), ("GET", "/ai/validate
 _map_many([("POST", "/scans/{sid}/publish"),
            ("POST", "/scans/{sid}/release/automatic"),
            ("POST", "/scans/{sid}/release/reports/retry"),
-           ("POST", "/scans/{sid}/release/automatic/{authorization_id}/stop")], {"release.publish"})
+           ("POST", "/scans/{sid}/release/automatic/{authorization_id}/stop"),
+           ("POST", "/scans/{sid}/release/automatic/{authorization_id}/resume")], {"release.publish"})
 _map_many([("POST", "/scans/{sid}/release/continuation/{intent_id}/authorize")],
           {"release.publish", "remediate.review"})
 _map_many([("POST", "/scans/{sid}/release/continuation/{intent_id}/resume")], {"release.publish"})

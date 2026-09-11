@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import RemediationAutoRelease from './RemediationAutoRelease.jsx'
 import { getAutomaticRelease, enableAutomaticRelease, stopAutomaticRelease } from './api.js'
-vi.mock('./api.js', () => ({ getAutomaticRelease: vi.fn(), enableAutomaticRelease: vi.fn(), stopAutomaticRelease: vi.fn() }))
+vi.mock('./api.js', () => ({ getAutomaticRelease: vi.fn(), enableAutomaticRelease: vi.fn(), stopAutomaticRelease: vi.fn(), resumeAutomaticRelease: vi.fn() }))
 const preview = { available: true, run_id: 'execution-one', destination: { provider: 'sharepoint', folder_id: 'folder', folder_name: 'Reports' }, destination_label: 'SharePoint / Reports', authorization: null }
 const authorized = { ...preview, authorization: { id: 'auth', status: 'active', expires_at: '2026-09-10T07:00:00+00:00', run_id: 'execution-one', files: ['a.docx'], destination_label: 'SharePoint / Reports', progress: { published: 0, pending: 1, failed: 0, blocked: 0 } } }
 beforeEach(() => { getAutomaticRelease.mockResolvedValue(preview); enableAutomaticRelease.mockResolvedValue(authorized); stopAutomaticRelease.mockResolvedValue({}) })
@@ -124,4 +124,18 @@ it('does not claim an uncertain terminal delivery never reached the destination'
  const v=await mount()
  expect(v.container.textContent).toContain('Delivery is not confirmed for files needing attention.')
  expect(v.container.textContent).not.toContain('Files needing attention have not been released.')
+})
+
+it('offers reconnect only when the saved release explicitly requires Drive access', async () => {
+ getAutomaticRelease.mockResolvedValue({...authorized, authorization:{...authorized.authorization,status:'blocked',requires_reconnect:true}})
+ const v = await mount()
+ expect(v.button('Reconnect Google Drive')).toBeTruthy()
+ expect(enableAutomaticRelease).not.toHaveBeenCalled()
+ await v.render({readOnly:true})
+ expect(v.button('Reconnect Google Drive').disabled).toBe(true)
+})
+it('never offers reconnect for stopped or expired authorization', async () => {
+ getAutomaticRelease.mockResolvedValue({...authorized, authorization:{...authorized.authorization,status:'expired',requires_reconnect:true}})
+ const v = await mount()
+ expect(v.button('Reconnect Google Drive')).toBeUndefined()
 })

@@ -863,7 +863,7 @@ def _publish_file(payload: dict, job: dict) -> None:
 
 
 def _publish_file_guarded(payload: dict, job: dict) -> None:
-    """Durably publish one approved corrected copy to its source SharePoint library.
+    """Durably publish one approved corrected copy to its source provider.
 
     Tokens are resolved from the short-lived Redis token store at execution time and are never
     placed in the durable job payload. One file per job makes a deployment/restart resumable and
@@ -876,8 +876,10 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
     if not all((scan_id, filename, owner, release_id)):
         raise FatalJobError("publish_file job missing release identity")
     scan = core.store.get_scan(scan_id, owner=owner)
-    if not scan or (scan.get("run") or {}).get("source") != "sharepoint":
-        raise FatalJobError("publish_file job is not an owned SharePoint scan")
+    source = ((scan or {}).get("run") or {}).get("source")
+    if not scan or source not in {"sharepoint", "drive"}:
+        raise FatalJobError("publish_file job is not an owned supported cloud scan")
+    provider = "Google Drive" if source == "drive" else "SharePoint"
     release = core.store.release_status(release_id, owner)
     if not release or release.get("scan_id") != scan_id:
         raise FatalJobError("release execution does not belong to this scan")
@@ -891,14 +893,23 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
     if allow_remaining_issues and (not payload.get("artifact_digest") or not payload.get("remediated_at")):
         raise FatalJobError("Release with remaining issues requires exact artifact authorization")
     saved = core.store.get_release_document(release_id, filename, owner)
-    token = core.get_scan_tokens(scan_id).get("sp")
+    def require_reconnect():
+        if source == "drive" and payload.get("automatic_release_id"):
+            import automatic_release_store as persistence
+            persistence.update_file(core.store, payload["automatic_release_id"], owner, filename,
+                                    {"state": "blocked", "requires_reconnect": True,
+                                     "waiting_for_delivery": False,
+                                     "message": "Reconnect Google Drive with write access to resume delivery."})
+
+    token = core.get_scan_tokens(scan_id).get("drive" if source == "drive" else "sp")
     if not token:
+        require_reconnect()
         _release_failure(release_id, owner, filename, record,
                          "provider_session_expired",
-                         "Reconnect SharePoint and retry this document.")
+                         f"Reconnect {provider} and retry this document.")
         # Dead, not done: enqueue_stage_batch deliberately revives failed terminal rows when the
         # user retries with a fresh token. Marking this successful would make Retry a no-op.
-        raise FatalJobError("SharePoint session expired — reconnect and retry")
+        raise FatalJobError(f"{provider} session expired — reconnect and retry")
     import publish as _publish
     from release_artifacts import ReleaseArtifactError, artifact_tag, reuse_state, require_current_record, require_current_source
     import scanner as _scanner
@@ -906,8 +917,29 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
     source_name = record.get("source_name") or filename
     source_id = record.get("drive_file_id") or filename
     drive_id = record.get("drive_id")
-    location = f"graph:{drive_id or 'me'}"
+    location = "google:me" if source == "drive" else f"graph:{drive_id or 'me'}"
+    content_digest = None
+    reservation = None
+    target_file_id = None
+    reconcile_only = False
+
+    def reservation_retry(message):
+        from worker import ReservationRetryError
+        from datetime import datetime, timezone
+        remaining = 300
+        if (reservation or {}).get("lease_expires_at"):
+            expires = datetime.fromisoformat(reservation["lease_expires_at"].replace("Z", "+00:00"))
+            remaining = max(1, (expires - datetime.now(timezone.utc)).total_seconds() + 1)
+        return ReservationRetryError(message, retry_after_seconds=remaining)
+
+    def log_provider_failure(exc):
+        from routes.scans import _log_release_provider_error
+        return _log_release_provider_error(
+            exc, scan_id=scan_id, release_id=release_id, file=filename,
+            provider=source, uncertain=bool(reservation and reservation.get("acquired")))
+
     try:
+        drive_svc = _drive_client(token) if source == "drive" else None
         content_digest = _publish.remediated_content_digest(owner, scan_id, filename)
         if not content_digest:
             raise IOError("corrected content was unavailable")
@@ -915,7 +947,7 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
             raise ReleaseArtifactError("The corrected artifact changed after this release was requested.")
         record = require_current_record(core.store, scan_id, filename, content_digest,
                                         payload.get("remediated_at") or record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
-        require_current_source("sharepoint", record, sp_token=token)
+        require_current_source(source, record, sp_token=token, drive_service=drive_svc)
         record = require_current_record(core.store, scan_id, filename, content_digest, record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
         identity = reuse_state(saved, content_digest)
         if identity == "unresolved":
@@ -923,24 +955,53 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
         if identity == "reuse":
             return
         chosen_parent = release.get("parent_folder_id")
-        if chosen_parent:
+        if chosen_parent and source == "sharepoint":
             chosen_drive, _, chosen_item = chosen_parent.partition("/")
             drive_id, parent_folder_id = chosen_drive, chosen_item
             location = f"graph:{drive_id}"
         else:
-            parent_folder_id = None
+            parent_folder_id = chosen_parent if source == "drive" else None
         root = core.store.get_release_root(release_id, location, owner)
-        if not root:
+        if not root and source != "drive":
             claimed_name = core.store.claim_release_root_name(
-                release_id, owner, "sharepoint", location, release["folder_name"])
+                release_id, owner, source, location, release["folder_name"])
             folder_options = {"parent_id": parent_folder_id} if parent_folder_id else {}
             detail = _publish.ensure_sharepoint_release_folder(
                 token, drive_id, release_id, claimed_name, **folder_options)
             root = core.store.record_release_root(
-                release_id, owner, "sharepoint", location, detail["id"],
+                release_id, owner, source, location, detail["id"],
                 detail["name"], detail.get("url"))
-        folders, planned_name = _publish.sharepoint_relative_path(source_path, source_name)
-        planned_destination = f"graph:{drive_id or 'me'}:{root['folder_id']}:{'/'.join([*folders, planned_name])}"
+        folders, planned_name = (_publish.normalize_relative_path(source_path, filename)
+                                 if source == "drive" else
+                                 _publish.sharepoint_relative_path(source_path, source_name))
+        planned_destination = (f"google:me:{release_id}:{'/'.join([*folders, planned_name])}"
+                               if source == "drive" else
+                               f"graph:{drive_id or 'me'}:{root['folder_id']}:{'/'.join([*folders, planned_name])}")
+
+        def publish_copy():
+            nonlocal root
+            if source == "drive":
+                if not root:
+                    if reconcile_only:
+                        detail = _publish.find_published_folder(drive_svc, release_id, parent_id=parent_folder_id)
+                    else:
+                        claimed_name = core.store.claim_release_root_name(
+                            release_id, owner, source, location, release["folder_name"])
+                        detail = _publish.ensure_published_folder(
+                            drive_svc, release_id, folder_name=claimed_name,
+                            return_details=True, parent_id=parent_folder_id)
+                    root = core.store.record_release_root(
+                        release_id, owner, source, location, detail["id"],
+                        detail["name"], detail.get("url"))
+                return _publish.archive_copy_publish(
+                    drive_svc, root["folder_id"], owner, scan_id, filename,
+                    relative_path=source_path, source_id=source_id,
+                    expected_digest=content_digest, return_details=True,
+                    target_file_id=target_file_id, reconcile_only=reconcile_only)
+            return _publish.archive_copy_publish_sharepoint(
+                token, drive_id, root["folder_id"], owner, release_id, scan_id,
+                filename, source_path, source_id, source_filename=source_name,
+                expected_digest=content_digest)
         # The provider write is a canonical side effect, not merely a URL on file_records. The
         # deterministic receipt survives retries and is what a sealed Release manifest cites.
         receipt_writer = getattr(core.store, "record_side_effect_receipt", None)
@@ -952,7 +1013,7 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
         if callable(reserve) and execution_id:
             reservation = reserve(
                 execution_id=execution_id, work_item_id=(work_item or {}).get("work_item_id"),
-                effect_type="sharepoint.publish", destination=planned_destination,
+                effect_type=f"{source}.publish", destination=planned_destination,
                 content_digest=content_digest,
                 worker_id=(job or {}).get("locked_by") or (job or {}).get("id") or "release-worker")
             if reservation.get("reused") and reservation.get("status") == "completed":
@@ -964,18 +1025,31 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
                                "filename": saved_receipt.get("filename") or planned_name,
                                "verified": bool(saved_receipt.get("verified", True))}
             elif not reservation.get("acquired"):
-                raise RuntimeError("SharePoint publication is owned by another worker attempt")
+                if source == "drive":
+                    raise reservation_retry("Google Drive delivery is reserved by another attempt; waiting for its lease.")
+                raise RuntimeError(f"{provider} publication is owned by another worker attempt")
             else:
                 # A reclaimed reservation may represent a predecessor that wrote and died before
                 # finalizing. The publisher verifies matching destination bytes before deciding
                 # whether a write is needed, so takeover never blindly repeats the side effect.
-                publication = _publish.archive_copy_publish_sharepoint(
-                    token, drive_id, root["folder_id"], owner, release_id, scan_id,
-                    filename, source_path, source_id, source_filename=source_name, expected_digest=content_digest)
+                if source == "drive":
+                    target_file_id = (reservation.get("receipt") or {}).get("planned_provider_id")
+                    if not target_file_id and reservation.get("reclaimed"):
+                        # Historical writes lack a preallocated ID. An empty marker search is
+                        # not proof of absence, so legacy recovery may only reuse verified bytes.
+                        reconcile_only = True
+                    elif not target_file_id:
+                        allocated = drive_svc.files().generateIds(count=1, space="drive", type="files").execute()
+                        candidate = (allocated.get("ids") or [None])[0]
+                        if not candidate:
+                            raise IOError("Google Drive did not allocate a delivery identifier")
+                        target_file_id = core.store.prepare_side_effect_provider_id(
+                            reservation["effect_id"], reservation["reservation_token"], candidate)
+                publication = publish_copy()
         else:
-            publication = _publish.archive_copy_publish_sharepoint(
-                token, drive_id, root["folder_id"], owner, release_id, scan_id,
-                filename, source_path, source_id, source_filename=source_name, expected_digest=content_digest)
+            if source == "drive":
+                raise FatalJobError("Google Drive delivery requires a durable work-item reservation")
+            publication = publish_copy()
         if publication is None:
             raise IOError("corrected content was unavailable")
         released_name = publication.get("filename") or planned_name
@@ -1012,7 +1086,7 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
                 provider_receipt["finding_lineage"] = finding_lineage
             receipt_writer(
                 execution_id=execution_id, work_item_id=(work_item or {}).get("work_item_id"),
-                effect_type="sharepoint.publish", destination=planned_destination,
+                effect_type=f"{source}.publish", destination=planned_destination,
                 content_digest=content_digest,
                 receipt=provider_receipt)
         published_at = core.store.record_publish(
@@ -1039,24 +1113,39 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
             raise
         _release_failure(release_id, owner, filename, record,
                          "provider_session_expired",
-                         "Reconnect SharePoint and retry this document.")
-        raise FatalJobError("SharePoint session expired — reconnect and retry")
-    except PermissionError:
+                         f"Reconnect {provider} and retry this document.")
+        raise FatalJobError(f"{provider} session expired — reconnect and retry")
+    except PermissionError as exc:
+        log_provider_failure(exc)
+        require_reconnect()
         _release_failure(release_id, owner, filename, record,
                          "provider_permission_denied",
-                         "SharePoint refused the write. Reconnect after an administrator grants Files.ReadWrite.All and Sites.ReadWrite.All.")
-        raise FatalJobError("SharePoint write permission denied — administrator consent required")
+                         ("Google Drive refused the write. Reconnect with write access to the destination."
+                          if source == "drive" else
+                          "SharePoint refused the write. Reconnect after an administrator grants Files.ReadWrite.All and Sites.ReadWrite.All."))
+        raise FatalJobError(f"{provider} write permission denied — reconnect with write access")
     except FatalJobError:
         raise
-    except Exception:
+    except Exception as exc:
+        if source == "drive":
+            diagnostic = log_provider_failure(exc)
+            status = diagnostic.get("http_status")
+            if status in {401, 403}:
+                require_reconnect()
+                category = "provider_session_expired" if status == 401 else "provider_permission_denied"
+                _release_failure(release_id, owner, filename, record, category,
+                                 "Reconnect Google Drive with write access and retry this document.")
+                raise FatalJobError("Google Drive access needs reconnecting") from exc
         # Let transient Graph/Redis failures use the queue's normal retry/backoff. On the final
         # attempt, settle the document into an actionable durable state instead of leaving it
         # looking queued forever after the job dead-letters.
         if int((job or {}).get("attempts") or 1) < int((job or {}).get("max_attempts") or 5):
+            if source == "drive" and reservation:
+                raise reservation_retry("Google Drive delivery is unconfirmed; waiting to verify the reserved copy.") from exc
             raise
         _release_failure(release_id, owner, filename, record,
                          "provider_write_failed",
-                         "The corrected copy could not be verified at the SharePoint release destination. Retry this document.")
+                         f"The corrected copy could not be verified at the {provider} release destination. Retry this document.")
         raise
 
 

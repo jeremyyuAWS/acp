@@ -156,6 +156,8 @@ def source_check(row, record):
     import core
     import handlers
     tokens = core.get_scan_tokens(row['scan_id'])
+    if row['intent']['source'] == 'drive' and not tokens.get('drive'):
+        raise PermissionError('Reconnect Google Drive to resume the same saved release.')
     svc = handlers._drive_client(tokens.get('drive')) if row['intent']['source'] == 'drive' else None
     require_current_source(row['intent']['source'], record, drive_service=svc, sp_token=tokens.get('sp'))
 

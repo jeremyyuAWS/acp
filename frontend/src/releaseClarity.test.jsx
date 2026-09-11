@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { getAutomaticRelease } from './api.js'
+import { getAutomaticRelease, resumeAutomaticRelease } from './api.js'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
@@ -16,6 +16,7 @@ const previewReleaseDestination = vi.fn(() => Promise.resolve({ can_release: tru
 const getSettings = vi.fn(() => Promise.resolve({ drive_mirror_enabled: false, drive_mirror_folder: 'Remediated' }))
 const putMyReleaseTemplates = vi.fn((templates) => Promise.resolve({ release_templates: templates }))
 vi.mock('./api.js', () => ({
+  resumeAutomaticRelease: vi.fn().mockResolvedValue({}), setDriveToken: vi.fn(),
   getAutomaticRelease: vi.fn().mockResolvedValue({authorization:null}),
   getReleaseReports: vi.fn().mockResolvedValue({status:'not_started',reports:[]}), retryReleaseReports: vi.fn(), downloadReleaseReport: vi.fn(),
   getReleaseAiProvenance: vi.fn(() => Promise.resolve({ calls: [] })),
@@ -45,6 +46,8 @@ vi.mock('./remediableScope.js', () => ({
   documentScopeSentence: () => '',
   documentsInSelection: (files) => files || [],
 }))
+
+vi.mock('./driveAuth.js', () => ({reconnectDriveForRelease: vi.fn().mockResolvedValue('new-grant')}))
 
 const { default: Publish } = await import('./Publish.jsx')
 
@@ -471,4 +474,13 @@ it('does not apply an old publish response after changing scans', async () => {
   expect(button(c, 'Publish ready files (1)').disabled).toBe(false)
   expect(c.querySelector('[aria-label="Delivery receipt"]')).toBeNull()
   expect(props.onPublish).not.toHaveBeenCalled()
+})
+
+it('Release reconnect resumes the exact saved authorization without publishing or approving again', async () => {
+ getAutomaticRelease.mockResolvedValue({authorization:{id:'saved-auth',status:'blocked',requires_reconnect:true,files:['one.pdf'],allow_remaining_issues:true}})
+ const c=await mount({run,files:[held('one.pdf')]})
+ await click(button(c,'Reconnect Google Drive and resume'))
+ expect(resumeAutomaticRelease).toHaveBeenCalledWith('scan1','saved-auth')
+ expect(publishAllFiles).not.toHaveBeenCalled()
+ expect(button(c,'Reconnect Google Drive and resume')).toBeUndefined()
 })

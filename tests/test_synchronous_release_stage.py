@@ -171,6 +171,31 @@ def test_local_release_does_not_publish_a_missing_blob(monkeypatch):
     assert labels[-2:] == ["document", "finish"]
 
 
+def _run_drive_worker(store, monkeypatch):
+    import core
+    import handlers
+    monkeypatch.setattr(core, "get_scan_tokens", lambda *args: {"drive": "token"})
+    release_status = store.release_status
+    store.release_status = lambda *args: {**release_status(*args), "scan_id": "scan-1"}
+    store.claim_release_root_name = lambda *args: args[-1]
+    store.stage_work_item_for_job = lambda *args: {"work_item_id": "work-1"}
+    # These fixtures exercise receipt ordering. The allocation/read-back protocol has
+    # separate adversarial fixtures in test_drive_publish_worker.py.
+    real_reserve = store.reserve_side_effect
+    # Preserve completed receipt data in the reuse case.
+    probe = real_reserve
+    def reserve(**kwargs):
+        result = probe(**kwargs)
+        if result.get("status") != "completed":
+            result["receipt"] = {"planned_provider_id": "reserved-copy"}
+        return result
+    store.reserve_side_effect = reserve
+    return handlers._publish_file_guarded(
+        {"scan_id": "scan-1", "release_id": "release-1", "owner": OWNER,
+         "file": "one.pdf", "artifact_digest": "sha256:sha256-content", "remediated_at": "now"},
+        {"id": "job-1", "batch_id": "execution-1", "attempts": 1, "max_attempts": 5})
+
+
 def test_drive_release_reserves_before_provider_and_finalizes_before_document(monkeypatch):
     import core
     import handlers
@@ -196,8 +221,7 @@ def test_drive_release_reserves_before_provider_and_finalizes_before_document(mo
                             "id": "copy-1", "url": "copy-url", "checksum": "md5-copy",
                             "verified": True, "created": True})
 
-    scans.publish_files("scan-1", _request({"x-drive-token": "token"}),
-                        {"files": ["one.pdf"]})
+    _run_drive_worker(store, monkeypatch)
 
     labels = [event if isinstance(event, str) else event[0] for event in store.events]
     assert labels.index("reserve") < labels.index("provider") < labels.index("finalize")
@@ -230,16 +254,15 @@ def test_drive_release_reuses_completed_receipt_without_provider_write(monkeypat
     monkeypatch.setattr(publish, "archive_copy_publish", lambda *args, **kwargs: (
         _ for _ in ()).throw(AssertionError("a completed receipt must prevent provider I/O")))
 
-    response = scans.publish_files(
-        "scan-1", _request({"x-drive-token": "token"}), {"files": ["one.pdf"]})
+    _run_drive_worker(store, monkeypatch)
 
-    assert response["published"][0]["status"] == "published"
-    assert response["published"][0]["released_document_id"] == "copy-1"
-    assert store.events[-3:] == ["publish", "document", ("finish", "completed")]
+    assert store.document["status"] == "published"
+    assert store.document["released_document_id"] == "copy-1"
+    assert store.events[-2:] == ["publish", "document"]
 
 
 @pytest.mark.parametrize("error_type,status", [(OSError, 503), (PermissionError, 403)])
-def test_drive_release_keeps_uncertain_provider_outcome_queued(monkeypatch, caplog, error_type, status):
+def test_drive_worker_preserves_safe_provider_diagnostics(monkeypatch, caplog, error_type, status):
     import core
     import handlers
     import publish
@@ -261,13 +284,16 @@ def test_drive_release_keeps_uncertain_provider_outcome_queued(monkeypatch, capl
     monkeypatch.setattr(publish, "archive_copy_publish", lambda *args, **kwargs: (
         _ for _ in ()).throw(error))
 
-    response = scans.publish_files(
-        "scan-1", _request({"x-drive-token": "token"}), {"files": ["one.pdf"]})
-
-    assert response["published"][0]["status"] == "queued"
-    assert "uncertain" in response["published"][0]["explanation"]
-    assert f"HTTP {status}" in response["published"][0]["explanation"]
-    assert "secret-token" not in str(response)
+    from worker import FatalJobError, ReservationRetryError
+    expected = FatalJobError if error_type is PermissionError else ReservationRetryError
+    with pytest.raises(expected) as raised:
+        _run_drive_worker(store, monkeypatch)
+    assert "secret-token" not in str(raised.value)
+    if error_type is OSError:
+        assert raised.value.retry_after_seconds >= 300
+        assert store.document is None
+    else:
+        assert store.document["failure_category"] == "provider_permission_denied"
     assert "secret-token" not in caplog.text
     assert "document content" not in caplog.text
     assert '"provider_request_id": "provider-request-123"' in caplog.text
@@ -275,7 +301,6 @@ def test_drive_release_keeps_uncertain_provider_outcome_queued(monkeypatch, capl
     assert '"scan_id": "scan-1"' in caplog.text
     assert '"release_id": "release-1"' in caplog.text
     assert '"file": "one.pdf"' not in caplog.text
-    assert store.document["explanation"] == response["published"][0]["explanation"]
     assert not any(isinstance(event, tuple) and event[0] == "finish"
                    for event in store.events)
 

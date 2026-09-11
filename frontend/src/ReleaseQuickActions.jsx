@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { planReleaseContinuation, authorizeReleaseContinuation, getReleaseContinuation, resumeReleaseContinuation } from './api.js'
 import './release-quick-actions.css'
+import DriveReleaseReconnect from './DriveReleaseReconnect.jsx'
 
 export default function ReleaseQuickActions({ runId, files = [], ready = [], destination, folderName = '', destinationLabel,
   announcement, destinationPicker, destinationContent, destinationLocked = false, destinationPending = false, readOnly, publishing, releaseOptions, allowRemainingIssues = false, readyReasons = [], fileStates = {}, publishedFolders = [], providerLabel = 'the destination', onReady, onProgress }) {
@@ -172,7 +173,13 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
       <p>Authorized destination: {active.intent.destination?.folder_name || 'Source location'} / Remediated / {active.intent.release_folder_name || 'Timestamp + user email'}</p>
       <details><summary>Delivery results and remaining work</summary>{outcomes.map(([file, result]) => <p key={file}><b>{file}</b>: {result.message}
         {result.receipt?.published_url && <> · <a href={result.receipt.published_url} target="_blank" rel="noopener noreferrer">Open delivered copy</a></>}</p>)}</details>
-      {count('failed') > 0 && <button className="ghost" disabled={busy || readOnly || activeRunning} onClick={retry}>Retry failed delivery with the same authorization</button>}
+      {active.requires_reconnect === true && <DriveReleaseReconnect key={`${runId}:${active.id}`} scanId={runId} authorizationId={active.id} readOnly={readOnly || busy}
+        onResume={async () => {
+          const frozenKey = currentKey.current
+          const result = await resumeReleaseContinuation(runId, active.id)
+          if (currentKey.current === frozenKey) { setActive(result); setRefresh(n => n + 1) }
+        }} />}
+      {active.requires_reconnect !== true && count('failed') > 0 && <button className="ghost" disabled={busy || readOnly || activeRunning} onClick={retry}>Retry failed delivery with the same authorization</button>}
     </div>}
     {error && <p role="alert">{error} <button className="linklike" onClick={() => setRefresh(n => n + 1)}>Refresh eligibility and status</button></p>}
   </section>
