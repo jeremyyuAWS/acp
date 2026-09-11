@@ -69,13 +69,8 @@ def normalize_run_policy(snapshot):
     if 'auto_approve_ai' in snapshot:
         from ai_standing_approval import normalize
         result['auto_approve_ai'] = normalize(snapshot['auto_approve_ai'])
-        # A cloud-capable run (zone 'any', or absent = the pre-field default) still needs a
-        # real spending limit before it may run unattended. A local-only run cannot spend:
-        # requiring a positive cap there demands a limit that can never be reached, which is
-        # why that one case is exempt. Every other precondition is unchanged, and `ai != 1`
-        # binds regardless of zone.
-        if result['auto_approve_ai'] and (ai != 1 or (cap <= 0 and result.get('ai_zone') != 'local')):
-            raise BudgetError('Standing approval requires AI and a positive run budget')
+        if result['auto_approve_ai'] and ai != 1:
+            raise BudgetError('Standing approval requires AI enabled')
     if 'generation_chain' in snapshot:
         from ai_generation_chain import normalize_chain
         result['generation_chain'] = normalize_chain(snapshot['generation_chain'])

@@ -72,7 +72,10 @@ def findings_from_layouts(pages: list[dict], *, filename: str = "") -> list[dict
     )
 
     findings: list[dict] = []
+    from assessment_selection import enabled
     for rule_id, wcag, rationale in _SCANNED_RULES:
+        if not enabled(wcag.split()[0]):
+            continue
         findings.append(
             {
                 "ruleId": rule_id,

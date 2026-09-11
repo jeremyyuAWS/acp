@@ -505,7 +505,7 @@ class OllamaVisionProvider:
 
     def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
                  timeout: float = 120.0) -> dict:
-        deferred = _managed_vision_deferral()
+        deferred = _managed_vision_deferral(local_ollama=True, endpoint=self.base_url)
         if deferred is not None:
             return deferred
         import base64
@@ -1549,9 +1549,10 @@ def active_vision_provider() -> VisionProvider:
 
 
 # Run governance is opt-in; legacy unbudgeted calls keep their existing behavior.
-def _managed_vision_deferral():
+def _managed_vision_deferral(*, local_ollama=False, endpoint=None):
     from llm_waterfall_provider import managed_context, defer_managed
-    if managed_context() is None:
+    context = managed_context()
+    if context is None or (local_ollama and endpoint and (getattr(context, 'enabled', False) or (getattr(context, 'local_drafting', False) and zone_for_url(endpoint) == 'local'))):
         return None
     defer_managed('vision_pricing_not_verified', kind='vision')
     return _result(text=None, model='not-dispatched', provider='governed',

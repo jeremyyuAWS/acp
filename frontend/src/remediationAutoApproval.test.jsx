@@ -22,7 +22,7 @@ it('offers review before applying and keeps publishing separate',async()=>{
   await act(async()=>checkbox.click())
   expect(onChange).toHaveBeenCalledWith('auto_approve_ai',true)
 })
-it.each([{ai:0,ai_budget_usd:'1.00'},{ai:1,ai_budget_usd:'0.00'}])('requires AI and a positive spending limit: %j',async value=>{
+it.each([{ai:0,ai_budget_usd:'1.00'},{ai:1}])('requires AI and an explicit spending limit: %j',async value=>{
   const {checkbox}=await mount({policy:value})
   expect(checkbox.disabled).toBe(true)
 })
@@ -40,21 +40,9 @@ it('explains accepted scope including later fallbacks without another dialog',as
   expect(container.textContent).toContain('Google Drive or SharePoint')
 })
 
-it('requires the AI reviewer, and says so',async()=>{
-  // Nothing shows an auto-approved suggestion to a person before it is applied, so the
-  // reviewer is the only remaining check on the draft. The server refuses to save a
-  // policy without it (remediation_impact_settings.normalize), so the control must not
-  // let one be built -- otherwise Save throws an opaque error.
-  const {checkbox,container}=await mount({policy:{ai:1,ai_budget_usd:'1.00'}})
-  expect(checkbox.disabled).toBe(true)
-  expect(container.textContent).toContain('Turn on AI review in the AI options first')
-  const on=await mount({policy:{ai:1,ai_budget_usd:'1.00',ai_review:{enabled:true}}})
-  expect(on.checkbox.disabled).toBe(false)
-})
-
-it('does not call the AI review optional any more',async()=>{
-  // Bite check for the copy: the wording tracked a policy option that is now mandatory.
-  const {container}=await mount({policy:{...policy,auto_approve_ai:true}})
-  expect(container.textContent).not.toContain('optional AI review')
-  expect(container.textContent).toContain('never approved this way')
+it.each(['local','any'])('supports explicit run approval without optional review for %s',async ai_zone=>{
+  const {checkbox,container}=await mount({policy:{ai:1,ai_zone,ai_budget_usd:'0.00',ai_review:{enabled:false}}})
+  expect(checkbox.disabled).toBe(false)
+  expect(container.textContent).toContain('optional AI review')
+  expect(container.textContent).toContain('normal writer and verification checks remain')
 })

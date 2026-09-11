@@ -192,13 +192,22 @@ def test_live_authority_and_current_generation_are_required(isolated_store, monk
     assert not apply_jobs(s)
 
 
-@pytest.mark.parametrize('outcome',['verified','cannot_verify','storage_failed','cancel_before_storage'])
+@pytest.mark.parametrize('outcome',['verified','cannot_verify','still_failing','regression','corrupt_output','storage_failed','cancel_before_storage'])
 def test_real_office_writer_only_credits_saved_verified_output(isolated_store,monkeypatch,outcome):
     import sys
     from test_apply_approved_values import _deck, _slide_xml, _Blob
     from proposals import Verification
     s=isolated_store;job=seed(s,monkeypatch)
-    original=_deck('Picture 1'); artifact=sha256(original).hexdigest()
+    original=_deck('Picture 1')
+    import io, zipfile
+    package = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(original)) as src, zipfile.ZipFile(package, 'w') as dst:
+        for name in src.namelist():
+            data=src.read(name)
+            if name.endswith('slide1.xml'):
+                data=data.replace(b'<p:sld>', b'<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">')
+            dst.writestr(name,data)
+    original=package.getvalue(); artifact=sha256(original).hexdigest()
     with s._db.cursor() as cur:
         s._db.execute(cur,'UPDATE file_records SET corrected_sha256=%s WHERE scan_id=%s',(artifact,SID))
     with run_context(s,job['payload'],job) as ctx:
@@ -207,10 +216,15 @@ def test_real_office_writer_only_credits_saved_verified_output(isolated_store,mo
     assert not s.get_hitl_item(item)['applied']
     blob=_Blob(original)
     monkeypatch.setitem(sys.modules,'blob',blob)
+    if outcome=='corrupt_output':
+        import output_provenance
+        monkeypatch.setattr(output_provenance,'stamp_output',lambda data,file:b'corrupt writer output')
     seen=[]
-    def verify(data,file):
+    def verify(data,file, **kwargs):
         seen.append(data)
-        if outcome=='cannot_verify':return Verification(False,())
+        if outcome in {'cannot_verify','corrupt_output'}:return Verification(False,())
+        if outcome=='still_failing':return Verification(True,{'1.1.1'})
+        if outcome=='regression':return Verification(True,{'1.1.1','2.4.6'} if data!=original else {'1.1.1'})
         if outcome=='cancel_before_storage' and data!=original:
             with s._db.cursor() as cur:s._db.execute(cur,"UPDATE stage_executions SET cancel_requested_at='now' WHERE execution_id=%s",(ctx.run_id,))
         return Verification(True, {'1.1.1'} if 'descr="Quarterly sales chart"' not in _slide_xml(data) else set())
@@ -221,12 +235,37 @@ def test_real_office_writer_only_credits_saved_verified_output(isolated_store,mo
         with pytest.raises((ValueError,RuntimeError)):handlers._apply_approved_values(payload,{})
     else:handlers._apply_approved_values(payload,{})
     assert len(seen)>=2 and seen[0]==original and seen[-1]!=original
-    assert bool(s.get_hitl_item(item)['applied']) is (outcome=='verified')
-    if outcome=='verified':
+    saved = outcome in {'verified','cannot_verify','still_failing'}
+    assert bool(s.get_hitl_item(item)['applied']) is saved
+    if saved:
         assert 'descr="Quarterly sales chart"' in _slide_xml(blob.data)
         assert s.get_file_record(SID,FILE)['corrected_sha256']==sha256(blob.data).hexdigest()
         handlers._apply_approved_values(payload,{})
         assert len(blob.uploads)==1
+        if outcome != 'verified':
+            assert not s.mark_file_compliant_if_reviewed(SID,FILE)
+            assert not s.get_file_record(SID,FILE)['compliant']
+            entries=[json.loads(r['detail']) for r in rows(s,'decision_log') if r['action']=='apply.saved_unverified']
+            assert entries[-1]['artifact_sha256']==sha256(blob.data).hexdigest()
+            assert entries[-1]['item_ids']==[item]
+            from unverified_changes import saved_changes
+            evidence=saved_changes(s,SID,FILE)
+            assert evidence[0]['after']=='Quarterly sales chart'
+            assert evidence[0]['verified'] is False
+            from remediation_delivery import load_artifact
+            delivered=load_artifact(owner=OWNER,scan_id=SID,file=FILE,expected_digest=entries[-1]['artifact_sha256'],download=blob.download_remediated)
+            assert delivered==blob.data and delivered!=original
+            from unverified_changes import blocks_certification, record_verification
+            assert record_verification(s,SID,FILE,b'other artifact',Verification(True,set()))==0
+            assert blocks_certification(s,SID,FILE)
+            monkeypatch.setattr(handlers,'_verify_residual',lambda *a,**kw:Verification(True,set()))
+            handlers._apply_approved_values(payload,{})
+            # This legacy fixture has no captured contribution lineage; a recheck
+            # alone cannot invent a mapped finding outcome.
+            assert blocks_certification(s,SID,FILE)
+            assert len(blob.uploads)==1
+            receipts=[r for r in rows(s,'decision_log') if r['action']=='apply.reverified']
+            assert receipts==[]
     else:assert not blob.uploads
     assert not [j for j in rows(s,'jobs') if j['type'] in {'publish_file','release_continue','deliver_corrected_copy'}]
 
@@ -284,35 +323,27 @@ def test_future_defaults_roundtrip_but_do_not_reauthorize_existing_run(isolated_
         with pytest.raises(ValueError):authorization(s,OWNER,SID,ctx.run_id)
 
 
-def test_standing_approval_refuses_to_save_without_the_reviewer():
-    """The one remaining check on a draft nobody reads cannot be the operator's option."""
-    base={'rule_based':2,'ai':1,'ai_budget_usd':'1.00','auto_approve_ai':True}
+@pytest.mark.parametrize('zone,budget', [('any','1.00'),('local','0.00'),('any','0.00')])
+def test_explicit_approval_does_not_require_model_reviewer(zone,budget):
+    base={'rule_based':2,'ai':1,'ai_budget_usd':budget,'auto_approve_ai':True,'ai_zone':zone}
     for review in (None,{'enabled':False}):
         policy=dict(base) if review is None else {**base,'ai_review':review}
-        with pytest.raises(ValueError,match='AI reviewer'):normalize_policy(policy)
-    assert normalize_policy({**base,'ai_review':{'enabled':True}})['auto_approve_ai'] is True
-    # ...and turning automatic approval off leaves the reviewer genuinely optional.
-    assert normalize_policy({'rule_based':2,'ai':1,'ai_budget_usd':'1.00'})['ai'] == 1
+        assert normalize_policy(policy)['auto_approve_ai'] is True
+        assert normalize_run_policy(policy)['auto_approve_ai'] is True
 
 
-def test_no_accepted_review_means_no_automatic_approval(isolated_store,monkeypatch):
-    """Fail closed: an eligible row with no review receipt stays for a human.
-
-    This is the bite check for the mandatory reviewer. Every other fixture here now
-    carries a receipt via `proposal(...)`; if the requirement stopped being enforced
-    at approval time, this test would go green while proving nothing.
-    """
+def test_explicit_run_consent_applies_exact_suggestion_without_model_review(isolated_store,monkeypatch):
     s=isolated_store;job=seed(s,monkeypatch)
     with run_context(s,job['payload'],job) as ctx:
         item=s.enqueue_proposals(SID,FILE,'2.4.6',[proposal(s,review=None)])
         approve_file(s,ctx)
-    assert s.get_hitl_item(item)['status']=='pending'
-    assert not apply_jobs(s)
-    assert not [r for r in rows(s,'decision_log') if r['action']=='hitl.approved_under_run_policy']
+    assert s.get_hitl_item(item)['status']=='approved'
+    assert apply_jobs(s)
+    assert not s.get_hitl_item(item).get('applied')  # approval is not a verified fix
 
 
-@pytest.mark.parametrize('policy',[{'ai':1},{'ai':0,'ai_budget_usd':'1.00'},{'ai':1,'ai_budget_usd':'0.00'}])
-def test_optin_without_ai_and_budget_never_snapshots(policy):
+@pytest.mark.parametrize('policy',[{'ai':1},{'ai':0,'ai_budget_usd':'1.00'}])
+def test_optin_without_ai_and_explicit_budget_never_snapshots(policy):
     with pytest.raises(ValueError):normalize_policy({'rule_based':2,**policy,'auto_approve_ai':True})
     from ai_spending_budget import BudgetError
     with pytest.raises(BudgetError):normalize_run_policy({**policy,'auto_approve_ai':True})
@@ -401,3 +432,11 @@ def test_saved_writer_receipt_attaches_to_system_authorization(isolated_store):
     after=contribution.read_contribution(s,'owner','scan',run)
     assert after['outcomes']['fixed']==1
     assert after['findings'][0]['approval_kind']=='run_authorization'
+
+
+def test_automatic_approval_rejects_out_of_scope_before_reading_proposal():
+    from types import SimpleNamespace
+    from ai_standing_approval import eligible_item
+    store = SimpleNamespace(_selected_sc=lambda *args: False)
+    with pytest.raises(ValueError, match='outside the selected assessment criteria'):
+        eligible_item(store, 'owner', 'scan', 'run', {'file': 'a.docx', 'rule_id': '1.1.1'})

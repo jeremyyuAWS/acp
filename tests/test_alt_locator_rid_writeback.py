@@ -327,7 +327,7 @@ def test_an_approved_vision_draft_now_certifies_the_file(store, monkeypatch):
     monkeypatch.setattr(core, "store", store)
     monkeypatch.setitem(sys.modules, "blob", blob)
     from proposals import Verification
-    monkeypatch.setattr(handlers, "_verify_residual", lambda b, f: Verification(True, ()))
+    monkeypatch.setattr(handlers, "_verify_residual", lambda b, f, **kwargs: Verification(True, ()))
     handlers._apply_approved_values({"scan_id": SID, "file": FILE}, {})
 
     assert 'descr="A dense field of coloured noise."' in _read(blob.data, SLIDE)

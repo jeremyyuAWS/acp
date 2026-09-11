@@ -133,3 +133,12 @@ it('explains stale source recovery without automatically retrying approval', asy
   expect(v.container.textContent).toContain('refresh this page, then select the current proposals and confirm again')
   expect(onDecide).toHaveBeenCalledOnce()
 })
+
+it('distinguishes proposal values from covered findings in the primary approval action', async () => {
+  const multi = finding(1, { proposals: [{ proposed_value: 'A' }, { proposed_value: 'B' }], _raw: { ...finding(1)._raw, finding_count: 1, proposal_snapshot_ids: ['a', 'b'] } })
+  const v = await mount({ visible: [multi], onDecide: vi.fn() })
+  expect(v.button('Approve all ready').textContent).toBe('Approve all ready (2 proposals)')
+  expect(v.container.textContent).toContain('1 findings covered by 2 ready proposals')
+  await click(v.button('Approve all ready'))
+  expect(v.container.querySelector('[aria-label="Approval summary"]').textContent).toContain('1 findings · 1 review item · 2 proposals · 1 file')
+})

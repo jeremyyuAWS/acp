@@ -229,6 +229,9 @@ export function workflowStatusOf(f, decisions = {}) {
   const st = String(f?.status || '').toLowerCase()
   const d = decisions[f?.id] ?? decisions[f?.file]
   const lane = laneOf(f)
+  if (st === 'verified' || st === 'resolved_verified' || f?.verified === true || (f?.validated && (f?.autoApplied || f?.applied || st === 'resolved'))) return 'completed'
+  if ((f?.autoApplied || f?.applied) && !['blocked', 'rejected', 'skipped'].includes(st)
+      && !f?.rejectedFix && !['assigned', 'deferred', 'rejected', 'not_applicable'].includes(d?.state)) return 'awaiting-validation'
 
   // ── The decision recorded ON THE ROW (hitl_queue.status), which outlives this browser session.
   // `decisions` only holds what THIS session did, so without these branches a row the reviewer
@@ -271,6 +274,7 @@ export function workflowStatusOf(f, decisions = {}) {
 }
 
 export function matchesWorkflow(f, tab, decisions = {}) {
+  if (tab === 'active') return workflowStatusOf(f, decisions) !== 'completed'
   if (tab === 'all') return true
   return workflowStatusOf(f, decisions) === tab
 }
@@ -389,7 +393,7 @@ export function normSc(v) {
  *  value. `nameOf(sc)` supplies the plain criterion name — injected so this file stays dependency-free
  *  (Remediate passes its ITEM_NAME lookup; a test passes a stub). Ids are namespaced `af:…` so they
  *  never collide with the human-queue's numeric/db ids. */
-export function autoFixRows(fixes = [], nameOf = (sc) => sc) {
+export function autoFixRows(fixes = [], nameOf = (sc) => sc, { aiApplicationRecords = false } = {}) {
   return fixes.map((a, i) => {
     const sc = normSc(a.sc ?? a.rule_id ?? a.wcag)
     const fmt = (String(a.file || '').split('.').pop() || 'DOC').toUpperCase()
@@ -404,6 +408,8 @@ export function autoFixRows(fixes = [], nameOf = (sc) => sc) {
       before: a.before ?? null,
       after: a.after ?? a.value ?? a.approved_value ?? null,
       autoApplied: true,
+      aiApplicationRecord: aiApplicationRecords,
+      validated: a.verified === true || a.validated === true || a.status === 'resolved_verified' || a.disposition === 'resolved_verified',
       severity: null,
       effortSec: 5,
     }

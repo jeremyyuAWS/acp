@@ -8,10 +8,10 @@ describe('workflowStatusOf — pipeline stage from real state (no invented flags
   it('a fresh AI draft awaiting a decision → needs-review', () => {
     expect(workflowStatusOf({ hasProposal: true, after: 'x' })).toBe('needs-review')
   })
-  it('an unacknowledged auto-fix → needs-review (the reviewer still confirms the change)', () => {
+  it('an applied auto-fix waits for verification without another approval', () => {
     // The double-count fix: an auto-fix used to land in ready-to-validate AND count as resolved.
     // It now waits in Needs review until the reviewer confirms it.
-    expect(workflowStatusOf({ autoApplied: true })).toBe('needs-review')
+    expect(workflowStatusOf({ autoApplied: true })).toBe('awaiting-validation')
   })
   it('a manual-from-start finding and a rejected AI fix → manual (needs hand-editing)', () => {
     expect(workflowStatusOf({ id: 9 })).toBe('manual')
@@ -42,10 +42,10 @@ describe('workflowCounts / matchesWorkflow', () => {
     { id: 4, status: 'blocked' },              // blocked
   ]
   it('counts each stage, summing to the list length', () => {
-    expect(workflowCounts(LIST)).toMatchObject({ all: 4, 'needs-review': 2, manual: 1, 'awaiting-validation': 0, blocked: 1, completed: 0 })
+    expect(workflowCounts(LIST)).toMatchObject({ all: 4, 'needs-review': 1, manual: 1, 'awaiting-validation': 1, blocked: 1, completed: 0 })
   })
   it('matchesWorkflow filters by stage; "all" passes everything', () => {
-    expect(LIST.filter((f) => matchesWorkflow(f, 'needs-review')).map((f) => f.id)).toEqual([1, 2])
+    expect(LIST.filter((f) => matchesWorkflow(f, 'needs-review')).map((f) => f.id)).toEqual([2])
     expect(LIST.filter((f) => matchesWorkflow(f, 'all')).length).toBe(4)
   })
   it('exposes the five workflow tabs', () => {
@@ -66,9 +66,9 @@ describe('count consistency — the reported double-count is fixed', () => {
     expect(counts.completed).toBe(0)
     expect(list.filter((f) => isResolved(f, decisions)).length).toBe(3)  // reviewed = 3 (a separate lens)
   })
-  it('an UNacknowledged auto-fix is Needs review and is NOT yet counted as reviewed', () => {
+  it('an uninspected auto-fix awaits verification and is not counted as inspected', () => {
     const f = { id: 1, autoApplied: true }
-    expect(workflowStatusOf(f, {})).toBe('needs-review')
+    expect(workflowStatusOf(f, {})).toBe('awaiting-validation')
     expect(isResolved(f, {})).toBe(false)   // it still needs the reviewer's confirmation
   })
   it('every finding lands in exactly one tab — the counts sum to the queue length', () => {
@@ -94,7 +94,7 @@ describe('workflowStepIndex — the footer loop step (Show 0 → Review 1 → Ve
   })
   it('a proposal awaiting review — AI draft or unconfirmed auto-fix — is at Review (1)', () => {
     expect(workflowStepIndex({ id: 1, hasProposal: true, after: 'x' })).toBe(1)  // apply lane, needs review
-    expect(workflowStepIndex({ id: 1, autoApplied: true })).toBe(1)              // unconfirmed auto-fix: review the change
+    expect(workflowStepIndex({ id: 1, autoApplied: true })).toBe(2)              // unconfirmed auto-fix: review the change
   })
   it('an approved fix awaiting the re-scan is at Verify (2)', () => {
     expect(workflowStepIndex({ id: 1, hasProposal: true, after: 'x' }, { 1: { state: 'accepted' } })).toBe(2)

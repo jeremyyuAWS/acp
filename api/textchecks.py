@@ -38,6 +38,8 @@ _SENSORY_RE = re.compile(
 _SENSORY_MAX = 10   # per-document cap — bounds work and review noise on pathological docs
 
 
+from assessment_selection import criteria
+
 def _sentence_around(text: str, start: int, end: int) -> str:
     """The (whitespace-normalised, capped) sentence containing text[start:end] — the
     evidence a reviewer needs to find the instruction without re-reading the document."""
@@ -48,6 +50,7 @@ def _sentence_around(text: str, start: int, end: int) -> str:
     return re.sub(r"\s+", " ", text[left:right]).strip()[:200]
 
 
+@criteria("1.3.3")
 def detect_sensory(text: str) -> list[dict]:
     """One finding PER sensory-only instruction, each carrying the offending sentence as
     `detail` — the reviewer sees exactly which phrasing fired instead of a bare rule id
@@ -121,6 +124,7 @@ def _is_marked(seg: str, lang: str, marked: dict[str, str]) -> bool:
     return bool(needle) and " ".join(pool.split()).find(needle[:80]) != -1
 
 
+@criteria("3.1.2")
 def detect_language_parts(text: str, marked: dict[str, str] | None = None) -> list[dict]:
     """Foreign passages whose language the document never identifies (WCAG 3.1.2).
 
@@ -226,6 +230,7 @@ def flesch_kincaid_grade(text: str) -> float | None:
     return 0.39 * (n_words / n_sent) + 11.8 * (syllables / n_words) - 15.59
 
 
+@criteria("3.1.5")
 def detect_reading_level(text: str) -> list[dict]:
     if not text:
         return []

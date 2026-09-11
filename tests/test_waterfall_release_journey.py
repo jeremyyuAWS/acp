@@ -55,7 +55,8 @@ def journey(isolated_store, monkeypatch, tmp_path):
                              corrected_sha256=hashlib.sha256(blob.data).hexdigest(),
                              corrected_bytes=len(blob.data))
 
-    def verify(data, filename):
+    def verify(data, filename, *, scan_id=None):
+        assert scan_id == SID
         path = tmp_path / filename
         path.write_bytes(data)
         missing = any(row['ruleId'] == 'PPTX_TITLE_EMPTY' for row in pptx_checks(path))
@@ -144,7 +145,7 @@ def test_empty_first_fallback_review_human_approval_verified_artifact(journey):
     assert j.blob.data == original
     j.handlers._apply_approved_values({'owner': 'owner', 'scan_id': SID, 'file': FILE}, {})
     assert Presentation(io.BytesIO(j.blob.data)).slides[0].shapes.title.text == TITLE
-    assert j.verify(j.blob.data, FILE).cleared({'2.4.6'})
+    assert j.verify(j.blob.data, FILE, scan_id=SID).cleared({'2.4.6'})
     reconciliation = j.store.finding_reconciliation(SID, j.batch)
     assert reconciliation['exact'] and reconciliation['resolved_verified'] == 1
     assert reconciliation['awaiting_review'] == reconciliation['approved_pending_verification'] == 0

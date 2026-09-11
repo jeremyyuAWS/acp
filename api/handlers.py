@@ -326,21 +326,13 @@ def _remediation_scope(filename: str, scan_id: str):
     legacy scan with nothing recorded → get_scan_scope None → predicate None → nothing gated, the
     same "unscoped behaves as before" contract as ever.
 
-    Returns None when no scope is recorded. The `except` keeps the established fail-open contract
-    for THIS predicate specifically: a scope we cannot resolve must not silently become a scope
-    that blocks all remediation. (get_scan_scope itself stays fail-loud; this net is the caller's
-    choice, not the reader's.)
+    Returns None only for a genuinely unrestricted legacy scan. Scope read failures propagate:
+    inability to resolve authorization must never authorize every fixer.
     """
-    try:
-        from store import in_scope, _file_format
-        scope = core.store.get_scan_scope(scan_id)
-        if not scope:
-            return None
-        fmt = _file_format(filename)
-        return lambda sc: in_scope(sc, fmt, scope)
-    except Exception:
-        # A scope we cannot resolve must not silently become a scope that blocks everything.
-        return None
+    from assessment_selection import selected_for_file
+    scope = core.store.scope_for_file(scan_id, filename, core.store.get_scan_scope(scan_id))
+    codes = selected_for_file(scope, filename)
+    return None if codes is None else lambda sc: sc in codes
 
 
 def _remediation_fix_scope(filename: str, scan_id: str, failing_auto_rules):
@@ -356,7 +348,7 @@ def _remediation_fix_scope(filename: str, scan_id: str, failing_auto_rules):
     return lambda sc: sc in eligible and (configured is None or bool(configured(sc)))
 
 
-def _verify_residual(fixed_bytes: bytes, filename: str):
+def _verify_residual(fixed_bytes: bytes, filename: str, scan_id: str | None = None):
     """Re-scan the remediated bytes and return a `proposals.Verification` — verified-cleared,
     verified-still-failing, or COULD-NOT-VERIFY. Delegates to the single shared implementation
     in api/proposals.py — the proposal lane and this loop must use the exact same residual
@@ -368,7 +360,7 @@ def _verify_residual(fixed_bytes: bytes, filename: str):
     returned `set | None` and every caller read `None` as "credit it", which published
     unreadable documents as remediated."""
     from proposals import verify_residual
-    return verify_residual(fixed_bytes, filename)
+    return verify_residual(fixed_bytes, filename, **({"scan_id": scan_id} if scan_id else {}))
 
 
 def _verify_residual_scs(fixed_bytes: bytes, filename: str):
@@ -380,6 +372,13 @@ def _verify_residual_scs(fixed_bytes: bytes, filename: str):
 
 
 def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_enabled: bool) -> None:
+    from assessment_selection import selected_for_file, selection
+    scope = core.store.scope_for_file(scan_id, filename, core.store.get_scan_scope(scan_id))
+    with selection(selected_for_file(scope, filename)):
+        return _propose_text_findings_selected(scan_id, filename, file_bytes, ai_enabled)
+
+
+def _propose_text_findings_selected(scan_id: str, filename: str, file_bytes: bytes, ai_enabled: bool) -> None:
     """Format-agnostic proposers (WCAG 3.1.2 language-of-parts, 1.3.3 sensory rewrite, and
     1.4.5 images-of-text). All self-gate: they yield proposals ONLY when the document actually
     mixes languages / carries a sensory instruction / bakes text into an image, so this is safe
@@ -460,7 +459,7 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
             # reachable), so the review card arrives with a per-image thumbnail + AI description
             # for each, not a single "author it yourself" template. Reuses the fix-time alt logic.
             img_props, img_evidence = ([], [])
-            if p.suffix.lower() in (".docx", ".pptx", ".xlsx"):
+            if p.suffix.lower() in (".docx", ".pptx", ".xlsx") and _prop.criteria_enabled("1.1.1"):
                 try:
                     from remediate_office import alt_proposals_for_office
                     img_props, img_evidence = alt_proposals_for_office(
@@ -552,8 +551,10 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
     except Exception:
         swallowed("_propose_text_findings: attaching 1.1.1 image evidence failed", scan_id)
     try:
-        _enqueue_proposals(scan_id, filename, "1.4.5", "Images of Text",
-                           _mark_describable(image_text, file_bytes, filename, scan_id))
+        for sc in ("1.4.5", "1.4.9"):
+            _enqueue_proposals(scan_id, filename, sc, "Images of Text",
+                _mark_describable([p for p in image_text if p.get("sc", "1.4.5") == sc],
+                                  file_bytes, filename, scan_id))
     except Exception:
         swallowed("_propose_text_findings: enqueueing 1.4.5 Images of Text proposals failed", scan_id)
     # 2.4.4 / 2.4.9 — descriptive link-text proposals for Office hyperlinks (vague text /
@@ -582,6 +583,9 @@ def _propose_form_fields(scan_id: str, filename: str, file_bytes: bytes, ai_enab
     local text model where there's no adjacent prompt — always a one-click value a human
     approves, never auto-applied. Enqueued only under 3.3.2 (never a fabricated 4.1.2 row).
     Never fails the remediation job."""
+    allows = _remediation_scope(filename, scan_id)
+    if allows is not None and not allows("3.3.2"):
+        return
     try:
         import io as _io
         import propose_forms as _pf
@@ -781,6 +785,9 @@ def _propose_media_captions(scan_id: str, filename: str, drive_file_id: str,
     which of those it was, so a reviewer looking at a card-less finding can tell "too long" from
     "no engine on this deployment" without reading source.
     """
+    allows = _remediation_scope(filename, scan_id)
+    if allows is not None and not any(allows(sc) for sc in ("1.2.1", "1.2.2")):
+        return
     import tempfile
     from pathlib import Path as _P
 
@@ -802,7 +809,10 @@ def _propose_media_captions(scan_id: str, filename: str, drive_file_id: str,
         with tempfile.TemporaryDirectory(prefix="acp-mediaprop-") as d:
             p = _P(d) / filename
             p.write_bytes(data)
-            props = _prop.propose_captions(p, p.suffix)
+            from assessment_selection import selected_for_file, selection
+            scope = core.store.scope_for_file(scan_id, filename, core.store.get_scan_scope(scan_id))
+            with selection(selected_for_file(scope, filename)):
+                props = _prop.propose_captions(p, p.suffix)
     except Exception:
         swallowed(f"_propose_media_captions: drafting captions for {filename} failed", scan_id)
         return
@@ -1725,7 +1735,7 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
     import joblog as _joblog
     with _joblog.stage("remediate.verify", doc=_joblog.doc_id(filename),
                        scan_id=scan_id, ext=ext):
-        verification = _verify_residual(fixed_bytes, filename)
+        verification = _verify_residual(fixed_bytes, filename, scan_id=scan_id)
     # Enqueue the inline AI proposals (2.4.4 link text …) now that the re-scan has run, so a
     # deterministic fix that verifiably cleared carries validated=True (confidence.js reads
     # it as a High, one-click confirm) while a fix still failing / a model draft stays
@@ -1764,6 +1774,8 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
                        fixes=_unverified)
     except Exception:
         swallowed("_remediate_file: recording the verified remediation diffs failed", scan_id)
+    from unverified_changes import record_verification
+    record_verification(core.store, scan_id, filename, fixed_bytes, verification)
     try:
         from documents import resolve_doc_id
         doc_id = resolve_doc_id(source, drive_file_id or f"{scan_id}:{filename}", filename, None)
@@ -3962,11 +3974,12 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
     # scan (e.g. the same PDF uploaded to two folders under different names) — skip the
     # download + engine analysis + PII extraction entirely and copy the prior result
     # forward under this file's own name/id. Scoped to one scan_id only.
-    dedup = core.store.find_by_checksum(scan_id, checksum) if checksum else None
+    dedup = core.store.find_by_checksum(scan_id, checksum, filename=name) if checksum else None
     # ADR 0011: reuse ACROSS scans when within-scan dedup didn't match. Gated on the
     # same owner + drive_file_id + checksum + rubric_hash (see find_prior_analysis).
     if not dedup and incremental:
-        dedup = core.store.find_prior_analysis(user, drive_file_id, checksum, rubric_hash)
+        dedup = core.store.find_prior_analysis(user, drive_file_id, checksum, rubric_hash,
+                                               scan_id=scan_id, filename=name)
     tmp = _Path(_tempfile.mkdtemp(prefix="acp-scanone-"))
     fdict = pinfo = None
     _timings = _st.ScanTimings()          # ADR 0037 Step 0 — measure download vs analyse (side-channel)
@@ -3976,24 +3989,8 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
             reused_from_scan = dedup.pop("reused_from_scan", None)
             pinfo = dedup.pop("pii")
             fdict = {"file": name, **dedup}
-            # RE-SCORE UNDER THE CURRENT SCOPE. The findings are reused; the SCORE is not.
-            #
-            # `score`, `compliant` and `skipped_rules` are scope-dependent — `_scoped_for_scoring`
-            # decides which findings `Rubric.assess` ever sees — but `find_prior_analysis` gates
-            # reuse on rubric_hash alone. So narrowing the operator's scope and re-scanning
-            # returned the score computed under the OLD scope: one measured .docx with a 1.1.1 and
-            # a 1.3.1 finding scores 60 unscoped and 75 with only 1.1.1 in scope, and the reuse
-            # handed back 60. Silently, and looking exactly like the scope had done nothing.
-            #
-            # That is the same class of staleness rubric_hash already guards ("a stale analysis
-            # under an old rubric is not valid evidence once the rule set has changed") — a stale
-            # score under an old SCOPE is not valid evidence either.
-            #
-            # Re-scored rather than invalidated, which is the cheaper and more faithful fix: the
-            # full issue list comes back with the reuse, and scoring is a pure function over it.
-            # No download, no engine, no OCR — the entire point of ADR 0011 survives. This is
-            # what `_scoped_for_scoring`'s own note already promises: "Every finding stays on the
-            # record, so re-reporting the same scan under a different scope needs no re-scan."
+            # Reuse was accepted only after comparing the measured and requested criteria.
+            # Narrower requests still need their issue list and score projected to that scope.
             try:
                 from scanner import rescore_reused
                 # PHASE 3a — re-score the reused analysis under THIS scan's FROZEN scope
@@ -4005,12 +4002,8 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
                                             fdict.get("status"),
                                             scope=core.store.scope_for_file(
                                                 scan_id, name, core.store.get_scan_scope(scan_id))))
-            except Exception:
-                # Deliberately narrow: a rescore failure leaves the reused score in place rather
-                # than failing the file. Logged, because a silent fallback here is how the stale
-                # score came back unnoticed the first time.
-                print(f"[scan] {name}: could not re-score reused analysis — "
-                      "keeping the prior score", flush=True)
+            except Exception as exc:
+                raise RuntimeError(f"cannot safely project reused assessment for {name}") from exc
             if reused_from_scan and pinfo and pinfo.get("total"):
                 # PII carries more sensitivity than a WCAG score -- copying it forward
                 # gets its own audit entry rather than a silent inherit (ADR 0011).
@@ -5023,8 +5016,8 @@ def _apply_one_value_kind(
     written bytes shows the criterion no longer failing AND the caller durably uploads them.
     Successful lanes append a callback to pending_credits; the caller commits those callbacks
     with the artifact fingerprint after storage succeeds, exactly as `verified_diffs` credits an
-    automatic fix. A write that does not clear the criterion leaves the row unapplied and the
-    file uncertified, which is the honest outcome: something about the document still fails.
+    automatic fix. A standing-authorized write that remains unverified may be saved as applied,
+    with separate durable evidence and no certification or resolved credit.
 
     extra_work: this lane's `write_fn` carries approved work of its own that is not expressible
     as {locator: text} — today, the decorative markings closed over by the alt lane, whose whole
@@ -5151,33 +5144,61 @@ def _apply_one_value_kind(
     fixed = stamp_output(fixed, filename)
 
     _phase(job, f"re-verifying the corrected copy ({noun})")
-    verification = _verify_residual(fixed, filename)
+    verification = _verify_residual(fixed, filename, scan_id=scan_id)
     # Newly-failing criteria: in this re-scan, absent from the baseline. Only decidable when both
     # re-scans ran to a trustworthy result; otherwise "unknown" (None), which the row stores as
     # such rather than as an empty list.
     baseline = (residual_state or {}).get("verification")
     regressions = (sorted(verification.residual - baseline.residual)
                    if verification.ok and baseline is not None and baseline.ok else None)
+    def preserve_unverified(outcome, reason):
+        if not (residual_state or {}).get('retain_unverified') or regressions:
+            return working, False
+        from unverified_changes import structurally_readable
+        if not structurally_readable(working, fixed, filename):
+            core.store.log_decision('system', 'apply.integrity_failed', scan_id=scan_id,
+                file=filename, rule_id=diff_rule_id, detail='Written copy did not pass document integrity checks; previous copy retained.')
+            return working, False
+        written_locators = {a.get('locator') for a in applied}
+        saved_items = [item_id for item_id in lane_items if item_locators.get(item_id)
+                       and set(item_locators[item_id]).issubset(written_locators)]
+        def commit_unverified():
+            import json
+            record = core.store.get_file_record(scan_id, filename) or {}
+            for item_id in saved_items:
+                core.store.mark_row_applied(item_id)
+            with core.store._db.cursor() as cur:
+                core.store._db.execute(cur, 'UPDATE file_records SET compliant=0 WHERE scan_id=%s AND file=%s', (scan_id, filename))
+            core.store.log_decision('system', 'apply.saved_unverified', scan_id=scan_id,
+                file=filename, rule_id=diff_rule_id, detail=json.dumps({
+                    'artifact_sha256': record['corrected_sha256'], 'item_ids': saved_items,
+                    'source_sha256': _proof_sha256(working).hexdigest(),
+                    'baseline_residual': sorted(baseline.residual) if baseline is not None and baseline.ok else None,
+                    'changes': applied, 'outcome': outcome, 'reason': reason,
+                    'verification': 'not_verified'}))
+            _model_outcome(outcome, reason + unresolved_note, regressions=regressions)
+        pending_credits.append(commit_unverified)
+        residual_state['verification'] = verification
+        return fixed, True
+
     if not verification.ok:
         # COULD NOT VERIFY — the document was unreadable, the scan errored or timed out, an
         # engine was missing, or a rule threw and its criterion is simply absent from the
         # result. None of that is evidence the fix worked, so nothing is credited: the row
-        # stays unapplied (the approved value is preserved on it for a retry) and the file
-        # stays uncertified. Returning `working` — the bytes as they were BEFORE this lane —
-        # is what keeps an unverified write out of the published copy.
+        # stays uncertified. The explicit standing-approval path can retain structurally
+        # sound bytes with applied-but-unverified evidence; other paths retain the prior copy.
         core.store.log_decision(
             "system", "apply.unverified", scan_id=scan_id, file=filename,
             detail=f"wrote {len(applied)} {noun} value(s) but could not verify "
-                   f"{sorted(scs_to_clear)}: {verification.reason}. Credit withheld; "
-                   f"the approved value is kept for retry")
+                   f"{sorted(scs_to_clear)}: {verification.reason}. Resolved credit withheld.")
         _model_outcome("could_not_verify",
                        (verification.reason or "verification unavailable") + unresolved_note,
                        regressions=None)
-        return working, False
+        return preserve_unverified("could_not_verify", verification.reason or "Verification unavailable")
     if not verification.cleared(scs_to_clear):
         # The value went in but the criterion still fails (content we never saw, or the engine
-        # reads it differently). Credit nothing: the row stays unapplied and the file stays
-        # uncertified, which is what is actually true of the document.
+        # reads it differently). Credit no resolved findings. Explicit automatic approval
+        # may retain the successful write while keeping the file uncertified.
         core.store.log_decision(
             "system", "apply.unverified", scan_id=scan_id, file=filename,
             detail=f"wrote {len(applied)} {noun} value(s) but "
@@ -5186,7 +5207,7 @@ def _apply_one_value_kind(
                        f"still failing: {sorted(verification.still_failing(scs_to_clear))}"
                        + unresolved_note,
                        regressions=regressions)
-        return working, False
+        return preserve_unverified("verified_still_failing", f"Remaining criterion failures: {sorted(verification.still_failing(scs_to_clear))}")
 
     if residual_state is not None:
         # These bytes are the next lane's `working`; its regressions are measured from here.
@@ -5257,6 +5278,12 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     if payload.get('standing_approval'):
         from ai_standing_approval import check_application
         if check_application(core.store, payload):
+            from unverified_changes import blocks_certification, record_verification
+            if blocks_certification(core.store, scan_id, filename):
+                import blob as _blob
+                data = _blob.download_remediated(payload['standing_approval']['owner'], scan_id, filename)
+                if data:
+                    record_verification(core.store, scan_id, filename, data, _verify_residual(data, filename, scan_id=scan_id))
             return
     from ai_standing_approval import check_file_approvals
     check_file_approvals(core.store, scan_id, filename)
@@ -5317,7 +5344,8 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     # its bytes are what the next lane writes on top of. `_verify_residual` never raises (a
     # re-scan that cannot run is Verification(ok=False)), so this cannot block the write.
     _phase(job, "re-scanning the copy before writing (regression baseline)")
-    residual_state = {"verification": _verify_residual(working, filename)}
+    residual_state = {"verification": _verify_residual(working, filename, scan_id=scan_id),
+                      "retain_unverified": bool(payload.get("standing_approval"))}
     pending_credits = []
 
     # ADR 0055: a described-not-replaced row carries the 1.4.5 card's own 'image N' locator — a

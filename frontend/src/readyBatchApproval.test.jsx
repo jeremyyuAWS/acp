@@ -20,7 +20,7 @@ async function mount(Component, props) {
 it('keeps 119 already-applied rows out of the selectable pages and surfaces later ready proposals', async () => {
   const v = await mount(BatchReviewSelection, { visible: [...applied, ready('one'), ready('two')], onDecide: vi.fn(), scopeKey: 'scan' })
   expect(v.container.querySelectorAll('input[type=checkbox]')).toHaveLength(2)
-  expect(v.button('Approve all ready (2)')).toBeTruthy()
+  expect(v.button('Approve all ready (2 proposals)')).toBeTruthy()
   expect(v.container.querySelectorAll('input[disabled]')).toHaveLength(0)
   expect(v.container.textContent).not.toContain('Select only proposals you have reviewed')
 })
@@ -28,7 +28,7 @@ it('freezes the complete cross-page ready set with optional inspection; refresh 
   const onDecide = vi.fn().mockResolvedValue(undefined)
   const visible = [...applied, ...Array.from({ length: 25 }, (_, i) => ready(i))]
   const v = await mount(BatchReviewSelection, { visible, onDecide, scopeKey: 'scan', scopeLabel: 'All documents in this scan' })
-  await click(v.button('Approve all ready (25)'))
+  await click(v.button('Approve all ready (25 proposals)'))
   expect(onDecide).not.toHaveBeenCalled()
   expect(v.container.querySelector('details[open]')).toBeNull()
   await v.render({ visible: [...visible, ready('new')] })
@@ -39,7 +39,7 @@ it('freezes the complete cross-page ready set with optional inspection; refresh 
 it('opens scan-wide ready approval even when the individual queue tab has only applied work', async () => {
   const v = await mount(RemediationInbox, { queue: [...applied, ready('pending')], decisions: {}, initialTab: 'needs-review', scanId: 'scan', onDecide: vi.fn() })
   await click(v.button('Bulk approve ready proposals'))
-  expect(v.button('Approve all ready (1)')).toBeTruthy()
+  expect(v.button('Approve all ready (1 proposals)')).toBeTruthy()
   expect(v.container.textContent).toContain('All documents in this scan')
 })
 it('shows a truthful no-ready explanation and useful action instead of disabled checkboxes', async () => {
@@ -61,7 +61,7 @@ it.each([
   const v = await mount(RemediationInbox, { queue: [ready('pending'), other], decisions: {}, scanId: 'scan', onDecide })
   expect(v.container.querySelector('.rem-wsfoot')).not.toBeNull()
   await click(v.button('Bulk approve ready proposals'))
-  await click(v.button('Approve all ready (1)'))
+  await click(v.button('Approve all ready (1 proposals)'))
   const progress = v.container.querySelector('.rem-wsfoot')
   expect(progress).toBeNull()
   await click(v.button(category))

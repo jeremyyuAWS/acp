@@ -81,7 +81,7 @@ def _run_handler(monkeypatch, store, blob, *, residual):
     if residual != "real":
         from proposals import Verification
         monkeypatch.setattr(handlers, "_verify_residual",
-                            lambda b, f: Verification(True, residual or ()))
+                            lambda b, f, **kwargs: Verification(True, residual or ()))
     handlers._apply_approved_values({"scan_id": SID, "file": FILE}, {})
 
 

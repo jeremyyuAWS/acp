@@ -53,6 +53,9 @@ class _Store:
     def get_scan_scope(self, scan_id):
         return self._frozen.get(scan_id)
 
+    def scope_for_file(self, scan_id, filename, scope):
+        return scope
+
     def get_setting(self, key, default=None):
         return self._settings.get(key, default)
 
@@ -106,23 +109,25 @@ def test_a_global_scope_change_after_the_scan_does_not_move_the_gate(handlers):
         "an old unscoped scan must keep remediating everything — the later global change is not its scope")
 
 
-def test_unknown_format_is_never_excluded(handlers):
+def test_unknown_format_still_respects_selected_criteria(handlers):
     """The gate honours a deliberate choice; it must not invent one from an unparseable name."""
     h, store = handlers
-    store.freeze("s1", "engagement-14")
+    store.freeze("s1", {"1.1.1": frozenset({"docx"})})
     allows = h._remediation_scope("no-extension-here", "s1")
-    assert allows("2.1.1") is True
+    assert allows("1.1.1") is True
+    assert allows("2.1.1") is False
 
 
-def test_a_broken_scope_lookup_does_not_block_everything(handlers, monkeypatch):
-    """Fail open, not closed: an unresolvable scope must not silently stop all remediation."""
+def test_a_broken_scope_lookup_cannot_authorize_mutations(handlers, monkeypatch):
+    """Scope lookup failure is not authorization to run every fixer."""
     h, store = handlers
 
     def _boom(*a, **k):
         raise RuntimeError("store unavailable")
 
     monkeypatch.setattr(store, "get_scan_scope", _boom)
-    assert h._remediation_scope("report.docx", "s1") is None
+    with pytest.raises(RuntimeError, match="store unavailable"):
+        h._remediation_scope("report.docx", "s1")
 
 
 # ── 2. the proposal lane ──────────────────────────────────────────────────────

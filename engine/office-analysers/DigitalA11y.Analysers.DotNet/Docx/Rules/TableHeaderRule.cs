@@ -20,7 +20,11 @@ public class TableHeaderRule : IDocxRule
 
         for (int tableIdx = 0; tableIdx < tables.Count; tableIdx++)
         {
-            var rows = tables[tableIdx].Descendants<TableRow>().ToList();
+            // Include content-control rows, but never count a nested table's rows
+            // as rows of its outer (possibly single-row layout) table.
+            var table = tables[tableIdx];
+            var rows = table.Descendants<TableRow>()
+                .Where(row => ReferenceEquals(row.Ancestors<Table>().FirstOrDefault(), table)).ToList();
             if (rows.Count <= 1) continue;
 
             if (!HasHeaderRow(rows[0]))

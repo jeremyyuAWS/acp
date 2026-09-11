@@ -69,17 +69,16 @@ it('every workflow tab badge equals the number of rows that tab lists', async ()
   }
 })
 
-it('counts the applied fix awaiting confirmation — the row that was in the list and in no badge', async () => {
+it('counts applied work under awaiting verification, not approval', async () => {
   const v = await mount()
-  // 5 approvable drafts + 1 unversioned draft + 1 applied fix to confirm.
-  expect(v.badge('Approve AI suggestions')).toBe(7)
-  expect(v.rows()).toBe(7)
-  // The bite check: it is the applied row being counted, not a coincidence of totals. Drop it and
-  // BOTH the badge and the list must fall by one — an assertion that survives that is asserting
-  // nothing about this row.
-  await v.render({ queue: RUN.filter((f) => !f.autoApplied) })
   expect(v.badge('Approve AI suggestions')).toBe(6)
   expect(v.rows()).toBe(6)
+  expect(v.badge('Awaiting verification')).toBe(1)
+  await click(v.tab('Awaiting verification'))
+  expect(v.rows()).toBe(1)
+  await v.render({ queue: RUN.filter((f) => !f.autoApplied) })
+  expect(v.badge('Awaiting verification')).toBe(0)
+  expect(v.rows()).toBe(0)
 })
 
 it('still says how many of those are ready to approve — on the button, where the number has a noun', async () => {
@@ -97,11 +96,12 @@ it('the run-approval ledger adds up to the workflow tabs', async () => {
   const summary = v.container.querySelector('.run-approval-summary').textContent
   expect(summary).toContain('5 ready review items')
   expect(summary).toContain('1 need proposal information or individual review')
-  expect(summary).toContain('1 applied changes to confirm')     // was rendered nowhere before
+  expect(summary).toContain('1 applied changes available to inspect')     // was rendered nowhere before
   expect(summary).toContain('3 manual review items')
   // The ledger's terms are the needs-review and manual tabs, split by what a reviewer can do with
   // them. Reconcilable by addition, which is the whole point of printing them together.
-  expect(c.ready + c.individual + c.inspection).toBe(v.badge('Approve AI suggestions'))
+  expect(c.ready + c.individual).toBe(v.badge('Approve AI suggestions'))
+  expect(c.inspection).toBe(v.badge('Awaiting verification'))
   expect(c.manual).toBe(v.badge('Fix manually'))
 })
 

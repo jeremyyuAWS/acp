@@ -254,3 +254,10 @@ def test_premature_sealed_assessment_does_not_report_zero_or_current_findings():
     snap = live_snapshot.build_snapshot(store, 's1', owner='o')
     assert 'findings_so_far' not in snap['kpis']
     assert 'findings_so_far' in snap['kpis_pending']
+
+
+def test_live_snapshot_preserves_frozen_criterion_selection():
+    scope = {"scan_scope": {"1.1.1": ["docx"]}, "inventory": {"large": "omitted"}}
+    snap = _snap({"status": "completed", "files": 1, "files_done": 1, "scope": scope})
+    assert snap["scope"]["scan_scope"] == {"1.1.1": ["docx"]}
+    assert "inventory" not in snap["scope"]

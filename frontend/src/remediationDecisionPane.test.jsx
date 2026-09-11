@@ -15,7 +15,7 @@ const { default: RemediationPreview } = await import('./RemediationPreview.jsx')
 
 let container, root
 beforeEach(() => { try { localStorage.clear() } catch {} ;({ container, root } = createTestRoot()) })
-const renderInbox = async (props) => { await act(async () => { root.render(createElement(RemediationInbox, { initialTab: 'needs-review', initialSort: 'document', onOpenWord: () => {}, ...props })) }) }
+const renderInbox = async (props) => { await act(async () => { root.render(createElement(RemediationInbox, { initialTab: 'active', initialSort: 'document', onOpenWord: () => {}, ...props })) }) }
 const renderPreview = async (props) => { await act(async () => { root.render(createElement(RemediationPreview, props)) }) }
 const click = async (el) => { await act(async () => { el.tagName === 'OPTION' ? (el.parentElement.value = el.value, el.parentElement.dispatchEvent(new Event('change', { bubbles: true }))) : el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
 const btnByText = (t) => [...container.querySelectorAll('button, select[aria-label="Filter by status"] option')].find((b) => b.textContent.includes(t))

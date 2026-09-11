@@ -24,8 +24,8 @@ table { width: 100%; border-collapse: collapse; font-size: 9pt; }
 th, td { border: 1px solid #d9cfdf; padding: 7px; overflow-wrap: anywhere; }
 th { background: #f5eff7; }
 tr { break-inside: avoid; }
-.report-card { border: 1px solid #d9cfdf; border-left: 4px solid #86618b; border-radius: 7px; padding: 12px; margin: 10px 0; break-inside: avoid; }
-.report-field { margin: 5px 0; overflow-wrap: anywhere; }
+.report-card { border: 1px solid #d9cfdf; border-left: 4px solid #86618b; border-radius: 7px; padding: 9px 11px; margin: 8px 0; break-inside: avoid; }
+.report-field { margin: 3px 0; overflow-wrap: anywhere; }
 .report-field b { color: #62435d; }
 .report-field.evidence { font-family: "DejaVu Sans Mono", monospace; font-size: 9pt; white-space: pre-wrap; }
 details { display: block; border: 1px solid #ded5e4; padding: 8px; margin: 7px 0; break-inside: auto; }

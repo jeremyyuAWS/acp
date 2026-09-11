@@ -80,13 +80,13 @@ def specs(size=3):
     return tuple(TextModelSpec('openai', f'fixture-model-{n}', 'synthetic-price', '1', '2', 8192, 128, int(time.time()) + 3600) for n in range(size))
 
 
-def test_catalog_is_read_only_defaults_to_three_and_requires_supported_finding(monkeypatch):
+def test_catalog_is_read_only_defaults_to_two_and_requires_supported_finding(monkeypatch):
     generator = StrictTextGenerator(specs(), provider_module=FakeProviders,
         post=lambda *a, **kw: pytest.fail('capability read dispatched a paid request'))
     monkeypatch.setattr('llm_waterfall_provider.configured_generator', lambda: generator)
     result = chain_options([{'file': 'a.pptx', 'criterion': '2.4.6', 'finding_count': 1}])
     assert result['supported'] is True
-    assert result['default_steps'] == chain(3)['steps']
+    assert result['default_steps'] == chain(2)['steps']
     assert len(result['models']) == 3
     assert 'synthetic-price' not in json.dumps(result)
     assert chain_options([])['supported'] is False
@@ -247,14 +247,13 @@ def test_the_default_never_offers_a_step_execution_would_not_admit(monkeypatch, 
     assert (len(result['default_steps']) == 3) is result['supported']
 
 
-def test_the_default_does_offer_the_third_step_where_execution_admits_it(monkeypatch):
-    """The other half of the pairing — without it the test above passes on a chain_options
-    that never offers a third step at all."""
+def test_the_third_step_remains_optional_where_execution_admits_it(monkeypatch):
+    """An available third model does not automatically add another generation step."""
     catalog(monkeypatch, FakeProviders)
     result = chain_options([{'file': 'a.pptx', 'criterion': '2.4.6', 'finding_count': 1}])
     assert result['supported'] is True
-    assert result['default_steps'] == chain(3)['steps']
-    assert (len(result['default_steps']) == 3) is result['supported']
+    assert result['default_steps'] == chain(2)['steps']
+    assert len(result['models']) == 3
 
 
 def test_two_model_configuration_still_defaults_to_two_positions(monkeypatch):

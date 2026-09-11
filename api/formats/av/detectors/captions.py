@@ -31,6 +31,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import media
+from assessment_selection import enabled
 
 # Sidecars that count as a TRANSCRIPT for 1.2.1 but not as CAPTIONS for 1.2.2. A .txt beside an
 # .mp3 is a transcript in the sense 1.2.1 asks for; the same file beside a video is not captions,
@@ -84,6 +85,11 @@ def detect(path: str | Path) -> list[dict]:
         info = media.probe(p)
     except Exception:
         info = None
+
+    criterion = ("1.2.2" if (info.has_video and info.has_audio) else "1.2.1") if info is not None else (
+        "1.2.2" if kind == "video" else "1.2.1")
+    if not enabled(criterion):
+        return []
 
     if info is None:
         # Not a defect and not a clean result — a statement that nothing looked. REVIEW severity,

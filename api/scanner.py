@@ -4177,11 +4177,14 @@ def _issue_with_loc(base: dict, loc) -> dict:
     return base
 
 
+from assessment_selection import enabled as _sc_enabled, selected as _selected_scs
+
+
 def _analyse_pdf(path: Path) -> dict:
     import asyncio
     sys.path.insert(0, str(WP))
     try:
-        from analysers.pdf_analyser import PdfAnalyser
+        from analysers.pdf_analyser import PdfAnalyser, _RULES
         from models.manifest import AnalysisJob, FileType
     except ModuleNotFoundError as exc:
         # worker-python is not vendored — it is loaded at runtime from ACP_PDF_ENGINE. Bare, this
@@ -4199,9 +4202,12 @@ def _analyse_pdf(path: Path) -> dict:
                         f"ACP_PDF_ENGINE (currently {WP}); this host has no importable analyser "
                         f"there, so no PDF can be assessed. See /readyz."),
             "rule": None}]}
+    from assessment_selection import allowed_rules
+    allowed = allowed_rules()
+    disabled = [] if allowed is None else [r.rule_id for r in _RULES if r.rule_id not in allowed]
     job = AnalysisJob(job_id=uuid.uuid4(), batch_run_id=uuid.uuid4(), file_id=uuid.uuid4(),
                       file_path=str(path), file_type=FileType.PDF, queue="pdf",
-                      enqueued_at=datetime.now(timezone.utc), department_id=uuid.uuid4(), disabled_rule_ids=[])
+                      enqueued_at=datetime.now(timezone.utc), department_id=uuid.uuid4(), disabled_rule_ids=disabled)
     try:
         r = asyncio.run(PdfAnalyser().analyse(path, job))
         issues = [_issue_with_loc({"ruleId": i.rule_id, "wcag": i.wcag_criterion.name,
@@ -4311,7 +4317,7 @@ def _docx_body_readable(path: Path) -> bool:
         return False
 
 
-def _analyse_office(dest: Path) -> dict:
+def _analyse_office(dest: Path, *, rule_allowlists=None) -> dict:
     out = dest / "_o.json"
     # DOTNET_ROOT only when that install actually exists, and never clobbering one the
     # environment already set (actions/setup-dotnet and the Docker image both set it
@@ -4349,7 +4355,14 @@ def _analyse_office(dest: Path) -> dict:
     timeout_s = int(os.environ.get("ACP_OFFICE_CLI_TIMEOUT", "180"))
     aborted: str | None = None
     try:
-        proc = subprocess.run([DOTNET, str(CLI_DLL), str(dest), str(out)],
+        from assessment_selection import allowed_rules
+        allowed = allowed_rules()
+        command = [DOTNET, str(CLI_DLL), str(dest), str(out)]
+        if rule_allowlists is not None:
+            command.append(json.dumps(rule_allowlists))
+        elif allowed is not None:
+            command.append(json.dumps({"*": allowed}))
+        proc = subprocess.run(command,
                               capture_output=True, text=True, env=env, timeout=timeout_s)
         if proc.returncode != 0:
             aborted = _cli_exit_reason(proc.returncode)
@@ -4552,326 +4565,358 @@ def _analyse_html(path: Path) -> dict:
         return {"succeeded": False, "issues": [], "errors": [{"message": f"{type(e).__name__}: {e}", "rule": None}]}
 
     issues: list[dict] = []
-
-    # 2.4.2 Page Titled — missing or empty <title>
-    titles = root.findall(".//title")
-    if not titles or not (titles[0].text or "").strip():
-        issues.append({"ruleId": "HTML_MISSING_TITLE", "wcag": "2.4.2 Page Titled", "severity": "SERIOUS"})
-
-    # 3.1.1 Language of Page — missing lang on <html>
-    # lxml.html.fromstring returns the root element (html or body depending on fragment)
-    html_el = root if root.tag == "html" else root.find(".//html") or root
-    lang = html_el.get("lang") or html_el.get("{http://www.w3.org/XML/1998/namespace}lang")
-    if not lang:
-        issues.append({"ruleId": "HTML_MISSING_LANG", "wcag": "3.1.1 Language of Page", "severity": "SERIOUS"})
-
-    # 1.1.1 Non-text Content — <img> without alt attribute (decorative: role=presentation is ok)
-    for img in root.iter("img"):
-        if img.get("alt") is None and img.get("role", "") not in ("presentation", "none"):
-            issues.append({"ruleId": "HTML_IMG_MISSING_ALT", "wcag": "1.1.1 Non-text Content", "severity": "SERIOUS"})
-
-    # 2.4.4 Link Purpose (In Context) — empty or vague <a> text
-    for a in root.iter("a"):
-        text = (a.text_content() or "").strip()
-        aria = (a.get("aria-label") or a.get("title") or "").strip()
-        if not text and not aria:
-            issues.append({"ruleId": "HTML_EMPTY_LINK", "wcag": "2.4.4 Link Purpose (In Context)", "severity": "SERIOUS"})
-        elif text.lower() in _VAGUE_LINK_TEXT and not aria:
-            issues.append({"ruleId": "HTML_VAGUE_LINK", "wcag": "2.4.4 Link Purpose (In Context)", "severity": "MODERATE"})
-
-    # 2.4.9 Link Purpose (Link Only) — text alone must convey purpose, with no
-    # credit for surrounding context. Its genuine failure case: identical link
-    # text pointing at different real destinations (2.4.4 tolerates this — context
-    # sorts it out — 2.4.9 doesn't). href="#" is excluded — a common JS-hook
-    # placeholder, not a real distinct destination. Vague text (2.4.4's list)
-    # fails "text alone" regardless of context, so it's flagged here too.
-    link_groups: dict[str, set[str]] = {}
-    for a in root.iter("a"):
-        href = a.get("href")
-        n = (a.get("aria-label") or a.text_content() or "").strip().lower()
-        if not href or href == "#" or not n:
-            continue
-        link_groups.setdefault(n, set()).add(href)
-    ambiguous_hrefs = {h for hrefs in link_groups.values() if len(hrefs) > 1 for h in hrefs}
-    for a in root.iter("a"):
-        href = a.get("href")
-        text = (a.text_content() or "").strip()
-        aria = (a.get("aria-label") or "").strip()
-        vague = text.lower() in _VAGUE_LINK_TEXT and not aria
-        duplicated = bool(href) and href != "#" and href in ambiguous_hrefs
-        if vague or duplicated:
-            issues.append({"ruleId": "HTML_LINK_PURPOSE_AMBIGUOUS", "wcag": "2.4.9 Link Purpose (Link Only)", "severity": "MODERATE"})
-
-    # 2.4.6 Headings and Labels — skipped heading levels (e.g. h1 → h3). EVERY gap is reported,
-    # not just the first: _fix_heading_skip closes them all in one pass, so stopping at the first
-    # understated the work and left a page looking one edit away from clean when it was several.
-    # `prev_level` advances to the level actually in the document (not the clamped prev+1), which
-    # is what keeps h1→h3→h4 a single finding — the outline has one gap there, and the h3→h4 step
-    # is well-formed. Mirrors office_structure.docx_checks' DOCX_HEADING_SKIP.
-    HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
-    prev_level = 0
-    ordinal = 0
-    for el in root.iter():
-        if el.tag in HEADING_TAGS:
-            level = int(el.tag[1])
-            ordinal += 1
-            if prev_level > 0 and level > prev_level + 1:
-                # The ordinal keeps two identical gaps (two separate h1→h3s) distinguishable.
-                issues.append({"ruleId": "HTML_HEADING_SKIP", "wcag": "2.4.6 Headings and Labels",
-                               "severity": "MODERATE",
-                               "detail": f"Heading {ordinal}: level jumps from h{prev_level} to h{level} "
-                                         f"(should step to h{prev_level + 1})"})
-            prev_level = level
-
-    # 1.3.2 Meaningful Sequence — CSS that visually reorders content away from source order
-    # (flex 'order', reversed flex direction/flow), or an image-replacement technique (a large
-    # negative text-indent hiding real text behind a background image). A screen reader follows
-    # source order, so any of these can make the spoken order differ from the visual one.
     _style_blob = " ".join(
         [el.get("style", "") for el in root.iter() if el.get("style")]
         + [s.text_content() for s in root.iter("style") if s.text_content()]
     ).lower()
-    if re.search(r"order\s*:\s*-?[1-9]", _style_blob) or re.search(r"flex-(?:direction|flow)\s*:[^;]*reverse", _style_blob):
-        issues.append({"ruleId": "HTML_VISUAL_REORDER", "wcag": "1.3.2 Meaningful Sequence", "severity": "MODERATE"})
 
-    # 1.4.5 Images of Text — an <img> whose file name signals it carries text, or a CSS
-    # image-replacement technique (large negative text-indent). Conservative: only these
-    # unambiguous signals fire, so an ordinary photo/diagram is never mistaken for text.
-    _TEXT_IMG_NAME = re.compile(
-        r"\b(heading|headline|banner|title|quote|wordmark|slogan|tagline|typography|text)\b", re.I)
-    _imgtext = any(_TEXT_IMG_NAME.search((img.get("src") or "").rsplit("/", 1)[-1]) for img in root.iter("img"))
-    if not _imgtext and re.search(r"text-indent\s*:\s*-\s*(?:9{3,}|\d{4,})", _style_blob):
-        _imgtext = True
-    if _imgtext:
-        issues.append({"ruleId": "HTML_IMAGE_OF_TEXT", "wcag": "1.4.5 Images of Text", "severity": "MODERATE"})
 
-    # 4.1.2 Name, Role, Value — <input> without an associated label
     labelled_ids: set[str] = set()
     for label in root.iter("label"):
         for_attr = label.get("for")
         if for_attr:
             labelled_ids.add(for_attr)
-    SKIP_INPUT_TYPES = {"hidden", "submit", "button", "image", "reset"}
-    for inp in root.iter("input"):
-        if (inp.get("type") or "text").lower() in SKIP_INPUT_TYPES:
-            continue
-        if not (inp.get("aria-label") or inp.get("aria-labelledby") or inp.get("title")):
-            if inp.get("id", "") not in labelled_ids:
-                issues.append({"ruleId": "HTML_INPUT_NO_LABEL", "wcag": "4.1.2 Name, Role, Value", "severity": "CRITICAL"})
 
-    # ── Phase 1 additions — predicates mirror frontend/src/rules/wcag-*.js so a
-    # file remediated client-side re-scans clean here.
+    if _sc_enabled("2.4.2"):
+        # 2.4.2 Page Titled — missing or empty <title>
+        titles = root.findall(".//title")
+        if not titles or not (titles[0].text or "").strip():
+            issues.append({"ruleId": "HTML_MISSING_TITLE", "wcag": "2.4.2 Page Titled", "severity": "SERIOUS"})
 
-    # 1.4.2 Audio Control — autoplaying media with no way to stop it
-    for m in root.iter("audio", "video"):
-        if m.get("autoplay") is not None and m.get("controls") is None:
-            issues.append({"ruleId": "HTML_AUTOPLAY_MEDIA", "wcag": "1.4.2 Audio Control", "severity": "SERIOUS"})
+    if _sc_enabled("3.1.1"):
+        # 3.1.1 Language of Page — missing lang on <html>
+        # lxml.html.fromstring returns the root element (html or body depending on fragment)
+        html_el = root if root.tag == "html" else root.find(".//html") or root
+        lang = html_el.get("lang") or html_el.get("{http://www.w3.org/XML/1998/namespace}lang")
+        if not lang:
+            issues.append({"ruleId": "HTML_MISSING_LANG", "wcag": "3.1.1 Language of Page", "severity": "SERIOUS"})
 
-    # 1.3.5 Identify Input Purpose — recognizable personal-data inputs without autocomplete
-    for inp in root.iter("input"):
-        if inp.get("autocomplete"):
-            continue
-        hint = f'{inp.get("name") or ""} {inp.get("id") or ""} {inp.get("placeholder") or ""}'
-        if (inp.get("type") or "").lower() in ("email", "tel") or _INPUT_PURPOSE.search(hint):
-            issues.append({"ruleId": "HTML_INPUT_NO_AUTOCOMPLETE", "wcag": "1.3.5 Identify Input Purpose", "severity": "MODERATE"})
+    if _sc_enabled("1.1.1"):
+        # 1.1.1 Non-text Content — <img> without alt attribute (decorative: role=presentation is ok)
+        for img in root.iter("img"):
+            if img.get("alt") is None and img.get("role", "") not in ("presentation", "none"):
+                issues.append({"ruleId": "HTML_IMG_MISSING_ALT", "wcag": "1.1.1 Non-text Content", "severity": "SERIOUS"})
 
-    # 2.5.3 Label in Name — accessible name omits the visible label text
-    for el in list(root.iter("a")) + list(root.iter("button")):
-        aria = re.sub(r"\s+", " ", el.get("aria-label") or "").strip().lower()
-        if not aria:
-            continue
-        visible = re.sub(r"\s+", " ", el.text_content() or "").strip().lower()[:80]
-        if visible and visible not in aria:
-            issues.append({"ruleId": "HTML_LABEL_NOT_IN_NAME", "wcag": "2.5.3 Label in Name", "severity": "SERIOUS"})
+    if _sc_enabled("2.4.4"):
+        # 2.4.4 Link Purpose (In Context) — empty or vague <a> text
+        for a in root.iter("a"):
+            text = (a.text_content() or "").strip()
+            aria = (a.get("aria-label") or a.get("title") or "").strip()
+            if not text and not aria:
+                issues.append({"ruleId": "HTML_EMPTY_LINK", "wcag": "2.4.4 Link Purpose (In Context)", "severity": "SERIOUS"})
+            elif text.lower() in _VAGUE_LINK_TEXT and not aria:
+                issues.append({"ruleId": "HTML_VAGUE_LINK", "wcag": "2.4.4 Link Purpose (In Context)", "severity": "MODERATE"})
 
-    # 2.4.1 Bypass Blocks — repeated chrome (nav/header) with no skip mechanism
-    roles = {el.get("role") for el in root.iter() if callable(getattr(el, "get", None)) and el.get("role")}
-    has_chrome = (root.find(".//nav") is not None or root.find(".//header") is not None
-                  or roles & {"navigation", "banner"})
-    if has_chrome:
-        has_main = root.find(".//main") is not None or "main" in roles
-        ids = {el.get("id") for el in root.iter() if callable(getattr(el, "get", None)) and el.get("id")}
-        has_skip = any((a.get("href") or "").startswith("#") and (a.get("href") or "")[1:] in ids
-                       for a in root.iter("a"))
-        if not (has_main or has_skip):
-            issues.append({"ruleId": "HTML_NO_SKIP_LINK", "wcag": "2.4.1 Bypass Blocks", "severity": "MODERATE"})
-
-    # 3.3.2 Labels or Instructions — required field with no guidance at all
-    for tag in ("input", "select", "textarea"):
-        for inp in root.iter(tag):
-            if inp.get("required") is None:
+    if _sc_enabled("2.4.9"):
+        # 2.4.9 Link Purpose (Link Only) — text alone must convey purpose, with no
+        # credit for surrounding context. Its genuine failure case: identical link
+        # text pointing at different real destinations (2.4.4 tolerates this — context
+        # sorts it out — 2.4.9 doesn't). href="#" is excluded — a common JS-hook
+        # placeholder, not a real distinct destination. Vague text (2.4.4's list)
+        # fails "text alone" regardless of context, so it's flagged here too.
+        link_groups: dict[str, set[str]] = {}
+        for a in root.iter("a"):
+            href = a.get("href")
+            n = (a.get("aria-label") or a.text_content() or "").strip().lower()
+            if not href or href == "#" or not n:
                 continue
-            if (inp.get("aria-label") or inp.get("aria-labelledby") or inp.get("aria-describedby")
-                    or inp.get("title") or inp.get("placeholder")):
+            link_groups.setdefault(n, set()).add(href)
+        ambiguous_hrefs = {h for hrefs in link_groups.values() if len(hrefs) > 1 for h in hrefs}
+        for a in root.iter("a"):
+            href = a.get("href")
+            text = (a.text_content() or "").strip()
+            aria = (a.get("aria-label") or "").strip()
+            vague = text.lower() in _VAGUE_LINK_TEXT and not aria
+            duplicated = bool(href) and href != "#" and href in ambiguous_hrefs
+            if vague or duplicated:
+                issues.append({"ruleId": "HTML_LINK_PURPOSE_AMBIGUOUS", "wcag": "2.4.9 Link Purpose (Link Only)", "severity": "MODERATE"})
+
+    if _sc_enabled("2.4.6"):
+        # 2.4.6 Headings and Labels — skipped heading levels (e.g. h1 → h3). EVERY gap is reported,
+        # not just the first: _fix_heading_skip closes them all in one pass, so stopping at the first
+        # understated the work and left a page looking one edit away from clean when it was several.
+        # `prev_level` advances to the level actually in the document (not the clamped prev+1), which
+        # is what keeps h1→h3→h4 a single finding — the outline has one gap there, and the h3→h4 step
+        # is well-formed. Mirrors office_structure.docx_checks' DOCX_HEADING_SKIP.
+        HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+        prev_level = 0
+        ordinal = 0
+        for el in root.iter():
+            if el.tag in HEADING_TAGS:
+                level = int(el.tag[1])
+                ordinal += 1
+                if prev_level > 0 and level > prev_level + 1:
+                    # The ordinal keeps two identical gaps (two separate h1→h3s) distinguishable.
+                    issues.append({"ruleId": "HTML_HEADING_SKIP", "wcag": "2.4.6 Headings and Labels",
+                                   "severity": "MODERATE",
+                                   "detail": f"Heading {ordinal}: level jumps from h{prev_level} to h{level} "
+                                             f"(should step to h{prev_level + 1})"})
+                prev_level = level
+
+    if _sc_enabled("1.3.2"):
+        # 1.3.2 Meaningful Sequence — CSS that visually reorders content away from source order
+        # (flex 'order', reversed flex direction/flow), or an image-replacement technique (a large
+        # negative text-indent hiding real text behind a background image). A screen reader follows
+        # source order, so any of these can make the spoken order differ from the visual one.
+        if re.search(r"order\s*:\s*-?[1-9]", _style_blob) or re.search(r"flex-(?:direction|flow)\s*:[^;]*reverse", _style_blob):
+            issues.append({"ruleId": "HTML_VISUAL_REORDER", "wcag": "1.3.2 Meaningful Sequence", "severity": "MODERATE"})
+
+    if _sc_enabled("1.4.5"):
+        # 1.4.5 Images of Text — an <img> whose file name signals it carries text, or a CSS
+        # image-replacement technique (large negative text-indent). Conservative: only these
+        # unambiguous signals fire, so an ordinary photo/diagram is never mistaken for text.
+        _TEXT_IMG_NAME = re.compile(
+            r"\b(heading|headline|banner|title|quote|wordmark|slogan|tagline|typography|text)\b", re.I)
+        _imgtext = any(_TEXT_IMG_NAME.search((img.get("src") or "").rsplit("/", 1)[-1]) for img in root.iter("img"))
+        if not _imgtext and re.search(r"text-indent\s*:\s*-\s*(?:9{3,}|\d{4,})", _style_blob):
+            _imgtext = True
+        if _imgtext:
+            issues.append({"ruleId": "HTML_IMAGE_OF_TEXT", "wcag": "1.4.5 Images of Text", "severity": "MODERATE"})
+
+    if _sc_enabled("4.1.2"):
+        # 4.1.2 Name, Role, Value — <input> without an associated label
+        SKIP_INPUT_TYPES = {"hidden", "submit", "button", "image", "reset"}
+        for inp in root.iter("input"):
+            if (inp.get("type") or "text").lower() in SKIP_INPUT_TYPES:
                 continue
-            if next(inp.iterancestors("label"), None) is not None or inp.get("id", "") in labelled_ids:
+            if not (inp.get("aria-label") or inp.get("aria-labelledby") or inp.get("title")):
+                if inp.get("id", "") not in labelled_ids:
+                    issues.append({"ruleId": "HTML_INPUT_NO_LABEL", "wcag": "4.1.2 Name, Role, Value", "severity": "CRITICAL"})
+
+        # ── Phase 1 additions — predicates mirror frontend/src/rules/wcag-*.js so a
+        # file remediated client-side re-scans clean here.
+
+    if _sc_enabled("1.4.2"):
+        # 1.4.2 Audio Control — autoplaying media with no way to stop it
+        for m in root.iter("audio", "video"):
+            if m.get("autoplay") is not None and m.get("controls") is None:
+                issues.append({"ruleId": "HTML_AUTOPLAY_MEDIA", "wcag": "1.4.2 Audio Control", "severity": "SERIOUS"})
+
+    if _sc_enabled("1.3.5"):
+        # 1.3.5 Identify Input Purpose — recognizable personal-data inputs without autocomplete
+        for inp in root.iter("input"):
+            if inp.get("autocomplete"):
                 continue
-            issues.append({"ruleId": "HTML_REQUIRED_NO_GUIDANCE", "wcag": "3.3.2 Labels or Instructions", "severity": "SERIOUS"})
+            hint = f'{inp.get("name") or ""} {inp.get("id") or ""} {inp.get("placeholder") or ""}'
+            if (inp.get("type") or "").lower() in ("email", "tel") or _INPUT_PURPOSE.search(hint):
+                issues.append({"ruleId": "HTML_INPUT_NO_AUTOCOMPLETE", "wcag": "1.3.5 Identify Input Purpose", "severity": "MODERATE"})
 
-    # 1.3.4 Orientation — content hidden in one orientation ("rotate your device" lock)
-    for st in root.iter("style"):
-        if _ORIENTATION_LOCK.search(st.text_content() or ""):
-            issues.append({"ruleId": "HTML_ORIENTATION_LOCK", "wcag": "1.3.4 Orientation", "severity": "MODERATE"})
+    if _sc_enabled("2.5.3"):
+        # 2.5.3 Label in Name — accessible name omits the visible label text
+        for el in list(root.iter("a")) + list(root.iter("button")):
+            aria = re.sub(r"\s+", " ", el.get("aria-label") or "").strip().lower()
+            if not aria:
+                continue
+            visible = re.sub(r"\s+", " ", el.text_content() or "").strip().lower()[:80]
+            if visible and visible not in aria:
+                issues.append({"ruleId": "HTML_LABEL_NOT_IN_NAME", "wcag": "2.5.3 Label in Name", "severity": "SERIOUS"})
 
-    # 1.4.6 Contrast (Enhanced, AAA) — inline colors that pass 4.5:1 but miss 7:1
-    for el in root.iter():
-        style = el.get("style") if callable(getattr(el, "get", None)) else None
-        if not style:
-            continue
-        m = _INLINE_COLOR.search(style)
-        if m and _luma(m.group(1)) > 0.45:
-            issues.append({"ruleId": "HTML_LOW_CONTRAST_AAA", "wcag": "1.4.6 Contrast (Enhanced)", "severity": "MODERATE"})
+    if _sc_enabled("2.4.1"):
+        # 2.4.1 Bypass Blocks — repeated chrome (nav/header) with no skip mechanism
+        roles = {el.get("role") for el in root.iter() if callable(getattr(el, "get", None)) and el.get("role")}
+        has_chrome = (root.find(".//nav") is not None or root.find(".//header") is not None
+                      or roles & {"navigation", "banner"})
+        if has_chrome:
+            has_main = root.find(".//main") is not None or "main" in roles
+            ids = {el.get("id") for el in root.iter() if callable(getattr(el, "get", None)) and el.get("id")}
+            has_skip = any((a.get("href") or "").startswith("#") and (a.get("href") or "")[1:] in ids
+                           for a in root.iter("a"))
+            if not (has_main or has_skip):
+                issues.append({"ruleId": "HTML_NO_SKIP_LINK", "wcag": "2.4.1 Bypass Blocks", "severity": "MODERATE"})
 
-    # ── Phase 2 — media alternatives + target size (detect + route to HITL) ──
+    if _sc_enabled("3.3.2"):
+        # 3.3.2 Labels or Instructions — required field with no guidance at all
+        for tag in ("input", "select", "textarea"):
+            for inp in root.iter(tag):
+                if inp.get("required") is None:
+                    continue
+                if (inp.get("aria-label") or inp.get("aria-labelledby") or inp.get("aria-describedby")
+                        or inp.get("title") or inp.get("placeholder")):
+                    continue
+                if next(inp.iterancestors("label"), None) is not None or inp.get("id", "") in labelled_ids:
+                    continue
+                issues.append({"ruleId": "HTML_REQUIRED_NO_GUIDANCE", "wcag": "3.3.2 Labels or Instructions", "severity": "SERIOUS"})
 
-    # 1.2.2 Captions — <video> with no captions/subtitles track
-    # 1.2.3 Audio Description — <video> with no descriptions track and no transcript
-    for v in root.iter("video"):
-        kinds = {(t.get("kind") or "").lower() for t in v.iter("track")}
-        if not (kinds & {"captions", "subtitles"}):
-            issues.append({"ruleId": "HTML_VIDEO_NO_CAPTIONS", "wcag": "1.2.2 Captions (Prerecorded)", "severity": "SERIOUS"})
-        if "descriptions" not in kinds and not v.get("aria-describedby"):
-            issues.append({"ruleId": "HTML_VIDEO_NO_DESCRIPTION", "wcag": "1.2.3 Audio Description or Media Alternative", "severity": "SERIOUS"})
+    if _sc_enabled("1.3.4"):
+        # 1.3.4 Orientation — content hidden in one orientation ("rotate your device" lock)
+        for st in root.iter("style"):
+            if _ORIENTATION_LOCK.search(st.text_content() or ""):
+                issues.append({"ruleId": "HTML_ORIENTATION_LOCK", "wcag": "1.3.4 Orientation", "severity": "MODERATE"})
 
-    # 1.2.1 Audio-only — <audio> with no linked/naming transcript
-    for a in root.iter("audio"):
-        if not (a.get("aria-describedby") or re.search(r"transcript", a.get("aria-label") or "", re.I)):
-            issues.append({"ruleId": "HTML_AUDIO_NO_TRANSCRIPT", "wcag": "1.2.1 Audio-only & Video-only (Prerecorded)", "severity": "SERIOUS"})
+    if _sc_enabled("1.4.6"):
+        # 1.4.6 Contrast (Enhanced, AAA) — inline colors that pass 4.5:1 but miss 7:1
+        for el in root.iter():
+            style = el.get("style") if callable(getattr(el, "get", None)) else None
+            if not style:
+                continue
+            m = _INLINE_COLOR.search(style)
+            if m and _luma(m.group(1)) > 0.45:
+                issues.append({"ruleId": "HTML_LOW_CONTRAST_AAA", "wcag": "1.4.6 Contrast (Enhanced)", "severity": "MODERATE"})
 
-    # 2.5.8 Target Size — interactive element with an inline px dimension < 24
-    for el in root.iter():
-        tag = el.tag if isinstance(el.tag, str) else ""
-        role = (el.get("role") or "") if callable(getattr(el, "get", None)) else ""
-        interactive = (tag in ("a", "button", "input", "select", "textarea")
-                       or role == "button" or el.get("onclick") is not None)
-        if not interactive:
-            continue
-        if tag == "a" and not el.get("href"):
-            continue
-        style = el.get("style") or ""
-        dims = [float(m) for m in re.findall(r"(?:^|;)\s*(?:width|height)\s*:\s*([\d.]+)px", style, re.I)]
-        if any(d < 24 for d in dims):
-            issues.append({"ruleId": "HTML_TARGET_TOO_SMALL", "wcag": "2.5.8 Target Size (Minimum)", "severity": "SERIOUS"})
+        # ── Phase 2 — media alternatives + target size (detect + route to HITL) ──
 
-    # ── Phase 4 — legacy rule modules with no prior backend mirror ──
-    # These SCs have a frontend rule module (used for the client-side remediation
-    # preview) and read as 'Shipped (demo)' in the catalog, but a real server-side
-    # scan never actually evaluated them — every persisted scan silently showed
-    # PASS for every HTML file, regardless of content. Ported here to close that
-    # false-PASS gap; predicates mirror frontend/src/rules/wcag-*.js exactly.
+    if _sc_enabled("1.2.2") or _sc_enabled("1.2.3"):
+        # 1.2.2 Captions — <video> with no captions/subtitles track
+        # Audio Description — <video> with no descriptions track and no transcript
+        for v in root.iter("video"):
+            kinds = {(t.get("kind") or "").lower() for t in v.iter("track")}
+            if _sc_enabled("1.2.2") and not (kinds & {"captions", "subtitles"}):
+                issues.append({"ruleId": "HTML_VIDEO_NO_CAPTIONS", "wcag": "1.2.2 Captions (Prerecorded)", "severity": "SERIOUS"})
+            if _sc_enabled("1.2.3") and "descriptions" not in kinds and not v.get("aria-describedby"):
+                issues.append({"ruleId": "HTML_VIDEO_NO_DESCRIPTION", "wcag": "1.2.3 Audio Description or Media Alternative", "severity": "SERIOUS"})
 
-    # 1.3.1 Info and Relationships — form control with no accessible name at all
-    # (broader than 4.1.2's check above: also credits implicit <label>wrapping).
-    SELF_NAMED_TYPES = {"hidden", "button", "submit", "reset", "image"}
-    for inp in root.iter("input", "select", "textarea"):
-        if inp.tag == "input" and (inp.get("type") or "text").lower() in SELF_NAMED_TYPES:
-            continue
-        if inp.get("aria-label") or inp.get("aria-labelledby"):
-            continue
-        if next(inp.iterancestors("label"), None) is not None:
-            continue
-        if inp.get("id", "") in labelled_ids:
-            continue
-        issues.append({"ruleId": "HTML_FORM_CONTROL_NO_NAME", "wcag": "1.3.1 Info and Relationships", "severity": "CRITICAL"})
+    if _sc_enabled("1.2.1"):
+        # 1.2.1 Audio-only — <audio> with no linked/naming transcript
+        for a in root.iter("audio"):
+            if not (a.get("aria-describedby") or re.search(r"transcript", a.get("aria-label") or "", re.I)):
+                issues.append({"ruleId": "HTML_AUDIO_NO_TRANSCRIPT", "wcag": "1.2.1 Audio-only & Video-only (Prerecorded)", "severity": "SERIOUS"})
 
-    # 1.3.1 — text styled to look like a heading but never marked up as one. One finding per
-    # element (docx emits one per document; html can carry many sections on one page, and the
-    # fix promotes each, so under-reporting here would understate the work the way the 2.4.6
-    # `break` did). See html_pseudo_headings for why this is 1.3.1 and not 2.4.6.
-    for el in html_pseudo_headings(root):
-        issues.append({"ruleId": "HTML_PSEUDO_HEADING", "wcag": "1.3.1 Info and Relationships",
-                       "severity": "MODERATE",
-                       "detail": f"Text styled as a heading but left as <{el.tag}>: "
-                                 f"{(el.text_content() or '').strip()[:60]}"})
+    if _sc_enabled("2.5.8"):
+        # 2.5.8 Target Size — interactive element with an inline px dimension < 24
+        for el in root.iter():
+            tag = el.tag if isinstance(el.tag, str) else ""
+            role = (el.get("role") or "") if callable(getattr(el, "get", None)) else ""
+            interactive = (tag in ("a", "button", "input", "select", "textarea")
+                           or role == "button" or el.get("onclick") is not None)
+            if not interactive:
+                continue
+            if tag == "a" and not el.get("href"):
+                continue
+            style = el.get("style") or ""
+            dims = [float(m) for m in re.findall(r"(?:^|;)\s*(?:width|height)\s*:\s*([\d.]+)px", style, re.I)]
+            if any(d < 24 for d in dims):
+                issues.append({"ruleId": "HTML_TARGET_TOO_SMALL", "wcag": "2.5.8 Target Size (Minimum)", "severity": "SERIOUS"})
 
-    # 1.4.1 Use of Color — link styled by inline color alone, no underline
-    for a in root.iter("a"):
-        style = a.get("style") or ""
-        if not style:
-            continue
-        if re.search(r"(?:^|;)\s*color\s*:", style) and not re.search(r"text-decoration\s*:[^;]*underline", style, re.I):
-            issues.append({"ruleId": "HTML_LINK_COLOR_ONLY", "wcag": "1.4.1 Use of Color", "severity": "SERIOUS"})
+        # ── Phase 4 — legacy rule modules with no prior backend mirror ──
+        # These SCs have a frontend rule module (used for the client-side remediation
+        # preview) and read as 'Shipped (demo)' in the catalog, but a real server-side
+        # scan never actually evaluated them — every persisted scan silently showed
+        # PASS for every HTML file, regardless of content. Ported here to close that
+        # false-PASS gap; predicates mirror frontend/src/rules/wcag-*.js exactly.
 
-    # 1.4.3 Contrast (Minimum, AA) — inline color likely below 4.5:1 (luma > 0.62).
-    # Same _INLINE_COLOR/_luma helpers as 1.4.6 above; AA's threshold is looser.
-    for el in root.iter():
-        style = el.get("style") if callable(getattr(el, "get", None)) else None
-        if not style:
-            continue
-        m = _INLINE_COLOR.search(style)
-        if m and _luma(m.group(1)) > 0.62:
-            issues.append({"ruleId": "HTML_LOW_CONTRAST_AA", "wcag": "1.4.3 Contrast (Minimum)", "severity": "SERIOUS"})
+    if _sc_enabled("1.3.1"):
+        # 1.3.1 Info and Relationships — form control with no accessible name at all
+        # (broader than 4.1.2's check above: also credits implicit <label>wrapping).
+        SELF_NAMED_TYPES = {"hidden", "button", "submit", "reset", "image"}
+        for inp in root.iter("input", "select", "textarea"):
+            if inp.tag == "input" and (inp.get("type") or "text").lower() in SELF_NAMED_TYPES:
+                continue
+            if inp.get("aria-label") or inp.get("aria-labelledby"):
+                continue
+            if next(inp.iterancestors("label"), None) is not None:
+                continue
+            if inp.get("id", "") in labelled_ids:
+                continue
+            issues.append({"ruleId": "HTML_FORM_CONTROL_NO_NAME", "wcag": "1.3.1 Info and Relationships", "severity": "CRITICAL"})
 
-    # 1.4.4 Resize Text — viewport meta blocks pinch-zoom / text resize
-    for meta in root.iter("meta"):
-        if (meta.get("name") or "").lower() != "viewport":
-            continue
-        content = meta.get("content") or ""
-        if re.search(r"user-scalable\s*=\s*(no|0)|maximum-scale\s*=\s*(0|1)(\.0+)?\b", content, re.I):
-            issues.append({"ruleId": "HTML_VIEWPORT_BLOCKS_ZOOM", "wcag": "1.4.4 Resize Text", "severity": "SERIOUS"})
+    if _sc_enabled("1.3.1"):
+        # 1.3.1 — text styled to look like a heading but never marked up as one. One finding per
+        # element (docx emits one per document; html can carry many sections on one page, and the
+        # fix promotes each, so under-reporting here would understate the work the way the 2.4.6
+        # `break` did). See html_pseudo_headings for why this is 1.3.1 and not 2.4.6.
+        for el in html_pseudo_headings(root):
+            issues.append({"ruleId": "HTML_PSEUDO_HEADING", "wcag": "1.3.1 Info and Relationships",
+                           "severity": "MODERATE",
+                           "detail": f"Text styled as a heading but left as <{el.tag}>: "
+                                     f"{(el.text_content() or '').strip()[:60]}"})
 
-    # 1.4.10 Reflow — a real page (has meta/link/style) with no responsive viewport
-    has_head_content = any(next(root.iter(t), None) is not None for t in ("meta", "link", "style"))
-    has_viewport = any((m.get("name") or "").lower() == "viewport" for m in root.iter("meta"))
-    if has_head_content and not has_viewport:
-        issues.append({"ruleId": "HTML_NO_VIEWPORT_REFLOW", "wcag": "1.4.10 Reflow", "severity": "SERIOUS"})
+    if _sc_enabled("1.4.1"):
+        # 1.4.1 Use of Color — link styled by inline color alone, no underline
+        for a in root.iter("a"):
+            style = a.get("style") or ""
+            if not style:
+                continue
+            if re.search(r"(?:^|;)\s*color\s*:", style) and not re.search(r"text-decoration\s*:[^;]*underline", style, re.I):
+                issues.append({"ruleId": "HTML_LINK_COLOR_ONLY", "wcag": "1.4.1 Use of Color", "severity": "SERIOUS"})
 
-    # 1.4.11 Non-text Contrast (AA) — inline border color likely below 3:1
-    for el in root.iter():
-        style = el.get("style") if callable(getattr(el, "get", None)) else None
-        if not style:
-            continue
-        m = re.search(r"border(?:-[a-z]+)?:[^;]*?#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b", style, re.I)
-        if m and _luma(m.group(1)) > 0.62:
-            issues.append({"ruleId": "HTML_BORDER_LOW_CONTRAST", "wcag": "1.4.11 Non-text Contrast", "severity": "MODERATE"})
+    if _sc_enabled("1.4.3"):
+        # 1.4.3 Contrast (Minimum, AA) — inline color likely below 4.5:1 (luma > 0.62).
+        # Same _INLINE_COLOR/_luma helpers as 1.4.6 above; AA's threshold is looser.
+        for el in root.iter():
+            style = el.get("style") if callable(getattr(el, "get", None)) else None
+            if not style:
+                continue
+            m = _INLINE_COLOR.search(style)
+            if m and _luma(m.group(1)) > 0.62:
+                issues.append({"ruleId": "HTML_LOW_CONTRAST_AA", "wcag": "1.4.3 Contrast (Minimum)", "severity": "SERIOUS"})
 
-    # 1.4.12 Text Spacing — fixed-pixel line-height blocks the user's spacing override
-    for el in root.iter():
-        style = el.get("style") if callable(getattr(el, "get", None)) else None
-        if style and re.search(r"line-height:\s*\d+px", style, re.I):
-            issues.append({"ruleId": "HTML_FIXED_LINE_HEIGHT", "wcag": "1.4.12 Text Spacing", "severity": "MODERATE"})
+    if _sc_enabled("1.4.4"):
+        # 1.4.4 Resize Text — viewport meta blocks pinch-zoom / text resize
+        for meta in root.iter("meta"):
+            if (meta.get("name") or "").lower() != "viewport":
+                continue
+            content = meta.get("content") or ""
+            if re.search(r"user-scalable\s*=\s*(no|0)|maximum-scale\s*=\s*(0|1)(\.0+)?\b", content, re.I):
+                issues.append({"ruleId": "HTML_VIEWPORT_BLOCKS_ZOOM", "wcag": "1.4.4 Resize Text", "severity": "SERIOUS"})
 
-    # 2.4.3 Focus Order — positive tabindex overrides natural reading order
-    for el in root.iter():
-        ti = el.get("tabindex") if callable(getattr(el, "get", None)) else None
-        if ti is None:
-            continue
-        try:
-            if int(ti) > 0:
-                issues.append({"ruleId": "HTML_POSITIVE_TABINDEX", "wcag": "2.4.3 Focus Order", "severity": "SERIOUS"})
-        except ValueError:
-            continue
+    if _sc_enabled("1.4.10"):
+        # 1.4.10 Reflow — a real page (has meta/link/style) with no responsive viewport
+        has_head_content = any(next(root.iter(t), None) is not None for t in ("meta", "link", "style"))
+        has_viewport = any((m.get("name") or "").lower() == "viewport" for m in root.iter("meta"))
+        if has_head_content and not has_viewport:
+            issues.append({"ruleId": "HTML_NO_VIEWPORT_REFLOW", "wcag": "1.4.10 Reflow", "severity": "SERIOUS"})
 
-    # 2.4.7 Focus Visible — outline suppressed (CSS or inline) with interactive content present
-    css_blocks = "\n".join((s.text_content() or "") for s in root.iter("style"))
-    inline_suppressed = any(
-        re.search(r"outline:\s*(none|0)\b", el.get("style") or "", re.I)
-        for el in root.iter() if callable(getattr(el, "get", None)) and el.get("style")
-    )
-    outline_suppressed = bool(re.search(r"outline:\s*(none|0)\b", css_blocks, re.I)) or inline_suppressed
-    has_interactive = next(root.iter("a", "button", "input", "select", "textarea"), None) is not None
-    if outline_suppressed and has_interactive:
-        issues.append({"ruleId": "HTML_FOCUS_OUTLINE_SUPPRESSED", "wcag": "2.4.7 Focus Visible", "severity": "SERIOUS"})
+    if _sc_enabled("1.4.11"):
+        # 1.4.11 Non-text Contrast (AA) — inline border color likely below 3:1
+        for el in root.iter():
+            style = el.get("style") if callable(getattr(el, "get", None)) else None
+            if not style:
+                continue
+            m = re.search(r"border(?:-[a-z]+)?:[^;]*?#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b", style, re.I)
+            if m and _luma(m.group(1)) > 0.62:
+                issues.append({"ruleId": "HTML_BORDER_LOW_CONTRAST", "wcag": "1.4.11 Non-text Contrast", "severity": "MODERATE"})
 
-    # 3.1.4 Abbreviations — known abbreviation with no <abbr title> expansion.
-    # ABBR mirrors frontend/src/rules/utils.js's ABBR dict (a small editorial
-    # glossary) — kept in sync by hand, same posture as RULE_CATALOG vs PLAIN_NAMES.
-    ABBR = {
-        "WCAG": "Web Content Accessibility Guidelines", "ADA": "Americans with Disabilities Act",
-        "PDF": "Portable Document Format", "PPO": "Preferred Provider Organization",
-        "HDHP": "High-Deductible Health Plan", "FSA": "Flexible Spending Account",
-        "HSA": "Health Savings Account", "FAQ": "Frequently Asked Questions",
-        "PII": "Personally Identifiable Information", "UTSW": "UT Southwestern", "HR": "Human Resources",
-    }
-    ABBR_RE = re.compile(r"\b(" + "|".join(ABBR) + r")\b")
-    SKIP_ANCESTOR_TAGS = {"abbr", "script", "style", "title"}
-    for el in root.iter():
-        tag = el.tag if isinstance(el.tag, str) else ""
-        if tag in SKIP_ANCESTOR_TAGS or any(a.tag in SKIP_ANCESTOR_TAGS for a in el.iterancestors()):
-            continue
-        for text in (el.text, el.tail):
-            if text and ABBR_RE.search(text):
-                issues.append({"ruleId": "HTML_UNEXPANDED_ABBR", "wcag": "3.1.4 Abbreviations", "severity": "MINOR"})
+    if _sc_enabled("1.4.12"):
+        # 1.4.12 Text Spacing — fixed-pixel line-height blocks the user's spacing override
+        for el in root.iter():
+            style = el.get("style") if callable(getattr(el, "get", None)) else None
+            if style and re.search(r"line-height:\s*\d+px", style, re.I):
+                issues.append({"ruleId": "HTML_FIXED_LINE_HEIGHT", "wcag": "1.4.12 Text Spacing", "severity": "MODERATE"})
+
+    if _sc_enabled("2.4.3"):
+        # 2.4.3 Focus Order — positive tabindex overrides natural reading order
+        for el in root.iter():
+            ti = el.get("tabindex") if callable(getattr(el, "get", None)) else None
+            if ti is None:
+                continue
+            try:
+                if int(ti) > 0:
+                    issues.append({"ruleId": "HTML_POSITIVE_TABINDEX", "wcag": "2.4.3 Focus Order", "severity": "SERIOUS"})
+            except ValueError:
+                continue
+
+    if _sc_enabled("2.4.7"):
+        # 2.4.7 Focus Visible — outline suppressed (CSS or inline) with interactive content present
+        css_blocks = "\n".join((s.text_content() or "") for s in root.iter("style"))
+        inline_suppressed = any(
+            re.search(r"outline:\s*(none|0)\b", el.get("style") or "", re.I)
+            for el in root.iter() if callable(getattr(el, "get", None)) and el.get("style")
+        )
+        outline_suppressed = bool(re.search(r"outline:\s*(none|0)\b", css_blocks, re.I)) or inline_suppressed
+        has_interactive = next(root.iter("a", "button", "input", "select", "textarea"), None) is not None
+        if outline_suppressed and has_interactive:
+            issues.append({"ruleId": "HTML_FOCUS_OUTLINE_SUPPRESSED", "wcag": "2.4.7 Focus Visible", "severity": "SERIOUS"})
+
+    if _sc_enabled("3.1.4"):
+        # 3.1.4 Abbreviations — known abbreviation with no <abbr title> expansion.
+        # ABBR mirrors frontend/src/rules/utils.js's ABBR dict (a small editorial
+        # glossary) — kept in sync by hand, same posture as RULE_CATALOG vs PLAIN_NAMES.
+        ABBR = {
+            "WCAG": "Web Content Accessibility Guidelines", "ADA": "Americans with Disabilities Act",
+            "PDF": "Portable Document Format", "PPO": "Preferred Provider Organization",
+            "HDHP": "High-Deductible Health Plan", "FSA": "Flexible Spending Account",
+            "HSA": "Health Savings Account", "FAQ": "Frequently Asked Questions",
+            "PII": "Personally Identifiable Information", "UTSW": "UT Southwestern", "HR": "Human Resources",
+        }
+        ABBR_RE = re.compile(r"\b(" + "|".join(ABBR) + r")\b")
+        SKIP_ANCESTOR_TAGS = {"abbr", "script", "style", "title"}
+        for el in root.iter():
+            tag = el.tag if isinstance(el.tag, str) else ""
+            if tag in SKIP_ANCESTOR_TAGS or any(a.tag in SKIP_ANCESTOR_TAGS for a in el.iterancestors()):
+                continue
+            for text in (el.text, el.tail):
+                if text and ABBR_RE.search(text):
+                    issues.append({"ruleId": "HTML_UNEXPANDED_ABBR", "wcag": "3.1.4 Abbreviations", "severity": "MINOR"})
 
     return {"succeeded": True, "issues": issues, "errors": []}
 
@@ -5030,10 +5075,9 @@ def _scoped_for_scoring(issues: list[dict], filename: str,
     nothing recorded), which is also what a caller with no scan context passes — so this stays a
     no-op for the storeless benchmark/proposal callers exactly as before.
     """
-    from store import filter_issues_to_scope, _file_format
-    if not scope:
-        return issues
-    return filter_issues_to_scope(issues, _file_format(filename), scope)
+    from assessment_selection import selection, selected_for_file, filter_findings
+    with selection(selected_for_file(scope, filename)):
+        return filter_findings(issues)
 
 
 def rescore_reused(issues: list[dict], filename: str, status: str | None = None,
@@ -5059,14 +5103,34 @@ def rescore_reused(issues: list[dict], filename: str, status: str | None = None,
     counts" is exactly how the single-file and batch paths diverged once already (see
     `_scoped_for_scoring`'s note), and this is a third caller. `scope=None` = no restriction.
 
-    Returns only the keys a reused fdict should overwrite, so the caller's `issues`, `engine`,
-    `acp_stamped` and every other reused field pass through untouched.
+    Returns scoped findings and their score together. Engine and source metadata remain
+    untouched. Cache eligibility must establish that the prior scan covered this scope.
     """
     rb = Rubric.load_active(ACP / "config")
-    assessed = rb.assess(status != "error", _scoped_for_scoring(issues, filename, scope), [])
-    return {k: assessed[k] for k in ("score", "compliant", "skipped_rules") if k in assessed}
+    from assessment_selection import selection, selected_for_file, filter_findings
+    with selection(selected_for_file(scope, filename)):
+        issues = filter_findings(issues)
+    assessed = rb.assess(status != "error", issues, [])
+    return {"issues": issues, **{k: assessed[k] for k in ("score", "compliant", "skipped_rules") if k in assessed}}
 
 
+def _with_assessment_scope(fn):
+    from functools import wraps
+    @wraps(fn)
+    def assess(tmp, name, *, scan_id=None, **kwargs):
+        from assessment_selection import selection, selected_for_file
+        scope = None
+        if scan_id:
+            import core
+            scope = core.store.get_scan_scope(scan_id)
+            scope = core.store.scope_for_file(scan_id, name, scope)
+        codes = selected_for_file(scope, name) if scan_id else _selected_scs()
+        with selection(codes):
+            return fn(tmp, name, scan_id=scan_id, **kwargs)
+    return assess
+
+
+@_with_assessment_scope
 def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
                        scan_id: str | None = None, doc_ref: str | None = None):
     """Analyse + rubric-assess ONE already-downloaded file (fan-out path, ADR 0007).
@@ -5121,8 +5185,9 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
         _jl.emit("analyse.skip", doc=doc, scan_id=scan_id, ext=ext, reason="unsupported_ext")
         return None, None
     # 1.4.5 / 1.4.9 Images of Text — OCR embedded images; self-gates + never raises.
-    _act.record_file(scan_id, name, sc="1.4.5", phase="analysing",
-                     action="reading text baked into images")
+    if _sc_enabled("1.4.5"):
+        _act.record_file(scan_id, name, sc="1.4.5", phase="analysing",
+                         action="reading text baked into images")
     try:
         import ocr as _ocr_mod
         # Pillow decodes and tesseract runs in-process, so this block is native too — and it is
@@ -5130,13 +5195,14 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
         # failures, because a segfault is not an exception and would leave an enter with no exit.
         with _jl.stage("analyse.ocr", doc=doc, scan_id=scan_id, ext=ext):
             raw["issues"] = (list(raw.get("issues", []))
-                              + _ocr_mod.images_of_text(tmp / name, ext)
-                              + _ocr_mod.images_of_text_no_exception(tmp / name, ext))
+                              + (_ocr_mod.images_of_text(tmp / name, ext) if _sc_enabled("1.4.5") else [])
+                              + (_ocr_mod.images_of_text_no_exception(tmp / name, ext) if _sc_enabled("1.4.9") else []))
     except Exception:
         swallowed("scanner.analyse_and_assess: running the images-of-text (OCR) checks failed", scan_id)
     # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
-    _act.record_file(scan_id, name, sc="1.3.3", phase="analysing",
-                     action="checking wording and language changes")
+    if _sc_enabled("1.3.3"):
+        _act.record_file(scan_id, name, sc="1.3.3", phase="analysing",
+                         action="checking wording and language changes")
     try:
         import pii as _pii_mod2
         import textchecks as _txt_mod
@@ -5144,15 +5210,16 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
         # extract_text reaches native extractors (pikepdf/qpdf for .pdf, lxml for OOXML parts).
         with _jl.stage("analyse.text", doc=doc, scan_id=scan_id, ext=ext):
             raw["issues"] = list(raw.get("issues", [])) + _txt_mod.content_findings(
-                _pii_mod2.extract_text(tmp / name),
-                _off_lang.language_marked_spans(tmp / name, ext))
+                (_pii_mod2.extract_text(tmp / name) if any(_sc_enabled(c) for c in ("1.3.3", "3.1.2", "3.1.5")) else ""),
+                (_off_lang.language_marked_spans(tmp / name, ext) if _sc_enabled("3.1.2") else {}))
     except Exception:
         swallowed("scanner.analyse_and_assess: running the text content checks failed", scan_id)
     # 2.4.6 / 2.4.9 / 1.4.3 / 1.4.6 — first-party OOXML/PDF structural checks
     # (docx/pptx headings + link-purpose, PDF contrast); partner engine doesn't
     # reach these for these formats. Self-contained; never raises.
-    _act.record_file(scan_id, name, sc="1.4.3", phase="analysing",
-                     action="checking headings, links and contrast")
+    if _sc_enabled("1.4.3"):
+        _act.record_file(scan_id, name, sc="1.4.3", phase="analysing",
+                         action="checking headings, links and contrast")
     try:
         import office_structure as _off_mod
         # PDF contrast measurement here rasterises through the native pdf stack.
@@ -5167,7 +5234,7 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
     # veraPDF Phase 0 corroboration (ADR 0028). Feature-flagged via ACP_VERAPDF_REST env var.
     # Only runs for PDF files; annotates existing 1.3.1/2.4.2/3.1.1 findings in-place with
     # per-content-item counts from veraPDF/ua1. Never raises; absent corroboration is not an error.
-    if ext == ".pdf":
+    if ext == ".pdf" and _selected_scs() is None:
         try:
             import verapdf_corroborate as _vcr
             _pdf_path = tmp / name
@@ -5180,7 +5247,7 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
     # ACP_SCANNED_PDF_TIER_A env var; a no-op when the flag is off or the file is not a
     # scanned/untagged PDF. Stores per-page layout descriptions; never raises.
     # ADR 0027 Tier B — REVIEW findings injected from the layouts (same guard, same block).
-    if ext == ".pdf" and scan_id:
+    if ext == ".pdf" and scan_id and any(_sc_enabled(c) for c in ("1.1.1", "1.3.1", "1.3.2", "2.4.6", "3.1.1")):
         try:
             import pdf_vision_assess as _pva
             if _pva.enabled():
@@ -5205,29 +5272,13 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
                             )
         except Exception:
             swallowed("scanner.analyse_and_assess: scanned-PDF Tier A/B failed", scan_id)
-    # Score over the IN-SCOPE findings, but keep every finding on the record. `Rubric.assess`
-    # computes `100 - sum(penalty(severity))` over whatever it is handed and knows nothing about
-    # scope, so scoring the full list gave a scoped scan unscoped scores — a document with no
-    # in-scope findings beside a penalised score, which is the contradiction the scope gate exists
-    # to prevent. `raw["issues"]` is passed on untouched, so re-scoping needs no re-scan.
-    # A no-op when no scope is set. PHASE 3a — score over THIS scan's FROZEN scope (the fan-out
-    # path: init_scan_run recorded it, get_scan_scope reads it), the SAME value save_file_result
-    # gates the traces by, so score and traces cannot disagree. `scan_id` is None for the storeless
-    # benchmark/proposal callers → frozen scope None → unrestricted, exactly as before.
-    _frozen_scope = None
-    if scan_id:
-        import core
-        try:
-            _frozen_scope = core.store.get_scan_scope(scan_id)
-            # PRD §4.4 / C4 — narrow to this file's per-file scope rules, the SAME resolution
-            # save_file_result applies to the traces, so the score and traces read one scope.
-            _frozen_scope = core.store.scope_for_file(scan_id, name, _frozen_scope)
-        except Exception:
-            # A corrupt or unreadable scope must not kill the file — fall back to unrestricted so
-            # the assess result is still recorded. Score will be unscoped, which is conservative.
-            _frozen_scope = None
-    assessed = rb.assess(raw["succeeded"], _scoped_for_scoring(raw["issues"], name, _frozen_scope),
-                         raw["errors"])
+    from assessment_selection import filter_findings, allowed_rules
+    raw["issues"] = filter_findings(raw["issues"])
+    allowed = allowed_rules()
+    if allowed is not None:
+        raw["errors"] = [e for e in raw["errors"] if not isinstance(e, dict)
+                         or not e.get("rule") or e["rule"] in allowed]
+    assessed = rb.assess(raw["succeeded"], raw["issues"], raw["errors"])
     # `errors` is carried alongside `**assessed` rather than being consumed by it. Rubric.assess
     # turns the engine's error list into `status` + `skipped_rules` — a COUNT — and drops the
     # list, so until now nothing downstream could say WHICH rules the engine failed on. The
@@ -5345,6 +5396,13 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                      exclude_remediated=exclude_remediated, scope_out=scope,
                      scope_files=_scope_for_listing(user), inventory_out=inventory_out,
                      drive_delta=drive_delta, sp_delta=sp_delta)
+        # Freeze per-file rules with the same listing, before any assessment starts.
+        import core as _scope_core
+        scope["scope_rules"] = [
+            {k: r.get(k) for k in ("rule_id", "selector", "value", "codes",
+                                   "priority", "is_override", "enabled")}
+            for r in _scope_core.store.list_scope_rules(enabled_only=True)
+        ]
         n = len(items)
         # Metadata completeness: derivable from the listing itself before any download.
         exc_missing_optional = sum(
@@ -5424,7 +5482,23 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             items = [it for it in items if it["name"] not in skipped]
             n = len(items)
 
-        office = _analyse_office(tmp)
+        from assessment_policy import scope_from_json
+        from assessment_selection import selection, selected_for_file, filter_findings
+        _execution_scope = scope_from_json((scope or {}).get("scan_scope"))
+        from assessment_policy import resolve_file_scope
+        scopes_by_file = {it["name"]: resolve_file_scope(it, _execution_scope, scope.get("scope_rules"))
+                          for it in items}
+        rule_allowlists = None
+        if _execution_scope or scope.get("scope_rules"):
+            from assessment_selection import allowed_rules
+            rule_allowlists = {}
+            for item in items:
+                with selection(selected_for_file(scopes_by_file[item["name"]], item["name"])):
+                    rule_allowlists[item["name"]] = allowed_rules()
+        if rule_allowlists is not None:
+            office = _analyse_office(tmp, rule_allowlists=rule_allowlists)
+        else:
+            office = _analyse_office(tmp)
 
         import pii as _pii_mod  # sensitive-data detection dimension (ADR 0006)
         import ocr as _ocr_mod  # 1.4.5 images-of-text OCR detection
@@ -5439,63 +5513,68 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         # emitted sequentially from the main thread (one trace, no concurrent writes).
         # Opt-out (detect_pii=False) skips PII text extraction — faster on PDF estates.
         def _analyse_one(it):
-            name, ext = it["name"], Path(it["name"]).suffix.lower()
-            _act.record_file(scan_id, name, phase="analysing",
-                             action="running the accessibility engine", force=True)
-            if ext == ".pdf":
-                r = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
-            elif ext in OFFICE:
-                r = {"engine": ".net/office",
-                     **office.get(name, {"succeeded": False, "issues": [], "errors": ["no engine result"]})}
-            elif ext in HTML_EXTS:
-                r = {"engine": "python/html", **_analyse_html(tmp / name)}
-            else:
-                return None
-            # Per-RULE-GROUP progress, in the order the groups actually run. These are the
-            # finest boundaries that exist: inside the .NET engine call there is one process
-            # invocation and no callback, so a line claiming to be on a specific rule within it
-            # would be invented. Each group below names the criteria it really evaluates.
-            #
-            # record_file, not record: up to _SCAN_WORKERS documents are in flight here, and a
-            # single last-writer-wins line under eight threads flips several times a second and
-            # reads as thrashing. See activity.record_file.
-            _act.record_file(scan_id, name, sc="1.4.5", phase="analysing",
-                             action="reading text baked into images")
-            # 1.4.5 / 1.4.9 Images of Text — OCR embedded images; self-gates + never raises.
-            try:
-                r["issues"] = (list(r.get("issues", []))
-                                + _ocr_mod.images_of_text(tmp / name, ext)
-                                + _ocr_mod.images_of_text_no_exception(tmp / name, ext))
-            except Exception:
-                swallowed("scanner._analyse_one: running the images-of-text (OCR) checks failed")
-            # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
-            _act.record_file(scan_id, name, sc="1.3.3", phase="analysing",
-                             action="checking wording and language changes")
-            try:
-                r["issues"] = list(r.get("issues", [])) + _txt_mod.content_findings(
-                    _pii_mod.extract_text(tmp / name),
-                    _off_mod.language_marked_spans(tmp / name, ext))
-            except Exception:
-                swallowed("scanner._analyse_one: running the text content checks failed")
-            # 2.4.6 / 2.4.9 / 1.4.3 / 1.4.6 — first-party OOXML/PDF structural checks.
-            _act.record_file(scan_id, name, sc="1.4.3", phase="analysing",
-                             action="checking headings, links and contrast")
-            try:
-                r["issues"] = list(r.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
-            except Exception:
-                swallowed("scanner._analyse_one: running the Office structure checks failed")
-            r["issues"] = _collapse_duplicate_alt(_collapse_reading_order(r["issues"]))
-            try:                                          # ADR 0020 stage 2 — inventory peek
-                import classify as _cls
-                r["classify"] = _cls.classify(tmp / name, ext)
-            except Exception:
-                swallowed("scanner._analyse_one: classifying the document failed")
-            pinfo = _pii_mod.detect_file(tmp / name) if detect_pii else None
-            # Drop it from the headline. Forced inside finish_file, because a stale entry here
-            # names a document that has FINISHED while others are still running — the one way
-            # this line can say something false rather than merely lag.
-            _act.finish_file(scan_id, name)
-            return (name, r, pinfo)
+            with selection(selected_for_file(scopes_by_file[it["name"]], it["name"])):
+                name, ext = it["name"], Path(it["name"]).suffix.lower()
+                _act.record_file(scan_id, name, phase="analysing",
+                                 action="running the accessibility engine", force=True)
+                if ext == ".pdf":
+                    r = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
+                elif ext in OFFICE:
+                    r = {"engine": ".net/office",
+                         **office.get(name, {"succeeded": False, "issues": [], "errors": ["no engine result"]})}
+                elif ext in HTML_EXTS:
+                    r = {"engine": "python/html", **_analyse_html(tmp / name)}
+                else:
+                    return None
+                # Per-RULE-GROUP progress, in the order the groups actually run. These are the
+                # finest boundaries that exist: inside the .NET engine call there is one process
+                # invocation and no callback, so a line claiming to be on a specific rule within it
+                # would be invented. Each group below names the criteria it really evaluates.
+                #
+                # record_file, not record: up to _SCAN_WORKERS documents are in flight here, and a
+                # single last-writer-wins line under eight threads flips several times a second and
+                # reads as thrashing. See activity.record_file.
+                if _sc_enabled("1.4.5"):
+                    _act.record_file(scan_id, name, sc="1.4.5", phase="analysing",
+                                     action="reading text baked into images")
+                # 1.4.5 / 1.4.9 Images of Text — OCR embedded images; self-gates + never raises.
+                try:
+                    r["issues"] = (list(r.get("issues", []))
+                                    + (_ocr_mod.images_of_text(tmp / name, ext) if _sc_enabled("1.4.5") else [])
+                                    + (_ocr_mod.images_of_text_no_exception(tmp / name, ext) if _sc_enabled("1.4.9") else []))
+                except Exception:
+                    swallowed("scanner._analyse_one: running the images-of-text (OCR) checks failed")
+                # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
+                if _sc_enabled("1.3.3"):
+                    _act.record_file(scan_id, name, sc="1.3.3", phase="analysing",
+                                     action="checking wording and language changes")
+                try:
+                    r["issues"] = list(r.get("issues", [])) + _txt_mod.content_findings(
+                        (_pii_mod.extract_text(tmp / name) if any(_sc_enabled(c) for c in ("1.3.3", "3.1.2", "3.1.5")) else ""),
+                        (_off_mod.language_marked_spans(tmp / name, ext) if _sc_enabled("3.1.2") else {}))
+                except Exception:
+                    swallowed("scanner._analyse_one: running the text content checks failed")
+                # 2.4.6 / 2.4.9 / 1.4.3 / 1.4.6 — first-party OOXML/PDF structural checks.
+                if _sc_enabled("1.4.3"):
+                    _act.record_file(scan_id, name, sc="1.4.3", phase="analysing",
+                                     action="checking headings, links and contrast")
+                try:
+                    r["issues"] = list(r.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
+                except Exception:
+                    swallowed("scanner._analyse_one: running the Office structure checks failed")
+                r["issues"] = _collapse_duplicate_alt(_collapse_reading_order(r["issues"]))
+                try:                                          # ADR 0020 stage 2 — inventory peek
+                    import classify as _cls
+                    r["classify"] = _cls.classify(tmp / name, ext)
+                except Exception:
+                    swallowed("scanner._analyse_one: classifying the document failed")
+                pinfo = _pii_mod.detect_file(tmp / name) if detect_pii else None
+                # Drop it from the headline. Forced inside finish_file, because a stale entry here
+                # names a document that has FINISHED while others are still running — the one way
+                # this line can say something false rather than merely lag.
+                _act.finish_file(scan_id, name)
+                r["issues"] = filter_findings(r["issues"])
+                return (name, r, pinfo)
 
         progress({"phase": "analysing", "files_found": n, "files_done": 0, "current": None})
         # as_completed, not map: `map` yields nothing until the whole batch finishes, so the
@@ -5552,7 +5631,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         # value. None (unscoped / no restriction) is a no-op.
         from store import scope_from_json
         _frozen_scope = scope_from_json((scope or {}).get("scan_scope"))
-        assessed = {k: rb.assess(r["succeeded"], _scoped_for_scoring(r["issues"], k, _frozen_scope),
+        assessed = {k: rb.assess(r["succeeded"], _scoped_for_scoring(r["issues"], k, scopes_by_file[k]),
                                  r["errors"])
                     for k, r in raw.items()}
         summary = rb.aggregate(assessed)

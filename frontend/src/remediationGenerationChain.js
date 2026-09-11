@@ -7,12 +7,7 @@ const validStep = (step, position) => step?.step_id === IDS[position] && step.po
 const allowedModel = model => model?.allowed === true && model.available === true && model.capabilities?.includes('text')
 export function generationSteps(policy, options) {
   if (policy?.ai_zone === 'local') return []
-  // The server owns the default chain. `chain_options` appends fallback_2 to
-  // default_steps and only THEN sets supported:true (api/ai_generation_chain.py), so a
-  // supported catalog always already carries three steps. A client-side append for
-  // "supported with two steps" describes a response the server cannot produce, and
-  // duplicating the default in two layers means a later server change silently
-  // disagrees with the client. An explicit saved policy still wins.
+  // Server defaults are primary plus one fallback. Explicit saved policies win.
   const steps = policy?.generation_chain?.steps ?? options?.default_steps
   if (!Array.isArray(steps)) return []
   // The server builds the default without knowing this run's cap, and permission can be

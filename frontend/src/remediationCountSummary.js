@@ -18,7 +18,7 @@ export function remediationReviewCounts(rows = [], decisions = {}, drafts = {}) 
   return { pendingItems: pending.length, ready: ready.length, manual: manual.length, individual: individual.length,
     findings: pending.reduce((total, row) => total + findingsIn(row), 0),
     documents: new Set(pending.map(row => row.file).filter(Boolean)).size,
-    inspection: rows.filter(row => row.autoApplied && workflowStatusOf(row, decisions) === 'needs-review').length }
+    inspection: rows.filter(row => row.autoApplied && workflowStatusOf(row, decisions) !== 'completed').length }
 }
 export function reviewBadgeTitle(count) {
   return `${count} review item${count === 1 ? '' : 's'} requiring attention`

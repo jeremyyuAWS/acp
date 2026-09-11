@@ -58,13 +58,13 @@ it('requires a publishing answer in the mandatory plan and resets it for a new s
   expect(v.review().checked).toBe(false)
   expect(onAnswered).toHaveBeenLastCalledWith(false)
 })
-it('requires a choice in the compact publishing question and preserves approval boundaries', async () => {
+it('requires a choice in the compact publishing question and explains automatic suggestion application', async () => {
   const onAnswered = vi.fn()
   const v = await mount({ compact: true, requireChoice: true, onAnswered })
   expect(v.container.textContent).toContain('Auto-publish?')
   expect(v.input().checked).toBe(false)
   expect(v.review().checked).toBe(false)
-  expect(v.container.textContent).toContain('Unapproved suggestions remain unapplied')
+  expect(v.container.textContent).toContain('Automatic publishing applies available fixes and AI suggestions')
   expect(v.container.querySelector('[aria-label="About automatic release"]')).toBeNull()
   await act(async () => v.input().click())
   expect(onAnswered).toHaveBeenLastCalledWith(true)

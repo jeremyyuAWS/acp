@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from decimal import Decimal
 
 KEY = 'auto_approve_ai'
 ACTION = 'standing_approve'
@@ -52,8 +51,7 @@ def authorization(store, owner, sid, run_id):
         row = store._db.fetchone(cur)
     policy = json.loads(row['policy_json']) if row else {}
     if (not row or not row['is_current'] or row['cancel_requested_at']
-            or policy.get(KEY) is not True or policy.get('ai') != 1
-            or Decimal(policy.get('ai_budget_usd', '0')) <= 0):
+            or policy.get(KEY) is not True or policy.get('ai') != 1):
         raise ValueError('No current standing AI approval authorization for this run')
     if row['input_snapshot_id'] != store.remediation_source_revision(sid):
         raise ValueError('Standing approval source revision changed')
@@ -87,6 +85,8 @@ def _identity(record):
 def eligible_item(store, owner, sid, run_id, item, *, approved=False):
     from release_continuation import eligibility
     from remediation_run_insights import PROPOSAL_KEYS
+    if not store._selected_sc(sid, item.get("file", ""), item.get("rule_id", "")):
+        raise ValueError("Suggestion is outside the selected assessment criteria")
     row = {**item, 'status': 'pending', 'applied': False} if approved else item
     reason = eligibility(row, row.get('file', ''))
     if reason or row.get('rule_id') not in RULES:
@@ -96,13 +96,12 @@ def eligible_item(store, owner, sid, run_id, item, *, approved=False):
                 or not p.get('model_call_id') or not p.get('model')
                 or p.get('describable') is False):
             raise ValueError('Proposal requires individual judgment or has no exact AI provenance')
-    # Automatic approval is the ONE path where no human reads the proposal before it is
-    # applied and released, so the independent second-model review is REQUIRED here
-    # rather than being the run policy's `ai_review.enabled` option. A run whose policy
-    # omits it fails closed: nothing is auto-approved and the item stays in the human
-    # queue. Deliberately not read from the run policy, so an already-queued run cannot
-    # carry an opt-out into this path.
+    # Explicit immutable run consent authorizes exact suggestions; model review is
+    # optional and never substitutes for the writer's verification evidence.
     with store._db.cursor() as cur:
+        store._db.execute(cur, 'SELECT policy_json FROM ai_spending_run_policies WHERE owner_id=%s AND scan_id=%s AND run_id=%s', (owner, sid, run_id))
+        saved = store._db.fetchone(cur)
+        require_review = json.loads(saved['policy_json']).get('ai_review', {}).get('enabled') is True if saved else False
         for i, (snapshot_id, p) in enumerate(zip(row['proposal_snapshot_ids'], row['proposals'])):
             store._db.execute(cur, 'SELECT * FROM ai_proposal_snapshots WHERE snapshot_id=%s', (snapshot_id,))
             snapshot = store._db.fetchone(cur)
@@ -125,22 +124,23 @@ def eligible_item(store, owner, sid, run_id, item, *, approved=False):
                     or datetime.fromisoformat(call['ts'].replace('Z', '+00:00'))
                     < datetime.fromisoformat(call['created_at'].replace('Z', '+00:00'))):
                 raise ValueError('AI call does not belong to the current proposal generation')
-            store._db.execute(cur, '''SELECT h.result_json,r.proposal_sha256,r.review_json
-                FROM ai_attempt_history h JOIN ai_review_receipts r
-                  ON r.owner_id=h.owner_id AND r.scan_id=h.scan_id AND r.run_id=h.run_id
-                  AND r.operation_id=h.operation_id
-                WHERE h.owner_id=%s AND h.scan_id=%s AND h.run_id=%s AND h.attempt_id=%s''',
-                (owner, sid, run_id, snapshot['attempt_id']))
-            reviews = store._db.fetchall(cur)
-            accepted = False
-            for receipt in reviews:
-                draft = json.loads(receipt['result_json'] or '{}').get('text')
-                review = json.loads(receipt['review_json'])
-                if (isinstance(draft, str) and hashlib.sha256(draft.encode()).hexdigest() == receipt['proposal_sha256']
-                        and review.get('verdict') == 'accept'):
-                    accepted = True
-            if not accepted:
-                raise ValueError('The required AI review is missing or unresolved; individual review is required')
+            if require_review:
+                store._db.execute(cur, '''SELECT h.result_json,r.proposal_sha256,r.review_json
+                    FROM ai_attempt_history h JOIN ai_review_receipts r
+                      ON r.owner_id=h.owner_id AND r.scan_id=h.scan_id AND r.run_id=h.run_id
+                      AND r.operation_id=h.operation_id
+                    WHERE h.owner_id=%s AND h.scan_id=%s AND h.run_id=%s AND h.attempt_id=%s''',
+                    (owner, sid, run_id, snapshot['attempt_id']))
+                reviews = store._db.fetchall(cur)
+                accepted = False
+                for receipt in reviews:
+                    draft = json.loads(receipt['result_json'] or '{}').get('text')
+                    review = json.loads(receipt['review_json'])
+                    if (isinstance(draft, str) and hashlib.sha256(draft.encode()).hexdigest() == receipt['proposal_sha256']
+                            and review.get('verdict') == 'accept'):
+                        accepted = True
+                if not accepted:
+                    raise ValueError('The required AI review is missing or unresolved; individual review is required')
     return row
 
 

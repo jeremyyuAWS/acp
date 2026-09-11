@@ -46,12 +46,12 @@ describe('findingStage', () => {
     expect(findingStage(F({ id: 9 }), { 9: { state: 'approved' } })).toBe('written')
   })
 
-  it('an auto-applied fix nobody has acknowledged still needs the reviewer', () => {
+  it('an auto-applied fix awaits system verification without requiring inspection', () => {
     // laneOf puts it in the green review lane and workflowStatusOf deliberately leaves it in
     // needs-review — it is written to the copy but unconfirmed by a person. It must not read as done.
     const f = F({ id: 10, autoApplied: true })
-    expect(workflowStatusOf(f, {})).toBe('needs-review')
-    expect(findingStage(f, {})).toBe('to-review')
+    expect(workflowStatusOf(f, {})).toBe('awaiting-validation')
+    expect(findingStage(f, {})).toBe('written')
   })
 
   it('puts every finding in exactly one of the declared stages', () => {

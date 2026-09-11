@@ -114,7 +114,7 @@ def _run_handler(monkeypatch, store, blob, *, residual=frozenset(), file=FILE):
     monkeypatch.setitem(sys.modules, "blob", blob)
     from proposals import Verification
     monkeypatch.setattr(handlers, "_verify_residual",
-                        lambda b, f: Verification(True, set(residual)))
+                        lambda b, f, **kwargs: Verification(True, set(residual)))
     handlers._apply_approved_values({"scan_id": SID, "file": file}, {})
 
 

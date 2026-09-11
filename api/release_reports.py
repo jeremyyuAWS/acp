@@ -17,7 +17,10 @@ def _text(value):
 
 
 def _rule(value):
-    return str(value or '').removeprefix('SC_').replace('_', '.').split('/')[0]
+    from assessment_selection import catalog
+    raw = str(value or '')
+    match = re.search(r'(?:SC_)?(\d+)[._](\d+)[._](\d+)', raw)
+    return '.'.join(match.groups()) if match else catalog().get(raw, raw)
 
 
 def _location(row):
@@ -25,10 +28,10 @@ def _location(row):
     for key, label in [('page', 'Page'), ('page_number', 'Page'), ('pages', 'Pages'),
                        ('slide', 'Slide'), ('slide_number', 'Slide'), ('sheet', 'Sheet'),
                        ('cell', 'Cell'), ('paragraph', 'Paragraph'), ('paragraph_index', 'Paragraph index'),
-                       ('element', 'Element'), ('selector', 'Selector'), ('location', 'Location')]:
+                       ('element', 'Element'), ('selector', 'Selector'), ('location', '')]:
         value = row.get(key)
         if value is not None and value != '':
-            parts.append(f'{label}: {value}')
+            parts.append(f'{label}: {value}' if label else re.sub(r'^Location:\s*', '', str(value), flags=re.I))
     return '; '.join(parts) or 'Not recorded'
 
 
@@ -74,7 +77,7 @@ def _page(title, content):
             '@media print{body{background:white;margin:0}main{border:0}.brand img{width:150px}details{break-inside:avoid}table{font-size:10px}}</style>'
             f'<main><header class="brand"><img src="data:image/png;base64,{_logo()}" alt="Mova iO"><div>Accessibility Compliance Platform<br><strong>Scan and remediation report</strong></div></header>'
             f'<h1>{_text(title)}</h1><p class="notice">Published copies may have remaining accessibility issues. '
-            'This report does not certify full accessibility compliance. Human follow-up is optional for publication.</p>'
+            'This report does not certify full accessibility compliance.</p>'
             f'{content}</main></html>').encode('utf-8')
 
 
@@ -115,7 +118,7 @@ def _table(headers, rows):
 
 
 def build_release_report_sources(store, scan_id, owner, release_id):
-    """Return HTML assets, one per document, plus an aggregate checklist CSV.
+    """Return separate checklist/change HTML assets per release document and a CSV.
 
     Original totals use sealed assessment evidence only. Verification credit requires
     ledger identity, timestamp AND a matching durable before/after evidence record.
@@ -125,6 +128,15 @@ def build_release_report_sources(store, scan_id, owner, release_id):
     release = store.release_status(release_id, owner)
     if not scan or not release or release.get('scan_id') != scan_id:
         raise KeyError('Release not found')
+    scope = store.get_scan_scope(scan_id)
+    @lru_cache(maxsize=None)
+    def selected_codes(name):
+        from assessment_selection import selected_for_file
+        return selected_for_file(store.scope_for_file(scan_id, name, scope), name)
+    def selected(row):
+        codes = selected_codes(row['file'])
+        rid = _rule(row.get('wcag') or row.get('rule_id') or row.get('ruleId'))
+        return codes is None or rid in codes
     stages = store.canonical_stage_lineage(scan_id, owner=owner).get('stages', [])
     remediation = next((s for s in stages if s.get('stage') == 'remediate'), {})
     assessment = next((s for s in stages if s.get('stage') == 'assess'), {})
@@ -144,7 +156,13 @@ def build_release_report_sources(store, scan_id, owner, release_id):
     groups = audit.get('finding_groups') if audit and audit.get('valid') is not False else None
     original_groups = Counter()
     for group in groups or []:
+        if not selected(group):
+            continue
         original_groups[(group['file'], _rule(group['rule_id']))] += int(group.get('finding_count') or 0)
+    if groups is not None:
+        original = sum(original_groups.values())
+    ledger = [r for r in ledger if selected(r)]
+    diffs['items'] = [d for d in diffs['items'] if selected(d)]
     ledger_groups = Counter((r['file'], _rule(r['rule_id'])) for r in ledger)
     ledger_exact = (original is not None and isinstance(groups, list) and sum(original_groups.values()) == original
                     and original_groups == ledger_groups and len(ledger) == original
@@ -156,22 +174,19 @@ def build_release_report_sources(store, scan_id, owner, release_id):
         allowed = evidence_by_key[(row['file'], _rule(row['rule_id']))]
         return bool(row.get('fix_evidence_ids')) and all(i in allowed for i in row['fix_evidence_ids'])
     verified = [r for r in ledger if r.get('disposition') == 'resolved_verified' and r.get('verified_at') and valid_evidence(r)]
+    resolved_groups = Counter((r['file'], _rule(r['rule_id'])) for r in verified)
+    fully_resolved = {key for key, count in original_groups.items() if count and resolved_groups[key] == count} if ledger_exact and diffs['complete'] else set()
     verified_total = len(verified) if ledger_exact and diffs['complete'] else None
     traces = store.get_scan_traces(scan_id)
-    failed = [r for r in traces if r.get('outcome') == 'FAIL']
     # Unknown outcomes are explicitly unfinished, never inferred as passes.
-    scope = store.get_scan_scope(scan_id)
-    def selected(row):
-        if scope is None:
-            return True
-        fmt = str(row['file']).rsplit('.', 1)[-1].lower()
-        fmt = 'html' if fmt == 'htm' else fmt
-        return fmt in scope.get(_rule(row['rule_id']), ())
+    traces = [r for r in traces if selected(r)]
+    failed = [r for r in traces if r.get('outcome') == 'FAIL']
     unfinished = [r for r in traces if selected(r) and str(r.get('outcome') or '').upper() not in ('PASS', 'FAIL', 'REVIEW', 'NA', 'NOT_APPLICABLE')]
-    queue = store.list_hitl_queue(scan_id=scan_id, owner=owner)
+    queue = [q for q in store.list_hitl_queue(scan_id=scan_id, owner=owner) if selected(q)]
     verified_keys = {(r['file'], _rule(r['rule_id'])) for r in diffs['items']}
-    open_queue = [r for r in queue if r.get('status') not in ('rejected', 'not_applicable') and not (r.get('status') in ('approved', 'resolved') and r.get('applied') and (r['file'], _rule(r['rule_id'])) in verified_keys)]
+    open_queue = [r for r in queue if r.get('status') != 'not_applicable' and not (r.get('status') in ('approved', 'resolved') and r.get('applied') and (r['file'], _rule(r['rule_id'])) in verified_keys)]
     unverified = [r for r in queue if r.get('applied') and (r['file'], _rule(r['rule_id'])) not in verified_keys]
+    machine_processing = {(q['file'], _rule(q['rule_id'])) for q in queue if q.get('status') in ('queued', 'processing', 'applying', 'verifying')}
     outcomes = {r['file']: r for r in release['documents']}
     files = {f['file']: f for f in scan['files']}
     names = sorted(outcomes)
@@ -185,35 +200,39 @@ def build_release_report_sources(store, scan_id, owner, release_id):
         status = outcome.get('status', 'not attempted')
         url = outcome.get('released_document_url') if status == 'published' else None
         checklist = []
-        issues = file.get('issues') or []
+        issues = [i for i in file.get('issues') or [] if selected(dict(i, file=name))]
         for issue in issues:
-            rid = _rule(issue.get('rule_id') or issue.get('ruleId') or issue.get('wcag'))
+            rid = _rule(issue.get('wcag') or issue.get('rule_id') or issue.get('ruleId'))
+            if (name, rid) in fully_resolved or (name, rid) in machine_processing:
+                continue
             task = next((q for q in open_queue if q['file'] == name and _rule(q['rule_id']) == rid), {})
             checklist.append([rid, issue.get('detail') or 'Accessibility issue remains', _location(issue), issue.get('severity') or 'Unclassified', issue.get('recommended_action') or issue.get('remediation') or task.get('instruction') or task.get('description') or 'Review and correct this issue in the source document; reassess when convenient.', task.get('assignee') or 'Unassigned', 'Remaining issue'])
-        for trace in [t for t in failed if t['file'] == name]:
+        for trace in [t for t in failed if t['file'] == name and (name, _rule(t['rule_id'])) not in fully_resolved and (name, _rule(t['rule_id'])) not in machine_processing]:
             rid = _rule(trace['rule_id'])
             if not any(r[0] == rid for r in checklist):
                 checklist.append([rid, f"{trace.get('finding_count', 0)} recorded findings: {trace.get('plain_name') or trace.get('rule_name') or rid}", 'Not recorded', 'Unclassified', 'Review and correct this issue in the source document.', 'Unassigned', 'Remaining issue'])
-        for task in [q for q in open_queue if q['file'] == name]:
+        for task in [q for q in open_queue if q['file'] == name and q.get('status') not in ('queued', 'processing', 'applying', 'verifying')]:
             rid = _rule(task['rule_id'])
             if not any(r[0] == rid for r in checklist):
                 checklist.append([rid, task.get('title') or task.get('rule_name') or 'Follow-up review task', _location(task), task.get('severity') or 'Unclassified', task.get('instruction') or 'Inspect the saved copy when convenient; this task does not block publication.', task.get('assignee') or 'Unassigned', 'Applied, verification not recorded' if task.get('applied') else task.get('status') or 'Pending'])
-        for trace in [t for t in traces if t['file'] == name and t.get('outcome') == 'REVIEW' and selected(t)]:
+        for trace in [t for t in traces if t['file'] == name and t.get('outcome') == 'REVIEW' and selected(t) and t.get('fix_mode') not in ('auto', 'ai-assisted', 'assisted') and (name, _rule(t['rule_id'])) not in fully_resolved and (name, _rule(t['rule_id'])) not in machine_processing]:
             rid = _rule(trace['rule_id'])
             if not any(r[0] == rid for r in checklist):
                 checklist.append([rid, trace.get('plain_name') or trace.get('rule_name') or 'Review recommended', 'Not recorded', 'Unclassified', 'Check the meaning or usability of the saved result when convenient.', 'Unassigned', 'Review recommended; not a verified pass'])
-        for check in [t for t in unfinished if t['file'] == name]:
+        for check in [t for t in unfinished if t['file'] == name and (name, _rule(t['rule_id'])) not in fully_resolved and (name, _rule(t['rule_id'])) not in machine_processing]:
             checklist.append([_rule(check['rule_id']), check.get('plain_name') or check.get('rule_name') or 'Check not completed', 'Not recorded', 'Unknown', 'Check manually or rerun with supported analysis.', 'Unassigned', f"Check not completed: {check.get('outcome') or 'unknown'}"])
         slug = re.sub(r'[^A-Za-z0-9._-]+', '-', name)[:65].strip('.-') or 'document'
         report_name = f'checklist-{slug}-{sha256(name.encode()).hexdigest()[:10]}.html'
-        detail = f'<p>Document: {_text(name)}<br>Publication: {_text(status)}<br>Published file: {_link(url, url or "Not published")}<br>Release explanation: {_text(outcome.get("explanation"))}</p>'
+        detail = f'<p>Publication: {_text(status)} · {_link(url, "Open published file") if url else "Not published"}</p>'
+        if status != 'published' and outcome.get('explanation'):
+            detail += f'<p>Release explanation: {_text(outcome["explanation"])}</p>'
         original_file = sum(n for (f, _), n in original_groups.items() if f == name) if groups is not None else None
         verified_file = sum(r['file'] == name for r in verified) if ledger_exact and diffs['complete'] else None
-        detail += _table(['Finding measure', 'Count'], [[_text(k), _text(v)] for k, v in [
-            ('Original assessment findings for this document', original_file),
-            ('Original findings fixed and verified', verified_file),
-            ('Original findings not yet verified fixed', original_file - verified_file if original_file is not None and verified_file is not None else None),
-        ]]) + '<h2>Follow-up checklist</h2>'
+        remaining_file = original_file - verified_file if original_file is not None and verified_file is not None else None
+        detail += (f'<p><strong>Assessed findings:</strong> {_text(original_file)} · '
+                   f'<strong>Verified fixed:</strong> {_text(verified_file)} · '
+                   f'<strong>Not yet verified fixed:</strong> {_text(remaining_file)}</p>'
+                   '<h2>Remaining actions</h2>')
         categorized = []
         for row in checklist:
             trace = next((t for t in traces if t['file'] == name and _rule(t['rule_id']) == row[0]), {})
@@ -222,11 +241,14 @@ def build_release_report_sources(store, scan_id, owner, release_id):
             categorized.append((category, row))
         detail += _table(['Criterion', 'Issue', 'Location', 'Remediation category', 'Recommended action', 'Owner', 'Status'],
                          [[_text(r[0]), _text(r[1]) + '<br><small>Severity: ' + _text(r[3]) + '</small>', _text(r[2]), _text(CATEGORIES[key]), *[_text(v) for v in r[4:]]] for key, r in categorized]) if checklist else '<p>No remaining issues are recorded in the available evidence. This is not a guarantee of compliance.</p>'
+        checklist_detail = detail
         from wcag_codeset import _name_for
+        detail = f'<p>Document: {_text(name)}<br>Publication: {_text(status)}</p><p>Change records document applied edits; they are not additional findings. Screenshots are unavailable in this saved evidence. Before and after values also describe changes that are not visible on a page.</p>'
         file_traces = [t for t in traces if t['file'] == name and selected(t)]
-        if scope is not None:
+        file_codes = selected_codes(name)
+        if file_codes is not None:
             recorded = {_rule(t['rule_id']) for t in file_traces}
-            for criterion in scope:
+            for criterion in file_codes:
                 missing = {'file': name, 'rule_id': criterion, 'outcome': 'Not recorded', 'finding_count': None}
                 if _rule(criterion) not in recorded and selected(missing):
                     file_traces.append(missing)
@@ -234,23 +256,28 @@ def build_release_report_sources(store, scan_id, owner, release_id):
         detail += _table(['Success criterion', 'Name / level', 'Recorded outcome', 'Recorded findings'],
                          [[_text(_rule(t['rule_id'])), _text(_name_for(_rule(t['rule_id']))) + ' / ' + _text(t.get('level')),
                            _text(t.get('outcome')), _text(t.get('finding_count'))] for t in file_traces]) if file_traces else '<p>Criterion-level coverage was not recorded.</p>'
-        tasks = [q for q in open_queue if q['file'] == name]
-        if tasks:
-            detail += '<h2>Review task details</h2><p>Tasks may cover several findings; these are not additional findings.</p>'
-            detail += _table(['Criterion', 'Task', 'Location', 'Instruction', 'Suggestions', 'Status'],
-                             [[_text(_rule(q['rule_id'])), _text(q.get('title') or q.get('rule_name')),
-                               _text(_location(q)), _text(q.get('instruction') or q.get('description')),
-                               _text(_suggestions(q)), _text(q.get('status'))] for q in tasks])
         changes = [d for d in diffs['items'] if d['file'] == name]
-        detail += '<h2>Recorded changes by success criterion</h2><p>Change records are separate from findings. Verified finding totals above require matching ledger evidence.</p>'
+        from unverified_changes import saved_changes
+        saved_unverified = [d for d in saved_changes(store, scan_id, name) if selected(d)]
+        detail += '<h2>Recorded changes by success criterion</h2><p>Change records are separate from findings. Verified finding totals in the checklist require matching ledger evidence.</p>'
         for sc in sorted({_rule(d['rule_id']) for d in changes}):
             records = [d for d in changes if _rule(d['rule_id']) == sc]
-            detail += f'<details open><summary>SC {_text(sc)} · {len(records)} change records</summary>'
-            detail += _table(['Location', 'Before', 'After'], [[_text(_location(d)), _text(d.get('before')), _text(d.get('after'))] for d in records]) + '</details>'
-        if not changes:
+            detail += f'<details open><summary>SC {_text(sc)} - {_text(_name_for(sc))} · {len(records)} change record{"s" if len(records) != 1 else ""}</summary>'
+            detail += _table(['Location', 'Before', 'After', 'Verification evidence'], [[_text(_location(d)), _text(d.get('before')), _text(d.get('after')), _text(d.get('note') or 'Recorded by the verified-change process; finding credit requires matching ledger evidence.')] for d in records]) + '</details>'
+        if saved_unverified:
+            detail += '<h2>Applied AI changes - not verified</h2><p>These edits were saved to the current processed copy. They do not count as verified fixes; remaining human actions are listed in the checklist.</p>'
+            for sc in sorted({_rule(d['rule_id']) for d in saved_unverified}):
+                records = [d for d in saved_unverified if _rule(d['rule_id']) == sc]
+                detail += f'<details open><summary>SC {_text(sc)} - {_text(_name_for(sc))}</summary>'
+                detail += _table(['Location', 'Before', 'After', 'Verification'], [
+                    [_text(d.get('locator') or _location(d)), _text(d.get('before')), _text(d.get('after')),
+                     _text('Not verified. ' + str(d.get('reason') or 'Verification evidence is unavailable.'))]
+                    for d in records]) + '</details>'
+        if not changes and not saved_unverified:
             detail += '<p>No change records are available for this file.</p>'
-        appendices.append(f'<section class="document-appendix"><h2>Document: {_text(name)}</h2>{detail}</section>')
-        assets.append({'name': report_name, 'content': _page(f'Follow-up checklist — {name}', detail), 'content_type': 'text/html; charset=utf-8'})
+        appendices.append(f'<section class="document-appendix"><h2>Document: {_text(name)}</h2>{checklist_detail}</section>')
+        assets.append({'name': report_name.replace('checklist-', 'changes-', 1), 'content': _page(f'Change record — {name}', detail), 'content_type': 'text/html; charset=utf-8'})
+        assets.append({'name': report_name, 'content': _page(f'Follow-up checklist — {name}', checklist_detail), 'content_type': 'text/html; charset=utf-8'})
         category_groups = ''
         for key, label in CATEGORIES.items():
             matches = [r for category, r in categorized if category == key]
@@ -263,7 +290,7 @@ def build_release_report_sources(store, scan_id, owner, release_id):
                       _link(url, 'Open published file') if url else 'Not published', f'<a href="{report_name}">Open checklist</a>'])
         rows.extend([[name, url or '', r[0], str(r[1]) + ' · Severity: ' + str(r[3]), r[2], CATEGORIES[key], *r[4:]] for key, r in categorized])
     remaining = sum(int(r.get('finding_count') or 0) for r in failed) if traces else None
-    metrics = [('Files published in this release', release['published']), ('Publication failures', release['failed']), ('Not yet published', release['remaining']), ('Original assessment findings (immutable, whole scan)', original), ('Original findings fixed and verified', verified_total), ('Original findings not yet verified fixed', original - verified_total if original is not None and verified_total is not None else None), ('Current recorded remaining findings (whole scan)', remaining), ('Verified change records (not findings)', diffs['total']), ('Applied review records without matching verification evidence (not findings)', len(unverified)), ('Checks not completed (current recorded traces)', len(unfinished) if traces else None)]
+    metrics = [('Files published in this release', release['published']), ('Publication failures', release['failed']), ('Not yet published', release['remaining']), ('Original assessment findings (immutable, whole scan)', original), ('Original findings fixed and verified', verified_total), ('Original findings not yet verified fixed', original - verified_total if original is not None and verified_total is not None else None), ('Current recorded remaining findings (whole scan)', remaining), ('Verified change records (not findings)', len(diffs['items']) if diffs['complete'] else None), ('Applied review records without matching verification evidence (not findings)', len(unverified)), ('Checks not completed (current recorded traces)', len(unfinished) if traces else None)]
     summary = f'<p>Scan: {_text(scan_id)} · Release: {_text(release_id)} · Generated: {_text(datetime.now(timezone.utc).isoformat())}</p>'
     summary += '<p>Original and current counts describe different points in time. Review tasks and change records are not added to finding totals. Not recorded means evidence is unavailable, not zero.</p>'
     summary += _table(['Measure', 'Count'], [[_text(k), _text(v)] for k, v in metrics])

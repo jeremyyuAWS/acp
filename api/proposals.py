@@ -258,7 +258,7 @@ class Verification:
         return set(scs) & self.residual if self.ok else set()
 
 
-def verify_residual(fixed_bytes: bytes, filename: str) -> "Verification":
+def verify_residual(fixed_bytes: bytes, filename: str, *, scan_id: str | None = None) -> "Verification":
     """Re-scan the remediated bytes and report one of three outcomes. THIS is the function to
     use before granting remediation credit or publication eligibility; `verify_residual_scs`
     below is observational only.
@@ -275,7 +275,8 @@ def verify_residual(fixed_bytes: bytes, filename: str) -> "Verification":
         from store import _extract_sc
         with tempfile.TemporaryDirectory(prefix="acp-verify-") as _d:
             (_P(_d) / filename).write_bytes(fixed_bytes)
-            fd, _ = analyse_and_assess(_P(_d), filename, detect_pii=False)
+            fd, _ = analyse_and_assess(_P(_d), filename, detect_pii=False,
+                                      **({"scan_id": scan_id} if scan_id else {}))
     except Exception as exc:
         # A raise here is the re-scan failing, not the document passing.
         return Verification(False, reason=f"rescan raised {type(exc).__name__}")
@@ -487,6 +488,9 @@ _LANG_NAMES = {
 _LANG_PROPOSAL_CAP = 25   # bound the work / card count on a heavily multilingual document
 
 
+from assessment_selection import criteria, enabled as criteria_enabled
+
+@criteria('3.1.2')
 def propose_language_parts(text: str) -> list[dict]:
     """Deterministically propose a `lang` code for each foreign-language span in `text`
     (relative to the document's dominant language). Returns [] when langdetect is
@@ -647,6 +651,7 @@ _SENSORY_SENT = re.compile(r"[^.!?\n]*[.!?\n]|[^.!?\n]+")
 _SENSORY_CAP = 5
 
 
+@criteria('1.3.3')
 def propose_sensory_rewrite(text: str, *, filename: str = "", ai_enabled: bool = True,
                             guidance: str = "") -> list[dict]:
     """Propose a non-sensory rewrite for each sentence that relies on shape / colour / size /
@@ -708,6 +713,7 @@ def propose_sensory_rewrite(text: str, *, filename: str = "", ai_enabled: bool =
 _READING_CAP = 5
 
 
+@criteria('3.1.5')
 def propose_reading_level(text: str, *, filename: str = "", ai_enabled: bool = True) -> list[dict]:
     """Propose a plain-language rewrite of the hardest sentences (WCAG 3.1.5). Self-gates on the same
     detector the scan uses (textchecks.detect_reading_level) so it only fires when the document really
@@ -939,6 +945,7 @@ def _propose_pdf_images_of_text(path, *, ai_enabled: bool = True) -> list[dict]:
         return []
 
 
+@criteria('1.4.5', '1.4.9')
 def propose_images_of_text(path, ext: str, *, ai_enabled: bool = True) -> list[dict]:
     """One WCAG 1.4.5 proposal per embedded image that bakes in substantial text: the text is
     OCR'd out and surfaced so the reviewer can paste it back as real, selectable text (or
@@ -963,8 +970,10 @@ def propose_images_of_text(path, ext: str, *, ai_enabled: bool = True) -> list[d
         try:
             # Band determination uses the scan's own functions at the scan's own floors, so
             # the card and the finding can never disagree about which tier an image is in.
-            aa_band = _ocr._ocr_words(img, _ocr._MIN_PIXELS) >= _ocr._MIN_WORDS
-            words = _ocr._ocr_words(img, _ocr._MIN_PIXELS_STRICT)
+            aa_band = (criteria_enabled("1.4.5")
+                       and _ocr._ocr_words(img, _ocr._MIN_PIXELS) >= _ocr._MIN_WORDS)
+            words = (_ocr._ocr_words(img, _ocr._MIN_PIXELS_STRICT)
+                     if criteria_enabled("1.4.9") else 0)
             if not aa_band and words < _ocr._MIN_WORDS_STRICT:
                 continue                       # icon / single-glyph — no images-of-text finding at all
             text = " ".join(_ocr.ocr_text(img).split())
@@ -996,14 +1005,14 @@ def propose_images_of_text(path, ext: str, *, ai_enabled: bool = True) -> list[d
                 except Exception:
                     swallowed("proposals.propose_images_of_text: asking the vision model whether the image "
                               "is a logotype failed")
-            out.append(proposal(
+            out.append({**proposal(
                 locator=f"image {i + 1}",
                 before="text baked into an image — assistive technology cannot read it",
                 proposed_value=text,
                 rationale=rationale,
                 source="OCR (tesseract) — human confirmation required",
                 thumb=thumb_b64(img),
-            ))
+            ), "sc": "1.4.5" if aa_band else "1.4.9"})
         except Exception:
             continue                           # one bad image never sinks the rest
     return out
@@ -1099,6 +1108,7 @@ def extract_office_links(path, ext: str) -> list[tuple[str, str]]:
     return out
 
 
+@criteria('2.4.4', '2.4.9')
 def propose_link_texts(path, ext: str, *, ai_enabled: bool = True, guidance: str = "") -> list[dict]:
     """Descriptive link-text proposals for a docx/pptx/xlsx. Each proposal carries `sc` ('2.4.4'
     for vague text, '2.4.9' for text reused across destinations) so the caller enqueues it
@@ -1125,7 +1135,7 @@ def propose_link_texts(path, ext: str, *, ai_enabled: bool = True, guidance: str
     # Text reused for a DIFFERENT destination — the 2.4.9 signal, the same comparison
     # _duplicate_href_findings makes, and only for the formats that actually make it.
     by_text: dict[str, set[str]] = {}
-    if (ext or "").lower().lstrip(".") in ("docx", "pptx"):
+    if criteria_enabled("2.4.9") and (ext or "").lower().lstrip(".") in ("docx", "pptx"):
         for text, href in links:
             t = " ".join((text or "").split()).lower()
             if t:
@@ -1136,7 +1146,7 @@ def propose_link_texts(path, ext: str, *, ai_enabled: bool = True, guidance: str
     seen: set[tuple[str, str]] = set()
     for text, href in links:
         norm = " ".join((text or "").split()).lower()
-        vague = is_vague_link_text(text)
+        vague = criteria_enabled("2.4.4") and is_vague_link_text(text)
         dup = norm in ambiguous
         if not (vague or dup) or (norm, href) in seen:
             continue
@@ -1183,6 +1193,7 @@ _SECTION_HEADING_CAP = 8      # a review card with 30 headings is homework, not 
 _MIN_SECTION_WORDS = 25       # a heading for a two-line fragment is noise
 
 
+@criteria('2.4.10')
 def propose_section_headings(path, ext: str, *, ai_enabled: bool = True, guidance: str = "") -> list[dict]:
     """Heading proposals for a long, heading-less docx. Gates on the DETECTOR's own
     conditions (no Heading styles, >= its paragraph floor) so a card can never appear for a
@@ -1252,6 +1263,7 @@ def propose_section_headings(path, ext: str, *, ai_enabled: bool = True, guidanc
 _SLIDE_TITLE_CAP = 10
 
 
+@criteria('2.4.6')
 def propose_slide_titles(path, ext: str, *, ai_enabled: bool = True, guidance: str = "") -> list[dict]:
     """A slide whose layout has a title placeholder that was left EMPTY (the detector's
     PPTX_TITLE_EMPTY condition, mirrored exactly) gets an AI-drafted title from the slide's
@@ -1324,6 +1336,7 @@ def propose_slide_titles(path, ext: str, *, ai_enabled: bool = True, guidance: s
 _XLSX_LABEL_CAP = 12
 
 
+@criteria('2.4.6')
 def propose_xlsx_labels(path, ext: str, *, ai_enabled: bool = True, guidance: str = "") -> list[dict]:
     """xlsx 2.4.6 Headings & Labels — default 'SheetN' tabs and 'ColumnN' table headers get an
     AI-drafted meaningful name from their OWN content (the sheet's cells / the column's values),
@@ -1456,6 +1469,7 @@ def _col_add(col: str, n: int) -> str:
 _READING_ORDER_CAP = 12
 
 
+@criteria('1.3.2')
 def propose_reading_order(path, ext: str) -> list[dict]:
     """docx 1.3.2 Meaningful Sequence — one recommendation per text-bearing floating object,
     carrying the box's own text so a reviewer knows exactly what to move and can drop it into the
@@ -1505,6 +1519,7 @@ def propose_reading_order(path, ext: str) -> list[dict]:
 # and stated, the human only elects it. Gates mirror the detectors exactly.
 
 
+@criteria('1.4.8')
 def propose_justified_fix(path, ext: str) -> list[dict]:
     """docx 1.4.8 — one card offering to set the document's justified paragraphs to
     left-aligned. Deterministic (no model); [] unless the detector's own condition holds
@@ -1533,6 +1548,7 @@ def propose_justified_fix(path, ext: str) -> list[dict]:
         source="deterministic (detector-mirrored) — human election required")]
 
 
+@criteria('1.4.2')
 def propose_autoplay_fix(path, ext: str) -> list[dict]:
     """pptx 1.4.2 — one card per slide offering to make auto-starting embedded audio play
     on click instead. Deterministic (no model); mirrors pptx_audio_autoplay_checks."""
@@ -1673,6 +1689,7 @@ def _chart_alt_and_sheet(desc: dict) -> tuple[str, str]:
     return alt, "\n".join(lines)
 
 
+@criteria('1.1.1')
 def propose_chart_datasheet(path, ext: str) -> list[dict]:
     """One 1.1.1 proposal per NATIVE chart in a docx/pptx/xlsx, carrying a deterministic,
     grounded description + the chart's exact data as a datasheet. Returns [] when the file
@@ -1757,6 +1774,7 @@ def heading_level_sequence(sizes) -> list[int]:
     return out
 
 
+@criteria('1.4.1')
 def propose_underline_restore(path, ext: str) -> list[dict]:
     """docx 1.4.1 — one card offering to put the underline back on hyperlinks that had it
     explicitly removed. Deterministic (no model); mirrors the detector's own condition.
@@ -1826,6 +1844,7 @@ def _outline_reaching_3to1(border_hex: str, fill_hex: str) -> str | None:
     return None
 
 
+@criteria('1.4.11')
 def propose_outline_contrast(path, ext: str) -> list[dict]:
     """docx 1.4.11 — one card naming the shade that would bring a faint shape outline to 3:1.
 
@@ -1883,6 +1902,7 @@ import os as _os_env
 CAPTION_MAX_SECONDS = float(_os_env.environ.get("ACP_CAPTION_MAX_SECONDS", "600"))
 
 
+@criteria('1.2.1', '1.2.2')
 def propose_captions(path, ext: str) -> list[dict]:
     """One explain-only caption/transcript draft for a media file, or [] when it cannot be made.
 
@@ -1913,7 +1933,9 @@ def propose_captions(path, ext: str) -> list[dict]:
 
     p = _Path(str(path))
     kind = _media.media_kind(p.name)
-    if kind is None or not _media.asr_available():
+    if kind is None or not criteria_enabled("1.2.2" if kind == "video" else "1.2.1"):
+        return []
+    if not _media.asr_available():
         return []
 
     try:

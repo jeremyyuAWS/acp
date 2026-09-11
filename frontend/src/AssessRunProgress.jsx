@@ -4,6 +4,7 @@ import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import LiveCounter from './LiveCounter.jsx'
 import SourceVisibility from './SourceVisibility.jsx'
 import Term from './Term.jsx'
+import AssessmentEvidenceDetails from './AssessmentEvidenceDetails.jsx'
 
 // The Assess RUNNING screen (approved board assess-03). It replaces the mid-run KPI scoreboard
 // (LiveAssessment.jsx, kept but no longer mounted here) with a single per-DOCUMENT focus card.
@@ -381,12 +382,13 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
               </section>
             )}
 
-            <details open className="assess-live-details"
+            <details open={!isFinished} className="assess-live-details"
                      style={{ borderTop: '1px solid var(--line,#e4e8ec)', marginTop: 14 }}>
               <summary style={{ cursor: 'pointer', padding: '10px 0 4px', fontSize: 12.5,
                                 fontWeight: 650, color: 'var(--ink)' }}>
                 {isFinished ? 'Assessment details' : 'Live processing details'}
               </summary>
+              <AssessmentEvidenceDetails scope={m.scope} activity={snapshot?.ai_activity} />
               {!isFinished && (cur || m.queue?.laneLabel) && (
                 <div style={{ paddingTop: 7, fontSize: 12.5, lineHeight: 1.5 }}>
                   <div className="muted" style={{ marginBottom: 4 }}>Processing now</div>
