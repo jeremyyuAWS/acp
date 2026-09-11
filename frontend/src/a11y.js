@@ -35,37 +35,39 @@ export function useDialog(panelRef, onClose) {
 // information from lingering over the workspace, while never closing it under a user who is
 // pointing at the panel or tabbing through its actions.
 export function useAutoDismissDetails(detailsRef, delayMs = 5000) {
+  const binding = useRef(null)
+  // Account controls can appear after authentication. Bind when the node arrives,
+  // without restarting its timer on every background data refresh.
   useEffect(() => {
     const details = detailsRef.current
-    if (!details) return undefined
+    if (binding.current?.node === details && binding.current?.delay === delayMs) return
+    binding.current?.dispose()
+    binding.current = null
+    if (!details) return
     let timer = null
-    let interacting = false
-    const clear = () => { if (timer) clearTimeout(timer); timer = null }
+    let focused = false
+    const clear = () => { if (timer !== null) clearTimeout(timer); timer = null }
     const arm = () => {
       clear()
-      if (details.open && !interacting) timer = setTimeout(() => { details.open = false }, delayMs)
+      if (details.open && !focused) timer = setTimeout(() => { details.open = false }, delayMs)
     }
     const onToggle = () => { if (details.open) arm(); else clear() }
-    const onPointerEnter = () => { interacting = true; clear() }
-    const onPointerLeave = () => { interacting = false; arm() }
-    const onFocusIn = (event) => {
-      if (event.target.closest?.('.header-menu-panel')) { interacting = true; clear() }
+    const onFocusIn = event => {
+      focused = !!event.target.closest?.('.header-menu-panel')
+      arm()
     }
-    const onFocusOut = (event) => {
-      if (!details.contains(event.relatedTarget)) { interacting = false; arm() }
+    const onFocusOut = event => {
+      focused = details.contains(event.relatedTarget) && !!event.relatedTarget?.closest?.('.header-menu-panel')
+      arm()
     }
-    details.addEventListener('toggle', onToggle)
-    details.addEventListener('pointerenter', onPointerEnter)
-    details.addEventListener('pointerleave', onPointerLeave)
-    details.addEventListener('focusin', onFocusIn)
-    details.addEventListener('focusout', onFocusOut)
-    return () => {
+    const events = { toggle: onToggle, pointerenter: arm, pointermove: arm, pointerleave: arm,
+      focusin: onFocusIn, focusout: onFocusOut }
+    Object.entries(events).forEach(([name, handler]) => details.addEventListener(name, handler))
+    binding.current = {node: details, delay: delayMs, dispose: () => {
       clear()
-      details.removeEventListener('toggle', onToggle)
-      details.removeEventListener('pointerenter', onPointerEnter)
-      details.removeEventListener('pointerleave', onPointerLeave)
-      details.removeEventListener('focusin', onFocusIn)
-      details.removeEventListener('focusout', onFocusOut)
-    }
-  }, [detailsRef, delayMs])
+      Object.entries(events).forEach(([name, handler]) => details.removeEventListener(name, handler))
+    }}
+    arm()
+  })
+  useEffect(() => () => { binding.current?.dispose(); binding.current = null }, [])
 }

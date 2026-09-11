@@ -12,10 +12,10 @@ function Dialog({ tick, onClose }) {
   return <div ref={ref} tabIndex={-1}><button>First</button><input aria-label="Confirmation" value={tick} readOnly /></div>
 }
 
-function AccountMenu() {
+function AccountMenu({ visible = true }) {
   const ref = useRef(null)
   useAutoDismissDetails(ref, 5000)
-  return <details ref={ref}><summary>Account</summary><div className="header-menu-panel"><button>Settings</button></div></details>
+  return visible ? <details ref={ref}><summary>Account</summary><div className="header-menu-panel"><button>Settings</button></div></details> : null
 }
 
 describe('stable dialog focus', () => {
@@ -38,7 +38,7 @@ describe('stable dialog focus', () => {
     expect(details.open).toBe(false)
   })
 
-  it('does not dismiss while the user is interacting with the panel', async () => {
+  it('dismisses after five idle seconds even with a stationary pointer over the panel', async () => {
     vi.useFakeTimers()
     const { container, root } = createTestRoot()
     await act(async () => root.render(createElement(AccountMenu)))
@@ -46,6 +46,32 @@ describe('stable dialog focus', () => {
     await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')) })
     details.dispatchEvent(new Event('pointerenter'))
     await act(async () => vi.advanceTimersByTime(6000))
-    expect(details.open).toBe(true)
+    expect(details.open).toBe(false)
   })
+})
+
+
+it('attaches when authentication mounts the menu later and does not reset on refresh', async () => {
+  vi.useFakeTimers()
+  const {container,root}=createTestRoot()
+  await act(async()=>root.render(<AccountMenu visible={false} />))
+  await act(async()=>root.render(<AccountMenu />))
+  const details=container.querySelector('details')
+  await act(async()=>{details.open=true;details.dispatchEvent(new Event('toggle'))})
+  await act(async()=>vi.advanceTimersByTime(3000))
+  await act(async()=>root.render(<AccountMenu />))
+  await act(async()=>vi.advanceTimersByTime(2000))
+  expect(details.open).toBe(false)
+})
+it('keeps keyboard controls available until focus leaves the panel', async () => {
+  vi.useFakeTimers()
+  const {container,root}=createTestRoot()
+  await act(async()=>root.render(<AccountMenu />))
+  const details=container.querySelector('details')
+  await act(async()=>{details.open=true;details.dispatchEvent(new Event('toggle'));container.querySelector('button').focus()})
+  await act(async()=>vi.advanceTimersByTime(6000))
+  expect(details.open).toBe(true)
+  await act(async()=>container.querySelector('summary').focus())
+  await act(async()=>vi.advanceTimersByTime(5000))
+  expect(details.open).toBe(false)
 })
