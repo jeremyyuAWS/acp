@@ -230,9 +230,9 @@ describe('the panel', () => {
     expect(c.querySelector('[role="status"]').textContent).toContain('Every applicable check ran')
   })
 
-  it('is labelled and headed, so it is reachable by landmark', async () => {
+  it('labels the disclosure with its summary', async () => {
     const c = await mount()
-    const section = c.querySelector('section[aria-labelledby]')
+    const section = c.querySelector('details[aria-labelledby]')
     expect(section).not.toBeNull()
     expect(c.querySelector(`#${section.getAttribute('aria-labelledby')}`).textContent)
       .toBe('Run integrity')
@@ -255,18 +255,33 @@ describe('the panel', () => {
     expect(c.querySelector('tbody th').getAttribute('scope')).toBe('row')
   })
 
-  it('cannot be collapsed away — the caveat has to be in the screenshot', async () => {
-    mockManifest = BROKEN_MANIFEST
-    const c = await mount()
-    // The only disclosure is the per-file rule list, never the verdict itself.
-    const summaries = [...c.querySelectorAll('summary')].map((s) => s.textContent)
-    expect(summaries.every((s) => s.startsWith('Which checks'))).toBe(true)
-    expect(c.querySelector('[role="status"]')).not.toBeNull()
-  })
-
   it('accepts a manifest directly, so a caller that already has one does not refetch', async () => {
     mockManifest = null            // the fetch would produce nothing
     const t = (await mount({ manifest: BROKEN_MANIFEST })).textContent
     expect(t).toMatch(/not a conformance result/i)
+  })
+})
+
+
+describe('the Run integrity accordion', () => {
+  it('starts collapsed and expands and closes from its native summary', async () => {
+    const c = await mount()
+    const accordion = c.querySelector('details.panel')
+    expect(accordion).not.toBeNull()
+    expect(accordion.open).toBe(false)
+    const summary = accordion.querySelector(':scope > summary')
+    expect(summary.textContent).toBe('Run integrity')
+    await act(async () => summary.click())
+    expect(accordion.open).toBe(true)
+    expect(accordion.querySelector('table').textContent).toContain('Not applicable')
+    await act(async () => summary.click())
+    expect(accordion.open).toBe(false)
+  })
+
+  it('also starts collapsed when the run has incomplete checks', async () => {
+    mockManifest = BROKEN_MANIFEST
+    const c = await mount()
+    expect(c.querySelector('details.panel').open).toBe(false)
+    expect(c.textContent).toContain('broken.docx')
   })
 })
