@@ -35,7 +35,7 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
       }).catch(() => { if (current) setLiveError(true) })
     }, 400)
     return () => { current = false; clearTimeout(timer) }
-  }, [scanId, material, refreshKey, liveMode])
+  }, [scanId, material, refreshKey, liveMode, connected])
   useEffect(() => {
     if (suppliedFixes !== undefined || liveMode) return
     let live = true
