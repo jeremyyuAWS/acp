@@ -100,3 +100,21 @@ def test_multiple_pdf_fields_preserve_assessed_identities(isolated_store, monkey
     assert len(manifest.findings) == 2
     assert manifest.findings[0].finding_id == rows[1]["finding_id"]
     assert manifest.findings[1].finding_id == rows[0]["finding_id"]
+
+
+def test_pdf_detector_locations_survive_real_ledger_freeze(isolated_store, tmp_path):
+    from formats.pdf.detectors.name_role_value import detect
+    path = tmp_path / 'a.pdf'
+    path.write_bytes(make_pdf(field_names=('Text1', 'Text2')))
+    findings = detect(path)
+    store = isolated_store
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "INSERT INTO scan_runs(id,source,status) VALUES('pdf-locations','drive','done')")
+        store._db.execute(cur, "INSERT INTO file_records(scan_id,file,drive_file_id,checksum) VALUES('pdf-locations','a.pdf','pdf-id','hash')")
+        store._db.execute(cur, "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) VALUES('pdf-locations','a.pdf','4.1.2','Name, Role, Value','Field names','A','human','FAIL',2)")
+        for finding in findings:
+            store._db.execute(cur, "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,location) VALUES('pdf-locations','a.pdf',%s,%s,%s,%s,%s)",
+                (finding['ruleId'], finding['wcag'], finding['severity'], finding['detail'], finding['location']))
+    rows = store.seed_finding_dispositions('pdf-locations', 'batch', snapshot_id='assessment')
+    assert {row['instance_key'] for row in rows} == {'pdf:field:1:0', 'pdf:field:1:1'}
+    assert len({row['finding_id'] for row in rows}) == 2
