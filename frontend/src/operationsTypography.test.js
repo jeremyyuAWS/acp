@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 const here = dirname(fileURLToPath(import.meta.url))
 const css = readFileSync(join(here, 'operations-typography.css'), 'utf8')
 const analytics = readFileSync(join(here, 'AdminInsights.jsx'), 'utf8')
+const liveCss = readFileSync(join(here, 'liveops-typography.css'), 'utf8')
 const liveOps = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
 
 describe('shared operations typography', () => {
@@ -16,8 +17,15 @@ describe('shared operations typography', () => {
     expect(liveOps).toContain('className="ops-kpi-grid"')
     expect(css).toMatch(/minmax\(180px, 1fr\)/)
     expect(css).toMatch(/\.ops-kpi__value\s*\{[^}]*font-family:\s*inherit/s)
-    expect(css).toMatch(/\.ops-kpi__value\s*\{[^}]*font-size:\s*24px/s)
-    expect(css).toMatch(/\.ops-kpi__label\s*\{[^}]*font-size:\s*12px/s)
+    expect(css).toMatch(/\.ops-kpi__value\s*\{[^}]*font-size:\s*var\(--text-metric, 24px\)/s)
+    expect(css).toMatch(/\.ops-kpi__label\s*\{[^}]*font-size:\s*var\(--text-small, 12px\)/s)
+  })
+
+  it('uses explicit numeric values rather than card position for mono', () => {
+    expect(liveCss).not.toContain('nth-child')
+    expect(liveCss).toMatch(/\.liveops-theme \.ops-kpi__value\s*\{[^}]*font-size:\s*var\(--text-metric, 24px\)/s)
+    expect(liveCss).toMatch(/:is\(b, strong, h2, h3, h4, summary, button, th\)\s*\{[^}]*font-weight:\s*600/s)
+    expect(css).toMatch(/\.ops-kpi__value \.machine-value\s*\{[^}]*font-size:\s*inherit/s)
   })
 
   it('does not regress the KPI cards to scattered inline font declarations', () => {

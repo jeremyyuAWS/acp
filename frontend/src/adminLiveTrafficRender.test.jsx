@@ -43,6 +43,13 @@ describe('Live Operations runtime rendering', () => {
     await act(async () => { root.render(createElement(ErrorBoundary, null, createElement(AdminLiveTraffic))) })
     await act(async () => { await Promise.resolve() })
     expect(container.textContent).not.toContain('Something went wrong')
+    const metrics = [...container.querySelectorAll('.ops-kpi__value')]
+    for (const suffix of ['active', 'jobs', '%', 'resolved']) {
+      const metric = metrics.find(el => el.textContent.endsWith(suffix))
+      expect(metric).toBeTruthy()
+      expect(metric.querySelector('.machine-value')).not.toBeNull()
+    }
+    expect(container.querySelector('[aria-label="Workflow data linkage"] .ops-kpi__value .machine-value')).toBeNull()
     expect(container.textContent).toContain('Google Drive')
     expect(container.textContent).toContain('SharePoint')
     expect(container.textContent).toContain('ACP intake')

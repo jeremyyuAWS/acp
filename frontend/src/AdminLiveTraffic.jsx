@@ -1109,14 +1109,14 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
     </div>
     <div className="ops-kpi-grid">
       <div className="panel ops-kpi"><div className="ops-kpi__label">WORKER CAPACITY</div>
-        <b className="ops-kpi__value">{summary.running || 0} active</b><div className="ops-kpi__meta">{summary.available_slots ?? '—'} available of {summary.worker_slots ?? '—'}</div></div>
+        <b className="ops-kpi__value"><span className="machine-value">{summary.running || 0}</span> active</b><div className="ops-kpi__meta">{summary.available_slots ?? '—'} available of {summary.worker_slots ?? '—'}</div></div>
       <div className="panel ops-kpi"><div className="ops-kpi__label">SHARED QUEUE</div>
-        <b className="ops-kpi__value">{summary.queued || 0} jobs</b><div className="ops-kpi__meta">{summary.waiting_users || 0} users waiting · tenant-fair</div></div>
+        <b className="ops-kpi__value"><span className="machine-value">{summary.queued || 0}</span> jobs</b><div className="ops-kpi__meta">{summary.waiting_users || 0} users waiting · tenant-fair</div></div>
       <div className="panel ops-kpi"><div className="ops-kpi__label">UTILIZATION</div>
-        <b className="ops-kpi__value">{summary.utilization_pct ?? '—'}%</b><div className="ops-kpi__meta">{summary.worker_tier_alive ? 'Worker tier online' : 'Worker tier unavailable'}</div></div>
+        <b className="ops-kpi__value"><span className="machine-value">{summary.utilization_pct ?? '—'}%</span></b><div className="ops-kpi__meta">{summary.worker_tier_alive ? 'Worker tier online' : 'Worker tier unavailable'}</div></div>
       <div className="panel ops-kpi" aria-label="Recovery activity in the last 24 hours">
         <div className="ops-kpi__label">RECOVERY · 24 HOURS</div>
-        <b className="ops-kpi__value">{recovery.cancel_resolved ?? 0} resolved</b>
+        <b className="ops-kpi__value"><span className="machine-value">{recovery.cancel_resolved ?? 0}</span> resolved</b>
         <div className="ops-kpi__meta">{recovery.cancel_pending ?? 0} stopping · {recovery.resumes ?? 0} resumed</div>
         <div className="muted" style={{ fontSize: 10.5, marginTop: 3 }}>
           {recovery.cancel_success_pct == null ? 'No stop requests in window'
