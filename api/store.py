@@ -11193,6 +11193,9 @@ class Store:
             return False   # still items pending / rejected / skipped — not fully resolved
         if self.count_unapplied_approved_values(scan_id, file):
             return False   # approved content that no remediator ever wrote into the document
+        from unverified_changes import blocks_certification
+        if blocks_certification(self, scan_id, file):
+            return False  # Written AI changes remain unresolved until verification succeeds.
         if self.unresolved_regression(scan_id, file):
             # An approved write broke a criterion and nobody has accepted that. Redundant with
             # the all-approved gate above WHILE the review row exists — and that redundancy is

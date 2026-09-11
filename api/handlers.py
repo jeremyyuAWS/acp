@@ -5014,8 +5014,8 @@ def _apply_one_value_kind(
     written bytes shows the criterion no longer failing AND the caller durably uploads them.
     Successful lanes append a callback to pending_credits; the caller commits those callbacks
     with the artifact fingerprint after storage succeeds, exactly as `verified_diffs` credits an
-    automatic fix. A write that does not clear the criterion leaves the row unapplied and the
-    file uncertified, which is the honest outcome: something about the document still fails.
+    automatic fix. A standing-authorized write that remains unverified may be saved as applied,
+    with separate durable evidence and no certification or resolved credit.
 
     extra_work: this lane's `write_fn` carries approved work of its own that is not expressible
     as {locator: text} — today, the decorative markings closed over by the alt lane, whose whole
@@ -5149,26 +5149,52 @@ def _apply_one_value_kind(
     baseline = (residual_state or {}).get("verification")
     regressions = (sorted(verification.residual - baseline.residual)
                    if verification.ok and baseline is not None and baseline.ok else None)
+    def preserve_unverified(outcome, reason):
+        if not (residual_state or {}).get('retain_unverified') or regressions:
+            return working, False
+        from unverified_changes import structurally_readable
+        if not structurally_readable(working, fixed, filename):
+            core.store.log_decision('system', 'apply.integrity_failed', scan_id=scan_id,
+                file=filename, rule_id=diff_rule_id, detail='Written copy did not pass document integrity checks; previous copy retained.')
+            return working, False
+        written_locators = {a.get('locator') for a in applied}
+        saved_items = [item_id for item_id in lane_items if item_locators.get(item_id)
+                       and set(item_locators[item_id]).issubset(written_locators)]
+        def commit_unverified():
+            import json
+            record = core.store.get_file_record(scan_id, filename) or {}
+            for item_id in saved_items:
+                core.store.mark_row_applied(item_id)
+            with core.store._db.cursor() as cur:
+                core.store._db.execute(cur, 'UPDATE file_records SET compliant=0 WHERE scan_id=%s AND file=%s', (scan_id, filename))
+            core.store.log_decision('system', 'apply.saved_unverified', scan_id=scan_id,
+                file=filename, rule_id=diff_rule_id, detail=json.dumps({
+                    'artifact_sha256': record['corrected_sha256'], 'item_ids': saved_items,
+                    'changes': applied, 'outcome': outcome, 'reason': reason,
+                    'verification': 'not_verified'}))
+            _model_outcome(outcome, reason + unresolved_note, regressions=regressions)
+        pending_credits.append(commit_unverified)
+        residual_state['verification'] = verification
+        return fixed, True
+
     if not verification.ok:
         # COULD NOT VERIFY — the document was unreadable, the scan errored or timed out, an
         # engine was missing, or a rule threw and its criterion is simply absent from the
         # result. None of that is evidence the fix worked, so nothing is credited: the row
-        # stays unapplied (the approved value is preserved on it for a retry) and the file
-        # stays uncertified. Returning `working` — the bytes as they were BEFORE this lane —
-        # is what keeps an unverified write out of the published copy.
+        # stays uncertified. The explicit standing-approval path can retain structurally
+        # sound bytes with applied-but-unverified evidence; other paths retain the prior copy.
         core.store.log_decision(
             "system", "apply.unverified", scan_id=scan_id, file=filename,
             detail=f"wrote {len(applied)} {noun} value(s) but could not verify "
-                   f"{sorted(scs_to_clear)}: {verification.reason}. Credit withheld; "
-                   f"the approved value is kept for retry")
+                   f"{sorted(scs_to_clear)}: {verification.reason}. Resolved credit withheld.")
         _model_outcome("could_not_verify",
                        (verification.reason or "verification unavailable") + unresolved_note,
                        regressions=None)
-        return working, False
+        return preserve_unverified("could_not_verify", verification.reason or "Verification unavailable")
     if not verification.cleared(scs_to_clear):
         # The value went in but the criterion still fails (content we never saw, or the engine
-        # reads it differently). Credit nothing: the row stays unapplied and the file stays
-        # uncertified, which is what is actually true of the document.
+        # reads it differently). Credit no resolved findings. Explicit automatic approval
+        # may retain the successful write while keeping the file uncertified.
         core.store.log_decision(
             "system", "apply.unverified", scan_id=scan_id, file=filename,
             detail=f"wrote {len(applied)} {noun} value(s) but "
@@ -5177,7 +5203,7 @@ def _apply_one_value_kind(
                        f"still failing: {sorted(verification.still_failing(scs_to_clear))}"
                        + unresolved_note,
                        regressions=regressions)
-        return working, False
+        return preserve_unverified("verified_still_failing", f"Remaining criterion failures: {sorted(verification.still_failing(scs_to_clear))}")
 
     if residual_state is not None:
         # These bytes are the next lane's `working`; its regressions are measured from here.
@@ -5308,7 +5334,8 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     # its bytes are what the next lane writes on top of. `_verify_residual` never raises (a
     # re-scan that cannot run is Verification(ok=False)), so this cannot block the write.
     _phase(job, "re-scanning the copy before writing (regression baseline)")
-    residual_state = {"verification": _verify_residual(working, filename, scan_id=scan_id)}
+    residual_state = {"verification": _verify_residual(working, filename, scan_id=scan_id),
+                      "retain_unverified": bool(payload.get("standing_approval"))}
     pending_credits = []
 
     # ADR 0055: a described-not-replaced row carries the 1.4.5 card's own 'image N' locator — a

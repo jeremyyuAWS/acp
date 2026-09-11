@@ -192,13 +192,22 @@ def test_live_authority_and_current_generation_are_required(isolated_store, monk
     assert not apply_jobs(s)
 
 
-@pytest.mark.parametrize('outcome',['verified','cannot_verify','storage_failed','cancel_before_storage'])
+@pytest.mark.parametrize('outcome',['verified','cannot_verify','still_failing','regression','corrupt_output','storage_failed','cancel_before_storage'])
 def test_real_office_writer_only_credits_saved_verified_output(isolated_store,monkeypatch,outcome):
     import sys
     from test_apply_approved_values import _deck, _slide_xml, _Blob
     from proposals import Verification
     s=isolated_store;job=seed(s,monkeypatch)
-    original=_deck('Picture 1'); artifact=sha256(original).hexdigest()
+    original=_deck('Picture 1')
+    import io, zipfile
+    package = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(original)) as src, zipfile.ZipFile(package, 'w') as dst:
+        for name in src.namelist():
+            data=src.read(name)
+            if name.endswith('slide1.xml'):
+                data=data.replace(b'<p:sld>', b'<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">')
+            dst.writestr(name,data)
+    original=package.getvalue(); artifact=sha256(original).hexdigest()
     with s._db.cursor() as cur:
         s._db.execute(cur,'UPDATE file_records SET corrected_sha256=%s WHERE scan_id=%s',(artifact,SID))
     with run_context(s,job['payload'],job) as ctx:
@@ -207,10 +216,15 @@ def test_real_office_writer_only_credits_saved_verified_output(isolated_store,mo
     assert not s.get_hitl_item(item)['applied']
     blob=_Blob(original)
     monkeypatch.setitem(sys.modules,'blob',blob)
+    if outcome=='corrupt_output':
+        import output_provenance
+        monkeypatch.setattr(output_provenance,'stamp_output',lambda data,file:b'corrupt writer output')
     seen=[]
     def verify(data,file, **kwargs):
         seen.append(data)
-        if outcome=='cannot_verify':return Verification(False,())
+        if outcome in {'cannot_verify','corrupt_output'}:return Verification(False,())
+        if outcome=='still_failing':return Verification(True,{'1.1.1'})
+        if outcome=='regression':return Verification(True,{'1.1.1','2.4.6'} if data!=original else {'1.1.1'})
         if outcome=='cancel_before_storage' and data!=original:
             with s._db.cursor() as cur:s._db.execute(cur,"UPDATE stage_executions SET cancel_requested_at='now' WHERE execution_id=%s",(ctx.run_id,))
         return Verification(True, {'1.1.1'} if 'descr="Quarterly sales chart"' not in _slide_xml(data) else set())
@@ -221,12 +235,26 @@ def test_real_office_writer_only_credits_saved_verified_output(isolated_store,mo
         with pytest.raises((ValueError,RuntimeError)):handlers._apply_approved_values(payload,{})
     else:handlers._apply_approved_values(payload,{})
     assert len(seen)>=2 and seen[0]==original and seen[-1]!=original
-    assert bool(s.get_hitl_item(item)['applied']) is (outcome=='verified')
-    if outcome=='verified':
+    saved = outcome in {'verified','cannot_verify','still_failing'}
+    assert bool(s.get_hitl_item(item)['applied']) is saved
+    if saved:
         assert 'descr="Quarterly sales chart"' in _slide_xml(blob.data)
         assert s.get_file_record(SID,FILE)['corrected_sha256']==sha256(blob.data).hexdigest()
         handlers._apply_approved_values(payload,{})
         assert len(blob.uploads)==1
+        if outcome != 'verified':
+            assert not s.mark_file_compliant_if_reviewed(SID,FILE)
+            assert not s.get_file_record(SID,FILE)['compliant']
+            entries=[json.loads(r['detail']) for r in rows(s,'decision_log') if r['action']=='apply.saved_unverified']
+            assert entries[-1]['artifact_sha256']==sha256(blob.data).hexdigest()
+            assert entries[-1]['item_ids']==[item]
+            from unverified_changes import saved_changes
+            evidence=saved_changes(s,SID,FILE)
+            assert evidence[0]['after']=='Quarterly sales chart'
+            assert evidence[0]['verified'] is False
+            from remediation_delivery import load_artifact
+            delivered=load_artifact(owner=OWNER,scan_id=SID,file=FILE,expected_digest=entries[-1]['artifact_sha256'],download=blob.download_remediated)
+            assert delivered==blob.data and delivered!=original
     else:assert not blob.uploads
     assert not [j for j in rows(s,'jobs') if j['type'] in {'publish_file','release_continue','deliver_corrected_copy'}]
 
