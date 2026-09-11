@@ -74,6 +74,14 @@ def build_manifest(store, scan_id, filename, data):
     ctx = managed_context()
     if ctx is None or ctx.scan_id != scan_id or ctx.file != filename:
         raise ValueError('document_context_missing')
+    input_mode = getattr(getattr(ctx, 'policy', None), 'document_wide_input_mode', 'extracted')
+    if input_mode not in {'extracted', 'native_pdf'}:
+        raise ValueError('document_input_mode_unsupported')
+    if input_mode == 'native_pdf' and not filename.lower().endswith('.pdf'):
+        input_mode = 'extracted'
+    if input_mode == 'native_pdf':
+        from document_wide_native_pdf import validate_native_pdf
+        validate_native_pdf(data)
     record = store.get_file_record(scan_id, filename) or {}
     actual = hashlib.sha256(data).hexdigest()
     if record.get('corrected_sha256') != actual:
@@ -144,13 +152,22 @@ def build_manifest(store, scan_id, filename, data):
         from experiments.document_wide_ai.packaging.pdf_images import render_pdf_page
         figures = package_pdf(data, max_text_chars=LIMITS.max_text_chars).figures
         per_page = Counter(f.page_index for f in figures)
+        from document_wide_native_pdf import figure_regions, region_image
+        regions = figure_regions(data) if input_mode == 'native_pdf' else {}
         evidence, rendered, image_bytes = [], {}, 0
         for finding in findings:
             if finding.success_criterion != '1.1.1':
                 continue
             page = finding.locator.page_index
             image = None
-            if page is not None and per_page[page] == 1 and len(rendered) < LIMITS.max_images:
+            region = regions.get(finding.locator.element_ref)
+            if region and len(evidence) < LIMITS.max_images:
+                image = region_image(data, region)
+                if image and image_bytes + len(image) <= 4 * 1024 * 1024:
+                    image_bytes += len(image)
+                else:
+                    image = None
+            elif page is not None and per_page[page] == 1 and len(evidence) < LIMITS.max_images and len(rendered) < LIMITS.max_images:
                 image = render_pdf_page(data, page)
                 if image and image_bytes + len(image) <= 4 * 1024 * 1024:
                     rendered[page] = image
@@ -163,7 +180,10 @@ def build_manifest(store, scan_id, filename, data):
                     (finding.finding_id,)))
                 continue
             evidence.append(Evidence(EvidenceKind.IMAGE, finding.locator,
-                f'Page {page + 1}, the sole tagged Figure on this page; full page context, not a region crop.',
+                (f'Page {page + 1}, explicit tagged Figure Layout BBox {region[1]}; matching region crop.' if region else
+                 f'Page {page + 1}, the sole tagged Figure on this page; full page context, not a region crop.'),
+                text=json.dumps({'native_pdf_region': region[1], 'page_number': page + 1,
+                                 'coordinate_system': 'PDF points, origin bottom-left; x increases right, y increases up'}) if region else None,
                 image_ref='sha256:'+hashlib.sha256(image).hexdigest()))
         manifest = replace(manifest, evidence=tuple(evidence), extraction_issues=tuple(issues))
     return manifest
@@ -191,6 +211,7 @@ def package_images(data, manifest):
     targets = _docx_targets(data) if manifest.document_format.value == 'docx' else {}
     images = {}
     rendered = {}
+    native_regions = None
     for evidence in manifest.evidence:
         if evidence.kind != EvidenceKind.IMAGE:
             continue
@@ -198,9 +219,18 @@ def package_images(data, manifest):
         if manifest.document_format.value == 'pdf':
             from experiments.document_wide_ai.packaging.pdf_images import render_pdf_page
             page = loc.page_index
-            if page not in rendered:
+            if evidence.text and 'native_pdf_region' in evidence.text:
+                from document_wide_native_pdf import figure_regions, region_image
+                if native_regions is None:
+                    native_regions = figure_regions(data)
+                region = native_regions.get(loc.element_ref)
+                if not region or json.loads(evidence.text).get('native_pdf_region') != list(region[1]) or json.loads(evidence.text).get('page_number') != region[0] + 1:
+                    raise ValueError('document_image_changed')
+                image = region_image(data, region)
+            elif page not in rendered:
                 rendered[page] = render_pdf_page(data, page) if page is not None else None
-            image = rendered[page]
+            if not (evidence.text and 'native_pdf_region' in evidence.text):
+                image = rendered[page]
         else:
             rid = targets.get(loc.part_name+'#'+loc.element_ref, (None, None))[1]
             image = _image(data, rid) if rid else None
@@ -210,3 +240,14 @@ def package_images(data, manifest):
     if len(images) > 8 or sum(map(len, images.values())) > 4 * 1024 * 1024:
         raise ValueError('document_too_large')
     return images
+
+
+def package_native_pdf(data, manifest):
+    """Return the exact current candidate; never rewrite or persist native payload bytes."""
+    if manifest.document_format.value != 'pdf':
+        raise ValueError('document_format_unsupported')
+    from document_wide_native_pdf import validate_native_pdf
+    validate_native_pdf(data, source_sha256=manifest.source_sha256)
+    if len(manifest.text_context) > LIMITS.max_text_chars or len(manifest.findings) > LIMITS.max_findings:
+        raise ValueError('document_too_large')
+    return data
