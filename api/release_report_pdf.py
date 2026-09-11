@@ -34,7 +34,7 @@ a { color: #573352; }
 .pdf-evidence-pair { break-inside: avoid; margin-top: 16px; }
 .pdf-evidence-images { display: flex; gap: 12px; }
 .pdf-evidence-images figure { width: 48%; margin: 0; }
-.pdf-evidence-images img { width: 100%; height: auto; border: 1px solid #d9cfdf; }
+.pdf-evidence-images img { width: 100%; height: 95mm; object-fit: contain; border: 1px solid #d9cfdf; }
 .pdf-evidence-images figcaption { font-weight: bold; margin-bottom: 6px; }
 '''
 

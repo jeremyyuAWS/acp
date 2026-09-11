@@ -19,11 +19,12 @@ def pdf(text='Original content', title=''):
 def setup(monkeypatch, source, candidate, digest=None):
     import blob
     calls = []
-    monkeypatch.setattr(blob, 'download_remediated', lambda *args: candidate)
     def read(*args, **kw):
+        if not kw.get('original'):
+            return candidate
         calls.append((args, kw))
         return source
-    monkeypatch.setattr(blob, 'download_source', read)
+    monkeypatch.setattr(blob, 'download_report_evidence', read)
     store = SimpleNamespace(get_file_record=lambda *args: {'checksum': 'source-cache-key'})
     outcome = {'status': 'published', 'artifact_digest': digest or 'sha256:' + sha256(candidate).hexdigest()}
     return lambda records=[{'page': 1}]: evidence.build_visual_evidence(store, 'scan', 'owner', 'file.pdf', outcome, records), calls
@@ -45,7 +46,7 @@ def test_release_sha_not_provider_checksum_governs_images(monkeypatch):
     assert 'Visual appearance unchanged' in html
     assert html.count('<img ') == 2
     assert sha256(candidate).hexdigest() in html
-    assert calls == [(('owner', 'scan', 'file.pdf'), {'checksum': 'source-cache-key'})]
+    assert calls == [(('owner', 'scan', 'file.pdf'), {'checksum': 'source-cache-key', 'original': True, 'max_bytes': evidence.MAX_BYTES})]
 
 
 def test_later_candidate_never_shown_as_released(monkeypatch):
@@ -92,6 +93,7 @@ def test_report_pdf_embeds_pair_with_labels(monkeypatch, tmp_path):
     assert 'Original' in text and 'Released corrected copy' in text
     assert 'Visual appearance unchanged' in text
     assert sum(len(page.images) for page in doc.pages) >= 2
+    assert len(doc.pages) == 1
 
 
 def test_real_store_change_report_wires_exact_release_evidence(isolated_store, monkeypatch):
@@ -103,10 +105,32 @@ def test_real_store_change_report_wires_exact_release_evidence(isolated_store, m
     release = store.ensure_release_execution('scan', 'owner', 'sharepoint', 1)
     store.record_release_document(release['id'], 'owner', {'file': 'file.pdf', 'status': 'published', 'artifact_digest': 'sha256:' + sha256(candidate).hexdigest(), 'corrected_checksum': 'provider-specific-not-sha256'})
     store.record_remediation_diffs('scan', 'file.pdf', [{'rule_id': 'SC_2_4_2', 'before': '', 'after': 'Accessible title'}])
-    monkeypatch.setattr(blob, 'download_remediated', lambda *args: candidate)
-    monkeypatch.setattr(blob, 'download_source', lambda *args, **kw: source)
+    monkeypatch.setattr(blob, 'download_report_evidence', lambda *args, **kw: source if kw.get('original') else candidate)
     assets = build_release_report_sources(store, 'scan', 'owner', release['id'])
     changes = next(a['content'].decode() for a in assets if a['name'].startswith('changes-'))
     checklist = next(a['content'].decode() for a in assets if a['name'].startswith('checklist-'))
     assert 'Released corrected copy' in changes and 'Visual appearance unchanged' in changes
     assert 'Released corrected copy' not in checklist
+
+
+def test_oversized_download_rejected_before_hash_or_render(monkeypatch):
+    build, _ = setup(monkeypatch, pdf(), b'oversized', 'sha256:' + '0' * 64)
+    monkeypatch.setattr(evidence, 'MAX_BYTES', 4)
+    monkeypatch.setattr(evidence, 'sha256', lambda *a: pytest.fail('oversized candidate must not be hashed'))
+    assert 'corrected PDF exceeds' in build()
+
+
+def test_blob_evidence_requests_bounded_owner_scoped_range(monkeypatch):
+    import blob
+    calls = []
+    def client(**identity):
+        def download(**kwargs):
+            calls.append((identity, kwargs))
+            return SimpleNamespace(readall=lambda: b'x' * kwargs['length'])
+        return SimpleNamespace(download_blob=download)
+    monkeypatch.setattr(blob, '_service_client', lambda: SimpleNamespace(get_blob_client=client))
+    assert len(blob.download_report_evidence('owner', 'scan', 'file.pdf', max_bytes=4)) == 5
+    assert calls[0][0] == {'container': blob._CONTAINER, 'blob': blob._blob_path('owner', 'scan', 'file.pdf')}
+    assert calls[0][1]['offset'] == 0 and calls[0][1]['length'] == 5
+    blob.download_report_evidence('owner', 'scan', 'file.pdf', original=True, checksum='cached', max_bytes=4)
+    assert calls[1][0] == {'container': blob._SOURCES_CONTAINER, 'blob': blob._source_key('owner', 'scan', 'file.pdf', 'cached')}

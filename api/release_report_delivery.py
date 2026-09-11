@@ -35,13 +35,26 @@ def _enqueue(store, row):
     return store.enqueue_job('publish_release_reports', dict(bundle_id=row['id'], owner=row['owner_email']), scan_id=row['scan_id'])
 
 
+REPORT_FORMAT = 'pdf-v3-release-page-evidence'
+
+
+def _fingerprint(release_id, release):
+    return hashlib.sha256(json.dumps([REPORT_FORMAT, release_id, release['documents'], release['roots']], sort_keys=True).encode()).hexdigest()
+
+
 def queue_release_reports(store, scan_id, owner, release_id):
     from release_reports import build_release_reports
     release = store.release_status(release_id, owner)
     if not release or release['scan_id'] != scan_id:
         raise KeyError('Release not found')
-    fingerprint = hashlib.sha256(json.dumps(['pdf-v2-action-checklist', release_id, release['documents'], release['roots']], sort_keys=True).encode()).hexdigest()
+    fingerprint = _fingerprint(release_id, release)
     identity = fingerprint[:24]
+    existing = _get(store, identity, owner)
+    if existing:
+        return _public(existing)
+    # Download/render optional visuals before taking the local release row lock.
+    # Recheck the snapshot and bundle under the lock before freezing any assets.
+    assets = build_release_reports(store, scan_id, owner, release_id)
     with store.transaction():
         # Serialize creation and retries for this owner's release.
         with store._db.cursor() as cur:
@@ -49,7 +62,9 @@ def queue_release_reports(store, scan_id, owner, release_id):
         existing = _get(store, identity, owner)
         if existing:
             return _public(existing)
-        assets = build_release_reports(store, scan_id, owner, release_id)
+        current = store.release_status(release_id, owner)
+        if not current or _fingerprint(release_id, current) != fingerprint:
+            raise ValueError('Release changed while preparing reports; retry with the current release')
         names = {a['name']: a['name'].rsplit('.', 1)[0] + '-' + identity[:10] + '.' + a['name'].rsplit('.', 1)[1] for a in assets}
         frozen = []
         for asset in assets:

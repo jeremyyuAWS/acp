@@ -168,3 +168,48 @@ def test_completed_legacy_bundle_can_generate_new_pdf_without_rescanning(setup, 
     assert refreshed['reports'][0]['content_type'] == 'application/pdf'
     assert store.release_status(release['id'], OWNER)['published'] == 1
     assert delivery.get_release_report_asset(store, SID, OWNER, 'legacy-bundle', 0)['content'].startswith(b'<a')
+
+
+def test_page_evidence_format_invalidates_previous_bundle(setup, monkeypatch):
+    store, release = setup
+    current = delivery.REPORT_FORMAT
+    monkeypatch.setattr(delivery, 'REPORT_FORMAT', 'pdf-v2-action-checklist')
+    old = delivery.queue_release_reports(store, SID, OWNER, release['id'])
+    monkeypatch.setattr(delivery, 'REPORT_FORMAT', current)
+    new = delivery.queue_release_reports(store, SID, OWNER, release['id'])
+    assert new['bundle_id'] != old['bundle_id']
+    assert delivery.queue_release_reports(store, SID, OWNER, release['id'])['bundle_id'] == new['bundle_id']
+
+
+def test_release_changed_during_render_is_not_frozen(setup, monkeypatch):
+    import release_reports
+    store, release = setup
+    def changed(*args):
+        store.record_release_document(release['id'], OWNER, {'file': 'changed.pdf', 'status': 'failed'})
+        return []
+    monkeypatch.setattr(release_reports, 'build_release_reports', changed)
+    with pytest.raises(ValueError, match='Release changed'):
+        delivery.queue_release_reports(store, SID, OWNER, release['id'])
+
+
+def test_optional_render_precedes_local_release_transaction(setup, monkeypatch):
+    import release_reports
+    from contextlib import contextmanager
+    store, release = setup
+    original = store.transaction
+    depth = []
+    @contextmanager
+    def transaction():
+        depth.append(True)
+        try:
+            with original():
+                yield
+        finally:
+            depth.pop()
+    monkeypatch.setattr(store, 'transaction', transaction)
+    build = release_reports.build_release_reports
+    def render(*args):
+        assert not depth
+        return build(*args)
+    monkeypatch.setattr(release_reports, 'build_release_reports', render)
+    delivery.queue_release_reports(store, SID, OWNER, release['id'])

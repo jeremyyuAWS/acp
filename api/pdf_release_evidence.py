@@ -65,14 +65,18 @@ def build_visual_evidence(store, scan_id, owner, name, outcome, records):
     try:
         import blob
         record = store.get_file_record(scan_id, name) or {}
-        candidate = blob.download_remediated(owner, scan_id, name)
+        candidate = blob.download_report_evidence(owner, scan_id, name, max_bytes=MAX_BYTES)
         if not candidate:
             return unavailable('the saved corrected PDF is unavailable')
+        if len(candidate) > MAX_BYTES:
+            return unavailable('the corrected PDF exceeds the visual evidence size limit')
         if 'sha256:' + sha256(candidate).hexdigest() != expected:
             return unavailable('the current saved copy differs from this release; images from another version are not shown')
-        source = blob.download_source(owner, scan_id, name, checksum=record.get('checksum'))
+        source = blob.download_report_evidence(owner, scan_id, name, original=True, checksum=record.get('checksum'), max_bytes=MAX_BYTES)
         if not source:
             return unavailable('the cached original PDF is unavailable')
+        if len(source) > MAX_BYTES:
+            return unavailable('the original PDF exceeds the visual evidence size limit')
         pages = page_numbers(records)
         # A first-page preview is explicitly orientation, not asserted target geometry.
         orientation = not pages
