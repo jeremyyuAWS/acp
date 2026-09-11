@@ -9,7 +9,10 @@ export default function useAcceptedRemediationIdentity({ scanId, snapshot, launc
   useEffect(() => {
     if (pendingLaunch?.batchId && scopedSnapshot?.batch_id === pendingLaunch.batchId) clearLaunch(null)
   }, [pendingLaunch?.batchId, scopedSnapshot?.batch_id, clearLaunch])
-  const authorization = batchId && releaseState?.scanId === scanId && releaseState.authorization?.run_id === batchId
-    ? releaseState.authorization : undefined
+  const sameReleaseRun = batchId && releaseState?.scanId === scanId
+  const authorization = sameReleaseRun && releaseState.authorization?.run_id === batchId
+    ? releaseState.authorization
+    : sameReleaseRun && releaseState.runId === batchId && releaseState.authorization === null
+      ? { run_id: batchId, allow_remaining_issues: false } : undefined
   return { batchId, authorization }
 }

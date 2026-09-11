@@ -43,3 +43,14 @@ it('ignores stale launch and snapshot after scan switches, including no scan', a
   await render({ ...props, scanId: null })
   expect(container.querySelector('output').textContent).toBe('none')
 })
+
+it.each([
+  [{ runId: 'current', authorization: null }, true],
+  [{ runId: 'current' }, false],
+  [{ runId: 'other', authorization: null }, false],
+  [{ authorization: null }, false],
+])('shows manual publishing only for confirmed absence on this execution: %j', async (state, known) => {
+  const { container } = await mount({ snapshot: { scan_id: 'scan', batch_id: 'current' }, releaseState: { scanId: 'scan', ...state } })
+  expect(container.textContent.includes('Review in Release before publishing')).toBe(known)
+  expect(container.textContent).not.toContain('Publish automatically')
+})
