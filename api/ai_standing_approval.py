@@ -104,8 +104,8 @@ def eligible_item(store, owner, sid, run_id, item, *, approved=False):
         saved_policy = json.loads(saved['policy_json']) if saved else {}
         require_review = saved_policy.get('ai_review', {}).get('enabled') is True
         from document_wide_workflow import SUPPORTED
-        document_sc = next((sc for ext, sc in SUPPORTED.items() if row['file'].lower().endswith(ext)), None)
-        if saved_policy.get('document_wide_ai') is True and row['rule_id'] == document_sc:
+        document_scs = next((scs for ext, scs in SUPPORTED.items() if row['file'].lower().endswith(ext)), ())
+        if saved_policy.get('document_wide_ai') is True and row['rule_id'] in document_scs:
             artifact = (store.get_file_record(sid, row['file']) or {}).get('corrected_sha256')
             for proposal in row['proposals']:
                 if (not proposal.get('document_wide_request_id') or not artifact

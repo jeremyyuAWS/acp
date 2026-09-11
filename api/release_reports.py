@@ -243,7 +243,7 @@ def build_release_report_sources(store, scan_id, owner, release_id):
                          [[_text(r[0]), _text(r[1]) + '<br><small>Severity: ' + _text(r[3]) + '</small>', _text(r[2]), _text(CATEGORIES[key]), *[_text(v) for v in r[4:]]] for key, r in categorized]) if checklist else '<p>No remaining issues are recorded in the available evidence. This is not a guarantee of compliance.</p>'
         checklist_detail = detail
         from wcag_codeset import _name_for
-        detail = f'<p>Document: {_text(name)}<br>Publication: {_text(status)}</p><p>Change records document applied edits; they are not additional findings. Screenshots are unavailable in this saved evidence. Before and after values also describe changes that are not visible on a page.</p>'
+        detail = f'<p>Document: {_text(name)}<br>Publication: {_text(status)}</p><p>Change records document applied edits; they are not additional findings. Before and after values also describe changes that are not visible on a page. Optional PDF images follow when the original and exact released copy are available.</p>'
         file_traces = [t for t in traces if t['file'] == name and selected(t)]
         file_codes = selected_codes(name)
         if file_codes is not None:
@@ -275,6 +275,8 @@ def build_release_report_sources(store, scan_id, owner, release_id):
                     for d in records]) + '</details>'
         if not changes and not saved_unverified:
             detail += '<p>No change records are available for this file.</p>'
+        from pdf_release_evidence import build_visual_evidence
+        detail += build_visual_evidence(store, scan_id, owner, name, outcome, changes + saved_unverified)
         appendices.append(f'<section class="document-appendix"><h2>Document: {_text(name)}</h2>{checklist_detail}</section>')
         assets.append({'name': report_name.replace('checklist-', 'changes-', 1), 'content': _page(f'Change record — {name}', detail), 'content_type': 'text/html; charset=utf-8'})
         assets.append({'name': report_name, 'content': _page(f'Follow-up checklist — {name}', checklist_detail), 'content_type': 'text/html; charset=utf-8'})

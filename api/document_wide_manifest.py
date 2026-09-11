@@ -115,10 +115,17 @@ def build_manifest(store, scan_id, filename, data):
             row = candidates[0]
             matched.add(row['finding_id'])
             findings.append(replace(target, finding_id=row['finding_id']))
+    advisory = []
     for row in rows:
         if row['finding_id'] not in matched:
+            advisory.append({key: row[key] for key in ('finding_id', 'rule_id', 'instance_key', 'message', 'evidence') if key in row})
             issues.append(ExtractionIssue('finding_not_packaged', 'No unambiguous supported target remains in this saved document.', (row['finding_id'],)))
-    manifest = replace(packaged, findings=tuple(findings), extraction_issues=tuple(issues))
+    context = packaged.text_context
+    if advisory:
+        context += '\n[Advisory selected findings: no write authorization; do not include these IDs in the edit-response envelope]\n' + json.dumps(advisory, sort_keys=True)
+    if len(context) > LIMITS.max_text_chars:
+        raise ValueError('document_extraction_incomplete')
+    manifest = replace(packaged, findings=tuple(findings), extraction_issues=tuple(issues), text_context=context)
     if targets:
         evidence = []
         for finding in findings:
@@ -130,6 +137,34 @@ def build_manifest(store, scan_id, filename, data):
                 continue
             evidence.append(Evidence(EvidenceKind.IMAGE, finding.locator, 'Image content needed to describe this assessed image.',
                                      image_ref='sha256:'+hashlib.sha256(image).hexdigest()))
+        manifest = replace(manifest, evidence=tuple(evidence), extraction_issues=tuple(issues))
+    if filename.lower().endswith('.pdf'):
+        from collections import Counter
+        from experiments.document_wide_ai.packaging.pdf_packager import package_pdf
+        from experiments.document_wide_ai.packaging.pdf_images import render_pdf_page
+        figures = package_pdf(data, max_text_chars=LIMITS.max_text_chars).figures
+        per_page = Counter(f.page_index for f in figures)
+        evidence, rendered, image_bytes = [], {}, 0
+        for finding in findings:
+            if finding.success_criterion != '1.1.1':
+                continue
+            page = finding.locator.page_index
+            image = None
+            if page is not None and per_page[page] == 1 and len(rendered) < LIMITS.max_images:
+                image = render_pdf_page(data, page)
+                if image and image_bytes + len(image) <= 4 * 1024 * 1024:
+                    rendered[page] = image
+                    image_bytes += len(image)
+                else:
+                    image = None
+            if image is None:
+                issues.append(ExtractionIssue('missing_visual_evidence',
+                    'A unique tagged Figure page could not be rendered within limits; region grounding is required for multiple Figures.',
+                    (finding.finding_id,)))
+                continue
+            evidence.append(Evidence(EvidenceKind.IMAGE, finding.locator,
+                f'Page {page + 1}, the sole tagged Figure on this page; full page context, not a region crop.',
+                image_ref='sha256:'+hashlib.sha256(image).hexdigest()))
         manifest = replace(manifest, evidence=tuple(evidence), extraction_issues=tuple(issues))
     return manifest
 
@@ -155,10 +190,20 @@ def package_images(data, manifest):
         raise ValueError('document_source_changed')
     targets = _docx_targets(data) if manifest.document_format.value == 'docx' else {}
     images = {}
+    rendered = {}
     for evidence in manifest.evidence:
+        if evidence.kind != EvidenceKind.IMAGE:
+            continue
         loc = evidence.source_locator
-        rid = targets.get(loc.part_name+'#'+loc.element_ref, (None, None))[1]
-        image = _image(data, rid) if rid else None
+        if manifest.document_format.value == 'pdf':
+            from experiments.document_wide_ai.packaging.pdf_images import render_pdf_page
+            page = loc.page_index
+            if page not in rendered:
+                rendered[page] = render_pdf_page(data, page) if page is not None else None
+            image = rendered[page]
+        else:
+            rid = targets.get(loc.part_name+'#'+loc.element_ref, (None, None))[1]
+            image = _image(data, rid) if rid else None
         if image is None or evidence.image_ref != 'sha256:'+hashlib.sha256(image).hexdigest():
             raise ValueError('document_image_changed')
         images[evidence.image_ref] = image

@@ -44,26 +44,37 @@ def recheck_pdf(
     except Exception as exc:
         return RecheckResult(False, frozenset(), frozenset(), False, (), error=str(exc))
 
-    baseline_by_loc = {f.locator: f for f in baseline.form_fields}
-    reopened_by_loc = {f.locator: f for f in reopened.form_fields}
-
-    baseline_missing = {loc for loc, f in baseline_by_loc.items() if not f.current_tu}
-    reopened_missing = {loc for loc, f in reopened_by_loc.items() if not f.current_tu}
-
-    still_failing = authorized_locators & reopened_missing
-    new_failures = reopened_missing - baseline_missing
-
-    unexpected = tuple(
-        loc
-        for loc, f in reopened_by_loc.items()
-        if loc not in authorized_locators and baseline_by_loc.get(loc) and f.current_tu != baseline_by_loc[loc].current_tu
-    )
+    if any(issue.kind in {"extraction_failed", "extraction_truncated"}
+           for issue in (*reopened.extraction_issues, *baseline.extraction_issues)):
+        return RecheckResult(False, authorized_locators, frozenset(), False, (),
+                             error="PDF extraction incomplete; verification unavailable")
+    baseline_by_loc = {f.locator: f.current_tu for f in baseline.form_fields}
+    reopened_by_loc = {f.locator: f.current_tu for f in reopened.form_fields}
+    baseline_by_loc.update({f.locator: f.current_alt for f in getattr(baseline, "figures", ())})
+    reopened_by_loc.update({f.locator: f.current_alt for f in getattr(reopened, "figures", ())})
+    baseline_missing = {loc for loc, value in baseline_by_loc.items() if not value}
+    reopened_missing = {loc for loc, value in reopened_by_loc.items() if not value}
+    disappeared = set(baseline_by_loc) - set(reopened_by_loc)
+    still_failing = (authorized_locators & reopened_missing) | (authorized_locators - set(reopened_by_loc))
+    new_failures = (reopened_missing - baseline_missing) | disappeared
+    baseline_field_state = {f.locator: f.preserved_state_sha256 for f in baseline.form_fields}
+    changed_field_state = {
+        f.locator for f in reopened.form_fields
+        if f.locator in baseline_field_state
+        and f.preserved_state_sha256 != baseline_field_state[f.locator]
+    }
+    unexpected = tuple(sorted(
+        changed_field_state | disappeared | (set(reopened_by_loc) - set(baseline_by_loc)) |
+        {loc for loc, value in reopened_by_loc.items()
+         if loc not in authorized_locators and loc in baseline_by_loc and value != baseline_by_loc[loc]}
+    ))
 
     return RecheckResult(
         reopened_ok=True,
         still_failing_locators=frozenset(still_failing),
         new_failure_locators=frozenset(new_failures),
-        text_preserved=reopened.text_context == baseline.text_context,
+        text_preserved=getattr(reopened, "page_text", reopened.text_context)
+        == getattr(baseline, "page_text", baseline.text_context),
         unexpected_changes=unexpected,
     )
 

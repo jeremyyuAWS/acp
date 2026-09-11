@@ -53,6 +53,7 @@ def test_multiple_findings_on_one_pdf_target_can_be_covered_by_one_edit(tmp_path
                     edit_dict(
                         edit_id="e1", finding_ids=[finding.finding_id, second.finding_id], locator_format="pdf",
                         element_ref=finding.locator.element_ref, fingerprint=finding.locator.fingerprint,
+                        page_index=finding.locator.page_index,
                         operation=SET_PDF_FIELD_ACCESSIBLE_NAME, proposed_value="First name",
                     )
                 ],

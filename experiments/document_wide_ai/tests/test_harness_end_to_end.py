@@ -21,6 +21,7 @@ def test_one_package_produces_exactly_one_generation_call(tmp_path: Path):
                     edit_dict(
                         edit_id="e1", finding_ids=[f0.finding_id], locator_format="pdf",
                         element_ref=f0.locator.element_ref, fingerprint=f0.locator.fingerprint,
+                        page_index=f0.locator.page_index,
                         operation=SET_PDF_FIELD_ACCESSIBLE_NAME, proposed_value="First name",
                     )
                 ],

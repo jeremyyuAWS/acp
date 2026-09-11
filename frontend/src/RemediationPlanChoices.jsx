@@ -127,7 +127,7 @@ export default function RemediationPlanChoices({ step = null, answers, policy, d
             <span><strong>Review the document together</strong><span>Send document context and selected findings together for a coordinated set of suggestions. Preview · Cloud AI</span></span>
           </label>
         </div>
-        <p id={`${id}-document-wide-note`}>Document review sends extracted text and supported images, rather than uploading the original file. It currently supports Word image descriptions and PDF form-field names, within extraction and spending limits. Other findings follow the usual process. Document review uses the primary model and at most one fallback.</p>
+        <p id={`${id}-document-wide-note`}>Document review sends extracted text and supported images, rather than uploading the original file. It currently supports Word image descriptions, PDF form-field names, and descriptions for existing tagged PDF images, within extraction and spending limits. PDF image suggestions require unambiguous page-image evidence. Other findings follow the usual process. Document review uses the primary model and at most one fallback.</p>
         {policy.document_wide_ai && <p>Your approval choice still applies. AI-written content stays marked as needing verification until its meaning is reviewed.</p>}
         {localOnly && <p>Choose Cloud AI to review the document together. Local Ollama can provide individual suggestions.</p>}
       </fieldset>}

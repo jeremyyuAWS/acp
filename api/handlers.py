@@ -5180,6 +5180,21 @@ def _apply_one_value_kind(
     from output_provenance import stamp_output
     fixed = stamp_output(fixed, filename)
 
+    # PDF name/alt writers may only change their approved target values. A WCAG
+    # rescan cannot detect lost filled-in form data or certify the exact written text.
+    if (filename.lower().endswith('.pdf') and values and not extra_work
+            and all(str(loc).startswith(('pdf:fig:', 'pdf:field:')) for loc in values)):
+        from unverified_changes import structurally_readable
+        written_targets = {a.get('locator'): values[a['locator']] for a in applied
+                           if a.get('locator') in values}
+        if not written_targets or not structurally_readable(
+                working, fixed, filename, pdf_semantic_targets=written_targets):
+            core.store.log_decision('system', 'apply.integrity_failed', scan_id=scan_id,
+                file=filename, rule_id=diff_rule_id,
+                detail='PDF writer changed unrelated content or failed exact approved-value readback; previous copy retained.')
+            _model_outcome('could_not_verify', 'PDF content preservation or exact-value readback failed', regressions=None)
+            return working, False
+
     _phase(job, f"re-verifying the corrected copy ({noun})")
     verification = _verify_residual(fixed, filename, scan_id=scan_id)
     # Newly-failing criteria: in this re-scan, absent from the baseline. Only decidable when both

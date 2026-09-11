@@ -174,8 +174,9 @@ class StrictTextGenerator:
             if spec.provider not in self.providers.permitted_text_providers():
                 raise ValueError('provider governance changed; dispatch blocked')
             # A conservative payload bound prevents unbounded prompt construction
-            # reaching transport. Reservation still uses the full context ceiling.
-            if len(prompt.encode('utf-8')) + 1024 > spec.context_token_limit:
+            # reaching transport, including room for the configured output allowance.
+            # Spending reservation still uses the full context ceiling.
+            if len(prompt.encode('utf-8')) + 1024 + spec.output_token_limit > spec.context_token_limit:
                 raise ValueError('source exceeds bounded text request size')
             key = self.providers._text_key_for(spec.provider)
             if not key:

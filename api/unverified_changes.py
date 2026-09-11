@@ -4,14 +4,44 @@ import json
 import zipfile
 
 
-def structurally_readable(before, after, filename):
+def _pdf_semantic_state_preserved(before, after, expected_values):
+    """Read actual bytes; permit only the exact approved /TU or /Alt edits."""
+    from experiments.document_wide_ai.packaging.pdf_packager import package_pdf
+    old = package_pdf(before, max_text_chars=60000)
+    new = package_pdf(after, max_text_chars=60000)
+    if any(i.kind in {'extraction_failed', 'extraction_truncated'}
+           for i in (*old.extraction_issues, *new.extraction_issues)):
+        return False
+    if old.page_count != new.page_count or old.page_text != new.page_text:
+        return False
+    old_fields = {f.locator: f.preserved_state_sha256 for f in old.form_fields}
+    new_fields = {f.locator: f.preserved_state_sha256 for f in new.form_fields}
+    if old_fields != new_fields:
+        return False
+    def values(pdf):
+        return {**{f.locator: f.current_tu for f in pdf.form_fields},
+                **{f.locator: f.current_alt for f in pdf.figures}}
+    old_values, new_values = values(old), values(new)
+    if old_values.keys() != new_values.keys() or not set(expected_values).issubset(new_values):
+        return False
+    return all(value == (expected_values[loc].strip() if loc in expected_values else old_values[loc])
+               for loc, value in new_values.items())
+
+
+def structurally_readable(before, after, filename, *, pdf_semantic_targets=None):
     """Reject corrupt writer output even when the WCAG verifier is unavailable."""
     try:
         ext = filename.rsplit('.', 1)[-1].lower()
         if ext == 'pdf':
-            import fitz
-            with fitz.open(stream=before, filetype='pdf') as old, fitz.open(stream=after, filetype='pdf') as new:
-                return not new.is_encrypted and not new.is_repaired and new.page_count > 0 and old.page_count == new.page_count
+            import pikepdf
+            # Use the PDF runtime deployed with ACP. Recovery is disabled so a
+            # repaired/malformed candidate cannot masquerade as a successful write.
+            with pikepdf.open(io.BytesIO(before), attempt_recovery=False) as old, pikepdf.open(
+                    io.BytesIO(after), attempt_recovery=False) as new:
+                return (not new.is_encrypted and len(new.pages) > 0
+                        and len(old.pages) == len(new.pages) and not new.check_pdf_syntax()
+                        and (pdf_semantic_targets is None or
+                             _pdf_semantic_state_preserved(before, after, pdf_semantic_targets)))
         if ext in {'docx', 'pptx', 'xlsx'}:
             from lxml import etree
             with zipfile.ZipFile(io.BytesIO(before)) as old, zipfile.ZipFile(io.BytesIO(after)) as new:

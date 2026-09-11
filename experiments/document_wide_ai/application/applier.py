@@ -18,10 +18,12 @@ import pypdf
 from experiments.document_wide_ai.application.allowlist import (
     SET_OFFICE_IMAGE_ALT_TEXT,
     SET_PDF_FIELD_ACCESSIBLE_NAME,
+    SET_PDF_FIGURE_ALT_TEXT,
 )
 from experiments.document_wide_ai.application.production_adapters import (
     apply_office_alt_text,
     apply_pdf_field_name,
+    apply_pdf_figure_alt,
 )
 from experiments.document_wide_ai.contracts.v1 import DocumentFormat, ProposedEdit
 
@@ -70,8 +72,10 @@ def apply_edits(
 
 
 def _apply_pdf(source_bytes: bytes, edits: list[ProposedEdit]) -> ApplicationResult:
-    supported = [e for e in edits if e.operation == SET_PDF_FIELD_ACCESSIBLE_NAME]
-    unsupported = [e for e in edits if e.operation != SET_PDF_FIELD_ACCESSIBLE_NAME]
+    adapters = {SET_PDF_FIELD_ACCESSIBLE_NAME: apply_pdf_field_name,
+                SET_PDF_FIGURE_ALT_TEXT: apply_pdf_figure_alt}
+    supported = [e for e in edits if e.operation in adapters]
+    unsupported = [e for e in edits if e.operation not in adapters]
 
     try:
         before_pages = len(pypdf.PdfReader(BytesIO(source_bytes)).pages)
@@ -87,13 +91,19 @@ def _apply_pdf(source_bytes: bytes, edits: list[ProposedEdit]) -> ApplicationRes
     edit_by_locator = {_locator_str(e): e for e in supported}
 
     try:
-        new_bytes, applied_rows, unresolved_locators = apply_pdf_field_name(source_bytes, values)
+        new_bytes, applied_rows, unresolved_locators = source_bytes, [], []
+        for operation, adapter in adapters.items():
+            operation_values = {_locator_str(e): e.proposed_value for e in supported if e.operation == operation}
+            if operation_values:
+                new_bytes, rows, unresolved = adapter(new_bytes, operation_values)
+                applied_rows.extend(rows)
+                unresolved_locators.extend(unresolved)
     except Exception as exc:
         return ApplicationResult(
             candidate_bytes=None,
             applied=(),
             not_applied=tuple((e.edit_id, "adapter_raised") for e in edits),
-            candidate_rejected_reason=f"apply_pdf_field_name raised: {exc}",
+            candidate_rejected_reason=f"PDF adapter raised: {exc}",
         )
 
     applied = tuple(

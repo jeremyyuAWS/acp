@@ -50,6 +50,10 @@ def _decode(request, text):
         edit_ids.append(edit.edit_id)
         membership.extend(edit.finding_ids)
         spec = operation_spec(edit.operation, manifest.document_format)
+        if edit.operation == 'set_pdf_figure_alt_text' and not any(
+                e.kind.value == 'image' and e.source_locator.key() == edit.locator.key()
+                for e in manifest.evidence):
+            raise ValueError('invalid_required_structure')
         if ((edit.operation, manifest.document_format) not in allowed or spec is None
                 or any(fid not in by_id or by_id[fid].success_criterion != spec.success_criterion
                        for fid in edit.finding_ids)):

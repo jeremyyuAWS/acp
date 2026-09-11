@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-SUPPORTED = {'.docx': '1.1.1', '.pdf': '4.1.2'}
+SUPPORTED = {'.docx': ('1.1.1',), '.pdf': ('1.1.1', '4.1.2')}
 
 
 def enabled(context, filename):
@@ -15,7 +15,7 @@ def enabled(context, filename):
 def suppressed_criteria(context, filename):
     if not enabled(context, filename):
         return set()
-    return {sc for ext, sc in SUPPORTED.items() if filename.lower().endswith(ext)}
+    return {sc for ext, criteria in SUPPORTED.items() if filename.lower().endswith(ext) for sc in criteria}
 
 
 def _record(store, context, action, value):

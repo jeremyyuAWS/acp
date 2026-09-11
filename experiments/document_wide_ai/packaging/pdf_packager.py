@@ -1,36 +1,42 @@
-"""PDF document-context packaging.
+"""Bounded PDF page text and target facts using production writer locators.
 
-Scope, deliberately small: this prototype extracts page text plus the one structural
-fact its allowlisted operation needs — AcroForm field accessible names (/TU), WCAG
-4.1.2 — using the *same* locator-minting helpers `api/remediate_pdf.py` uses at apply
-time (`_collect_form_fields`, `_form_field_locators`), so a locator built here always
-resolves at application time (see `application/applier.py`). This is not a general PDF
-structure-tree extractor. Per the PRD, prefer extracted text over submitting a native
-PDF; images are out of scope for this packager (no allowlisted operation needs them).
-
-Extraction failures are recorded as `ExtractionIssue`s, never silently dropped.
+Nearby text is candidate evidence, not an asserted field label. Figure context never
+infers a relationship between an arbitrary page image and a structure-tree tag.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from io import BytesIO
+import json
+import math
 
 import pikepdf
 import pypdf
-
 from experiments.document_wide_ai.application.production_adapters import (
-    collect_pdf_form_fields,
-    pdf_form_field_locators,
+    collect_pdf_form_fields, pdf_form_field_locators,
 )
 from experiments.document_wide_ai.contracts.v1 import ExtractionIssue, sha256_hex
 
-EXTRACTOR_VERSION = "pdf-extractor.v1"
+EXTRACTOR_VERSION = "pdf-extractor.v2"
 
 
 @dataclass(frozen=True)
 class PdfFormField:
-    locator: str  # "pdf:field:{page}:{seq}"
-    current_tu: str | None  # None means no accessible name set
+    locator: str
+    current_tu: str | None
+    page_index: int | None = None
+    internal_name: str = ""
+    field_type: str = ""
+    rectangle: tuple[float, ...] = ()
+    nearby_text: tuple[str, ...] = ()
+    preserved_state_sha256: str = ""
+
+
+@dataclass(frozen=True)
+class PdfFigure:
+    locator: str
+    current_alt: str | None
+    page_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -40,63 +46,144 @@ class PackagedPdf:
     text_context: str
     form_fields: tuple[PdfFormField, ...]
     extraction_issues: tuple[ExtractionIssue, ...] = field(default_factory=tuple)
+    figures: tuple[PdfFigure, ...] = ()
+    page_text: str = ""
 
     def field_by_locator(self, locator: str) -> PdfFormField | None:
-        for f in self.form_fields:
-            if f.locator == locator:
-                return f
-        return None
+        return next((f for f in self.form_fields if f.locator == locator), None)
 
 
 def fingerprint_value(current_value: str | None) -> str:
     return sha256_hex((current_value or "<missing>").encode("utf-8"))
 
 
-def package_pdf(source_bytes: bytes, *, max_text_chars: int) -> PackagedPdf:
-    issues: list[ExtractionIssue] = []
-    text_parts: list[str] = []
-    page_count = 0
+def locator_page_index(locator: str) -> int | None:
+    try:
+        page = int(locator.split(":")[2])
+        return page - 1 if page > 0 else None
+    except (ValueError, IndexError):
+        return None
 
+
+def _rectangle(field):
+    rect = field.get('/Rect')
+    if rect is None:
+        kids = field.get('/Kids', [])
+        rect = kids[0].get('/Rect') if len(kids) == 1 else None
+    try:
+        values = tuple(float(v) for v in rect)
+        return values if len(values) == 4 and all(math.isfinite(v) for v in values) else ()
+    except (TypeError, ValueError):
+        return ()
+
+
+def _field_state_fingerprint(fld) -> str:
+    """Hash non-editable form state without sending filled-in values to the model.
+
+    /TU is the only allowed field mutation. Resolve inherited value/type fields and
+    snapshot widget rectangles/states; ignore object numbers, which change on save.
+    Unreadable or cyclic data fails extraction instead of silently weakening the check.
+    """
+    def primitive(value, depth=0):
+        if depth > 16:
+            raise ValueError("form value nesting exceeds preservation limit")
+        if isinstance(value, pikepdf.Stream):
+            return {"stream_sha256": sha256_hex(value.read_bytes())}
+        if isinstance(value, pikepdf.Dictionary):
+            return {str(k): primitive(v, depth + 1) for k, v in value.items()}
+        if isinstance(value, pikepdf.Array):
+            return [primitive(v, depth + 1) for v in value]
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, pikepdf.Name):
+            return {"name": str(value)}
+        if isinstance(value, pikepdf.String):
+            return {"string_bytes": bytes(value).hex()}
+        # Decimal numbers preserve their textual value.
+        return str(value)
+
+    def inherited(key):
+        current = fld
+        for _ in range(16):
+            if key in current:
+                return {"present": True, "value": primitive(current[key])}
+            parent = current.get('/Parent')
+            if parent is None:
+                return {"present": False}
+            current = parent
+        raise ValueError("form parent chain exceeds preservation limit")
+
+    state = {key: inherited(key) for key in (
+        '/FT', '/Ff', '/V', '/DV', '/Opt', '/I', '/MaxLen', '/T', '/TM',
+    )}
+    widgets = list(fld.get('/Kids', [])) or [fld]
+    state['widgets'] = [{key: primitive(widget.get(key))
+                         for key in ('/Rect', '/AS', '/F')}
+                        for widget in widgets]
+    return sha256_hex(json.dumps(state, sort_keys=True, ensure_ascii=True).encode('utf-8'))
+
+
+def package_pdf(source_bytes: bytes, *, max_text_chars: int) -> PackagedPdf:
+    issues, text_parts, text_runs = [], [], {}
+    page_count = 0
     try:
         reader = pypdf.PdfReader(BytesIO(source_bytes))
         page_count = len(reader.pages)
         for i, page in enumerate(reader.pages):
             try:
-                text_parts.append(page.extract_text() or "")
-            except Exception as exc:  # pragma: no cover - defensive, pypdf-internal failures
-                issues.append(
-                    ExtractionIssue(
-                        kind="extraction_failed",
-                        detail=f"page {i} text extraction failed: {exc}",
-                    )
-                )
+                runs = []
+                def visitor(text, cm, tm, font, size):
+                    value = text.strip()
+                    if value:
+                        x = tm[4] * cm[0] + tm[5] * cm[2] + cm[4]
+                        y = tm[4] * cm[1] + tm[5] * cm[3] + cm[5]
+                        if math.isfinite(x) and math.isfinite(y):
+                            runs.append((float(x), float(y), value))
+                text = page.extract_text(visitor_text=visitor) or ""
+                text_parts.append(f"[Page {i + 1}]\n{text}")
+                text_runs[i] = runs
+            except Exception as exc:
+                issues.append(ExtractionIssue('extraction_failed', f'page {i + 1} text extraction failed: {type(exc).__name__}'))
     except Exception as exc:
-        issues.append(ExtractionIssue(kind="extraction_failed", detail=f"pypdf open failed: {exc}"))
+        issues.append(ExtractionIssue('extraction_failed', f'pypdf open failed: {type(exc).__name__}'))
 
-    text_context = "\n".join(text_parts)
-    if len(text_context) > max_text_chars:
-        text_context = text_context[:max_text_chars]
-        issues.append(
-            ExtractionIssue(kind="extraction_truncated", detail=f"text truncated to {max_text_chars} chars")
-        )
-
-    form_fields: list[PdfFormField] = []
+    form_fields, figures, metadata = [], [], {}
     try:
         with pikepdf.open(BytesIO(source_bytes)) as pdf:
+            from experiments.document_wide_ai.application.production_adapters import (
+                collect_pdf_figures, pdf_figure_locators, pdf_figure_alt,
+            )
+            metadata = {'page_count': page_count, 'title': str(pdf.docinfo.get('/Title', '')),
+                        'language': str(pdf.Root.get('/Lang', '')), 'encrypted': pdf.is_encrypted}
             fields = collect_pdf_form_fields(pdf)
             locators = pdf_form_field_locators(fields, pdf)
             for fld in fields:
                 loc = locators[id(fld)]
-                tu = fld.get("/TU")
+                tu = fld.get('/TU')
                 current_tu = str(tu).strip() if tu is not None else None
-                form_fields.append(PdfFormField(locator=loc, current_tu=current_tu or None))
+                page_index = locator_page_index(loc)
+                rectangle, nearby = _rectangle(fld), ()
+                if rectangle and page_index is not None:
+                    x0, y0, x1, y1 = rectangle
+                    candidates = [(abs(y-(y0+y1)/2) + abs(x-x0)/4, text)
+                                  for x, y, text in text_runs.get(page_index, ())
+                                  if y0-40 <= y <= y1+40 and x0-250 <= x <= x1+30]
+                    nearby = tuple(text[:500] for _, text in sorted(candidates)[:4])
+                form_fields.append(PdfFormField(loc, current_tu or None, page_index,
+                    str(fld.get('/T', '')), str(fld.get('/FT', '')), rectangle, nearby,
+                    _field_state_fingerprint(fld)))
+            raw_figures = collect_pdf_figures(pdf.Root.get('/StructTreeRoot'))
+            locators = pdf_figure_locators(raw_figures, pdf)
+            figures = [PdfFigure(locators[id(fig)], pdf_figure_alt(fig),
+                       locator_page_index(locators[id(fig)])) for fig in raw_figures]
     except Exception as exc:
-        issues.append(ExtractionIssue(kind="extraction_failed", detail=f"form-field extraction failed: {exc}"))
+        issues.append(ExtractionIssue('extraction_failed', f'target extraction failed: {type(exc).__name__}'))
 
-    return PackagedPdf(
-        extractor_version=EXTRACTOR_VERSION,
-        page_count=page_count,
-        text_context=text_context,
-        form_fields=tuple(form_fields),
-        extraction_issues=tuple(issues),
-    )
+    page_text = '\n'.join(text_parts)
+    text_context = page_text + '\n[PDF target facts; nearby text is candidate evidence, not a confirmed label]\n' + json.dumps(
+        {'document': metadata, 'form_fields': [asdict(f) for f in form_fields],
+         'figures': [asdict(f) for f in figures]}, sort_keys=True)
+    if len(text_context) > max_text_chars:
+        text_context = text_context[:max_text_chars]
+        issues.append(ExtractionIssue('extraction_truncated', f'text truncated to {max_text_chars} chars'))
+    return PackagedPdf(EXTRACTOR_VERSION, page_count, text_context, tuple(form_fields), tuple(issues), tuple(figures), page_text)

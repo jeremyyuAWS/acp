@@ -120,6 +120,26 @@ def download_remediated(owner: str | None, scan_id: str, filename: str) -> bytes
         return None
 
 
+def download_report_evidence(owner, scan_id, filename, *, original=False, checksum=None, max_bytes):
+    """Bounded cache-only read for optional report visuals; existing readers unchanged.
+
+    Return at most limit+1 bytes so callers distinguish oversized artifacts from a
+    cache miss without allocating/downloading the complete document.
+    """
+    if type(max_bytes) is not int or max_bytes < 1:
+        raise ValueError('A positive evidence byte limit is required')
+    svc = _service_client()
+    if svc is None:
+        return None
+    container = _SOURCES_CONTAINER if original else _CONTAINER
+    key = _source_key(owner, scan_id, filename, checksum) if original else _blob_path(owner, scan_id, filename)
+    try:
+        client = svc.get_blob_client(container=container, blob=key)
+        return client.download_blob(offset=0, length=max_bytes + 1, **_timeouts()).readall()
+    except Exception:
+        return None
+
+
 def upload_release_package(owner: str, scan_id: str, job_id: str, stream) -> str | None:
     """Persist a prepared ZIP so request navigation cannot discard expensive packaging work."""
     svc = _service_client()
