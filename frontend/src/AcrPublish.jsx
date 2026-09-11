@@ -198,7 +198,7 @@ export default function AcrPublish({ reportId, onChange, readOnly = false }) {
                         and "Download PDF" four times over is four identical controls. */}
                     <button
                       type="button"
-                      disabled={busy || readOnly}
+                      disabled={busy}
                       onClick={() => downloadRevision(r.revision, 'pdf')}
                     >
                       Download revision {r.revision} as PDF
@@ -206,7 +206,7 @@ export default function AcrPublish({ reportId, onChange, readOnly = false }) {
                     {' '}
                     <button
                       type="button"
-                      disabled={busy || readOnly}
+                      disabled={busy}
                       onClick={() => downloadRevision(r.revision, 'docx')}
                     >
                       Download revision {r.revision} as Word

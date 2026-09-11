@@ -45,7 +45,7 @@ const READY = {
 const NO_REVS = { revisions: [], current_report_id: 'acr_1', lineage: [] }
 
 let container
-const mount = async (ready = READY, revs = NO_REVS) => {
+const mount = async (ready = READY, revs = NO_REVS, readOnly = false) => {
   api.getAcrPublication.mockReset().mockResolvedValue(ready)
   api.getAcrRevisions.mockReset().mockResolvedValue(revs)
   api.publishAcr.mockReset().mockResolvedValue({ revision: 1, content_digest: 'a'.repeat(64) })
@@ -53,7 +53,7 @@ const mount = async (ready = READY, revs = NO_REVS) => {
     { report_id: 'acr_2', revision: 2, reset_criteria: ['1.4.3'], note: 'Every carried criterion re-enters the approval queue.' })
   const created = createTestRoot()
   container = created.container
-  await act(async () => { created.root.render(createElement(AcrPublish, { reportId: 'acr_1' })) })
+  await act(async () => { created.root.render(createElement(AcrPublish, { reportId: 'acr_1', readOnly })) })
   await act(async () => { await Promise.resolve() })
   await act(async () => { await Promise.resolve() })
   return container
@@ -226,4 +226,14 @@ describe('accessibility', () => {
     })
     expect(results.violations.map((v) => `${v.id}: ${v.help}`)).toEqual([])
   })
+})
+
+
+it('allows View users to download published reports but not create a revision', async () => {
+  await mount({ ...READY, status: 'published' }, {
+    revisions: [{ snapshot_id: 's1', revision: 1, digest_verified: true }], lineage: [],
+  }, true)
+  expect(button(/Download revision 1 as PDF/).disabled).toBe(false)
+  expect(button(/Download revision 1 as Word/).disabled).toBe(false)
+  expect(button(/Start a new revision/).disabled).toBe(true)
 })
