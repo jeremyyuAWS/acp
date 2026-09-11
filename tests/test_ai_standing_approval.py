@@ -442,13 +442,18 @@ def test_automatic_approval_rejects_out_of_scope_before_reading_proposal():
         eligible_item(store, 'owner', 'scan', 'run', {'file': 'a.docx', 'rule_id': '1.1.1'})
 
 
-def test_document_wide_consent_does_not_authorize_old_per_image_draft(isolated_store, monkeypatch):
+@pytest.mark.parametrize('filename,rule,locator', [
+    ('file.docx', '1.1.1', 'word/document.xml#Picture 1'),
+    ('file.pdf', '1.1.1', 'pdf:fig:1:0'),
+    ('file.pdf', '4.1.2', 'pdf:field:1:0'),
+])
+def test_document_wide_consent_does_not_authorize_old_per_image_draft(isolated_store, monkeypatch, filename, rule, locator):
     import sys
-    monkeypatch.setattr(sys.modules[__name__], 'FILE', 'file.docx')
+    monkeypatch.setattr(sys.modules[__name__], 'FILE', filename)
     s = isolated_store
     job = seed(s, monkeypatch)
     with run_context(s, job['payload'], job) as ctx:
-        s.enqueue_proposals(SID, FILE, '1.1.1', [proposal(s, rule='1.1.1', locator='word/document.xml#Picture 1')])
+        s.enqueue_proposals(SID, FILE, rule, [proposal(s, rule=rule, locator=locator)])
         with s._db.cursor() as cur:
             s._db.execute(cur, 'SELECT policy_json FROM ai_spending_run_policies WHERE run_id=%s', (ctx.run_id,))
             saved = json.loads(s._db.fetchone(cur)['policy_json'])

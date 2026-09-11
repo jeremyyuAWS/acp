@@ -9,9 +9,13 @@ def structurally_readable(before, after, filename):
     try:
         ext = filename.rsplit('.', 1)[-1].lower()
         if ext == 'pdf':
-            import fitz
-            with fitz.open(stream=before, filetype='pdf') as old, fitz.open(stream=after, filetype='pdf') as new:
-                return not new.is_encrypted and not new.is_repaired and new.page_count > 0 and old.page_count == new.page_count
+            import pikepdf
+            # Use the PDF runtime deployed with ACP. Recovery is disabled so a
+            # repaired/malformed candidate cannot masquerade as a successful write.
+            with pikepdf.open(io.BytesIO(before), attempt_recovery=False) as old, pikepdf.open(
+                    io.BytesIO(after), attempt_recovery=False) as new:
+                return (not new.is_encrypted and len(new.pages) > 0
+                        and len(old.pages) == len(new.pages) and not new.check_pdf_syntax())
         if ext in {'docx', 'pptx', 'xlsx'}:
             from lxml import etree
             with zipfile.ZipFile(io.BytesIO(before)) as old, zipfile.ZipFile(io.BytesIO(after)) as new:
