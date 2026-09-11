@@ -59,7 +59,8 @@ def process_file(store, context):
     manifest = build_manifest(store, sid, filename, data)
     request_id = hashlib.sha256((context.run_id + manifest.to_json()).encode()).hexdigest()
     if not manifest.findings:
-        _record(store, context, 'deferred', {'reason': 'No remaining findings have a supported document-wide target.'})
+        _record(store, context, 'deferred', {'reason': 'No remaining findings have a supported document-wide target.',
+            'extraction_issues': [{'kind': e.kind, 'detail': e.detail, 'finding_ids': list(e.related_finding_ids)} for e in manifest.extraction_issues]})
         return
     result = _saved(store, context, request_id)
     if result is None:
@@ -76,18 +77,21 @@ def process_file(store, context):
             if sc not in suppressed_criteria(context, filename):
                 continue
             proposals.setdefault(sc, []).append({
-                'locator': edit.locator.element_ref, 'before': edit.expected_original_value,
+                'locator': ((edit.locator.part_name + '#' + edit.locator.element_ref)
+                            if edit.locator.part_name else edit.locator.element_ref), 'before': edit.expected_original_value,
                 'proposed_value': edit.proposed_value, 'rationale': edit.rationale,
                 'source': 'ai', 'model': response.get('model'),
                 'model_call_id': response.get('model_call_id'),
-                'finding_ids': list(edit.finding_ids), 'document_wide_request_id': request_id,
+                'finding_ids': list(edit.finding_ids), 'baseline_finding_ids': list(edit.finding_ids), 'document_wide_request_id': request_id,
                 'source_sha256': digest, 'assessment_revision': manifest.assessment_revision,
             })
         result = {'request_id': request_id, 'proposals': proposals,
                   'unresolved': [{'finding_id': u.finding_id, 'reason': u.reason} for u in validation.unresolved],
                   'omitted_finding_ids': list(validation.model_omitted_finding_ids),
-                  'rejected': [{'edit_id': e.edit_id, 'reason': e.reason} for e in validation.rejected_edits]}
+                  'rejected': [{'edit_id': e.edit_id, 'reason': e.reason} for e in validation.rejected_edits],
+                  'extraction_issues': [{'kind': e.kind, 'detail': e.detail, 'finding_ids': list(e.related_finding_ids)} for e in manifest.extraction_issues]}
         _record(store, context, 'generated', result)
+    canonical_rows = store.list_finding_dispositions(sid, context.run_id)
     with store.transaction():
         if (store.remediation_source_revision(sid) != revision or
                 (store.get_file_record(sid, filename) or {}).get('corrected_sha256') != digest):
@@ -99,4 +103,8 @@ def process_file(store, context):
             if existing and (existing.get('status') != 'pending' or existing.get('applied')):
                 _record(store, context, 'deferred', {'request_id': request_id, 'reason': 'An existing review decision was preserved.', 'sc': sc})
                 continue
-            store.enqueue_proposals(sid, filename, sc, proposals, validated=False)
+            count = len({r['finding_id'] for r in canonical_rows if r.get('file') == filename and r.get('rule_id') == sc})
+            if not count:
+                _record(store, context, 'deferred', {'request_id': request_id, 'reason': 'Canonical finding count unavailable.', 'sc': sc})
+                continue
+            store.enqueue_proposals(sid, filename, sc, proposals, validated=False, finding_count=count)

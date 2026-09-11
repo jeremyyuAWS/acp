@@ -31,6 +31,7 @@ def setup(monkeypatch, *, status='pending', stale=False):
         remediation_source_revision=lambda sid: 'revision',
         get_file_record=lambda *a: current,
         transaction=lambda: nullcontext(),
+        list_finding_dispositions=lambda *a:[{'finding_id':'real-finding','file':'file.pdf','rule_id':'4.1.2'}],
         list_hitl_queue=lambda **kw: [{'file':'file.pdf', 'rule_id':'4.1.2', 'status':status}],
         enqueue_proposals=lambda *a, **kw: queued.append((a,kw)),
         log_decision=lambda *a, **kw: logs.append((a,kw)),
@@ -71,8 +72,8 @@ def test_valid_proposal_preserves_lineage_and_is_not_verified(monkeypatch):
     args,kwargs=queued[0]
     assert args[3][0]['finding_ids']==['real-finding']
     assert args[3][0]['model_call_id']=='actual-call'
-    assert kwargs=={'validated':False}
-    assert 'finding_count' not in kwargs
+    assert kwargs=={'validated':False,'finding_count':1}
+    assert args[3][0]['baseline_finding_ids']==['real-finding']
 
 
 def test_stale_artifact_does_not_enqueue(monkeypatch):
