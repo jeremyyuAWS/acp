@@ -6,6 +6,10 @@
 .remediation-category-pill--unsupported { color: #454957; background: #eceef2; }
 .remediation-category-pill--blocked { color: #9d2626; background: #ffe6e6; }
 .remediation-category-pill--applied { color: #075e80; background: #def4fc; }
+/* Indigo — deliberately distinct from --suggestion's purple (an AI draft awaiting approval) and
+   --applied's blue (an applied change of unknown or non-AI origin). The text label carries the
+   meaning ("AI applied · not verified" / "AI applied"); color is a secondary cue only. */
+.remediation-category-pill--ai_applied { color: #3730a3; background: #e0e7ff; }
 .remediation-category-pill--verified { color: #006353; background: #d8f5eb; }
 .remediation-category-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 12px 0; font-size: 12px; }
 .col-category { vertical-align: middle; }

@@ -5,6 +5,7 @@ import RemediationFileDetail from './RemediationFileDetail.jsx'
 import { documentRows } from './assessMetrics.js'
 import { getFileRemediationDiffs, getScanRemediationDiffs } from './api.js'
 import { remediationDiffPage } from './remediationCountSummary.js'
+import { changeCategory } from './remediationCategories.js'
 
 export default function RemediationLiveDocuments({ scanId, files, cap, assessment, fixes: suppliedFixes, fixTotal: suppliedTotal, refreshKey }) {
   const [scanEvidence, setScanEvidence] = useState(null)
@@ -45,10 +46,10 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
   return <div className="remediation-live-documents">
     <div hidden={!!selectedRow}>
     <p className="muted">Assessment findings stay visible below. The Remediation category column shows applied-change records as they arrive; open a file for changes by WCAG success criterion.</p>
-    <AssessWorklist changeRows={scopedFixes.map(fix => ({ ...fix, category: fix.verified === true ? 'verified' : 'applied' }))} files={files} cap={cap} assessment={assessment} initialFilter="all" openLabel="View fixes"
+    <AssessWorklist changeRows={scopedFixes.map(fix => ({ ...fix, category: changeCategory(fix) }))} files={files} cap={cap} assessment={assessment} initialFilter="all" openLabel="View fixes"
       renderProgress={row => {
-        return <span>{['applied', 'verified'].map(category => {
-          const count = scopedFixes.filter(fix => fix.file === row.file && (fix.verified === true ? 'verified' : 'applied') === category).length
+        return <span>{['applied', 'ai_applied', 'verified'].map(category => {
+          const count = scopedFixes.filter(fix => fix.file === row.file && changeCategory(fix) === category).length
           return count > 0 && <RemediationCategoryPill key={category} category={category} count={count} unit="records" />
         })}</span>
       }} onOpenFile={row => { opener.current = document.activeElement; setSelected(row.file) }} />

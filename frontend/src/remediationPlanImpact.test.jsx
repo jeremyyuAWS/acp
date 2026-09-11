@@ -18,7 +18,9 @@ it('compares only settled selections in the same scope, announces changes and cl
   const { root, container } = createTestRoot()
   const render = async (policyKey, value, extra = {}) => act(async () => root.render(<RemediationPlanImpact identity="scan-one" policyKey={policyKey} data={value} ready loading={false} {...extra} />))
   await render('rules', data(4, 7))
-  expect(container.querySelectorAll('.plan-impact__tile')).toHaveLength(8)
+  // 9: the 8 original categories plus 'ai_applied' — a distinct tag for an applied change with
+  // durable evidence of AI origin, still unverified (see remediationCategories.js).
+  expect(container.querySelectorAll('.plan-impact__tile')).toHaveLength(9)
   expect(container.querySelector('.plan-impact__delta')).toBeNull()
   await render('cloud', data(4, 7), { ready: false, loading: true })
   expect(container.textContent).toContain('Updating…')
@@ -53,7 +55,9 @@ it('offers explanation and examples for every tile by hover, keyboard and click'
   await act(async () => root.render(<RemediationPlanImpact identity="help" policyKey="cloud" ready
     assessmentTotal={32} data={data(17,12)} />))
   const buttons = [...container.querySelectorAll('.plan-impact__tile button')]
-  expect(buttons).toHaveLength(9)
+  // 10: the 9 category tiles (see above) plus the "Outside this plan" tile shown when
+  // assessmentTotal exceeds the plan's own findings.
+  expect(buttons).toHaveLength(10)
   for (const button of buttons) {
     await act(async () => button.focus())
     const tip = container.querySelector('[role=tooltip]')

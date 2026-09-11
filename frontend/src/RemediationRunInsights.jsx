@@ -9,6 +9,39 @@ const count = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocal
 const purpose = value => ({ draft: 'First AI draft', fallback: 'Fallback draft', review: 'AI review', final_review: 'Final AI review' })[value] || 'Recorded attempt'
 const display = value => value == null ? 'Unavailable' : typeof value === 'string' ? value : JSON.stringify(value, null, 2)
 
+// Capitalizes whatever the backend actually recorded — never a hardcoded vendor dictionary. This
+// renders only a real, recorded `ai_attempt_history.provider` value (the model that actually ran),
+// so there is no vendor name to name in this file's own source for aiModel.test.js's "no rendered
+// string names a model the product never calls" guard to catch; a static map here would be exactly
+// the pattern that guard exists to flag, evidence-backed or not.
+const providerLabel = value => (typeof value === 'string' && value ? value[0].toUpperCase() + value.slice(1).replaceAll('_', ' ') : 'Unknown provider')
+
+// The concise line PRD §4 asks for: was AI used, by what, and what happened — read from SAVED
+// records only (the same query `read_insights` already ran; no new AI request is made to answer
+// this). Configuration alone ("cloud AI is selected") is never treated as evidence a model ran —
+// this renders only what `activity_summary` (api/remediation_run_insights.py) actually counted.
+function AiActivitySummary({ summary }) {
+  if (!summary) return null
+  if (summary.attempted === 0) {
+    return <p className="ai-activity-summary"><strong>AI activity: </strong>{summary.not_used_reason || 'AI was not used for this run.'}</p>
+  }
+  return <div className="ai-activity-summary">
+    <p><strong>AI activity</strong></p>
+    <ul>
+      {summary.by_model.map(row => <li key={`${row.provider}-${row.model}`}>
+        {providerLabel(row.provider)} · {row.model}: {count(row.attempts)} request{row.attempts === 1 ? '' : 's'} attempted,{' '}
+        {count(row.completed)} completed
+      </li>)}
+      <li>
+        {count(summary.suggestions_generated)} suggestion{summary.suggestions_generated === 1 ? '' : 's'} generated
+        {'; '}{count(summary.suggestions_applied)} applied
+        {'; '}{count(summary.suggestions_needs_input)} need{summary.suggestions_needs_input === 1 ? 's' : ''} input
+      </li>
+      {summary.verified != null && <li>{count(summary.verified)} verified so far</li>}
+    </ul>
+  </div>
+}
+
 export default function RemediationRunInsights({ scanId, batchId, inlineDrilldown = false }) {
   const [open, setOpen] = useState(false)
   const [reload, setReload] = useState(0)
@@ -37,6 +70,7 @@ export default function RemediationRunInsights({ scanId, batchId, inlineDrilldow
       {current?.loading && data && <p role="status">Refreshing saved history; showing the last saved snapshot.</p>}
       {!scanId || !batchId ? <p>Select a remediation run.</p> : current?.error && !data ? <p role="alert">Saved history could not be loaded. Try refreshing.</p> : !current || (current.loading && !data) ? <p role="status">Loading saved model history…</p> : !data ? <p>Saved model history is unavailable in this environment.</p> : <>
         <p><strong>{data.standing_approval?.enabled ? 'Auto-approval on for this run' : 'Manual AI approval for this run'}</strong>. {data.standing_approval?.enabled ? 'The saved plan authorizes eligible suggestions, including fallbacks. Exceptions still need review; publishing stays separate.' : 'AI suggestions require your approval before application.'}</p>
+        <AiActivitySummary summary={data.activity_summary} />
         <RemediationContribution key={identity} snapshot={data.measured_contribution} inlineDrilldown={inlineDrilldown} />
         <h4>Saved suggestions by AI step</h4>
         <p>{data.contribution?.note || 'Proposal versions are not findings or verified fixes.'}</p>

@@ -12,6 +12,7 @@ const CATEGORY_HELP = {
   unsupported: 'ACP has no supported way to apply this fix. Use another tool or edit the source document. Example: a required structural repair that ACP cannot perform for this file format.',
   blocked: 'ACP cannot proceed until an obstacle is resolved. Example: the file cannot be accessed or a required service is unavailable.',
   applied: 'A change was made, but successful verification has not been recorded. Example: a language setting was updated and is waiting for a check.',
+  ai_applied: 'An AI-generated change was written, with recorded evidence it came from AI, but successful verification has not been recorded. Example: AI-drafted alternative text was applied and is waiting for a check.',
   verified: 'ACP applied the fix and recorded a successful verification for that finding. Example: a missing-language check passes after the update. This does not certify the whole document.',
   outside: 'These findings were counted in Assess but have no classification in this plan preview. Examples: a review finding omitted from the preview, or a finding in a file not selected for this plan. These are possible reasons, not confirmed explanations for each finding. Outside the plan does not mean ACP cannot fix it, or that it is fixed. Incomplete checks are separate.',
 }

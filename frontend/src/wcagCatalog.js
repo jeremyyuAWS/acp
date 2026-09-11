@@ -94,3 +94,7 @@ export const WCAG = [
   {sc:"4.1.2", name:"Name, Role, Value", level:"A", added:"2.0", legal:"Required", docApplies:true, principle:"Robust", approach:"Automated + Agentic", source:"Shipped (demo)", tier:"Tier 2 · Agentic AI", phase:"—", lo:0, hi:0, req:"UI components expose correct name, role, state and value to assistive tech (critical for custom / ARIA widgets)."},
   {sc:"4.1.3", name:"Status Messages", level:"AA", added:"2.1", legal:"Required", docApplies:true, principle:"Robust", approach:"Human / AT", source:"MDK HITL", tier:"Tier 3 · HITL workflow", phase:"Phase 2 · HITL (Req. A/AA)", lo:1, hi:2, req:"Status messages are announced to assistive tech without receiving focus."},
 ]
+
+// Code → name lookup, built once. Shared rather than reconstructed per component so two
+// screens naming the same criterion can never spell it differently.
+export const SC_NAME = Object.fromEntries(WCAG.map((r) => [r.sc, r.name]))

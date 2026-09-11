@@ -220,7 +220,7 @@ export function findingsByCriterion(row) {
                  || a.sc.localeCompare(b.sc, undefined, { numeric: true }))
 }
 
-export function assessMetrics(files, { cap, assessment, criteria = SCOPE_SCS, level = 'AA', notStarted, runStatus } = {}) {
+export function assessMetrics(files, { cap, assessment, criteria = SCOPE_SCS, level = 'AA', notStarted, runStatus, scopeLabel } = {}) {
   if (!Array.isArray(files)) return null
 
   const rows = documentRows(files, { cap, assessment, criteria, level })
@@ -289,7 +289,7 @@ export function assessMetrics(files, { cap, assessment, criteria = SCOPE_SCS, le
     // ── coverage, stated as a fraction of a named list ──────────────────────────────────────
     coverageEvaluated,
     coverageSelected: criteria.size,
-    scopeLabel: criteria === SCOPE_SCS ? SCOPE_LABEL : 'document core',
+    scopeLabel: scopeLabel || (criteria === SCOPE_SCS ? SCOPE_LABEL : 'document core'),
 
     status: statusOf({
       selected: files.length, assessed: assessed.length, notStarted, runStatus,

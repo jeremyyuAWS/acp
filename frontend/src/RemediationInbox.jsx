@@ -406,7 +406,11 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             {onOpenWord && <button className="ghost" onClick={() => onOpenWord(f)}>View full document</button>}
           </div>
           <Meta row={{ ...r, wcag: (f.rule_id || f.ruleId || '') }} />
-          {aiAppliedUnverified(f) && <span className="remediation-category-pill remediation-category-pill--applied" title="AI wrote this change. Verification has not confirmed that the finding is resolved. It remains in pending counts.">AI applied · not verified</span>}
+          {/* Indigo, not the generic "applied" blue — a distinct color for a distinct claim (this
+              specific change has durable, recorded evidence of AI origin), per aiAppliedUnverified's
+              own evidence gate above. Still counted in the generic 'applied' bucket everywhere else
+              (remediationCategory), so no total changes — this is a rendering-only distinction. */}
+          {aiAppliedUnverified(f) && <span className="remediation-category-pill remediation-category-pill--ai_applied" title="AI wrote this change. Verification has not confirmed that the finding is resolved. It remains in pending counts.">AI applied · not verified</span>}
         </div>
         <p className="remediation-review-problem" style={{ fontSize: 15, lineHeight: 1.55, margin: '18px 0 0' }}>{problemOf(f, r.issue)}</p>
         {displayText(f.problemStatement).length > EXCERPT_LIMIT && <details className="remediation-full-text" key={`problem-${f.id}`}>
