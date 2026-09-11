@@ -79,7 +79,7 @@ def _sequence(*residuals):
     from proposals import Verification
     it = iter(residuals)
 
-    def verify(_bytes, _file):
+    def verify(_bytes, _file, *, scan_id=None):
         r = next(it)
         return (Verification(False, reason="rescan raised X") if r is Exception
                 else Verification(True, r))
