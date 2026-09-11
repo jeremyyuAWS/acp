@@ -235,6 +235,27 @@ export default function CapacityScheduleEditor({
     const timer = setTimeout(() => validate(false), 600);
     return () => clearTimeout(timer);
   }, [JSON.stringify(draft)]); // eslint-disable-line react-hooks/exhaustive-deps
+  const showSaveFailure = (failure) => {
+    const detail = failure?.detail;
+    if (detail?.current_version !== undefined) {
+      setError(`Someone else saved while you were editing (you had version ${detail.your_version}, current is ${detail.current_version}). Your draft is still here. Close and reopen the editor to review the latest saved schedule before trying again.`);
+    } else if (Array.isArray(detail?.findings)) {
+      setChecked(detail);
+      setStep(2);
+      setError("This schedule cannot be saved — review the findings below. Your draft is still here.");
+    } else if (failure?.status === 403) {
+      setError("You do not have permission to manage worker configuration. Ask a platform administrator to check your role. Your draft is still here.");
+    } else if (failure?.status === 401) {
+      setError("Your session needs to be renewed before saving. Your draft is still here.");
+    } else if (failure?.status === 422) {
+      const explanation = typeof detail === "string" ? detail
+        : Array.isArray(detail) ? detail.map((item) => `${(item.loc || []).filter((part) => part !== "body").join(".")}: ${item.msg}`).join("; ")
+        : "Check the schedule fields and try again.";
+      setError(`This schedule could not be saved: ${explanation} Your draft is still here.`);
+    } else {
+      setError("We could not confirm whether the schedule was saved. Your draft is still here. Check the saved schedule before retrying.");
+    }
+  };
   const save = () => {
     if (Object.keys(errors).length)
       return setError("Fix the highlighted fields before saving.");
@@ -242,24 +263,11 @@ export default function CapacityScheduleEditor({
     setError(null);
     putCapacitySchedule({ ...draft, version: snap.version, reason })
       .then((r) => {
-        if (r?.detail?.current_version !== undefined)
-          return setError(
-            `Someone else saved while you were editing (you had version ${r.detail.your_version}, current is ${r.detail.current_version}). Review the latest version before saving yours.`,
-          );
-        if (r?.detail?.findings) {
-          setChecked(r.detail);
-          return setError(
-            "This schedule cannot be saved — review the findings below.",
-          );
-        }
+        if (r?.detail) return showSaveFailure(r);
         setReason("");
         onSaved?.(`Schedule version ${r?.version ?? snap.version + 1} saved as a draft.`);
       })
-      .catch(() =>
-        setError(
-          "The schedule could not be saved. Nothing was changed; your draft is still here.",
-        ),
-      )
+      .catch(showSaveFailure)
       .finally(() => setBusy(false));
   };
   const apply = () => {

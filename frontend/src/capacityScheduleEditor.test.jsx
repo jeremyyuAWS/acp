@@ -6,7 +6,7 @@ afterEach(unmountAll)
 const calls = vi.hoisted(() => ({ put: [], apply: [], validate: [], override: [], del: 0, get: 0, putResult: null }))
 vi.mock('./api.js', () => ({
   getCapacitySchedule: () => { calls.get += 1; return Promise.resolve(calls.snapshot) },
-  putCapacitySchedule: (body) => { calls.put.push(body); return calls.putFails ? Promise.reject(new Error('no')) : Promise.resolve(calls.putResult ?? { version: 8 }) },
+  putCapacitySchedule: (body) => { calls.put.push(body); if (calls.putError) return Promise.reject(calls.putError); return calls.putFails ? Promise.reject(new Error('no')) : Promise.resolve(calls.putResult ?? { version: 8 }) },
   applyCapacitySchedule: (body) => { calls.apply.push(body); return Promise.resolve({ application: { state: 'applied' } }) },
   validateCapacitySchedule: (body) => { calls.validate.push(body); return Promise.resolve(calls.validation ?? { blocked: false, findings: [] }) },
   createCapacityOverride: (body) => { calls.override.push(body); return Promise.resolve({ override: body }) },
@@ -21,7 +21,7 @@ async function mount({ admin = true, snapshot = SNAP } = {}) { calls.snapshot = 
 async function open(c, name = 'Edit schedule') { await act(async () => { button(c, name).click() }) }
 async function review(c) { await act(async () => { button(c, 'Continue').click() }); await act(async () => { button(c, 'Continue').click() }) }
 
-beforeEach(() => { document.body.innerHTML = ''; calls.put = []; calls.apply = []; calls.validate = []; calls.override = []; calls.del = 0; calls.get = 0; calls.putResult = null; calls.putFails = false; calls.validation = null; vi.restoreAllMocks(); vi.spyOn(window, 'confirm').mockReturnValue(true) })
+beforeEach(() => { document.body.innerHTML = ''; calls.put = []; calls.apply = []; calls.validate = []; calls.override = []; calls.del = 0; calls.get = 0; calls.putResult = null; calls.putFails = false; calls.putError = null; calls.validation = null; vi.restoreAllMocks(); vi.spyOn(window, 'confirm').mockReturnValue(true) })
 
 describe('guided schedule management', () => {
   it('keeps mutation controls away from view-only users', async () => { const c = await mount({ admin: false }); expect(button(c, 'Edit schedule')).toBeFalsy(); expect(c.textContent).toMatch(/View only/i) })
@@ -50,4 +50,37 @@ describe('temporary overrides', () => {
 describe('read-only policy verification', () => {
   it('shows desired, reconciler-applied, and Azure values from the snapshot', async () => { const c = await mount({ snapshot: { ...SNAP, effective_floors: { assess: 4 }, reconciliation: { ...SNAP.reconciliation, authority: 'saved_schedule', desired_key: 'schedule:7:business', applied_key: 'schedule:7:business', attempted_at: '2026-09-07T15:59:00Z' }, observed: { 'acp-assess': { min_replicas: 4, max_replicas: 10 } } } }); const row = c.querySelector('[data-verification-service="assess"]'); expect(row.textContent).toContain('Assess'); expect(row.textContent).toContain('4'); expect(row.textContent).toContain('4–10'); expect(c.textContent).toContain('Matches desired policy'); expect(c.textContent).toMatch(/Last attempt.*\([^)]+\)/) })
   it('does not claim an applied floor when reconciliation keys differ', async () => { const c = await mount({ snapshot: { ...SNAP, effective_floors: { assess: 6 }, reconciliation: { state: 'applying', desired_key: 'override:8', applied_key: 'schedule:7' } } }); expect(c.querySelector('[data-verification-service="assess"]').textContent).toContain('Not verified'); expect(c.textContent).toContain('Does not yet match desired policy') })
+})
+
+
+describe('server save rejections', () => {
+  async function saveWithError(error) {
+    calls.putError = error
+    const c = await mount()
+    await open(c)
+    await review(c)
+    setValue(c.querySelector('#cap-reason'), 'keep my draft')
+    await act(async () => { button(c, 'Save draft').click(); await Promise.resolve() })
+    return c
+  }
+  it('shows the actual rejected version conflict and preserves the draft', async () => {
+    const c = await saveWithError(Object.assign(new Error('conflict'), { status: 409, detail: { your_version: 7, current_version: 9 } }))
+    expect(c.textContent).toContain('current is 9')
+    expect(c.querySelector('#cap-reason').value).toBe('keep my draft')
+    expect(c.querySelector('[data-testid="schedule-confirmation"]')).toBeNull()
+  })
+  it('shows blocking capacity findings returned with HTTP 422', async () => {
+    const c = await saveWithError(Object.assign(new Error('invalid'), { status: 422, detail: { blocked: true, findings: [{ blocking: true, detail: 'Reduce the maximum Assess replicas to fit database capacity.' }] } }))
+    expect(c.textContent).toContain('Reduce the maximum Assess replicas')
+    expect(c.querySelector('#cap-reason').value).toBe('keep my draft')
+  })
+  it('explains a permissions rejection', async () => {
+    const c = await saveWithError(Object.assign(new Error('forbidden'), { status: 403 }))
+    expect(c.textContent).toContain('permission to manage worker configuration')
+  })
+  it('does not claim a timed-out write changed nothing', async () => {
+    const c = await saveWithError(new Error('network timeout'))
+    expect(c.textContent).toContain('could not confirm')
+    expect(c.textContent).not.toContain('Nothing was changed')
+  })
 })
