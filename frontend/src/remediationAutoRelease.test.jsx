@@ -118,3 +118,10 @@ it('keeps an actively processing authorization enabled without a stall banner',a
  expect(v.container.textContent).toContain('Delivered')
  expect(v.button('Stop future releases')).toBeTruthy()
 })
+
+it('does not claim an uncertain terminal delivery never reached the destination',async()=>{
+ getAutomaticRelease.mockResolvedValue({...authorized,authorization:{...authorized.authorization,status:'failed'}})
+ const v=await mount()
+ expect(v.container.textContent).toContain('Delivery is not confirmed for files needing attention.')
+ expect(v.container.textContent).not.toContain('Files needing attention have not been released.')
+})

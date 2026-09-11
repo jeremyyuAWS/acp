@@ -103,7 +103,7 @@ export default function RemediationAutoRelease({ scanId, files = [], readOnly = 
         </li>)}</ul>
       </details>}
       {enabled && <button type="button" className="ghost" disabled={busy || unconfirmed || readOnly} onClick={() => change(false)}>Stop future releases</button>}
-      <p>{authorization.status === 'stopped' ? 'Future releases stopped. Files already delivered remain available.' : enabled ? 'Stopping prevents future releases; a delivery already in progress may finish.' : authorization.status === 'completed' ? 'Automatic publication has finished. Any remaining accessibility work stays in the checklist.' : 'Files needing attention have not been released.'}</p>
+      <p>{authorization.status === 'stopped' ? 'Future releases stopped. Files already delivered remain available.' : enabled ? 'Stopping prevents future releases; a delivery already in progress may finish.' : authorization.status === 'completed' ? 'Automatic publication has finished. Any remaining accessibility work stays in the checklist.' : 'Delivery is not confirmed for files needing attention. Check the destination and receipt before retrying.'}</p>
     </div>}
     {busy && <p role="status">Saving automatic release…</p>}
     {error && <p role="alert">{error} <button type="button" className="linklike" disabled={busy} onClick={() => setRefresh(n => n + 1)}>Refresh status</button></p>}
