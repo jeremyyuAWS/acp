@@ -198,7 +198,7 @@ def test_later_lane_regression_cannot_credit_earlier_lane_against_final_artifact
     monkeypatch.setattr(output_provenance, 'stamp_output', lambda data, filename: data)
     run,item=seed_exact_writer(store)
     monkeypatch.setattr(core,'store',store)
-    monkeypatch.setattr(handlers,'_verify_residual',lambda data,file: Verification(True,set()))
+    monkeypatch.setattr(handlers,'_verify_residual',lambda data,file,**kwargs: Verification(True,set()))
     # Source fingerprint is for the bytes that this actual write will consume.
     with store._db.cursor() as cur:
         store._db.execute(cur,"UPDATE remediation_contribution_proposals SET source_sha256=%s",(sha256(b'before').hexdigest(),))

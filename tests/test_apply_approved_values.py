@@ -82,7 +82,7 @@ def _run_handler(monkeypatch, store, blob, *, residual, file=FILE):
     # (see tests/test_verification_fail_closed.py).
     from proposals import Verification
     monkeypatch.setattr(handlers, "_verify_residual",
-                        lambda b, f: Verification(True, residual or ()))
+                        lambda b, f, **kwargs: Verification(True, residual or ()))
     handlers._apply_approved_values({"scan_id": SID, "file": file}, {})
 
 

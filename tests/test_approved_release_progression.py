@@ -72,7 +72,7 @@ def progression(isolated_store, monkeypatch, tmp_path):
     store.update_hitl_item(item, "approved", None, None)
     store.approve_proposal_values(item, [TITLE])
 
-    def verify(data, filename):
+    def verify(data, filename, **kwargs):
         path = tmp_path / filename
         path.write_bytes(data)
         missing = any(f["ruleId"] == "PPTX_TITLE_EMPTY" for f in pptx_checks(path))
@@ -125,7 +125,7 @@ def test_failed_verification_preserves_pending_work(progression, monkeypatch, re
     original = blob.data
     verification = (Verification(True, {"2.4.6"}) if result == "still_failing"
                     else Verification(False, (), "fixture engine unavailable"))
-    monkeypatch.setattr(handlers, "_verify_residual", lambda *_: verification)
+    monkeypatch.setattr(handlers, "_verify_residual", lambda *_, **kwargs: verification)
     run(progression)
     assert blob.data == original and blob.uploads == 0
     assert not store.get_hitl_item(item)["applied"]

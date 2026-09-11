@@ -140,7 +140,7 @@ def test_actual_apply_handler_records_only_its_verified_output(prepared, monkeyp
     job = flow.application_jobs(st, row, FILE)[0]
     payload = json.loads(job['payload']) if isinstance(job['payload'], str) else job['payload']
     monkeypatch.setitem(sys.modules, 'blob', blob)
-    monkeypatch.setattr(handlers, '_verify_residual', lambda *args: Verification(True, () if verified else ('1.1.1',)))
+    monkeypatch.setattr(handlers, '_verify_residual', lambda *args, **kwargs: Verification(True, () if verified else ('1.1.1',)))
     handlers._apply_approved_values(payload, {})
     current = persistence.get(st, row['id'], OWNER)
     if verified:
