@@ -1,3 +1,4 @@
+import useAcceptedRemediationIdentity from './useAcceptedRemediationIdentity.js'
 import AcceptedRemediationPlanSummary from './AcceptedRemediationPlanSummary.jsx'
 import { getAcceptedRemediationPlan } from './api.js'
 import { assessMetrics } from './assessMetrics.js'
@@ -580,8 +581,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [runDetailsOpen, setRunDetailsOpen] = useState(false)  // the Run details disclosure (PRD §11)
   const [acceptedLaunch, setAcceptedLaunch] = useState(null)
   const [acceptedPlan, setAcceptedPlan] = useState(null)
-  const scopedSnapshot = runId && (runStream?.snapshot?.scan_id || runStream?.snapshot?.run_id) === runId ? runStream.snapshot : null
-  const acceptedBatchId = scopedSnapshot?.batch_id || (acceptedLaunch && acceptedLaunch.scanId === runId ? acceptedLaunch.batchId : null)
+  const { batchId: acceptedBatchId, authorization: acceptedAuthorization } = useAcceptedRemediationIdentity({
+    scanId: runId, snapshot: runStream?.snapshot, launch: acceptedLaunch, clearLaunch: setAcceptedLaunch, releaseState: automaticReleaseState,
+  })
   useEffect(() => {
     let active = true
     setAcceptedPlan(null)
@@ -1894,7 +1896,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         {runDetailsOpen && <AcceptedRemediationPlanSummary
           policy={acceptedPlan?.scanId === runId && acceptedPlan?.batchId === acceptedBatchId ? acceptedPlan.policy : null}
           loading={acceptedPlan?.loading === true}
-          authorization={automaticReleaseState?.scanId === runId ? automaticReleaseState.authorization : undefined} />}
+          authorization={acceptedAuthorization} />}
         <RemediationAutoRelease statusOnly onStatus={setAutomaticReleaseState} scanId={runId} files={impactScope} readOnly={readOnly} />
         {runDetailsOpen && <details><summary>Additional run information</summary>
           <RemediationRunDetails sections={runDetailSections} open />
@@ -1903,7 +1905,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       </section>
       <RemediationWorkspaceTabs
         planAccepted={planAccepted}
-        reviewOptional={automaticReleaseState?.scanId === runId && automaticReleaseState?.authorization?.allow_remaining_issues === true && ['active', 'waiting', 'publishing', 'blocked', 'completed'].includes(automaticReleaseState?.authorization?.status)}
+        reviewOptional={acceptedAuthorization?.allow_remaining_issues === true && ['active', 'waiting', 'publishing', 'blocked', 'completed'].includes(acceptedAuthorization?.status)}
         runId={runId}
         workspaceRequest={workspaceRequest}
         plan={<>
