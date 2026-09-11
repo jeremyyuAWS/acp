@@ -4,7 +4,10 @@ Status: **limited production integration with an offline evaluation harness.**
 The app integrates this package through `api/document_wide_workflow.py` and
 `api/document_wide_provider.py`. Users opt into document-wide AI in the remediation
 plan; configured cloud providers receive bounded extracted context and, for eligible
-PDF figures, page images. This does not upload the original file wholesale.
+PDF figures, page images. An explicit Full PDF preview also sends the current saved
+PDF bytes to a supported configured cloud model; this preserves prior deterministic
+fixes. Existing runs retain extracted context. See `docs/NATIVE_PDF_REMEDIATION.md`
+at the repository root for the production limits and validation.
 
 Requests include the selected assessment findings. Only allowlisted edits are
 accepted. Production proposals flow through existing approval and saved-copy paths;
@@ -69,7 +72,7 @@ The experiment tests are offline. No test calls a provider, a database, or the n
 
 ## Remaining limits
 
-- No wholesale original-file upload or automatic chunking.
+- Native PDF input is opt-in and bounded; automatic chunking is not implemented.
 - No general PDF heading, table, reading-order or untagged-document repair.
 - PDF figure suggestions require an existing tagged target and unambiguous page-image evidence.
 - Extraction, image and spending limits apply; unsupported findings remain explicit.
