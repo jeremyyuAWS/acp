@@ -229,6 +229,7 @@ export function workflowStatusOf(f, decisions = {}) {
   const st = String(f?.status || '').toLowerCase()
   const d = decisions[f?.id] ?? decisions[f?.file]
   const lane = laneOf(f)
+  if (['failed', 'apply_failed', 'verification_failed'].includes(st)) return 'blocked'
   if (st === 'verified' || st === 'resolved_verified' || f?.verified === true || (f?.validated && (f?.autoApplied || f?.applied || st === 'resolved'))) return 'completed'
   if ((f?.autoApplied || f?.applied) && !['blocked', 'rejected', 'skipped'].includes(st)
       && !f?.rejectedFix && !['assigned', 'deferred', 'rejected', 'not_applicable'].includes(d?.state)) return 'awaiting-validation'
@@ -274,6 +275,7 @@ export function workflowStatusOf(f, decisions = {}) {
 }
 
 export function matchesWorkflow(f, tab, decisions = {}) {
+  if (tab === 'review') return ['needs-review', 'manual', 'blocked'].includes(workflowStatusOf(f, decisions))
   if (tab === 'active') return workflowStatusOf(f, decisions) !== 'completed'
   if (tab === 'all') return true
   return workflowStatusOf(f, decisions) === tab

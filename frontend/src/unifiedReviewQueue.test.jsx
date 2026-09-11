@@ -19,26 +19,27 @@ async function mount() {
   await act(async () => view.root.render(createElement(RemediationInbox, { queue, onDecide, onRecheck: vi.fn() })))
   return { ...view, onDecide }
 }
-it('shows all statuses together without workflow tabs and places actionable work before waiting and completed items', async () => {
+it('defaults to Needs review and keeps processing and completed in separate queues', async () => {
   const { container } = await mount()
   expect(container.querySelector('[aria-label="Workflow status"]')).toBeNull()
-  expect(container.querySelector('select[aria-label="Filter by status"]').value).toBe('active')
+  expect(container.querySelector('select[aria-label="Filter by status"]').value).toBe('review')
   const rows = [...container.querySelectorAll('.rinbox-row')]
-  expect(rows).toHaveLength(4)
-  expect(rows.find(row => row.textContent.includes('Approved change')).textContent).toContain('Awaiting verification')
+  expect(rows).toHaveLength(3)
+  expect(rows.some(row => row.textContent.includes('Approved change'))).toBe(false)
   expect(rows.some(row => row.textContent.includes('Verified change'))).toBe(false)
   expect(rows.slice(0, 2).map(row => row.id).sort()).toEqual(['rinbox-row-manual', 'rinbox-row-proposal'])
-  expect(rows.at(-1).id).toBe('rinbox-row-waiting')
+  expect(container.querySelectorAll('.review-queue-tabs button')).toHaveLength(3)
 })
 it('lets the reviewer inspect a waiting item in the same queue without another approval or editable proposal', async () => {
   const { container, onDecide } = await mount()
+  await act(async () => container.querySelectorAll('.review-queue-tabs button')[1].click())
   await act(async () => container.querySelector('#rinbox-row-waiting').click())
   const pane = container.querySelector('.remediation-detail')
   expect(pane.querySelector('textarea')).toBeNull()
   expect(pane.textContent).not.toContain('Save and continue')
   expect(pane.textContent).toMatch(/awaiting|re-scan/i)
   expect(onDecide).not.toHaveBeenCalled()
-  expect(container.querySelectorAll('.rinbox-row')).toHaveLength(4)
+  expect(container.querySelectorAll('.rinbox-row')).toHaveLength(1)
 })
 it('keeps status filtering optional and accessible', async () => {
   const { container } = await mount()

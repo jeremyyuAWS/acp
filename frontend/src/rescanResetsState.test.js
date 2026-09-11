@@ -34,7 +34,7 @@ describe('one reset, used by every path that changes the active scan', () => {
     const fn = code.match(/const resetScanScopedState = \(\) => \{[\s\S]*?\n  \}/)
     expect(fn, 'resetScanScopedState should be defined').toBeTruthy()
     const body = fn[0]
-    for (const setter of ['setDecisions({})', 'setTriage({})', 'setCertifiedDocs([])', 'setPublishedFiles([])']) {
+    for (const setter of ['setHitlCount(0)', 'setDecisions({})', 'setTriage({})', 'setCertifiedDocs([])', 'setPublishedFiles([])']) {
       expect(body, `reset should call ${setter}`).toContain(setter)
     }
   })
