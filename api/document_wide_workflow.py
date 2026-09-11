@@ -57,7 +57,20 @@ def process_file(store, context):
     if not digest or digest != record.get('corrected_sha256'):
         _record(store, context, 'deferred', {'reason': 'No current stored corrected artifact is available.'})
         return
-    manifest = build_manifest(store, sid, filename, data)
+    try:
+        manifest = build_manifest(store, sid, filename, data)
+    except ValueError as exc:
+        reasons = {
+            'document_too_large': 'The document exceeds the pilot file-size or archive extraction limits.',
+            'document_extraction_incomplete': 'ACP could not fully extract the document within the pilot limits (100 pages, 60,000 text characters, and 20 target findings).',
+            'document_source_changed': 'The saved document changed before generation. Run remediation again for the current copy.',
+            'document_selected_criteria_missing': 'The saved assessment does not identify the selected criteria. Assess the document again.',
+            'document_assessment_lineage_missing': 'The saved assessment finding identities are unavailable. Assess the document again.',
+        }
+        if str(exc) not in reasons:
+            raise
+        _record(store, context, 'deferred', {'reason': reasons[str(exc)]})
+        return
     request_id = hashlib.sha256((context.run_id + manifest.to_json()).encode()).hexdigest()
     if not manifest.findings:
         _record(store, context, 'deferred', {'reason': 'No remaining findings have a supported document-wide target.',

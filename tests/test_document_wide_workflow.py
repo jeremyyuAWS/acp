@@ -182,3 +182,14 @@ def test_cancelled_after_provider_response_does_not_enqueue(monkeypatch):
     assert len(calls)==1
     assert not queued
     assert 'cancelled, replaced' in logs[-1][1]['detail']
+
+
+def test_extraction_limit_has_actionable_reason_without_provider_call(monkeypatch):
+    store, ctx, calls, logs, queued = setup(monkeypatch)
+    def oversized(*args):
+        raise ValueError('document_extraction_incomplete')
+    monkeypatch.setattr(sys.modules['document_wide_manifest'], 'build_manifest', oversized)
+    workflow.process_file(store, ctx)
+    assert not calls and not queued
+    assert '100 pages' in logs[-1][1]['detail']
+    assert '20 target findings' in logs[-1][1]['detail']
