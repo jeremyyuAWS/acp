@@ -1774,6 +1774,8 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
                        fixes=_unverified)
     except Exception:
         swallowed("_remediate_file: recording the verified remediation diffs failed", scan_id)
+    from unverified_changes import record_verification
+    record_verification(core.store, scan_id, filename, fixed_bytes, verification)
     try:
         from documents import resolve_doc_id
         doc_id = resolve_doc_id(source, drive_file_id or f"{scan_id}:{filename}", filename, None)
@@ -5170,6 +5172,8 @@ def _apply_one_value_kind(
             core.store.log_decision('system', 'apply.saved_unverified', scan_id=scan_id,
                 file=filename, rule_id=diff_rule_id, detail=json.dumps({
                     'artifact_sha256': record['corrected_sha256'], 'item_ids': saved_items,
+                    'source_sha256': _proof_sha256(working).hexdigest(),
+                    'baseline_residual': sorted(baseline.residual) if baseline is not None and baseline.ok else None,
                     'changes': applied, 'outcome': outcome, 'reason': reason,
                     'verification': 'not_verified'}))
             _model_outcome(outcome, reason + unresolved_note, regressions=regressions)
@@ -5274,6 +5278,12 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     if payload.get('standing_approval'):
         from ai_standing_approval import check_application
         if check_application(core.store, payload):
+            from unverified_changes import blocks_certification, record_verification
+            if blocks_certification(core.store, scan_id, filename):
+                import blob as _blob
+                data = _blob.download_remediated(payload['standing_approval']['owner'], scan_id, filename)
+                if data:
+                    record_verification(core.store, scan_id, filename, data, _verify_residual(data, filename))
             return
     from ai_standing_approval import check_file_approvals
     check_file_approvals(core.store, scan_id, filename)

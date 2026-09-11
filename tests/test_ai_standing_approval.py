@@ -255,6 +255,17 @@ def test_real_office_writer_only_credits_saved_verified_output(isolated_store,mo
             from remediation_delivery import load_artifact
             delivered=load_artifact(owner=OWNER,scan_id=SID,file=FILE,expected_digest=entries[-1]['artifact_sha256'],download=blob.download_remediated)
             assert delivered==blob.data and delivered!=original
+            from unverified_changes import blocks_certification, record_verification
+            assert record_verification(s,SID,FILE,b'other artifact',Verification(True,set()))==0
+            assert blocks_certification(s,SID,FILE)
+            monkeypatch.setattr(handlers,'_verify_residual',lambda *a,**kw:Verification(True,set()))
+            handlers._apply_approved_values(payload,{})
+            # This legacy fixture has no captured contribution lineage; a recheck
+            # alone cannot invent a mapped finding outcome.
+            assert blocks_certification(s,SID,FILE)
+            assert len(blob.uploads)==1
+            receipts=[r for r in rows(s,'decision_log') if r['action']=='apply.reverified']
+            assert receipts==[]
     else:assert not blob.uploads
     assert not [j for j in rows(s,'jobs') if j['type'] in {'publish_file','release_continue','deliver_corrected_copy'}]
 

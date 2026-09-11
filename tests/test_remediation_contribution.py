@@ -290,3 +290,31 @@ def test_drive_draft_input_must_match_retained_assessment_bytes(store,monkeypatc
             assert result['coverage']=='partial'
             assert c.SOURCE.get() is None
     finally: c.SOURCE.reset(source_token)
+
+
+def test_exact_saved_unverified_write_reverify_is_scoped_and_idempotent(store):
+    from hashlib import sha256
+    from proposals import Verification
+    from unverified_changes import record_verification, blocks_certification, saved_changes
+    run,item=seed_exact_writer(store)
+    data=b'exact saved corrected fixture'
+    artifact=sha256(data).hexdigest()
+    with store._db.cursor() as cur:
+        store._db.execute(cur,"UPDATE file_records SET corrected_sha256=%s WHERE scan_id='scan'",(artifact,))
+        store._db.execute(cur,"UPDATE hitl_queue SET applied=1 WHERE id=%s",(item,))
+    store.log_decision('system','apply.saved_unverified',scan_id='scan',file='a.docx',rule_id='1.1.1',
+        detail=c.encoded(dict(artifact_sha256=artifact,source_sha256='a'*64,item_ids=[item],
+            baseline_residual=['1.1.1'],changes=[dict(locator='image',before='',after='A tree')],verification='not_verified')))
+    assert blocks_certification(store,'scan','a.docx')
+    assert record_verification(store,'scan','a.docx',data,Verification(False,set()))==0
+    assert record_verification(store,'scan','a.docx',data,Verification(True,{'1.1.1'}))==0
+    assert record_verification(store,'scan','a.docx',data,Verification(True,{'2.4.6'}))==0
+    assert record_verification(store,'scan','a.docx',b'another artifact',Verification(True,set()))==0
+    assert blocks_certification(store,'scan','a.docx')
+    assert record_verification(store,'scan','a.docx',data,Verification(True,set()))==1
+    assert not blocks_certification(store,'scan','a.docx')
+    assert saved_changes(store,'scan','a.docx')==[]
+    assert c.read_contribution(store,'owner','scan',run)['outcomes']['fixed']==1
+    assert record_verification(store,'scan','a.docx',data,Verification(True,set()))==0
+    assert len(store.get_remediation_diffs('scan','a.docx'))==1
+    assert c.read_contribution(store,'owner','scan',run)['outcomes']['fixed']==1
