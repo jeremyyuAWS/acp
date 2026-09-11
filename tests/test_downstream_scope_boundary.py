@@ -67,3 +67,25 @@ def test_store_rejects_prior_analysis_with_unmeasured_criteria(monkeypatch,tmp_p
     assert st.find_prior_analysis('owner','drive-id','same-bytes','hash') is not None
     assert st.find_prior_analysis('owner','drive-id','same-bytes','hash',
                                   scan_id='new',filename='a.docx') is None
+
+
+def test_multicriterion_link_proposer_only_generates_selected_sc(monkeypatch):
+    monkeypatch.setattr(proposals,'extract_office_links',lambda *a:[('Details','https://a.test'),('Details','https://b.test')])
+    monkeypatch.setattr(proposals,'derive_link_text',lambda *a:{'text':'destination','rationale':'from URL'})
+    with selection({'2.4.9'}):
+        out=proposals.propose_link_texts(Path('a.docx'),'.docx')
+    assert len(out)==2 and all(p['sc']=='2.4.9' for p in out)
+
+
+def test_image_text_proposer_does_not_run_unselected_strict_check(monkeypatch):
+    import ocr
+    monkeypatch.setattr(ocr,'is_available',lambda:True)
+    monkeypatch.setattr(ocr,'_embedded_images',lambda *a:[object()])
+    thresholds=[]
+    monkeypatch.setattr(ocr,'_ocr_words',lambda image,floor: thresholds.append(floor) or 100)
+    monkeypatch.setattr(ocr,'ocr_text',lambda image:'Words in image')
+    monkeypatch.setattr(proposals,'thumb_b64',lambda image:None)
+    with selection({'1.4.5'}):
+        out=proposals.propose_images_of_text(Path('a.docx'),'.docx')
+    assert thresholds == [ocr._MIN_PIXELS]
+    assert out[0]['sc']=='1.4.5'

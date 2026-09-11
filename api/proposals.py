@@ -970,8 +970,10 @@ def propose_images_of_text(path, ext: str, *, ai_enabled: bool = True) -> list[d
         try:
             # Band determination uses the scan's own functions at the scan's own floors, so
             # the card and the finding can never disagree about which tier an image is in.
-            aa_band = _ocr._ocr_words(img, _ocr._MIN_PIXELS) >= _ocr._MIN_WORDS
-            words = _ocr._ocr_words(img, _ocr._MIN_PIXELS_STRICT)
+            aa_band = (criteria_enabled("1.4.5")
+                       and _ocr._ocr_words(img, _ocr._MIN_PIXELS) >= _ocr._MIN_WORDS)
+            words = (_ocr._ocr_words(img, _ocr._MIN_PIXELS_STRICT)
+                     if criteria_enabled("1.4.9") else 0)
             if not aa_band and words < _ocr._MIN_WORDS_STRICT:
                 continue                       # icon / single-glyph — no images-of-text finding at all
             text = " ".join(_ocr.ocr_text(img).split())
@@ -1003,14 +1005,14 @@ def propose_images_of_text(path, ext: str, *, ai_enabled: bool = True) -> list[d
                 except Exception:
                     swallowed("proposals.propose_images_of_text: asking the vision model whether the image "
                               "is a logotype failed")
-            out.append(proposal(
+            out.append({**proposal(
                 locator=f"image {i + 1}",
                 before="text baked into an image — assistive technology cannot read it",
                 proposed_value=text,
                 rationale=rationale,
                 source="OCR (tesseract) — human confirmation required",
                 thumb=thumb_b64(img),
-            ))
+            ), "sc": "1.4.5" if aa_band else "1.4.9"})
         except Exception:
             continue                           # one bad image never sinks the rest
     return out
@@ -1133,7 +1135,7 @@ def propose_link_texts(path, ext: str, *, ai_enabled: bool = True, guidance: str
     # Text reused for a DIFFERENT destination — the 2.4.9 signal, the same comparison
     # _duplicate_href_findings makes, and only for the formats that actually make it.
     by_text: dict[str, set[str]] = {}
-    if (ext or "").lower().lstrip(".") in ("docx", "pptx"):
+    if criteria_enabled("2.4.9") and (ext or "").lower().lstrip(".") in ("docx", "pptx"):
         for text, href in links:
             t = " ".join((text or "").split()).lower()
             if t:
@@ -1144,7 +1146,7 @@ def propose_link_texts(path, ext: str, *, ai_enabled: bool = True, guidance: str
     seen: set[tuple[str, str]] = set()
     for text, href in links:
         norm = " ".join((text or "").split()).lower()
-        vague = is_vague_link_text(text)
+        vague = criteria_enabled("2.4.4") and is_vague_link_text(text)
         dup = norm in ambiguous
         if not (vague or dup) or (norm, href) in seen:
             continue
@@ -1931,7 +1933,9 @@ def propose_captions(path, ext: str) -> list[dict]:
 
     p = _Path(str(path))
     kind = _media.media_kind(p.name)
-    if kind is None or not _media.asr_available():
+    if kind is None or not criteria_enabled("1.2.2" if kind == "video" else "1.2.1"):
+        return []
+    if not _media.asr_available():
         return []
 
     try:

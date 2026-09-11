@@ -551,8 +551,10 @@ def _propose_text_findings_selected(scan_id: str, filename: str, file_bytes: byt
     except Exception:
         swallowed("_propose_text_findings: attaching 1.1.1 image evidence failed", scan_id)
     try:
-        _enqueue_proposals(scan_id, filename, "1.4.5", "Images of Text",
-                           _mark_describable(image_text, file_bytes, filename, scan_id))
+        for sc in ("1.4.5", "1.4.9"):
+            _enqueue_proposals(scan_id, filename, sc, "Images of Text",
+                _mark_describable([p for p in image_text if p.get("sc", "1.4.5") == sc],
+                                  file_bytes, filename, scan_id))
     except Exception:
         swallowed("_propose_text_findings: enqueueing 1.4.5 Images of Text proposals failed", scan_id)
     # 2.4.4 / 2.4.9 — descriptive link-text proposals for Office hyperlinks (vague text /
@@ -807,7 +809,10 @@ def _propose_media_captions(scan_id: str, filename: str, drive_file_id: str,
         with tempfile.TemporaryDirectory(prefix="acp-mediaprop-") as d:
             p = _P(d) / filename
             p.write_bytes(data)
-            props = _prop.propose_captions(p, p.suffix)
+            from assessment_selection import selected_for_file, selection
+            scope = core.store.scope_for_file(scan_id, filename, core.store.get_scan_scope(scan_id))
+            with selection(selected_for_file(scope, filename)):
+                props = _prop.propose_captions(p, p.suffix)
     except Exception:
         swallowed(f"_propose_media_captions: drafting captions for {filename} failed", scan_id)
         return
