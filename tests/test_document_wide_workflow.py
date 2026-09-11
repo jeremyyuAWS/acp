@@ -11,18 +11,19 @@ from experiments.document_wide_ai.contracts.v1 import (
 )
 
 
-def fixture(monkeypatch):
+def fixture(monkeypatch, sc="4.1.2"):
+    operation = "set_pdf_figure_alt_text" if sc == "1.1.1" else "set_pdf_field_accessible_name"
     data = b'current corrected file'
     digest = hashlib.sha256(data).hexdigest()
-    locator = Locator(DocumentFormat.PDF, 0, None, 'pdf:field:0:0', 'fingerprint')
+    locator = Locator(DocumentFormat.PDF, 0, None, ('pdf:fig:0:0' if sc == '1.1.1' else 'pdf:field:0:0'), 'fingerprint')
     manifest = DocumentContextManifest(CONTRACT_VERSION, '1', '1', 'file', DocumentFormat.PDF,
-        digest, 'revision', ('4.1.2',), (Finding('real-finding', 'pdf.form', '4.1.2', locator),),
-        (AllowedOperation('set_pdf_field_accessible_name', DocumentFormat.PDF),), 'Form context')
+        digest, 'revision', (sc,), (Finding('real-finding', 'pdf.form', sc, locator),),
+        (AllowedOperation(operation, DocumentFormat.PDF),), 'Form context')
     return data, digest, locator, manifest
 
 
-def setup(monkeypatch, *, status='pending', stale=False):
-    data, digest, locator, manifest = fixture(monkeypatch)
+def setup(monkeypatch, *, status='pending', stale=False, sc='4.1.2'):
+    data, digest, locator, manifest = fixture(monkeypatch, sc)
     context = SimpleNamespace(file='file.pdf', owner_id='owner', scan_id='scan', run_id='run',
                               enabled=True, policy={'document_wide_ai': True})
     calls, logs, queued = [], [], []
@@ -32,8 +33,8 @@ def setup(monkeypatch, *, status='pending', stale=False):
         get_file_record=lambda *a: current,
         transaction=lambda: nullcontext(),
         get_stage_execution=lambda *a,**kw:{'owner_email':'owner','scan_id':'scan','stage':'remediate','is_current':True,'state':'processing','input_snapshot_id':'revision'},
-        list_finding_dispositions=lambda *a:[{'finding_id':'real-finding','file':'file.pdf','rule_id':'4.1.2'}],
-        list_hitl_queue=lambda **kw: [{'file':'file.pdf', 'rule_id':'4.1.2', 'status':status}],
+        list_finding_dispositions=lambda *a:[{'finding_id':'real-finding','file':'file.pdf','rule_id':sc}],
+        list_hitl_queue=lambda **kw: [{'file':'file.pdf', 'rule_id':sc, 'status':status}],
         enqueue_proposals=lambda *a, **kw: queued.append((a,kw)),
         log_decision=lambda *a, **kw: logs.append((a,kw)),
     )
@@ -42,7 +43,7 @@ def setup(monkeypatch, *, status='pending', stale=False):
         if stale:
             current['corrected_sha256'] = 'different'
         return {'envelope': EditResponseEnvelope(CONTRACT_VERSION, request.request_id, digest,
-            (ProposedEdit('edit', ('real-finding',), locator, 'set_pdf_field_accessible_name',
+            (ProposedEdit('edit', ('real-finding',), locator, manifest.allowed_operations[0].op,
                           'Patient name', '', 'Visible label'),), ()),
             'model': 'model', 'model_call_id': 'actual-call'}
     monkeypatch.setitem(sys.modules,'document_wide_manifest',SimpleNamespace(build_manifest=lambda *a:manifest, package_images=lambda *a:{}))
@@ -193,3 +194,16 @@ def test_extraction_limit_has_actionable_reason_without_provider_call(monkeypatc
     assert not calls and not queued
     assert '100 pages' in logs[-1][1]['detail']
     assert '20 target findings' in logs[-1][1]['detail']
+
+
+def test_pdf_figure_proposal_reaches_existing_review_lane(monkeypatch):
+    store, ctx, calls, logs, queued = setup(monkeypatch, sc='1.1.1')
+    workflow.process_file(store, ctx)
+    assert len(calls) == len(queued) == 1
+    args, kwargs = queued[0]
+    assert args[2] == '1.1.1'
+    assert args[3][0]['locator'] == 'pdf:fig:0:0'
+    assert args[3][0]['requires_semantic_review'] is True
+    assert kwargs['validated'] is False
+    assert workflow.suppressed_criteria(ctx, 'file.pdf') == {'1.1.1', '4.1.2'}
+    assert workflow.suppressed_criteria(ctx, 'file.docx') == {'1.1.1'}
