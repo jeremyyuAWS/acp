@@ -1,3 +1,4 @@
+import { assessMetrics } from './assessMetrics.js'
 import { reviewableRemediationItems } from './remediationReviewAvailability.js'
 import RemediationLiveDocuments from './RemediationLiveDocuments.jsx'
 import RemediationAutoRelease from './RemediationAutoRelease.jsx'
@@ -1873,6 +1874,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         plan={<>
           <RemediationImpactCard requireAnswers releaseAnswered={releaseAnswered} key={`${runId || 'current'}:${planRevision}`} runId={runId}
             runBusy={remBusy} readOnly={readOnly} myEmail={myEmail}
+            assessmentTotal={assessMetrics(files, { cap, assessment }).totalFindings}
             scopeFiles={impactScope.map(file => file.file)}
             refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`}
             renderAssessment={forecast => <AssessSummary files={files} cap={cap} assessment={assessment}

@@ -12,8 +12,13 @@ export function planCategoryCounts(data) {
   }
   return Object.values(counts).reduce((sum, n) => sum + n, 0) === data.open.findings ? counts : null
 }
-export default function RemediationPlanImpact({ identity, data, ready, loading, policyKey }) {
+export default function RemediationPlanImpact({ identity, data, ready, loading, policyKey, assessmentTotal }) {
   const counts = ready ? planCategoryCounts(data) : null
+  const assessed = Number.isSafeInteger(assessmentTotal) && assessmentTotal >= 0 ? assessmentTotal : null
+  const outside = counts && assessed !== null ? Math.max(0, assessed - data.open.findings) : 0
+  const totalText = outside > 0
+    ? `${data.open.findings} in this plan + ${outside} outside this plan = ${assessed} assessed findings.`
+    : `${data?.open?.findings} findings across the selected files.`
   const signature = JSON.stringify(counts)
   const previous = useRef(null)
   const [flash, setFlash] = useState(null)
@@ -43,8 +48,13 @@ export default function RemediationPlanImpact({ identity, data, ready, loading, 
         <span>{label}</span><strong>{counts ? counts[key] : '—'}</strong>
         {delta !== 0 && <span className={`plan-impact__delta ${direction > 0 ? 'positive' : direction < 0 ? 'negative' : 'neutral'}`}>{delta > 0 ? '+' : '−'}{Math.abs(delta)}</span>}
       </div>
-    })}</div>
-    <p role="status" aria-live="polite" aria-atomic="true">{loading ? 'Updating…' : counts ? `${data.open.findings} findings across the selected files. ${REMEDIATION_CATEGORIES.filter(([key]) => active?.[key]).map(([key, label]) => `${label}: ${active[key] > 0 ? '+' : ''}${active[key]}`).join('; ')}` : 'Preview unavailable — category counts could not be reconciled.'}</p>
+    })}
+      {outside > 0 && <div className="plan-impact__tile plan-impact__outside">
+        <span>Outside this plan</span><strong>{outside}</strong>
+        <p>Assessed findings without a current plan classification. They may be outside the selected scope or absent from this preview. They are not counted as fixed.</p>
+      </div>}
+    </div>
+    <p role="status" aria-live="polite" aria-atomic="true">{loading ? 'Updating…' : counts ? `${totalText} ${REMEDIATION_CATEGORIES.filter(([key]) => active?.[key]).map(([key, label]) => `${label}: ${active[key] > 0 ? '+' : ''}${active[key]}`).join('; ')}` : 'Preview unavailable — category counts could not be reconciled.'}</p>
     <small>Plan classification only. Completion requires application and verification.</small>
   </section>
 }

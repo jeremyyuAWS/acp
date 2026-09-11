@@ -30,3 +30,19 @@ it('compares only settled selections in the same scope, announces changes and cl
   await render('cloud', null, { ready: false })
   expect(container.textContent).toContain('Preview unavailable')
 })
+it('adds the unclassified remainder to reconcile the plan with Assess without counting incomplete checks', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(<RemediationPlanImpact identity="scan" policyKey="cloud" ready
+    assessmentTotal={32} data={data(17,12)} />))
+  expect(container.querySelector('.plan-impact__outside strong').textContent).toBe('3')
+  expect([...container.querySelectorAll('.plan-impact__tile > strong')].reduce((sum, n) => sum + Number(n.textContent), 0)).toBe(32)
+  expect(container.textContent).toContain('29 in this plan + 3 outside this plan = 32 assessed findings.')
+  expect(container.textContent).toContain('without a current plan classification')
+  expect(container.textContent).toContain('not counted as fixed')
+  await act(async () => root.render(<RemediationPlanImpact identity="scan" policyKey="cloud" ready
+    assessmentTotal={29} data={data(17,12)} />))
+  expect(container.querySelector('.plan-impact__outside')).toBeNull()
+  await act(async () => root.render(<RemediationPlanImpact identity="scan" policyKey="cloud" ready={false}
+    assessmentTotal={32} data={data(17,12)} />))
+  expect(container.querySelector('.plan-impact__outside')).toBeNull()
+})

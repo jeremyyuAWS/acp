@@ -53,7 +53,7 @@ function PolicySlider({ title, question, stops, value, onChange, disabled, maxLe
   </div>
 }
 
-export default function RemediationImpactCard({ runId, onRun, runBusy = false, myEmail = '', readOnly = false, refreshKey = 0, scopeFiles, renderAssessment, releaseOption, requireAnswers = false, releaseAnswered = true }) {
+export default function RemediationImpactCard({ runId, onRun, runBusy = false, myEmail = '', readOnly = false, refreshKey = 0, scopeFiles, assessmentTotal, renderAssessment, releaseOption, requireAnswers = false, releaseAnswered = true }) {
   const [answers, setAnswers] = useState({})
   const [step, setStep] = useState(0)
   const [reached, setReached] = useState(0)
@@ -223,7 +223,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     {requireAnswers && <h3 ref={stepHeading} tabIndex={-1} className="plan-step-heading">Step {step + 1} of 3 · {stepNames[step]}</h3>}
     <div className="remediation-impact__split"><div className="remediation-impact__settings">
     {chainProblem && <p role="alert">{chainProblem}</p>}
-    {requireAnswers && <div hidden={step !== 1}><RemediationPlanImpact identity={JSON.stringify([runId, scopeKey])} data={data} ready={ready} loading={loading} policyKey={JSON.stringify(selected)} /></div>}
+    {requireAnswers && <div hidden={step !== 1}><RemediationPlanImpact assessmentTotal={assessmentTotal} identity={JSON.stringify([runId, scopeKey])} data={data} ready={ready} loading={loading} policyKey={JSON.stringify(selected)} /></div>}
     <RemediationPlanChoices step={requireAnswers ? step : null} answers={requireAnswers ? answers : undefined} generationChainOptions={data?.capabilities?.generation_chain} policy={selected} providers={data?.providers}
       disabled={readOnly || !runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true}
       standingApprovalSupported={data?.capabilities?.ai_standing_approval?.supported === true}
