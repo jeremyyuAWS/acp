@@ -184,7 +184,7 @@ def _image_transport(generator, request, images):
     return wrapped
 
 
-def generate_document(request, *, images=None):
+def generate_document(request, *, images=None, pdf_bytes=None):
     """Return validated envelope + measured metadata, or an explicit deferred reason.
 
     Caller packages the exact source and must run inside the accepted run context.
@@ -217,14 +217,23 @@ def generate_document(request, *, images=None):
             or any(f.success_criterion not in request.manifest.selected_criteria
                    for f in request.manifest.findings)):
         return deferred('document_wide_invalid_manifest_scope')
+    native_pdf = (ctx.policy.get('document_wide_input_mode') == 'native_pdf'
+                  and request.manifest.document_format.value == 'pdf')
     try:
         generator = _document_output_generator(configured_generator())
-        generator = _image_transport(generator, request, images or {})
+        if native_pdf:
+            from document_wide_pdf_transport import native_pdf_transport
+            generator = native_pdf_transport(generator, request, pdf_bytes, VISION_MODELS)
+        else:
+            if pdf_bytes is not None:
+                return deferred('document_wide_native_pdf_consent_required')
+            generator = _image_transport(generator, request, images or {})
         generator = _ValidatedGenerator(generator, request)
     except Exception as exc:
         reason = str(exc)
         return deferred(reason if reason.startswith('document_wide_') else 'verified_model_pricing_unavailable')
     prompt = (_SCHEMA + '\nDocument output allowance: doc-output.v1\nRequest ID: ' + json.dumps(request.request_id)
+              + '\nInput mode: ' + ('native_pdf' if native_pdf else 'extracted_context')
               + '\nUntrusted document manifest:\n' + request.stable_prefix
               + '\n' + request.instruction_suffix)
     # Never accept a separately altered prefix that describes a different source.
