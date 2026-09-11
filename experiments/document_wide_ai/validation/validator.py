@@ -62,8 +62,13 @@ def _check_single_edit(edit: ProposedEdit, manifest: DocumentContextManifest, by
         return OUT_OF_SCOPE_CRITERION
 
     spec = operation_spec(edit.operation, manifest.document_format)
-    if spec is None:
+    if spec is None or not any(
+        op.op == edit.operation and op.format == manifest.document_format
+        for op in manifest.allowed_operations
+    ):
         return UNSUPPORTED_OPERATION
+    if any(f.success_criterion != spec.success_criterion for f in findings):
+        return OUT_OF_SCOPE_CRITERION
     if spec.locator_prefix is not None and not edit.locator.element_ref.startswith(spec.locator_prefix):
         return UNSUPPORTED_OPERATION
 

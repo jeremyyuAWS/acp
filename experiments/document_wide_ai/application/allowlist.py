@@ -2,7 +2,7 @@
 apply to a local copy — PRD §5: "Start with a small allowlist chosen from existing
 adapters that can run safely and have demonstrable saved-file behavior."
 
-Both operations here are backed by a genuine, isolated production adapter (see
+The operations here are backed by a genuine, isolated production adapter (see
 `production_adapters.py` and `docs/ADAPTER_INVENTORY.md`), not a fixer written for this
 prototype. Any operation not listed here is `unsupported_operation` — see
 `validation/validator.py`.
@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from experiments.document_wide_ai.contracts.v1 import AllowedOperation, DocumentFormat
 
 SET_PDF_FIELD_ACCESSIBLE_NAME = "set_pdf_field_accessible_name"
+SET_PDF_FIGURE_ALT_TEXT = "set_pdf_figure_alt_text"
 SET_OFFICE_IMAGE_ALT_TEXT = "set_office_image_alt_text"
 
 MAX_VALUE_LEN = 500
@@ -29,6 +30,8 @@ class OperationSpec:
 
 
 SUPPORTED_OPERATIONS: tuple[OperationSpec, ...] = (
+    OperationSpec(SET_PDF_FIGURE_ALT_TEXT, DocumentFormat.PDF, "pdf:fig:", "1.1.1",
+                  "Set existing tagged PDF Figure alt text using the isolated production writer."),
     OperationSpec(
         op=SET_PDF_FIELD_ACCESSIBLE_NAME,
         format=DocumentFormat.PDF,
@@ -70,7 +73,7 @@ def value_ok(op: str, value: object) -> tuple[bool, str | None]:
         return False, "value must be a non-empty string"
     if len(value) > MAX_VALUE_LEN:
         return False, f"value exceeds {MAX_VALUE_LEN} chars"
-    if op == SET_OFFICE_IMAGE_ALT_TEXT:
+    if op in (SET_OFFICE_IMAGE_ALT_TEXT, SET_PDF_FIGURE_ALT_TEXT):
         from experiments.document_wide_ai.application.production_adapters import office_is_junk_descr
 
         if office_is_junk_descr(value):

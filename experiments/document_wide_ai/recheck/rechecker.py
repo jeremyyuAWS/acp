@@ -44,20 +44,24 @@ def recheck_pdf(
     except Exception as exc:
         return RecheckResult(False, frozenset(), frozenset(), False, (), error=str(exc))
 
-    baseline_by_loc = {f.locator: f for f in baseline.form_fields}
-    reopened_by_loc = {f.locator: f for f in reopened.form_fields}
-
-    baseline_missing = {loc for loc, f in baseline_by_loc.items() if not f.current_tu}
-    reopened_missing = {loc for loc, f in reopened_by_loc.items() if not f.current_tu}
-
-    still_failing = authorized_locators & reopened_missing
-    new_failures = reopened_missing - baseline_missing
-
-    unexpected = tuple(
-        loc
-        for loc, f in reopened_by_loc.items()
-        if loc not in authorized_locators and baseline_by_loc.get(loc) and f.current_tu != baseline_by_loc[loc].current_tu
-    )
+    if any(issue.kind in {"extraction_failed", "extraction_truncated"}
+           for issue in (*reopened.extraction_issues, *baseline.extraction_issues)):
+        return RecheckResult(False, authorized_locators, frozenset(), False, (),
+                             error="PDF extraction incomplete; verification unavailable")
+    baseline_by_loc = {f.locator: f.current_tu for f in baseline.form_fields}
+    reopened_by_loc = {f.locator: f.current_tu for f in reopened.form_fields}
+    baseline_by_loc.update({f.locator: f.current_alt for f in getattr(baseline, "figures", ())})
+    reopened_by_loc.update({f.locator: f.current_alt for f in getattr(reopened, "figures", ())})
+    baseline_missing = {loc for loc, value in baseline_by_loc.items() if not value}
+    reopened_missing = {loc for loc, value in reopened_by_loc.items() if not value}
+    disappeared = set(baseline_by_loc) - set(reopened_by_loc)
+    still_failing = (authorized_locators & reopened_missing) | (authorized_locators - set(reopened_by_loc))
+    new_failures = (reopened_missing - baseline_missing) | disappeared
+    unexpected = tuple(sorted(
+        disappeared | (set(reopened_by_loc) - set(baseline_by_loc)) |
+        {loc for loc, value in reopened_by_loc.items()
+         if loc not in authorized_locators and loc in baseline_by_loc and value != baseline_by_loc[loc]}
+    ))
 
     return RecheckResult(
         reopened_ok=True,

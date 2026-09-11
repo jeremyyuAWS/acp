@@ -62,6 +62,14 @@ def build_report(
         )
         return OutcomeReport(manifest.document_id, application.candidate_rejected_reason, outcomes)
 
+    if recheck is not None and recheck.reopened_ok and (
+        recheck.new_failure_locators or recheck.unexpected_changes or not recheck.text_preserved
+    ):
+        reason = "saved candidate changed unrelated content or introduced new failures"
+        return OutcomeReport(manifest.document_id, reason, tuple(
+            FindingOutcome(fid, Outcome.CANDIDATE_REJECTED, reason) for fid in finding_ids
+        ))
+
     edit_by_finding: dict[str, str] = {}
     for edit in (envelope.edits if envelope else ()):
         for fid in edit.finding_ids:

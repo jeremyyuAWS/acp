@@ -44,3 +44,9 @@ pdf_form_field_locators = _remediate_pdf._form_field_locators
 # DOCX/PPTX/XLSX — image alt text (descr=), WCAG 1.1.1. Locator: "{part}#{docPr name|r:embed}".
 apply_office_alt_text = _apply_alt.apply_alt_text
 parse_office_alt_locator = _apply_alt.parse_locator
+
+# Tagged PDF figures: same collectors as production detector and writer.
+apply_pdf_figure_alt = _remediate_pdf.apply_pdf_figure_alt
+collect_pdf_figures = _remediate_pdf._collect_figures
+pdf_figure_locators = _remediate_pdf._figure_locators
+pdf_figure_alt = _remediate_pdf._fig_alt
