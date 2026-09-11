@@ -177,11 +177,11 @@ def test_governance_failure_defers_without_request(managed, monkeypatch, kind):
     assert managed.ledger.snapshot('owner', 'run')['held_units'] == 0
 
 
-def test_all_vision_adapters_defer_before_network(managed, monkeypatch):
+def test_paid_vision_adapters_defer_before_network(managed, monkeypatch):
     import httpx
     import providers
     monkeypatch.setattr(httpx, 'post', lambda *a, **kw: pytest.fail('unexpected request'))
-    for name in ('OllamaVisionProvider', 'AzureOpenAIVisionProvider', 'OpenAIVisionProvider',
+    for name in ('AzureOpenAIVisionProvider', 'OpenAIVisionProvider',
         'GeminiVisionProvider', 'BedrockVisionProvider', 'AnthropicVisionProvider',
         'RunPodServerlessVisionProvider', 'HuggingFaceVisionProvider'):
         cls = getattr(providers, name)
@@ -212,13 +212,11 @@ def test_ai_direct_paths_defer_before_threads_or_transport(managed, monkeypatch)
     import httpx
     import ai
     monkeypatch.setattr(httpx, 'post', lambda *a, **kw: pytest.fail('unexpected request'))
-    assert ai._vision_generate('prompt', b'fixture') is None
     assert ai._bounded_vision_generate(None, 'prompt', b'fixture')['ok'] is False
     assert ai.copilot_guidance(b'fixture') is None
     assert ai.describe_reading_order(b'fixture') is None
     assert ai.simplify_text('fixture') is None
     assert ai._ollama_narrative({}) is None
-    assert ai.suggest_fix('1.1.1', 'Alt text', 'A', 'x', image_bytes=b'fixture') is None
 
 
 def test_cached_usage_requires_explicit_price_support(specs):
@@ -267,8 +265,9 @@ def test_managed_text_availability_does_not_require_ollama(managed, monkeypatch)
     import ai
     monkeypatch.setattr(ai, '_tags_cached', lambda: pytest.fail('legacy probe'))
     assert ai.model_is_available() is True
+    monkeypatch.setattr(ai, '_tags_cached', lambda: [])
     assert ai.vision_is_available() is False
-    assert 'spending bound' in ai.vision_unavailable_reason()
+    assert 'not present' in ai.vision_unavailable_reason()
 
 
 def test_verified_facade_binds_durable_context(managed, monkeypatch, specs):

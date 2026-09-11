@@ -136,7 +136,7 @@ def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs
     from llm_waterfall_provider import managed_context, defer_managed
     _run = managed_context()
     from providers import OllamaVisionProvider
-    if _run is not None and not (getattr(_run, 'local_drafting', False) and isinstance(provider, OllamaVisionProvider)):
+    if _run is not None and not (isinstance(provider, OllamaVisionProvider) and (getattr(_run, 'enabled', False) or (getattr(_run, 'local_drafting', False) and provider.zone == 'local'))):
         defer_managed('legacy_ai_path_not_budgeted', kind='_bounded_vision_generate')
         return {'ok': False, 'text': None, 'reason': 'vision_pricing_not_verified', 'model': 'not-dispatched'}
     if not _enter_vision_capacity():
@@ -570,10 +570,14 @@ def vision_is_available() -> bool:
     images, so the alt-text remediator must gate genuine captioning on this, not is_available."""
     from llm_waterfall_provider import managed_context, defer_managed
     _run = managed_context()
-    if _run is not None and not getattr(_run, 'local_drafting', False):
+    if _run is not None and not (getattr(_run, 'local_drafting', False) or getattr(_run, 'enabled', False)):
         defer_managed('vision_pricing_not_verified', kind='vision')
         return False
     _maybe_refresh_endpoint()
+    from providers import zone_for_url
+    if _run is not None and getattr(_run, 'local_drafting', False) and zone_for_url(OLLAMA_BASE_URL) != 'local':
+        defer_managed('local_endpoint_required', kind='vision')
+        return False
     return _tags_have(_tags_cached(), OLLAMA_VISION_MODEL)
 
 
@@ -596,10 +600,13 @@ def vision_unavailable_reason() -> str | None:
     """
     from llm_waterfall_provider import managed_context, defer_managed
     _run = managed_context()
-    if _run is not None and not getattr(_run, 'local_drafting', False):
+    if _run is not None and not (getattr(_run, 'local_drafting', False) or getattr(_run, 'enabled', False)):
         defer_managed('vision_pricing_not_verified', kind='vision')
         return 'Vision is deferred: no verified spending bound for this run'
     _maybe_refresh_endpoint()
+    from providers import zone_for_url
+    if _run is not None and getattr(_run, 'local_drafting', False) and zone_for_url(OLLAMA_BASE_URL) != 'local':
+        return 'Local-only AI requires a private Ollama endpoint; the configured endpoint is public.'
     tags = _tags_cached()
     if tags is None:
         return f"Ollama at {OLLAMA_BASE_URL} is not reachable"
@@ -776,7 +783,7 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     rather than an alt string)."""
     from llm_waterfall_provider import managed_context, defer_managed
     _run = managed_context()
-    if _run is not None and not getattr(_run, 'local_drafting', False):
+    if _run is not None and not (getattr(_run, 'local_drafting', False) or getattr(_run, 'enabled', False)):
         defer_managed('legacy_ai_path_not_budgeted', kind='_vision_generate')
         return None
     import time as _t
@@ -786,7 +793,8 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     # provider/zone/cost it reports is what flows into the trace, so a cloud adapter records its
     # real cost and zone here without touching this function again. generate() never raises.
     import providers as _providers
-    # A local-only plan must not inherit a configured paid vision provider.
+    # A managed plan may use configured Ollama at zero provider fee, never
+    # inherit an unmetered paid vision adapter. Endpoint zone is checked below.
     prov = (_providers.OllamaVisionProvider(OLLAMA_BASE_URL, OLLAMA_VISION_MODEL)
             if _run is not None else _providers.active_vision_provider())
     mdl = model or getattr(prov, "model", None) or OLLAMA_VISION_MODEL
@@ -1459,7 +1467,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
         from ai_generation_adapter import current_generation_adapter
         if current_generation_adapter() is not None:
             scan_id, file = _managed_run.scan_id, _managed_run.file
-    if _managed_run is not None and rule_id == "1.1.1" and not getattr(_managed_run, "local_drafting", False):
+    if _managed_run is not None and rule_id == "1.1.1" and not (getattr(_managed_run, "local_drafting", False) or getattr(_managed_run, "enabled", False)):
         defer_managed('vision_pricing_not_verified', kind='alt_text')
         return None
     if rule_id == "1.1.1" and image_bytes:
