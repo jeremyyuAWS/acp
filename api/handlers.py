@@ -1316,7 +1316,8 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 except Exception as exc:
                     core.store.log_decision('system', 'document_wide.deferred',
                         scan_id=context.scan_id, file=context.file,
-                        detail=f'Document-wide suggestions did not complete: {type(exc).__name__}')
+                        detail=__import__('json').dumps({'owner_id': context.owner_id, 'run_id': context.run_id,
+                            'reason': f'Document-wide suggestions did not complete: {type(exc).__name__}'}))
             if context is not None and context.policy.get('auto_approve_ai') is True:
                 try:
                     from ai_standing_approval import approve_file

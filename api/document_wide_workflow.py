@@ -20,7 +20,8 @@ def suppressed_criteria(context, filename):
 
 def _record(store, context, action, value):
     store.log_decision('system', 'document_wide.' + action, scan_id=context.scan_id,
-                       file=context.file, detail=json.dumps(value, sort_keys=True))
+                       file=context.file, detail=json.dumps({**value, 'owner_id': context.owner_id,
+                           'run_id': context.run_id}, sort_keys=True))
 
 
 def _saved(store, context, request_id):
