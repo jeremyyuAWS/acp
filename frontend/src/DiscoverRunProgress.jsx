@@ -433,6 +433,27 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
     const sublines = []
     if (status !== 'pending' && s.key === 'inventory') {
       if (foldersFound !== null) sublines.push(folderTraversalText(foldersFound, scope))
+      if (status === 'done' && scope?.inventory) {
+        const summary = scope.inventory
+        const buckets = summary.by_status || {}
+        const valid = value => Number.isSafeInteger(value) && value >= 0
+        if (valid(summary.discovered) && valid(buckets.excluded)) {
+          sublines.push(`${n(summary.discovered)} files found at the source`)
+          sublines.push(`${n(buckets.excluded)} excluded — ACP-generated outputs or policy exclusions`)
+          if (summary.discovered === filesFound + buckets.excluded) {
+            sublines.push(`${n(filesFound)} inventoried + ${n(buckets.excluded)} excluded = ${n(summary.discovered)} found`)
+          } else {
+            sublines.push('Source listing and inventory totals are not yet reconciled')
+          }
+        }
+        if (valid(summary.assessment_eligible) && valid(buckets.metadata_only) && valid(buckets.unsupported)
+          && summary.assessment_eligible + buckets.metadata_only + buckets.unsupported === filesFound) {
+          sublines.push(`${n(summary.assessment_eligible)} eligible for assessment`)
+          sublines.push(`${n(buckets.metadata_only)} metadata only — no content assessment available`)
+          sublines.push(`${n(buckets.unsupported)} unsupported formats — no accessibility assessment available`)
+          sublines.push(`${n(summary.assessment_eligible)} + ${n(buckets.metadata_only)} + ${n(buckets.unsupported)} = ${n(filesFound)} inventoried files`)
+        }
+      }
       if (hasClassStats) {
         sublines.push(`${n(clsAssessable ?? 0)} assessable · ${n(clsMetadataOnly ?? 0)} metadata only · ${n(clsUnsupported ?? 0)} unsupported`)
       } else if (assessableCount !== null) {
