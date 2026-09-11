@@ -1014,7 +1014,9 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None, in_scope=
     # which is exactly what the analyser's HasHeaderRow() checks for.
     tbl_fixed = 0
     for tbl in (root.iter(f"{{{W}}}tbl") if _sc_ok(in_scope, "1.3.1") else ()):
-        rows = tbl.findall(f"{{{W}}}tr")
+        # Rows may be wrapped in content controls. Nested tables own their rows.
+        rows = [row for row in tbl.iter(f"{{{W}}}tr")
+                if next(row.iterancestors(f"{{{W}}}tbl"), None) is tbl]
         if len(rows) <= 1:
             continue
         first = rows[0]
@@ -1034,49 +1036,48 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None, in_scope=
     # Heading outline (1.3.1): exactly one Heading 1. Promote the top heading if none is
     # level 1; demote any extra Heading 1s to Heading 2. Matches the doc's own style-id
     # spelling ("Heading1" vs "Heading 1") so the promoted style still resolves.
-    levels = {"Heading1": 1, "Heading 1": 1, "Heading2": 2, "Heading 2": 2,
-              "Heading3": 3, "Heading 3": 3, "Heading4": 4, "Heading 4": 4,
-              "Heading5": 5, "Heading 5": 5, "Heading6": 6, "Heading 6": 6}
+    levels = {spelling: level for level in range(1, 7)
+              for spelling in (f"heading{level}", f"heading {level}")}
     headings = []
+    def heading_level(style, outline):
+        explicit = outline.get(val_attr) if outline is not None else None
+        if explicit is not None and explicit.isdigit() and 0 <= int(explicit) <= 8:
+            return int(explicit) + 1
+        return levels.get((style.get(val_attr) or '').casefold()) if style is not None else None
+    def set_level(style, outline, level):
+        if style is not None and (style.get(val_attr) or '').casefold() in levels:
+            style.set(val_attr, f"Heading {level}" if ' ' in style.get(val_attr) else f"Heading{level}")
+        if outline is not None:
+            outline.set(val_attr, str(level - 1))
     for p in root.iter(f"{{{W}}}p"):
         pPr = p.find(f"{{{W}}}pPr")
         st = pPr.find(f"{{{W}}}pStyle") if pPr is not None else None
-        val = st.get(f"{{{W}}}val") if st is not None else None
-        if val in levels:
-            headings.append((st, val))
+        outline = pPr.find(f"{{{W}}}outlineLvl") if pPr is not None else None
+        level = heading_level(st, outline)
+        if level is not None:
+            headings.append((st, outline, level))
     if headings:
-        h1s = [h for h in headings if levels[h[1]] == 1]
-        spaced = " " in headings[0][1]
-        h1_id, h2_id = ("Heading 1", "Heading 2") if spaced else ("Heading1", "Heading2")
+        h1s = [h for h in headings if h[2] == 1]
         if not h1s and _sc_ok(in_scope, "1.3.1"):
-            headings[0][0].set(f"{{{W}}}val", h1_id)
+            st, outline, level = headings[0]
+            set_level(st, outline, 1)
             applied.append("Promoted the top heading to Heading 1 · 1.3.1")
-            _rec(diffs, "1.3.1", f"top heading styled “{headings[0][1]}” — document had no Heading 1",
-                 f"top heading promoted to “{h1_id}”",
+            _rec(diffs, "1.3.1", f"top heading level was H{level} — document had no Heading 1",
+                 "top heading promoted to Heading 1",
                  "so the outline has a single, unambiguous document title level")
         elif len(h1s) > 1 and _sc_ok(in_scope, "1.3.1"):
-            for st, _ in h1s[1:]:
-                st.set(f"{{{W}}}val", h2_id)
+            for st, outline, _ in h1s[1:]:
+                set_level(st, outline, 2)
             applied.append(f"Demoted {len(h1s) - 1} extra Heading 1(s) to Heading 2 · 1.3.1")
             _rec(diffs, "1.3.1", f"{len(h1s)} separate Heading 1s competed as the document title",
-                 f"kept 1 Heading 1; demoted {len(h1s) - 1} to “{h2_id}”",
+                 f"kept 1 Heading 1; demoted {len(h1s) - 1} to Heading 2",
                  "so the heading outline nests correctly under one title")
-
-        # Heading skips (2.4.6): after the 1.3.1 outline fix, walk the headings in
-        # document order and clamp any level that jumps by more than one down to
-        # prev+1, so office_structure's DOCX_HEADING_SKIP detector reads a gap-free
-        # outline. Re-derives each level from the (possibly just-rewritten) style id
-        # and keeps the doc's own spelling (same uniform-spelling assumption the
-        # 1.3.1 fix above already makes).
         skip_fixed, prev_lvl = 0, 0
-        for st, _old in (headings if _sc_ok(in_scope, "2.4.6") else ()):
-            cur = st.get(f"{{{W}}}val")
-            lvl = levels.get(cur)
-            if lvl is None:
-                continue
+        for st, outline, _ in (headings if _sc_ok(in_scope, "2.4.6") else ()):
+            lvl = heading_level(st, outline)
             if prev_lvl > 0 and lvl > prev_lvl + 1:
                 lvl = prev_lvl + 1
-                st.set(f"{{{W}}}val", f"Heading {lvl}" if " " in cur else f"Heading{lvl}")
+                set_level(st, outline, lvl)
                 skip_fixed += 1
             prev_lvl = lvl
         if skip_fixed:
