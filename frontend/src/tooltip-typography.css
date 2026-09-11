@@ -1,0 +1,5 @@
+/* KPI headings may be uppercase; explanations preserve authored sentence case and acronyms. */
+[role="tooltip"], [role="tooltip"] * {
+  text-transform: none;
+  letter-spacing: normal;
+}
