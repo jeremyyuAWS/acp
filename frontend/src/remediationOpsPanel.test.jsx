@@ -654,3 +654,28 @@ it('uses compact honest activity states rather than an empty stretched column', 
   expect(html).toContain('Time unavailable')
   expect(html).toContain('Saved correction')
 })
+
+describe('streamlined Live View deliberately retires duplicate progress surfaces', () => {
+  it('keeps the actual AI waterfall and saved activity, without parallel totals', () => {
+    const html = render({ snapshot: SNAP, streamlined: true, events: [{ key: 'saved-1', line: 'Saved corrected copy', occurredAt: '2026-09-05T12:00:00Z' }] })
+    expect(html).toContain('AI waterfall')
+    expect(html).toContain('Live activity')
+    expect(html).toContain('Saved corrected copy')
+    for (const retired of ['Follow your remediation', 'Active document pipeline', 'Throughput', 'Fix and delivery totals',
+      'Detailed accounting and finding evidence', 'documents through automatic processing', 'remops-secondary', 'remops-counts']) {
+      expect(html).not.toContain(retired)
+    }
+  })
+  it('preserves explicit failures and missing activity instead of inventing progress', () => {
+    const html = render({ snapshot: { ...SNAP, state: 'failed' }, streamlined: true, activityStatus: 'unavailable' })
+    expect(html).toContain('could not be loaded')
+    expect(html).toContain('remops-error')
+    expect(html).not.toContain('remops-counts')
+  })
+  it('leaves the retained default presentation available', () => {
+    const html = render({ snapshot: SNAP })
+    expect(html).toContain('Follow your remediation')
+    expect(html).toContain('Active document pipeline')
+    expect(html).toContain('Detailed accounting and finding evidence')
+  })
+})
