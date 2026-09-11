@@ -12,7 +12,8 @@ from ai_attempt_history import AttemptHistory
 from remediation_impact_estimates import build_impact_estimate
 
 MAX_PROPOSAL_BYTES = 128 * 1024
-PROPOSAL_KEYS = frozenset({'locator', 'before', 'proposed_value', 'rationale', 'source', 'model', 'model_call_id'})
+PROPOSAL_KEYS = frozenset({'locator', 'before', 'proposed_value', 'rationale', 'source', 'model', 'model_call_id', 'document_wide_request_id',
+                           'source_sha256', 'assessment_revision', 'finding_ids'})
 SCHEMA = RUN_INSIGHTS_SCHEMA = (
     """CREATE TABLE IF NOT EXISTS ai_proposal_snapshots (
       snapshot_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, scan_id TEXT NOT NULL,

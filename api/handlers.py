@@ -374,7 +374,14 @@ def _verify_residual_scs(fixed_bytes: bytes, filename: str):
 def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_enabled: bool) -> None:
     from assessment_selection import selected_for_file, selection
     scope = core.store.scope_for_file(scan_id, filename, core.store.get_scan_scope(scan_id))
-    with selection(selected_for_file(scope, filename)):
+    from ai_run_policy import optional_current_run_context
+    from document_wide_workflow import suppressed_criteria
+    selected = selected_for_file(scope, filename)
+    suppressed = suppressed_criteria(optional_current_run_context(), filename)
+    if suppressed:
+        # Managed document mode has a frozen explicit scope; no duplicate per-image call.
+        selected = set(selected or ()) - suppressed
+    with selection(selected):
         return _propose_text_findings_selected(scan_id, filename, file_bytes, ai_enabled)
 
 
@@ -685,6 +692,10 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
     draft never had. Passing it here rather than deriving it here is deliberate for the same
     reason: derived, it would apply to all 12."""
     if not proposals:
+        return
+    from ai_run_policy import optional_current_run_context
+    from document_wide_workflow import suppressed_criteria
+    if sc in suppressed_criteria(optional_current_run_context(), filename):
         return
     # OPERATOR SCOPE. One gate here covers every proposer — 19 call sites across 12 criteria —
     # because this is the single boundary where a proposal is still labelled with its SC. Gating
@@ -1298,6 +1309,14 @@ def _remediate_file(payload: dict, job: dict) -> None:
         source_token = SOURCE.set(None)
         try:
             result = _remediate_file_with_policy(payload, job)
+            if context is not None:
+                try:
+                    from document_wide_workflow import process_file
+                    process_file(core.store, context)
+                except Exception as exc:
+                    core.store.log_decision('system', 'document_wide.deferred',
+                        scan_id=context.scan_id, file=context.file,
+                        detail=f'Document-wide suggestions did not complete: {type(exc).__name__}')
             if context is not None and context.policy.get('auto_approve_ai') is True:
                 try:
                     from ai_standing_approval import approve_file

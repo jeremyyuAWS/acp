@@ -101,7 +101,17 @@ def eligible_item(store, owner, sid, run_id, item, *, approved=False):
     with store._db.cursor() as cur:
         store._db.execute(cur, 'SELECT policy_json FROM ai_spending_run_policies WHERE owner_id=%s AND scan_id=%s AND run_id=%s', (owner, sid, run_id))
         saved = store._db.fetchone(cur)
-        require_review = json.loads(saved['policy_json']).get('ai_review', {}).get('enabled') is True if saved else False
+        saved_policy = json.loads(saved['policy_json']) if saved else {}
+        require_review = saved_policy.get('ai_review', {}).get('enabled') is True
+        from document_wide_workflow import SUPPORTED
+        document_sc = next((sc for ext, sc in SUPPORTED.items() if row['file'].lower().endswith(ext)), None)
+        if saved_policy.get('document_wide_ai') is True and row['rule_id'] == document_sc:
+            artifact = (store.get_file_record(sid, row['file']) or {}).get('corrected_sha256')
+            for proposal in row['proposals']:
+                if (not proposal.get('document_wide_request_id') or not artifact
+                        or (not row.get('applied') and proposal.get('source_sha256') != artifact)
+                        or not proposal.get('finding_ids')):
+                    raise ValueError('Document-wide automatic approval requires a current document-wide suggestion')
         for i, (snapshot_id, p) in enumerate(zip(row['proposal_snapshot_ids'], row['proposals'])):
             store._db.execute(cur, 'SELECT * FROM ai_proposal_snapshots WHERE snapshot_id=%s', (snapshot_id,))
             snapshot = store._db.fetchone(cur)

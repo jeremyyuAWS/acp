@@ -440,3 +440,20 @@ def test_automatic_approval_rejects_out_of_scope_before_reading_proposal():
     store = SimpleNamespace(_selected_sc=lambda *args: False)
     with pytest.raises(ValueError, match='outside the selected assessment criteria'):
         eligible_item(store, 'owner', 'scan', 'run', {'file': 'a.docx', 'rule_id': '1.1.1'})
+
+
+def test_document_wide_consent_does_not_authorize_old_per_image_draft(isolated_store, monkeypatch):
+    import sys
+    monkeypatch.setattr(sys.modules[__name__], 'FILE', 'file.docx')
+    s = isolated_store
+    job = seed(s, monkeypatch)
+    with run_context(s, job['payload'], job) as ctx:
+        s.enqueue_proposals(SID, FILE, '1.1.1', [proposal(s, rule='1.1.1', locator='word/document.xml#Picture 1')])
+        with s._db.cursor() as cur:
+            s._db.execute(cur, 'SELECT policy_json FROM ai_spending_run_policies WHERE run_id=%s', (ctx.run_id,))
+            saved = json.loads(s._db.fetchone(cur)['policy_json'])
+            saved['document_wide_ai'] = True
+            s._db.execute(cur, 'UPDATE ai_spending_run_policies SET policy_json=%s WHERE run_id=%s', (json.dumps(saved), ctx.run_id))
+        approve_file(s, ctx)
+    assert not apply_jobs(s)
+    assert any('current document-wide suggestion' in r.get('detail', '') for r in rows(s, 'decision_log'))
