@@ -34,17 +34,17 @@ describe('the gate is composed into the Assess screen', () => {
     expect(app).toMatch(/<AssessRunIntegrity\b/)
   })
 
-  it('keeps the gate with the canonical reconnect card used by SharePoint and Drive', () => {
+  it('does not duplicate integrity above results in the live progress card', () => {
     const live = code('LiveAssessmentLive.jsx')
-    expect(live).toMatch(/<AssessRunProgress[\s\S]{0,300}<AssessRunIntegrity/)
-    expect(live).toMatch(/scanId=\{scanId\}/)
-    expect(live).toMatch(/runInFlight=\{!!snapshot\.active\}/)
-    expect(live).not.toMatch(/sharepoint|drive/i)
+    expect(live).toMatch(/<AssessRunProgress/)
+    expect(live).not.toMatch(/<AssessRunIntegrity/)
   })
 
-  it('renders it BEFORE the summary, so the caveat is above the result it qualifies', () => {
-    expect(app.indexOf('<AssessRunIntegrity')).toBeLessThan(app.indexOf('<AssessSummary'))
-    expect(app.indexOf('<AssessRunIntegrity')).toBeGreaterThan(-1)
+  it('renders integrity immediately after results and before the document worklist', () => {
+    expect(app.indexOf('<AssessRunIntegrity')).toBeGreaterThan(app.indexOf('<AssessSummary'))
+    expect(app.indexOf('<AssessRunIntegrity')).toBeLessThan(app.indexOf('<AssessWorklist'))
+    expect(app.match(/<AssessRunIntegrity\b/g)).toHaveLength(1)
+    expect(app).toMatch(/<AssessRunIntegrity key=\{run.id\}/)
   })
 
   it('passes the verdict to the summary as well, so the two cannot disagree', () => {

@@ -7,10 +7,8 @@ import {
 // The Assessment Run Integrity Gate — what this run actually checked, and whether its results may
 // be read as a conformance result.
 //
-// It sits ABOVE the summary rather than inside it, and it is not collapsible when the answer is
-// "no". A caveat a reader can close is a caveat that is absent from the screenshot, and this screen
-// gets screenshotted; the one thing this panel exists to prevent is a clean-looking result being
-// circulated as evidence of compliance over a run that did not finish looking.
+// Collapsed below Assessment results. The summary retains its integrity caveat so
+// incomplete coverage remains visible even while these detailed counts are closed.
 //
 // WHY IT IS NOT A SCORE. It reports four counts that do not add into one number, on purpose:
 //
@@ -95,12 +93,12 @@ export default function AssessRunIntegrity({
   const c = verdict.counts
 
   return (
-    <section
+    <details
       className="panel"
       style={{ ...PANEL, borderLeft: `4px solid ${tone.bar}` }}
       aria-labelledby="run-integrity-h"
     >
-      <h2 id="run-integrity-h" style={{ fontSize: 15, margin: '0 0 2px' }}>Run integrity</h2>
+      <summary id="run-integrity-h" style={{ fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>Run integrity</summary>
 
       {/* role=status rather than alert: this is a standing statement about the run, not an
           interruption, and it is re-read on every state change. */}
@@ -190,7 +188,7 @@ export default function AssessRunIntegrity({
           </ul>
         </div>
       )}
-    </section>
+    </details>
   )
 }
 

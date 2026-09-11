@@ -1,5 +1,4 @@
 import AssessRunProgress from './AssessRunProgress.jsx'
-import AssessRunIntegrity from './AssessRunIntegrity.jsx'
 import { useLiveSnapshot } from './useLiveSnapshot.js'
 import { useThroughput } from './useThroughput.js'
 
@@ -17,10 +16,6 @@ export default function LiveAssessmentLive({ scanId, active = true, intervalMs =
   const total = snapshot && snapshot.totals ? snapshot.totals.eligible : undefined
   const remaining = (typeof total === 'number' && typeof done === 'number') ? Math.max(0, total - done) : undefined
   const throughput = useThroughput(snapshot ? snapshot.run_id : undefined, done, remaining)
-  return <>
-    <AssessRunProgress snapshot={snapshot} throughput={throughput} onStop={onStop} />
-    {snapshot?.available && (
-      <AssessRunIntegrity scanId={scanId} runInFlight={!!snapshot.active} currentScanId={scanId} />
-    )}
-  </>
+  // Run integrity is deliberately shown only below Assessment results in App.
+  return <AssessRunProgress snapshot={snapshot} throughput={throughput} onStop={onStop} />
 }
