@@ -54,6 +54,30 @@ it('pages saved records and resets the page when the run changes', async()=>{
   expect(getRunInsights.mock.calls.at(-1)[3]).toBe(0)
 })
 
+it('shows a concise AI activity summary from saved records, provider and model included', async()=>{
+  getRunInsights.mockResolvedValue({...view, activity_summary:{
+    by_model:[{provider:'ollama',model:'llama3.1',attempts:3,completed:2}],
+    attempted:3, completed:2, suggestions_generated:3, suggestions_applied:2, suggestions_needs_input:1,
+    verified:1, ai_policy:{level:1,zone:'local',budget_usd:null}, not_used_reason:null}})
+  const {root,container}=createTestRoot()
+  await act(async()=>root.render(createElement(Insights,{scanId:'s1',batchId:'b1'})))
+  await open(container)
+  expect(container.textContent).toContain('Ollama · llama3.1: 3 requests attempted, 2 completed')
+  expect(container.textContent).toContain('3 suggestions generated; 2 applied; 1 needs input')
+  expect(container.textContent).toContain('1 verified so far')
+})
+
+it('explains why AI was not used rather than showing an empty activity summary', async()=>{
+  getRunInsights.mockResolvedValue({...view, activity_summary:{
+    by_model:[], attempted:0, completed:0, suggestions_generated:0, suggestions_applied:0,
+    suggestions_needs_input:0, verified:null, ai_policy:{level:1,zone:'any',budget_usd:'0.00'},
+    not_used_reason:'Cloud AI not used: the run spending limit prevents a request.'}})
+  const {root,container}=createTestRoot()
+  await act(async()=>root.render(createElement(Insights,{scanId:'s1',batchId:'b1'})))
+  await open(container)
+  expect(container.textContent).toContain('Cloud AI not used: the run spending limit prevents a request.')
+})
+
 it('identifies saved run authorization and system decisions without claiming human review',async()=>{
   getRunInsights.mockResolvedValue({...view,standing_approval:{enabled:true,authorized_by:'owner@example.test'},
     review_receipts:[{operation_id:'r',review:{verdict:'accept'}}],

@@ -9,6 +9,13 @@ export const REMEDIATION_CATEGORIES = [
   ['unsupported', 'Cannot fix with ACP'],
   ['blocked', 'Blocked'],
   ['applied', 'Applied — verification pending'],
+  // Distinct from plain "applied": this change is not only unverified, its origin is KNOWN to be
+  // AI — durable evidence the row carries explicitly (see remediationCategory below), never
+  // guessed from a description. A row applied by a rule, or one whose origin nobody recorded,
+  // stays 'applied' — this category exists so a reader can tell "we don't know how this was
+  // fixed" apart from "an AI wrote this and nobody has checked it yet", which the row above alone
+  // cannot say.
+  ['ai_applied', 'AI applied · not verified'],
   ['verified', 'Fixed and verified'],
 ]
 export const categoryLabel = key => REMEDIATION_CATEGORIES.find(([id]) => id === key)?.[1] || 'Blocked'
@@ -18,6 +25,12 @@ export const typeOf = name => String(name || '').split('.').pop()?.toUpperCase()
 export function remediationCategory(row) {
   const status = row.disposition || row.status
   if (row.verified === true || status === 'resolved_verified') return 'verified'
+  // Deliberately still 'applied', not 'ai_applied', here — this is the finding-ACCOUNTING bucket,
+  // and keeping AI-evidenced-but-unverified findings inside the existing 'applied' total is what
+  // this repo's own aiAppliedUnverified() work (main) already committed to ("keep pending
+  // accounting unchanged"), with a test asserting exactly that. 'ai_applied' is a RENDERING-only
+  // distinction — see the inline pill in RemediationInbox.jsx and changeCategory() below — layered
+  // on top of this bucket rather than replacing it, so no total anywhere has to be re-reconciled.
   if (row.applied || row.autoApplied || aiAppliedUnverified(row)) return 'applied'
   if (row.processing_blocked || row.lane === 'blocked' || status === 'blocked') return 'blocked'
   if (row.rejected || row.human_only || row.subjective || ['accessibility_judgment', 'failed_or_rejected_fix', 'ai_disabled'].includes(row.primary_reason)) return 'manual'
@@ -30,6 +43,15 @@ export function remediationCategory(row) {
   if (['assisted', 'ai-assisted'].includes(row.fixMode)) return 'suggestion'
   return 'blocked'
 }
+
+// The category for an applied CHANGE record (before/after evidence), as opposed to an assessment
+// FINDING — a distinct grain `remediationCategory` above does not cover. Same three-way split:
+// verified wins outright; otherwise an AI origin the record explicitly carries gets the distinct
+// tag; anything else — including a rule-based change or one with no recorded origin — is the
+// generic "applied" state. `aiApplied` must be durable evidence (e.g. a recorded model_call_id
+// upstream), never inferred from `change.reason`/`change.detail` text.
+export const changeCategory = change =>
+  change.verified === true ? 'verified' : change.aiApplied === true ? 'ai_applied' : 'applied'
 
 export function assessmentCategoryRows(files, options) {
   return (documentRows(files, options) || []).flatMap(file => (file.findings || []).map(finding => ({

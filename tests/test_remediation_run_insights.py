@@ -139,6 +139,65 @@ def test_paging_rejects_invalid_limits(store, kwargs):
         read_insights(store, OWNER, 'scan-1', 'run-1', **kwargs)
 
 
+def set_policy(store, *, ai=None, ai_zone=None, ai_budget_usd=None):
+    import json
+    policy = {}
+    if ai is not None: policy['ai'] = ai
+    if ai_zone is not None: policy['ai_zone'] = ai_zone
+    if ai_budget_usd is not None: policy['ai_budget_usd'] = ai_budget_usd
+    with store._db.cursor() as cur:
+        store._db.execute(cur, 'DELETE FROM ai_spending_run_policies WHERE owner_id=%s AND run_id=%s', (OWNER, 'run-1'))
+        store._db.execute(cur, 'INSERT INTO ai_spending_run_policies VALUES(%s,%s,%s,%s)',
+                          (OWNER, 'run-1', 'scan-1', json.dumps(policy)))
+
+
+def approve(store, snapshot_id, *, action='approve', call='call-1'):
+    with store._db.cursor() as cur:
+        store._db.execute(cur, 'INSERT INTO hitl_events VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+            ('event-' + snapshot_id, call, 'scan-1', 'one.pdf', '1.1.1', 'item-1', action, 0, '[]', '2026-09-08'))
+
+
+def test_activity_summary_counts_attempts_by_model_and_applied_suggestions(store):
+    link(store)
+    saved = capture(store, [proposal()])
+    approve(store, saved[0])
+    result = read_insights(store, OWNER, 'scan-1', 'run-1')
+    summary = result['activity_summary']
+    assert summary['by_model'] == [{'provider': 'fixture', 'model': 'fixture-model', 'attempts': 1, 'completed': 0}]
+    assert summary['attempted'] == 1
+    assert summary['suggestions_generated'] == 1
+    assert summary['suggestions_applied'] == 1
+    assert summary['suggestions_needs_input'] == 0
+    assert summary['not_used_reason'] is None
+
+
+def test_activity_summary_explains_why_ai_was_not_used(store):
+    # No policy row saved at all — the pre-field/legacy case.
+    assert read_insights(store, OWNER, 'scan-1', 'run-1')['activity_summary']['not_used_reason'] \
+        == "AI suggestions were not enabled for this run's plan."
+    set_policy(store, ai=0, ai_budget_usd='5.00')
+    assert read_insights(store, OWNER, 'scan-1', 'run-1')['activity_summary']['not_used_reason'] \
+        == "AI suggestions were not enabled for this run's plan."
+    set_policy(store, ai=1, ai_zone='any', ai_budget_usd='0.00')
+    assert read_insights(store, OWNER, 'scan-1', 'run-1')['activity_summary']['not_used_reason'] \
+        == 'Cloud AI not used: the run spending limit prevents a request.'
+    # A zero paid budget does not block a LOCAL-only run — Ollama has nothing to meter.
+    set_policy(store, ai=1, ai_zone='local', ai_budget_usd='0.00')
+    assert read_insights(store, OWNER, 'scan-1', 'run-1')['activity_summary']['not_used_reason'] \
+        == 'AI was enabled for this run, but no eligible findings needed a suggestion.'
+    set_policy(store, ai=1, ai_zone='any', ai_budget_usd='5.00')
+    assert read_insights(store, OWNER, 'scan-1', 'run-1')['activity_summary']['not_used_reason'] \
+        == 'AI was enabled for this run, but no eligible findings needed a suggestion.'
+
+
+def test_activity_summary_has_no_reason_once_something_was_attempted(store):
+    set_policy(store, ai=1, ai_zone='any', ai_budget_usd='0.00')
+    link(store)
+    result = read_insights(store, OWNER, 'scan-1', 'run-1')
+    assert result['activity_summary']['attempted'] == 1
+    assert result['activity_summary']['not_used_reason'] is None
+
+
 def test_review_receipts_are_paged_even_without_any_proposal_or_attempt(store):
     db = store._db
     with db.cursor() as cur:

@@ -4,6 +4,8 @@ import { assessmentCategoryRows, outsidePlanRows, countOf } from './remediationC
 import AssessIncompleteChecks from './AssessIncompleteChecks.jsx'
 import { assessMetrics, reconcile, coverageSentence,
          STATUS_LABEL } from './assessMetrics.js'
+import { SCOPE_SCS } from './activeScope.js'
+import { runScopeCriteria, runScopeIsKnown, runScopeLabel } from './runScopeCriteria.js'
 
 // The assessment summary: a status a person can check, then seven metrics, then the arithmetic.
 //
@@ -135,7 +137,17 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
   useEffect(() => { setChecksOpen(false); setOutsideOpen(false) }, [run?.id])
   const closeChecks = () => { setChecksOpen(false); checksTrigger.current?.focus() }
   const runStatus = run?.status
-  const m = assessMetrics(files, { cap, assessment, criteria, level, notStarted, runStatus })
+  // The criteria THIS run was frozen to at assessment time, never today's live setting — see
+  // runScopeCriteria.js. An explicit `criteria` prop (tests, or a caller that already resolved a
+  // scope) always wins; otherwise a run with recorded scope evidence wins; a run with none falls
+  // back to the previous default (today's live scope) so callers that pass no run are unaffected.
+  // (The selected-criteria LIST itself is shown elsewhere on this screen, by
+  // AssessmentEvidenceDetails inside AssessRunProgress's "Assessment details" disclosure — this
+  // only needs the correct denominator for the counts below.)
+  const effectiveCriteria = criteria || (runScopeIsKnown(run) ? runScopeCriteria(run) : SCOPE_SCS)
+  const effectiveScopeLabel = criteria ? undefined : (runScopeIsKnown(run) ? runScopeLabel(run) : undefined)
+  const m = assessMetrics(files, { cap, assessment, criteria: effectiveCriteria, level, notStarted,
+                                   runStatus, scopeLabel: effectiveScopeLabel })
   // Nothing, rather than zeros. A run that has not happened is not a run that found nothing.
   if (!m) return null
 
