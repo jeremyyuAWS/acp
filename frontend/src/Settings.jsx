@@ -88,22 +88,22 @@ export function ResetData() {
 
 // Self-service sibling of ResetData above: clears only the SIGNED-IN USER'S OWN scans, so two
 // people testing concurrently never clear each other's work — no admin role needed, no scope
-// choice (it's always "everything of mine"). Typed-confirm, same convention as ResetData.
+// choice (it's always "everything of mine"). Confirmation is required before deleting personal records.
 export function ResetMyData() {
-  const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
   const [err, setErr] = useState('')
   const run = () => {
+    if (!window.confirm('Reset your data? This permanently clears your scans, findings, decisions, comments, and fix records. Source files and delivered copies remain. Other users’ data will not change.')) return
     setBusy(true); setErr(''); setResult(null)
     resetMyData()
-      .then((d) => { setResult(d); setTyped('') })
+      .then((d) => { setResult(d) })
       .catch((e) => setErr(e.message || 'reset failed'))
       .finally(() => setBusy(false))
   }
   return (
     <div style={{ maxWidth: 560 }}>
-      <h3 style={{ marginTop: 0 }}>Reset my test data</h3>
+      <h3 style={{ marginTop: 0 }}>Reset my data</h3>
       <p className="muted" style={{ fontSize: 13 }}>
         Wipes <strong>your own</strong> scans and everything tied to them — findings, decisions,
         review comments, applied fixes — so you can test with a clean slate. Other signed-in
@@ -111,14 +111,10 @@ export function ResetMyData() {
         OneDrive / Drive, and does not remove already-written remediated copies from storage.
         This cannot be undone.
       </p>
-      <label style={{ fontSize: 13 }}>Type <code>RESET</code> to confirm:
-        <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="RESET"
-               style={{ marginLeft: 8, padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 6 }} />
-      </label>
       <div style={{ marginTop: 14 }}>
-        <button onClick={run} disabled={busy || typed !== 'RESET'}
-                style={{ background: typed === 'RESET' ? 'var(--error-fg-strong)' : '#ccc', color: '#fff', border: 'none',
-                         borderRadius: 8, padding: '8px 16px', cursor: typed === 'RESET' ? 'pointer' : 'not-allowed', fontWeight: 600 }}>
+        <button onClick={run} disabled={busy}
+                style={{ background: 'var(--error-fg-strong)', color: '#fff', border: 'none',
+                         borderRadius: 8, padding: '8px 16px', cursor: busy ? 'wait' : 'pointer', fontWeight: 600 }}>
           {busy ? 'Resetting…' : 'Reset my data'}
         </button>
       </div>

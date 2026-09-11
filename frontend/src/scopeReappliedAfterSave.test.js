@@ -1,21 +1,4 @@
-/**
- * The SPA's assessment scope (activeScope.js's module-level SCOPE_SCS/ACTIVE_SCOPE_PRESET/etc.,
- * read by Overview, ScopeBanner, AssessmentScopeCard, AssessRunner, CoverageScorecard,
- * ScanScopeChip, AccessibilityStatus, Transparency, and FileDrawer) was refreshed from the
- * server exactly ONCE, at boot (App.jsx's `getConfig().then(applyScopeConfig)` effect).
- *
- * AssessSetup already calls `onSaved?.(scope)` after every successful PUT /settings that writes
- * a new `scan_scope` — the same setting /config's `_active_scope_info()` reads — but App.jsx
- * never passed an `onSaved` prop. So an operator who edited and saved a new assessment scope
- * kept seeing the PREVIOUS scope's "N of 20 in scope" arithmetic everywhere until a full page
- * reload: the exact bug class applyScopeConfig itself was built to fix (see activeScope.js's own
- * doc comment — "two sources of truth for one question, and the wrong one was the one the
- * customer could see"), just recurring after a live edit instead of at build time.
- *
- * Source-level pin, matching this repo's convention for "two things must stay wired together"
- * bugs (see sessionExpiry.test.js, rescanResetsState.test.js) — the wiring itself, not a full
- * AssessSetup mount, is what broke.
- */
+// The saved per-scan scope must refresh the shared UI arithmetic without re-reading global defaults.
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -43,7 +26,7 @@ describe('the assessment scope is re-adopted after a save, not just at boot', ()
     expect((app.match(/adoptScopeConfig/g) || []).length).toBeGreaterThanOrEqual(3) // def + boot + onSaved
   })
 
-  it('the save handler re-fetches /config before adopting — it cannot reuse a stale response', () => {
-    expect(app).toMatch(/onSaved=\{\(\) => \{ getConfig\(\)\.then\(adoptScopeConfig\)\.catch\(\(\) => \{\}\) \}\}/)
+  it('adopts the saved scan scope rather than global defaults', () => {
+    expect(app).toContain("onSaved={(scope) => adoptScopeConfig({ scope: { name: 'Selected criteria', criteria: scope } })}")
   })
 })

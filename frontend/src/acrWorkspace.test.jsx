@@ -99,7 +99,7 @@ const EMPTY_GAPS = {
 let container
 const mount = async ({
   reports = [{ id: 'acr_1', report_title: 'ACP ACR', status: 'draft' }],
-  gaps = EMPTY_GAPS,
+  gaps = EMPTY_GAPS, readOnly = false,
 } = {}) => {
   api.listAcrReports.mockReset().mockResolvedValue({ reports })
   api.getAcrReport.mockReset().mockResolvedValue(REPORT)
@@ -108,7 +108,7 @@ const mount = async ({
   api.getAcrGaps.mockReset().mockResolvedValue(gaps)
   const created = createTestRoot()
   container = created.container
-  await act(async () => { created.root.render(createElement(AcrWorkspace)) })
+  await act(async () => { created.root.render(createElement(AcrWorkspace, { readOnly })) })
   await act(async () => { await Promise.resolve() })
   await act(async () => { await Promise.resolve() })
   return container
@@ -349,4 +349,10 @@ describe('accessibility', () => {
       expect(results.violations.map((v) => `${section}: ${v.id}`)).toEqual([])
     }
   })
+})
+
+
+it('does not offer report creation to a workspace View role', async () => {
+  await mount({ reports: [], readOnly: true })
+  expect(button(/Create Accessibility Conformance Report/).disabled).toBe(true)
 })

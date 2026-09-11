@@ -272,7 +272,7 @@ const findingLabel = (f, fallback = 'failed') => {
   return `${name}: ${f.detail || fallback}`
 }
 
-export default function AcrWorkspace() {
+export default function AcrWorkspace({ readOnly = false }) {
   const [reports, setReports] = useState(null)
   const [reportId, setReportId] = useState(null)
   const [report, setReport] = useState(null)
@@ -374,7 +374,7 @@ export default function AcrWorkspace() {
             evidence; people make and approve the conformance decisions.
           </p>
           <p>Automated results alone never establish conformance.</p>
-          <button type="button" onClick={create} disabled={busy}>
+          <button type="button" onClick={create} disabled={busy || readOnly}>
             {busy ? 'Creating report…' : 'Create Accessibility Conformance Report'}
           </button>
         </div>
@@ -402,8 +402,8 @@ export default function AcrWorkspace() {
 
   const p = report?.progress
   const roles = report?.roles || []
-  const canEdit = roles.includes('editor') || roles.includes('approver') || roles.includes('admin')
-  const canApprove = roles.includes('approver') || roles.includes('admin')
+  const canEdit = !readOnly && (roles.includes('editor') || roles.includes('approver') || roles.includes('admin'))
+  const canApprove = !readOnly && (roles.includes('approver') || roles.includes('admin'))
 
   return (
     <section aria-labelledby="acr-heading">
@@ -636,7 +636,7 @@ export default function AcrWorkspace() {
       )}
 
       {tab === 'publication' && (
-        <AcrPublish reportId={reportId} onChange={() => {
+        <AcrPublish readOnly={readOnly} reportId={reportId} onChange={() => {
           load()
           getAcrValidation(reportId).then(setValidation).catch(() => {})
         }} />

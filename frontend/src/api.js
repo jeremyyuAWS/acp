@@ -996,6 +996,9 @@ export const removePerson = (email) => (SIM
 export const getWorkspaceRoles = () => (SIM
   ? sim({ roles: [], enforced: false })
   : fetch(`${BASE}/admin/roles`, { headers: headers() }).then(j))
+export const putRoleEnforcement = (body) => (SIM
+  ? sim({ rollout: { mode: body.enabled ? 'enforce' : 'off' } })
+  : fetch(`${BASE}/admin/workspace-roles/enforcement`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j))
 export const getRoleCapabilities = () => (SIM
   ? sim({ tabs: [], levels: [], grants: [], mine: [], ungoverned_tabs: [] })
   : fetch(`${BASE}/admin/capabilities`, { headers: headers() }).then(j))
@@ -1056,6 +1059,16 @@ export const saveDecisionsBatch = (scanId, items) => (SIM
 // `includeLifecycleFlagged` is the authorized override (PRD §4.5): by default the run SKIPS files a
 // discovery rule flagged for archival or deletion (Archive/Delete Candidate, Archived, Deleted) —
 // pass true to pull them back into the assessment anyway.
+// Assessment scope belongs to this owned scan, not administrative workspace settings.
+export const getAssessmentScope = (scanId) => (SIM
+  ? getSettings()
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/assessment-scope`, { headers: headers() }).then(j))
+export const putAssessmentScope = (scanId, body) => (SIM
+  ? sim({ simulated: true })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/assessment-scope`, {
+      method: 'PUT', headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j))
 export const assessScan = (scanId, level = 'AA', includeLifecycleFlagged = false) => (SIM
   ? sim({ ok: true })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/assess?level=${encodeURIComponent(level)}&include_lifecycle_flagged=${includeLifecycleFlagged ? 'true' : 'false'}`,
