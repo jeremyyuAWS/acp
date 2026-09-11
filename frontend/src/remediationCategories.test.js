@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { remediationCategory, outsidePlanRows } from './remediationCategories.js'
+import { remediationCategory, outsidePlanRows, aiAppliedUnverified } from './remediationCategories.js'
 it.each([
   [{ lane: 'automatic' }, 'automatic'],
   [{ has_proposal: true }, 'approval'],
@@ -21,4 +21,15 @@ it('matches assessment and plan by file and SC, distinguishes excluded scope, an
   expect(result[0].reason).toContain('does not prove a fix')
   expect(result[1].reason).toContain('outside the selected plan scope')
   expect(outsidePlanRows(rows, null)).toBeNull()
+})
+
+it('AI applied tag requires durable application provenance and stays in the pending category', () => {
+  const proposal = { model_call_id: 'call-1', model: 'local-model' }
+  expect(aiAppliedUnverified({ has_proposal: true, proposals: [proposal] })).toBe(false)
+  expect(aiAppliedUnverified({ applied: true, fixMode: 'ai-assisted' })).toBe(false)
+  const row = { _raw: { applied: true, proposals: [proposal] } }
+  expect(aiAppliedUnverified(row)).toBe(true)
+  expect(remediationCategory(row)).toBe('applied')
+  expect(aiAppliedUnverified({ ...row, verified: true })).toBe(false)
+  expect(aiAppliedUnverified({ aiApplicationRecord: true })).toBe(true)
 })

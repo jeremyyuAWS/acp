@@ -14,6 +14,7 @@ const EXCLUSION_HELP = {
   'Blocked or unavailable': 'no supported automatic route for this issue',
 }
 
+const countFindings = f => Number.isSafeInteger(f._raw?.finding_count) && f._raw.finding_count >= 0 ? f._raw.finding_count : 1
 const PAGE_SIZE = 10
 export default function BatchReviewSelection({ visible = [], decisions = {}, drafts = {}, scopeKey, scopeLabel = 'Current approval scope', onDecide, onResult, onBusy, onReviewExcluded, onShowAllReady, readyOutsideScope = 0, confirmRequest = 0, onConfirmRequestHandled, preparingProposals = false, onOpenPlan, disabled = false, open = true }) {
   const [entries, setEntries] = useState([])
@@ -40,13 +41,14 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
   // (selectionProblem), so a selection that sat through a change is refused, not silently applied.
   useEffect(() => { if (!open) { setConfirming(false); setPage(0) } }, [open])
   useEffect(() => { if (confirming) heading.current?.focus() }, [confirming])
-  const findingCount = entries.reduce((n, e) => n + (e.finding._raw?.finding_count || 1), 0)
+  const findingCount = entries.reduce((n, e) => n + countFindings(e.finding), 0)
   const problems = entries.map(e => selectionProblem(e, visible, decisions, drafts))
   const successfulIds = new Set(results.filter(r => r.state === 'recorded').map(r => r.id))
   const uncertainIds = new Set(results.filter(r => r.state === 'uncertain').map(r => r.id))
   const selectable = f => !exclusionReason(f, decisions, drafts) && !successfulIds.has(f.id) && !uncertainIds.has(f.id)
   const eligible = visible.filter(selectable)
-  const readyCount = eligible.reduce((n, f) => n + (f._raw?.finding_count || 1), 0)
+  const readyCount = eligible.reduce((n, f) => n + countFindings(f), 0)
+  const readyProposals = eligible.reduce((n, f) => n + proposalValues(f).length, 0)
   const shown = [...(confirming ? entries.map(e => e.finding) : eligible)].sort((a, b) =>
     String(groupBy === 'file' ? a.file : a.ruleId || a.rule_id || a.title).localeCompare(String(groupBy === 'file' ? b.file : b.ruleId || b.rule_id || b.title)))
   const pages = Math.max(1, Math.ceil(shown.length / PAGE_SIZE))
@@ -88,7 +90,7 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
     if (lock.current || disabled || !entries.length || problems.some(Boolean) || !onDecide) return
     lock.current = true; setBusy(true); onBusy?.(true)
     const batch = entries.slice(), initialScope = scopeKey, outcomes = []
-    setAttempt({ scopeKey, number: ++attemptNumber.current, items: batch.length,
+    setAttempt({ scopeKey, number: ++attemptNumber.current, items: batch.length, findings: batch.reduce((n, e) => n + countFindings(e.finding), 0),
       proposals: batch.reduce((n, e) => n + proposalValues(e.finding).length, 0),
       files: new Set(batch.map(e => e.finding.file)).size })
     setAttemptResults([])
@@ -117,7 +119,7 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
     onResult?.(outcomes)
   }
   const activeAttempt = attempt?.scopeKey === scopeKey ? attempt : null
-  const summary = confirming && !busy ? { items: entries.length, proposals: entries.reduce((n, e) => n + proposalValues(e.finding).length, 0), files: new Set(entries.map(e => e.finding.file)).size } : activeAttempt
+  const summary = confirming && !busy ? { items: entries.length, findings: findingCount, proposals: entries.reduce((n, e) => n + proposalValues(e.finding).length, 0), files: new Set(entries.map(e => e.finding.file)).size } : activeAttempt
   const approved = attemptResults.filter(r => r.state === 'recorded').length
   const failed = attemptResults.filter(r => r.state === 'failed').length
   const uncertain = attemptResults.filter(r => r.state === 'uncertain').length
@@ -127,7 +129,7 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
     <p>Approve the ready proposals together, or inspect them and choose a subset. Writing and verification follow approval.</p>
     <p className="batch-sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</p>
     {summary && <div className="batch-approval-summary" aria-label="Approval summary">
-      <p><b>{summary.items} review item{summary.items === 1 ? '' : 's'} · {summary.proposals} proposal{summary.proposals === 1 ? '' : 's'} · {summary.files} file{summary.files === 1 ? '' : 's'}</b></p>
+      <p><b>{summary.findings} findings · {summary.items} review item{summary.items === 1 ? '' : 's'} · {summary.proposals} proposal{summary.proposals === 1 ? '' : 's'} · {summary.files} file{summary.files === 1 ? '' : 's'}</b></p>
       {activeAttempt && (!confirming || busy) && <>
         <dl className="batch-approval-counts" aria-live="off">
           <div className="batch-approved"><dt>Approved</dt><dd><span aria-hidden="true"><LiveCounter key={attempt.number} value={approved} /></span><span className="batch-sr-only">{approved}</span></dd></div>
@@ -139,11 +141,11 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
       </>}
     </div>}
     {(eligible.length > 0 || entries.length > 0) && <div className="batch-review-sticky">
-      <span><b>{entries.length > 0 ? `${findingCount} findings selected` : `${readyCount} findings ready`}</b> · {new Set((entries.length > 0 ? entries.map(e => e.finding) : eligible).map(f => f.file)).size} files</span>
+      <span><b>{entries.length > 0 ? `${findingCount} findings selected` : `${readyCount} findings covered by ${readyProposals} ready proposals`}</b> · {new Set((entries.length > 0 ? entries.map(e => e.finding) : eligible).map(f => f.file)).size} files</span>
       {confirming ? <><button type="button" disabled={busy} onClick={() => setConfirming(false)}>Back</button>
         <button type="button" className="primary" disabled={busy || disabled || problems.some(Boolean) || !entries.length || !onDecide} onClick={approve}>{busy ? 'Recording decisions…' : `Confirm approval of ${findingCount} findings`}</button></>
         : <>
-          <button type="button" className="primary" disabled={busy || disabled || !eligible.length || !onDecide || problems.some(Boolean)} onClick={confirmAllReady}>Approve all ready ({readyCount})</button>
+          <button type="button" className="primary" disabled={busy || disabled || !eligible.length || !onDecide || problems.some(Boolean)} onClick={confirmAllReady}>Approve all ready ({readyProposals} proposals)</button>
           {entries.length > 0 && <button type="button" disabled={busy || disabled || problems.some(Boolean) || !onDecide} onClick={() => { setConfirming(true); setPage(0) }}>Approve selected</button>}
         </>}
     </div>}

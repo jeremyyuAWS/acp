@@ -389,7 +389,7 @@ export function normSc(v) {
  *  value. `nameOf(sc)` supplies the plain criterion name — injected so this file stays dependency-free
  *  (Remediate passes its ITEM_NAME lookup; a test passes a stub). Ids are namespaced `af:…` so they
  *  never collide with the human-queue's numeric/db ids. */
-export function autoFixRows(fixes = [], nameOf = (sc) => sc) {
+export function autoFixRows(fixes = [], nameOf = (sc) => sc, { aiApplicationRecords = false } = {}) {
   return fixes.map((a, i) => {
     const sc = normSc(a.sc ?? a.rule_id ?? a.wcag)
     const fmt = (String(a.file || '').split('.').pop() || 'DOC').toUpperCase()
@@ -404,6 +404,7 @@ export function autoFixRows(fixes = [], nameOf = (sc) => sc) {
       before: a.before ?? null,
       after: a.after ?? a.value ?? a.approved_value ?? null,
       autoApplied: true,
+      aiApplicationRecord: aiApplicationRecords,
       severity: null,
       effortSec: 5,
     }

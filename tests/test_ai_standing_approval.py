@@ -208,7 +208,7 @@ def test_real_office_writer_only_credits_saved_verified_output(isolated_store,mo
     blob=_Blob(original)
     monkeypatch.setitem(sys.modules,'blob',blob)
     seen=[]
-    def verify(data,file,**kwargs):
+    def verify(data,file, **kwargs):
         seen.append(data)
         if outcome=='cannot_verify':return Verification(False,())
         if outcome=='cancel_before_storage' and data!=original:

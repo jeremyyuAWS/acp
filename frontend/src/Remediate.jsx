@@ -27,6 +27,7 @@ import CloseoutPanel from './CloseoutPanel.jsx'
 // subject. R8 is page-level because a failure list is a property of the run.
 import DocumentAudit from './DocumentAudit.jsx'
 import FindingComments from './FindingComments.jsx'
+import ReviewDetails from './ReviewDetails.jsx'
 import DueDate from './DueDate.jsx'
 import UndoFix from './UndoFix.jsx'
 import FixOutcomes from './FixOutcomes.jsx'
@@ -1027,7 +1028,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // Fold the auto-applied fixes into the inbox as green REVIEW-lane rows, so review-of-auto-fixes
   // shares the master/detail flow. The human review queue (assisted/manual) comes first; the
   // green auto-fixes follow. Ack'd ones resolve in place (RemediationInbox's Resolved tab).
-  const autoFixItems = autoFixRows(fixSource, (sc) => ITEM_NAME[sc] || sc)
+  const autoFixItems = autoFixRows(fixSource, (sc) => ITEM_NAME[sc] || sc, { aiApplicationRecords: !scanDiffs.length })
   // W2 — rejected AI fixes sit between the live human queue and the auto-applied rows, in the amber
   // "Needs manual handling" lane, so a reviewer sees exactly what was bounced back for a person.
   // Decided rows sit between the two: after this session's handoffs (a rejection this reviewer
@@ -1779,11 +1780,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   <UndoFix scanId={sel.scanId || run?.id} file={sel.file} ruleId={sel.ruleId}
                            onUndone={onRefresh} />
                 )}
+                <ReviewDetails key={sel.id}>
                 <DocumentAudit scanId={sel.scanId || run?.id} file={sel.file} />
                 <DueDate scanId={sel.scanId || run?.id} file={sel.file}
                          value={decisions[sel.file]?.due_date || ''}
                          assignee={decisions[sel.file]?.assignee || ''} />
                 <FindingComments scanId={sel.scanId || run?.id} finding={sel} />
+                </ReviewDetails>
               </>
             ) : null)}
             queue={inboxQueue}

@@ -18,7 +18,7 @@ export const typeOf = name => String(name || '').split('.').pop()?.toUpperCase()
 export function remediationCategory(row) {
   const status = row.disposition || row.status
   if (row.verified === true || status === 'resolved_verified') return 'verified'
-  if (row.applied || row.autoApplied) return 'applied'
+  if (row.applied || row.autoApplied || aiAppliedUnverified(row)) return 'applied'
   if (row.processing_blocked || row.lane === 'blocked' || status === 'blocked') return 'blocked'
   if (row.rejected || row.human_only || row.subjective || ['accessibility_judgment', 'failed_or_rejected_fix', 'ai_disabled'].includes(row.primary_reason)) return 'manual'
   if (row.remediation_supported === false || row.unsupported === true) return 'unsupported'
@@ -60,4 +60,12 @@ export function outsidePlanRows(assessmentRows, forecastRows, scopeFiles) {
       reason: Array.isArray(scopeFiles) && !scopeFiles.includes(row.file) ? 'Document is outside the selected plan scope.'
         : 'Fewer current plan findings than assessment findings for this file and SC. Changed results or scope may explain the difference; this does not prove a fix.' }] : []
   })
+}
+
+// An AI capability or a proposed value alone is not evidence of an application.
+export function aiAppliedUnverified(row) {
+  const record = row._raw || row
+  if (row.verified === true || record.verified === true || [row.disposition, row.status, record.disposition, record.status].includes('resolved_verified')) return false
+  if (row.aiApplicationRecord === true) return true
+  return record.applied === true && Array.isArray(record.proposals) && record.proposals.some(p => p.model_call_id && p.model)
 }
