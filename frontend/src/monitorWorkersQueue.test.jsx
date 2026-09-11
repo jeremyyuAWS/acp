@@ -36,6 +36,6 @@ describe('the Workers & Queue section', () => {
 
   it('points to Settings for capacity changes rather than duplicating the control here', async () => {
     const c = await render()
-    expect(c.textContent).toMatch(/Settings.*Worker Configuration/)
+    expect(c.textContent).toMatch(/Settings.*Scheduling/)
   })
 })

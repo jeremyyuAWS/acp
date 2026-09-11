@@ -755,7 +755,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                     and setWorkers stay in this file for Settings' own control, so restoring this
                     button is one line if that decision is reversed. */}
                 <span className="muted" style={{ fontSize: 12 }}>
-                  Worker capacity is managed in Settings → Worker Configuration.
+                  Worker capacity is managed in Settings → Scheduling.
                 </span>
               </div>
             )}

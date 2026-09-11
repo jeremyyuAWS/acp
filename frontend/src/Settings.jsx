@@ -1184,6 +1184,7 @@ function CopyToken() {
 // (QueuePanel) belongs in Monitor → Workers & Queue instead, where every other live operational
 // view already lives (Source drift, Scheduled re-scans, the Audit trail). This tab is deliberately
 // just the one thing that IS configuration: the Azure Container Apps replica floor.
+// Retired from Settings navigation; retained for restoration. Current controls live in Scheduling.
 function WorkerConfiguration({ me }) {
   return (
     <div style={{ maxWidth: 560 }}>
@@ -1259,12 +1260,7 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
           <button role="tab" aria-selected={tab === 'roles'} className={tab === 'roles' ? 'fchip on' : 'fchip'} onClick={() => setTab('roles')}>Roles</button>
           <button role="tab" aria-selected={tab === 'mydata'} className={tab === 'mydata' ? 'fchip on' : 'fchip'} onClick={() => setTab('mydata')}>My Data</button>
           <button role="tab" aria-selected={tab === 'myscope'} className={tab === 'myscope' ? 'fchip on' : 'fchip'} onClick={() => setTab('myscope')}>My Scope</button>
-          <button role="tab" aria-selected={tab === 'workers'} className={tab === 'workers' ? 'fchip on' : 'fchip'} onClick={() => setTab('workers')}>Worker Configuration</button>
-          {/* PRD "Settings -> Scheduling" §4: immediately after Worker Configuration, because the
-              two are one job — Worker Configuration sets warm capacity NOW, Scheduling says when
-              ACP should hold more of it. The writable capacity control stays where it is
-              (queuePanelCapacity.test.jsx); Live Operations gets a read-only mode strip, never a
-              second place to change capacity. */}
+          {/* Scheduling is the single capacity-management surface. */}
           <button role="tab" aria-selected={tab === 'scheduling'} className={tab === 'scheduling' ? 'fchip on' : 'fchip'} onClick={() => setTab('scheduling')}>Scheduling</button>
           <button role="tab" aria-selected={tab === 'release'} className={tab === 'release' ? 'fchip on' : 'fchip'} onClick={() => setTab('release')}>Release</button>
           <button role="tab" aria-selected={tab === 'ai'} className={tab === 'ai' ? 'fchip on' : 'fchip'} onClick={() => setTab('ai')}>AI Governance</button>
@@ -1280,7 +1276,6 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
           {tab === 'roles' && <WorkspaceRoles />}
           {tab === 'mydata' && <><ResetMyData /><CopyToken /></>}
           {tab === 'myscope' && <MyScanScope />}
-          {tab === 'workers' && <WorkerConfiguration me={me} />}
           {tab === 'scheduling' && <CapacitySchedule me={me} />}
           {tab === 'release' && <ReleasePreferences />}
           {tab === 'ai' && <AIProvidersPanel />}

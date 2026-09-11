@@ -886,7 +886,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
         <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
           What the workers are doing right now, across every scan and assessment — reachable
           without an active run, so this no longer means checking Azure logs directly. Adjust
-          how many are warm ahead of a large batch in Settings → Worker Configuration.
+          how many are warm ahead of a large batch in Settings → Scheduling.
         </p>
         <QueuePanel focusScanId={focusScanId} onClearFocus={onClearFocus} />
         <RevisionHistoryPanel />
