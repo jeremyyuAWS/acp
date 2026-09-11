@@ -120,7 +120,7 @@ def test_document_mode_suppresses_only_supported_criterion(monkeypatch):
     import handlers
     from assessment_selection import enabled as selected
     ctx=SimpleNamespace(policy={'document_wide_ai':True})
-    store=SimpleNamespace(get_scan_scope=lambda *a:{}, scope_for_file=lambda *a:{'1.1.1':['docx'], '1.3.1':['docx']})
+    store=SimpleNamespace(get_scan_scope=lambda *a, **kwargs:{}, scope_for_file=lambda *a:{'1.1.1':['docx'], '1.3.1':['docx']})
     monkeypatch.setattr(handlers.core,'store',store)
     monkeypatch.setattr(ai_run_policy,'optional_current_run_context',lambda:ctx)
     checks=[]

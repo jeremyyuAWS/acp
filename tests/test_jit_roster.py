@@ -111,7 +111,7 @@ def test_the_old_behaviour_was_an_over_grant_not_a_lockout(env):
     before = access(st, NEWCOMER)
     assert before["role"]["id"] == rbac.PLATFORM_USER
     assert before.get("defaulted") is True
-    assert len(visible_tabs(before)) == 10, visible_tabs(before)
+    assert len(visible_tabs(before)) == 12, visible_tabs(before)
 
 
 def test_a_domain_admitted_user_is_on_no_screen_until_they_sign_in(env):
