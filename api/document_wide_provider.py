@@ -12,6 +12,7 @@ import hashlib
 import time
 from io import BytesIO
 from collections import Counter
+from dataclasses import replace
 
 from experiments.document_wide_ai.contracts.v1 import parse_edit_response
 from experiments.document_wide_ai.validation.validator import validate_edit_response
@@ -96,6 +97,32 @@ VISION_MODELS = {'openai': {'gpt-4.1-mini-2025-04-14', 'gpt-4.1-2025-04-14'},
                  'anthropic': {'claude-haiku-4-5-20251001', 'claude-sonnet-5'}}
 
 
+# Verified 2026-09-11. These allowances are below official model ceilings:
+# GPT-4.1/mini 32,768; Haiku4.5 64K; Sonnet5 128K output tokens.
+# Existing prices/expiry remain authoritative. Unknown configured models keep
+# their explicit operator bounds; this pilot never invents a model capability.
+# https://platform.claude.com/docs/en/models/overview
+DOCUMENT_OUTPUT_LIMITS = (4096, 8192)
+MAX_DOCUMENT_FINDINGS = 20
+
+
+def _document_output_generator(generator):
+    from llm_remediation_waterfall import Model
+    wrapped = copy.copy(generator)
+    wrapped.specs = dict(generator.specs)
+    models = []
+    for index, model in enumerate(generator.models[:2]):
+        spec = generator.specs[model.name]
+        if model.name in VISION_MODELS.get(spec.provider, set()):
+            spec = replace(spec, output_token_limit=DOCUMENT_OUTPUT_LIMITS[index])
+            spec.validate(generator.clock())
+            wrapped.specs[model.name] = spec
+            model = Model(model.name, spec.maximum_cost())
+        models.append(model)
+    wrapped.models = tuple(models)
+    return wrapped
+
+
 def _image_transport(generator, request, images):
     from PIL import Image
     image_evidence = [e for e in request.manifest.evidence if e.kind.value == 'image']
@@ -167,6 +194,8 @@ def generate_document(request, *, images=None):
         refs = {e.source_locator.key() for e in request.manifest.evidence if e.kind.value == 'image' and e.image_ref in (images or {})}
         if any(f.locator.key() not in refs for f in request.manifest.findings):
             return deferred('document_wide_insufficient_visual_evidence')
+    if len(request.manifest.findings) > MAX_DOCUMENT_FINDINGS:
+        return deferred('document_wide_finding_limit')
     if not request.manifest.findings:
         return deferred('document_wide_no_findings')
     if (len(request.manifest.finding_ids()) != len(request.manifest.findings)
@@ -174,13 +203,13 @@ def generate_document(request, *, images=None):
                    for f in request.manifest.findings)):
         return deferred('document_wide_invalid_manifest_scope')
     try:
-        generator = configured_generator()
+        generator = _document_output_generator(configured_generator())
         generator = _image_transport(generator, request, images or {})
         generator = _ValidatedGenerator(generator, request)
     except Exception as exc:
         reason = str(exc)
         return deferred(reason if reason.startswith('document_wide_') else 'verified_model_pricing_unavailable')
-    prompt = (_SCHEMA + '\nRequest ID: ' + json.dumps(request.request_id)
+    prompt = (_SCHEMA + '\nDocument output allowance: doc-output.v1\nRequest ID: ' + json.dumps(request.request_id)
               + '\nUntrusted document manifest:\n' + request.stable_prefix
               + '\n' + request.instruction_suffix)
     # Never accept a separately altered prefix that describes a different source.

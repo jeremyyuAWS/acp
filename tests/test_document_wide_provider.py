@@ -223,3 +223,64 @@ def test_missing_durable_call_cannot_authorize_apply(setup, request_package, mon
     with run_context(store, job['payload'], job):
         generated = provider.generate_document(request_package)
     assert generated['reason'] == 'document_wide_provenance_unavailable' and generated['envelope'] is None
+
+
+def test_document_output_allowance_recomputes_reservation_without_mutation(specs):
+    names = ('gpt-4.1-mini-2025-04-14', 'gpt-4.1-2025-04-14')
+    generator = StrictTextGenerator(tuple(replace(s, model=name, context_token_limit=32768)
+        for s, name in zip(specs, names)), provider_module=FakeProviders, post=lambda *a, **k: None)
+    bounded = provider._document_output_generator(generator)
+    assert [bounded.specs[n].output_token_limit for n in names] == [4096, 8192]
+    assert [generator.specs[n].output_token_limit for n in names] == [128, 128]
+    assert [m.max_cost_usd for m in bounded.models] == ['0.04096', '0.049152']
+
+
+def test_twenty_full_edits_use_one_response_with_document_output_cap(setup, request_package, specs, monkeypatch):
+    from dataclasses import asdict
+    store, job, calls, _ = setup
+    finding = request_package.manifest.findings[0]
+    findings = tuple(replace(finding, finding_id=f'f{i}', locator=replace(finding.locator, element_ref=f'pdf:field:{i}')) for i in range(20))
+    request_package = build_request(replace(request_package.manifest, findings=findings), request_id=request_package.request_id)
+    edits = [dict(edit_id=f'e{i}', finding_ids=[f.finding_id], locator=asdict(f.locator),
+                  operation='set_pdf_field_accessible_name', proposed_value=f'Contact name {i}',
+                  expected_original_value=None, rationale='Label beside field') for i,f in enumerate(findings)]
+    raw = response(request_package, edits=edits, unresolved=[])
+    names = ('gpt-4.1-mini-2025-04-14', 'gpt-4.1-2025-04-14')
+    def post(endpoint, **kwargs):
+        calls.append(kwargs['json'])
+        return Response(result(model=kwargs['json']['model'], text=json.dumps(raw),
+            usage=dict(prompt_tokens=2000, completion_tokens=3500)))
+    generator = StrictTextGenerator(tuple(replace(s, model=name, context_token_limit=32768)
+        for s,name in zip(specs,names)), provider_module=FakeProviders, post=post)
+    monkeypatch.setattr(provider, 'configured_generator', lambda: generator)
+    with run_context(store, job['payload'], job) as ctx:
+        generated = provider.generate_document(request_package)
+        history = AttemptHistory(store._db).list_run(ctx.owner_id,ctx.scan_id,ctx.run_id)
+    assert len(generated['envelope'].edits) == 20 and len(calls) == 1
+    assert calls[0]['max_completion_tokens'] == 4096
+    assert generated['cost_usd'] == '0.009' and history[0]['spending_state'] == 'settled'
+
+
+def test_over_target_limit_does_not_silently_drop_findings(setup, request_package):
+    store, job, calls, _ = setup
+    finding = request_package.manifest.findings[0]
+    manifest = replace(request_package.manifest, findings=tuple(replace(finding, finding_id=f'f{i}') for i in range(21)))
+    request_package = build_request(manifest, request_id=request_package.request_id)
+    with run_context(store, job['payload'], job):
+        generated = provider.generate_document(request_package)
+    assert generated['reason'] == 'document_wide_finding_limit' and not calls
+
+
+def test_larger_output_reservation_still_honors_run_cap(isolated_store, request_package, specs, monkeypatch):
+    seed(isolated_store)
+    batch = enqueue(isolated_store, files=('a.pdf',), amount='0.04')
+    job = isolated_store.get_job(batch['job_ids'][0])
+    calls = []
+    names = ('gpt-4.1-mini-2025-04-14', 'gpt-4.1-2025-04-14')
+    generator = StrictTextGenerator(tuple(replace(s, model=name, context_token_limit=32768)
+        for s,name in zip(specs,names)), provider_module=FakeProviders,
+        post=lambda *a, **kw: calls.append(kw) or pytest.fail('must reserve full allowance'))
+    monkeypatch.setattr(provider, 'configured_generator', lambda: generator)
+    with run_context(isolated_store, job['payload'], job):
+        generated = provider.generate_document(request_package)
+    assert generated['reason'] == 'budget_admission_denied' and not calls
