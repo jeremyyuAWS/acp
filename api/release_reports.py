@@ -257,12 +257,23 @@ def build_release_report_sources(store, scan_id, owner, release_id):
                          [[_text(_rule(t['rule_id'])), _text(_name_for(_rule(t['rule_id']))) + ' / ' + _text(t.get('level')),
                            _text(t.get('outcome')), _text(t.get('finding_count'))] for t in file_traces]) if file_traces else '<p>Criterion-level coverage was not recorded.</p>'
         changes = [d for d in diffs['items'] if d['file'] == name]
+        from unverified_changes import saved_changes
+        saved_unverified = [d for d in saved_changes(store, scan_id, name) if selected(d)]
         detail += '<h2>Recorded changes by success criterion</h2><p>Change records are separate from findings. Verified finding totals in the checklist require matching ledger evidence.</p>'
         for sc in sorted({_rule(d['rule_id']) for d in changes}):
             records = [d for d in changes if _rule(d['rule_id']) == sc]
             detail += f'<details open><summary>SC {_text(sc)} - {_text(_name_for(sc))} · {len(records)} change record{"s" if len(records) != 1 else ""}</summary>'
             detail += _table(['Location', 'Before', 'After', 'Verification evidence'], [[_text(_location(d)), _text(d.get('before')), _text(d.get('after')), _text(d.get('note') or 'Recorded by the verified-change process; finding credit requires matching ledger evidence.')] for d in records]) + '</details>'
-        if not changes:
+        if saved_unverified:
+            detail += '<h2>Applied AI changes - not verified</h2><p>These edits were saved to the current processed copy. They do not count as verified fixes; remaining human actions are listed in the checklist.</p>'
+            for sc in sorted({_rule(d['rule_id']) for d in saved_unverified}):
+                records = [d for d in saved_unverified if _rule(d['rule_id']) == sc]
+                detail += f'<details open><summary>SC {_text(sc)} - {_text(_name_for(sc))}</summary>'
+                detail += _table(['Location', 'Before', 'After', 'Verification'], [
+                    [_text(d.get('locator') or _location(d)), _text(d.get('before')), _text(d.get('after')),
+                     _text('Not verified. ' + str(d.get('reason') or 'Verification evidence is unavailable.'))]
+                    for d in records]) + '</details>'
+        if not changes and not saved_unverified:
             detail += '<p>No change records are available for this file.</p>'
         appendices.append(f'<section class="document-appendix"><h2>Document: {_text(name)}</h2>{checklist_detail}</section>')
         assets.append({'name': report_name.replace('checklist-', 'changes-', 1), 'content': _page(f'Change record — {name}', detail), 'content_type': 'text/html; charset=utf-8'})

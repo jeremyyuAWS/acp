@@ -274,3 +274,28 @@ def test_report_scope_uses_per_file_effective_selection(isolated_store, monkeypa
     checklist = next(a['content'].decode() for a in assets if a['name'].startswith('checklist-one'))
     assert '<td>2.4.4</td>' in checklist
     assert '<td>1.1.1</td>' not in checklist
+
+
+def test_change_report_shows_saved_unverified_ai_without_credit(isolated_store, monkeypatch, tmp_path):
+    import unverified_changes
+    release = setup(isolated_store)
+    monkeypatch.setattr(isolated_store, 'get_scan_scope', lambda *a: {'1.1.1': {'pdf'}})
+    monkeypatch.setattr(unverified_changes, 'saved_changes', lambda store, sid, name: [
+        {'file': name, 'rule_id': 'SC_1_1_1', 'locator': 'Page 3, figure 2',
+         'before': 'Missing', 'after': '<Suggested description>', 'reason': 'Human meaning check required',
+         'verified': False, 'verification': 'not_verified'},
+        {'file': name, 'rule_id': 'SC_3_1_1', 'before': 'Unselected original', 'after': 'Unselected language'},
+    ] if name == 'one.pdf' else [])
+    assets = build_release_reports(isolated_store, 'scan', OWNER, release)
+    change = next(a['content'].decode() for a in assets if a['name'].startswith('changes-one'))
+    from release_report_pdf import render_report_pdf
+    (tmp_path / 'unverified-change.pdf').write_bytes(render_report_pdf(change))
+    assert 'Applied AI changes - not verified' in change
+    assert 'Page 3, figure 2' in change
+    assert '&lt;Suggested description&gt;' in change
+    assert 'Human meaning check required' in change
+    assert 'Unselected language' not in change
+    assert 'No change records' not in change
+    assert 'Original findings fixed and verified</td><td>Not recorded' in assets[0]['content'].decode()
+    checklist = next(a['content'].decode() for a in assets if a['name'].startswith('checklist-one'))
+    assert 'Suggested description' not in checklist
