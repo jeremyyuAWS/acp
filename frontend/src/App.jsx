@@ -2248,6 +2248,7 @@ export default function App() {
       />
       <WorkflowStageStack lineage={canonicalRun.lineage} receivedAt={canonicalRun.receivedAt}
         assessmentActivity={assessmentActivity}
+        assessmentFindings={assessed && resultsReady ? { scanId: run?.id, rows: assessNavRows, total: assessNavRows.reduce((sum, row) => sum + row.totalFindings, 0) } : null}
         activeStage={view === 'publish' ? 'release'
           : ['discover', 'assess', 'remediate'].includes(view) ? view : null}
         stageDetails={{

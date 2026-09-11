@@ -7731,10 +7731,10 @@ class Store:
             if not run:
                 raise ValueError(f"scan not found: {scan_id}")
             self._db.execute(cur,
-                "SELECT t.file,t.rule_id,t.finding_count,f.drive_file_id,f.checksum "
+                "SELECT t.file,t.rule_id,t.finding_count,t.outcome,f.drive_file_id,f.checksum "
                 "FROM scan_rule_traces t LEFT JOIN file_records f "
                 "ON f.scan_id=t.scan_id AND f.file=t.file "
-                "WHERE t.scan_id=%s AND t.outcome='FAIL' ORDER BY t.file,t.rule_id",
+                "WHERE t.scan_id=%s AND t.outcome IN ('FAIL','REVIEW') ORDER BY t.file,t.rule_id",
                 (scan_id,))
             traces = self._db.fetchall(cur)
             # Remediation verification rewrites live traces. Seed the same immutable
@@ -7770,10 +7770,11 @@ class Store:
                         "INSERT INTO finding_disposition(scan_id,batch_id,finding_id,workflow_id,"
                         "snapshot_id,document_id,file,rule_id,instance_key,assessment_status,"
                         "disposition,review_item_id,fix_evidence_ids,verified_at,revision,created_at,"
-                        "updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,'fail',NULL,NULL,NULL,NULL,"
+                        "updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,NULL,NULL,NULL,"
                         "0,%s,%s) ON CONFLICT(scan_id,batch_id,finding_id) DO NOTHING",
                         (scan_id, batch_id, finding_id, run["workflow_id"], snapshot_id or scan_id,
-                         document_id, trace["file"], trace["rule_id"], instance_key, now, now))
+                         document_id, trace["file"], trace["rule_id"], instance_key,
+                         trace.get("assessment_status") or ("review" if trace.get("outcome") == "REVIEW" else "fail"), now, now))
             self._db.execute(cur,
                 "SELECT * FROM finding_disposition WHERE scan_id=%s AND batch_id=%s "
                 "ORDER BY file,rule_id,instance_key", (scan_id, batch_id))
@@ -7899,7 +7900,7 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT COALESCE(SUM(finding_count),0) AS n FROM scan_rule_traces "
-                "WHERE scan_id=%s AND outcome='FAIL'", (scan_id,))
+                "WHERE scan_id=%s AND outcome IN ('FAIL','REVIEW')", (scan_id,))
             assessed = int((self._db.fetchone(cur) or {}).get("n") or 0)
             self._db.execute(cur,
                 "SELECT disposition,COUNT(*) AS n FROM finding_disposition "
@@ -9454,10 +9455,11 @@ class Store:
         requested_total = max(0, int(documents_total))
         release_id = uuid.uuid4().hex[:16]
         from datetime import datetime
-        from publish import release_folder_name, sharepoint_release_name
-        folder_name = (sharepoint_release_name(preferred_folder_name, owner, at=datetime.fromisoformat(now))
+        from publish import release_folder_name, sharepoint_release_name, user_release_timezone
+        release_timezone = user_release_timezone(self, owner)
+        folder_name = (sharepoint_release_name(preferred_folder_name, owner, timezone_name=release_timezone, at=datetime.fromisoformat(now))
                        if source == "sharepoint" else preferred_folder_name or release_folder_name(
-                           datetime.fromisoformat(now), owner_email=owner))
+                           datetime.fromisoformat(now), timezone_name=release_timezone, owner_email=owner))
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO release_executions(id,scan_id,owner_email,source,folder_name,"
@@ -14097,7 +14099,7 @@ class Store:
         import re
         groups = []
         for row in traces:
-            if row.get("outcome") != "FAIL":
+            if row.get("outcome") not in ("FAIL", "REVIEW"):
                 continue
             fmt = str(row["file"]).rsplit(".", 1)[-1].lower()
             if fmt == "htm":
@@ -14110,7 +14112,8 @@ class Store:
             mode = lane(fmt, sc) if sc else None
             groups.append({"file": row["file"], "rule_id": rule_id,
                            "finding_count": int(row.get("finding_count") or 0),
-                           "fix_mode": mode})
+                           "fix_mode": mode,
+                           **({"assessment_status": "review"} if row.get("outcome") == "REVIEW" else {})})
         return {"findings_recorded": sum(row["finding_count"] for row in groups),
                 "finding_groups": groups,
                 "domain_reconciliation": domain, "captured_at": self._now()}

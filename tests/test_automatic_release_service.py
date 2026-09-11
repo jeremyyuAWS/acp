@@ -355,3 +355,16 @@ def test_stopped_run_without_copy_is_not_reinterpreted_as_publish_authority(prep
     result = tick(prepared, row)
     assert result['progress']['files'][FILE]['state'] == 'blocked'
     assert not prepared.calls
+
+
+def test_automatic_folder_uses_owner_timezone_and_freezes_on_replay(prepared, monkeypatch):
+    import publish
+    from datetime import datetime, timezone
+    real_name = publish.release_folder_name
+    monkeypatch.setattr(publish, 'release_folder_name', lambda at=None, timezone_name='UTC', **kw:
+        real_name(datetime(2026, 9, 11, 1, 35, tzinfo=timezone.utc), timezone_name, **kw))
+    prepared.store.set_user_setting(OWNER, 'release_timezone', 'America/Chicago')
+    row = authorize(prepared)
+    assert row['intent']['release_folder_name'] == '2026-09-10 20-35 CDT - ' + OWNER
+    prepared.store.set_user_setting(OWNER, 'release_timezone', 'Asia/Kolkata')
+    assert authorize(prepared)['intent']['release_folder_name'] == row['intent']['release_folder_name']

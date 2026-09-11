@@ -304,3 +304,15 @@ def test_publish_reports_frozen_destination_when_release_starts_after_status_rea
     assert provider_calls == []
     assert st.get_file_record('reader-scan', 'one.pdf')['published_at'] is None
     assert st.release_for_scan('reader-scan', 'reader@example.com')['documents'] == []
+
+
+def test_continuation_folder_uses_owner_timezone(prepared, monkeypatch):
+    import publish
+    from datetime import datetime, timezone
+    st, _, _ = prepared
+    real_name = publish.release_folder_name
+    monkeypatch.setattr(publish, 'release_folder_name', lambda at=None, timezone_name='UTC', **kw:
+        real_name(datetime(2026, 1, 11, 1, 35, tzinfo=timezone.utc), timezone_name, **kw))
+    st.set_user_setting(OWNER, 'release_timezone', 'America/New_York')
+    row = flow.plan(st, SID, OWNER, [FILE], None, None)
+    assert row['intent']['release_folder_name'] == '2026-01-10 20-35 EST - ' + OWNER

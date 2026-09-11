@@ -18,6 +18,12 @@ RELEASE_TIMEZONES = frozenset({
 })
 
 
+def user_release_timezone(store, owner: str) -> str:
+    """Use the owner's saved preference, including the Settings default."""
+    getter = getattr(store, "get_user_setting", None)
+    return (getter(owner, "release_timezone") if callable(getter) else None) or "America/Chicago"
+
+
 def release_folder_name(at: datetime | None = None, timezone_name: str = "UTC",
                         *, owner_email: str | None = None) -> str:
     """Human-facing release folder name; the underlying release instant remains UTC."""
@@ -175,7 +181,7 @@ def ensure_published_folder(svc, release_id: str | None = None, *,
                             folder_name: str | None = None,
                             parent_id: str | None = None,
                             return_details: bool = False):
-    """Create/reuse ``Remediated/<UTC timestamp>`` for one stable release execution."""
+    """Create/reuse ``Remediated/<user-local timestamp>`` for one stable release execution."""
     if not release_id:  # backwards compatibility for older callers/tests
         root, _ = _ensure_folder(svc, parent_id, RELEASE_ROOT)
         return root["id"]
