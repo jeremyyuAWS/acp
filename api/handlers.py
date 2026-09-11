@@ -5083,12 +5083,14 @@ def _apply_one_value_kind(
     # about it and it must not inherit a verified_cleared from its neighbours.
     lane_items = list(review_item_ids)
     semantic_review = False
+    semantic_review_revision = None
     if (residual_state or {}).get('retain_unverified'):
         for item_id in lane_items:
             item = core.store.get_hitl_item(item_id) or {}
             if (str(item.get('last_decision_request_id') or '').startswith('standing:')
                     and any(p.get('requires_semantic_review') is True for p in item.get('proposals', []))):
                 semantic_review = True
+                semantic_review_revision = item.get('approved_source_revision')
     from remediation_contribution import writer_tickets, record_writer_result
     from hashlib import sha256 as _proof_sha256
     import uuid as _proof_uuid
@@ -5210,7 +5212,8 @@ def _apply_one_value_kind(
                     'source_sha256': _proof_sha256(working).hexdigest(),
                     'baseline_residual': sorted(baseline.residual) if baseline is not None and baseline.ok else None,
                     'changes': applied, 'outcome': outcome, 'reason': reason,
-                    'verification': 'not_verified', 'requires_semantic_review': semantic_review}))
+                    'verification': 'not_verified', 'requires_semantic_review': semantic_review,
+                    'assessment_revision': semantic_review_revision}))
             _model_outcome(outcome, reason + unresolved_note, regressions=regressions)
         pending_credits.append(commit_unverified)
         residual_state['verification'] = verification
