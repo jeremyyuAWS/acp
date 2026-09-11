@@ -3677,10 +3677,12 @@ def publish_files(sid: str, request: Request, body: dict):
     folder_name = release["folder_name"]
     drive_token = request.headers.get("x-drive-token")
     sp_token = request.headers.get("x-sp-token")
-    # SharePoint Release is worker-backed: make the short-lived delegated credential available
+    # Provider Release is worker-backed: make the short-lived delegated credential available
     # to any remediation replica without ever persisting it in Postgres or a job payload.
     if source == "sharepoint" and sp_token:
         _register_scan_tokens(sid, sp=sp_token)
+    if source == "drive" and drive_token:
+        _register_scan_tokens(sid, drive=drive_token)
     drive_svc = None
     if source == "drive" and drive_token:
         try:
@@ -3698,7 +3700,7 @@ def publish_files(sid: str, request: Request, body: dict):
     results = []
     folder_cache = {}
     synchronous_execution = None
-    if source != "sharepoint":
+    if source not in {"sharepoint", "drive"}:
         ensure_sync = getattr(core.store, "ensure_synchronous_stage_execution", None)
         if callable(ensure_sync):
             import hashlib, json
@@ -3729,13 +3731,15 @@ def publish_files(sid: str, request: Request, body: dict):
         core.store.finish_synchronous_stage_item(
             synchronous_execution["execution_id"], filename, outcome=outcome, result=result)
 
-    # A SharePoint release can contain hundreds of documents. Running that Graph traffic inside
+    # A provider release can contain hundreds of documents. Running external traffic inside
     # this HTTP request makes the browser/proxy timeout the unit of durability. Queue one stable
     # job per corrected copy instead; completed documents are reused by the handler and a worker
     # restart resumes from the durable queue.
-    if source == "sharepoint":
-        if not sp_token:
-            raise HTTPException(403, "SharePoint publishing requires a current write grant.")
+    if source in {"sharepoint", "drive"}:
+        provider_token = sp_token if source == "sharepoint" else drive_token
+        if not provider_token:
+            provider_name = "SharePoint" if source == "sharepoint" else "Google Drive"
+            raise HTTPException(403, f"{provider_name} publishing requires a current write grant.")
         payloads = []
         for f in files:
             record = core.store.get_file_record(sid, f)
@@ -3763,7 +3767,7 @@ def publish_files(sid: str, request: Request, body: dict):
                 try:
                     actual_digest = _publish.remediated_content_digest(owner, sid, f)
                     require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
-                    require_current_source(source, record, sp_token=sp_token)
+                    require_current_source(source, record, sp_token=sp_token, drive_service=drive_svc)
                     require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
                     if not actual_digest or reuse_state(saved, actual_digest) != "reuse":
                         raise ValueError("Corrected bytes changed; verify the new copy before Release.")
@@ -3800,10 +3804,21 @@ def publish_files(sid: str, request: Request, body: dict):
                 fingerprint_inputs = {"artifacts": fingerprint_inputs, "automatic_release_id": automatic_release_id}
             fingerprint = hashlib.sha256(json.dumps(fingerprint_inputs, sort_keys=True).encode()).hexdigest()
             snapshot_id, input_manifest_id = _sealed_stage_input(sid, "remediate", release_id)
-            execution = _enqueue_stage_batch(
-                sid, "release", "publish_file", payloads,
-                snapshot_id=snapshot_id, request_fingerprint=fingerprint,
-                input_manifest_id=input_manifest_id)
+            if source == "drive":
+                try:
+                    queue_drive = (core.store.enqueue_automatic_drive_release if automatic_release_id
+                                   else core.store.enqueue_manual_drive_release)
+                    options = {} if automatic_release_id else {"owner": owner}
+                    execution = queue_drive(
+                        sid, payloads, snapshot_id=snapshot_id,
+                        request_fingerprint=fingerprint, input_manifest_id=input_manifest_id, **options)
+                except (ValueError, ActiveStageExecutionError) as exc:
+                    raise HTTPException(409, str(exc)) from exc
+            else:
+                execution = _enqueue_stage_batch(
+                    sid, "release", "publish_file", payloads,
+                    snapshot_id=snapshot_id, request_fingerprint=fingerprint,
+                    input_manifest_id=input_manifest_id)
         if not automatic_release_id:
             from release_report_delivery import queue_if_release_settled
             queue_if_release_settled(core.store, sid, owner, release_id)

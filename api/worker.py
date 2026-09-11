@@ -90,6 +90,17 @@ class FatalJobError(Exception):
     """Raise from a handler to dead-letter the job immediately (no retry)."""
 
 
+class ReservationRetryError(Exception):
+    """A provider reservation must expire before a delivery can safely retry."""
+    def __init__(self, message: str, retry_after_seconds: float):
+        import math
+        delay = float(retry_after_seconds)
+        if not math.isfinite(delay):
+            raise ValueError("retry delay must be finite")
+        self.retry_after_seconds = min(900.0, max(1.0, delay))
+        super().__init__(message)
+
+
 class JobCancelledError(Exception):
     """Raised by check_cancel() when the current job has been flagged for cancellation.
 
@@ -440,6 +451,8 @@ class JobWorker:
             # shows something actionable rather than a google-auth traceback.
             msg = drive_session_expired(e) or str(e)
             force_dead, backoff = job_retry_policy(eclass, job["attempts"])
+            if isinstance(e, ReservationRetryError) and not force_dead:
+                backoff = max(backoff, e.retry_after_seconds)
             outcome = self.store.fail_job(job["id"], msg, backoff_seconds=backoff,
                                           force_dead=force_dead, error_class=eclass, **_claim)
             # Logged from fail_job's OWN return, not from the policy's `force_dead`. Those

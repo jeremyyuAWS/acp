@@ -155,9 +155,7 @@ def _find_folder(svc, parent_id: str | None, *, name: str | None = None,
         clauses.append(f"name='{_q(name)}'")
     if release_id:
         clauses.append(f"properties has {{ key='{RELEASE_PROPERTY}' and value='{_q(release_id)}' }}")
-    rows = svc.files().list(q=" and ".join(clauses),
-                            fields="files(id,name,webViewLink,createdTime)",
-                            orderBy="createdTime,id", pageSize=10).execute().get("files", [])
+    rows = _drive_publication_candidates(svc, " and ".join(clauses))
     return rows[0] if rows else None
 
 
@@ -203,15 +201,33 @@ def ensure_published_folder(svc, release_id: str | None = None, *,
     return details if return_details else details["id"]
 
 
+def find_published_folder(svc, release_id: str, *, parent_id: str | None = None):
+    """Locate a historical release without creating any new provider objects."""
+    root = _find_folder(svc, parent_id, name=RELEASE_ROOT)
+    folder = _find_folder(svc, root["id"], release_id=release_id) if root else None
+    if not folder:
+        from release_artifacts import ReleaseArtifactError
+        raise ReleaseArtifactError("The earlier Google Drive release folder could not be found. Check the destination before authorizing another copy.", category="delivery_version_unresolved")
+    return {"id": folder["id"], "name": folder.get("name") or RELEASE_ROOT,
+            "url": folder.get("webViewLink") or f"https://drive.google.com/drive/folders/{folder['id']}"}
+
+
 def ensure_relative_folders(svc, release_folder_id: str, relative_path: str | None,
-                            filename: str, cache: dict | None = None) -> tuple[str, str]:
+                            filename: str, cache: dict | None = None, *,
+                            read_only: bool = False) -> tuple[str, str]:
     folders, safe_filename = normalize_relative_path(relative_path, filename)
     cache = cache if cache is not None else {}
     parent = release_folder_id
     for segment in folders:
         key = (parent, segment.casefold())
         if key not in cache:
-            folder, _ = _ensure_folder(svc, parent, segment)
+            if read_only:
+                folder = _find_folder(svc, parent, name=segment)
+                if not folder:
+                    from release_artifacts import ReleaseArtifactError
+                    raise ReleaseArtifactError("The earlier Google Drive destination could not be found. Check it before authorizing another copy.", category="delivery_version_unresolved")
+            else:
+                folder, _ = _ensure_folder(svc, parent, segment)
             cache[key] = folder["id"]
         parent = cache[key]
     return parent, safe_filename
@@ -360,8 +376,43 @@ def archive_copy_publish_sharepoint(token: str, drive_id: str | None, folder_id:
             "verified": True, "created": True, "filename": target_name}
 
 
+def _drive_publication_candidates(svc, query: str) -> list[dict]:
+    """Do not infer absence from a truncated or incomplete Drive search."""
+    rows, token, seen = [], None, set()
+    while True:
+        options = {"q": query,
+                   "fields": "nextPageToken,incompleteSearch,files(id,name,webViewLink,md5Checksum)",
+                   "orderBy": "createdTime", "pageSize": 100}
+        if token:
+            options["pageToken"] = token
+        page = svc.files().list(**options).execute()
+        if page.get("incompleteSearch"):
+            raise IOError("Google Drive could not complete the delivery lookup")
+        rows.extend(page.get("files", []))
+        token = page.get("nextPageToken")
+        if not token:
+            return rows
+        if token in seen:
+            raise IOError("Google Drive repeated a delivery lookup page")
+        seen.add(token)
+
+
+def _verify_drive_publication(svc, result: dict, data: bytes) -> None:
+    """A provider identifier or missing checksum is never proof of delivered content."""
+    item_id = result.get("id")
+    if not item_id:
+        raise IOError("Google Drive did not return a delivered document identifier")
+    expected_md5 = hashlib.md5(data).hexdigest()  # nosec B324: provider integrity checksum
+    if result.get("md5Checksum") and result["md5Checksum"] != expected_md5:
+        raise IOError("provider checksum did not match corrected content")
+    downloaded = svc.files().get_media(fileId=item_id).execute()
+    if not isinstance(downloaded, bytes) or hashlib.sha256(downloaded).digest() != hashlib.sha256(data).digest():
+        raise IOError("Google Drive content verification failed")
+
+
 def upload_published(svc, folder_id: str, filename: str, data: bytes, *,
-                     idempotency_key: str | None = None, return_details: bool = False):
+                     idempotency_key: str | None = None, return_details: bool = False,
+                     target_file_id: str | None = None, reconcile_only: bool = False):
     """Create or reuse a corrected document, verifying provider checksum when available."""
     from googleapiclient.http import MediaIoBaseUpload
     digest = hashlib.md5(data).hexdigest()  # nosec B324: provider integrity checksum
@@ -370,9 +421,26 @@ def upload_published(svc, folder_id: str, filename: str, data: bytes, *,
         clauses.append(f"properties has {{ key='{IDEMPOTENCY_PROPERTY}' and value='{_q(idempotency_key)}' }}")
     else:
         clauses.append(f"name='{_q(filename)}'")
-    rows = svc.files().list(q=" and ".join(clauses),
-                            fields="files(id,name,webViewLink,md5Checksum)",
-                            orderBy="createdTime,id", pageSize=10).execute().get("files", [])
+    if target_file_id:
+        try:
+            existing = svc.files().get(
+                fileId=target_file_id,
+                fields="id,name,webViewLink,md5Checksum,parents,properties,trashed").execute()
+        except Exception as exc:
+            if getattr(getattr(exc, "resp", None), "status", None) != 404:
+                raise
+            existing = None
+        if existing and (existing.get("trashed") or folder_id not in existing.get("parents", [])
+                         or (existing.get("properties") or {}).get(IDEMPOTENCY_PROPERTY) != idempotency_key):
+            raise IOError("Reserved Google Drive document identity no longer matches this delivery")
+        rows = [existing] if existing else []
+    else:
+        rows = _drive_publication_candidates(svc, " and ".join(clauses))
+    if not rows and reconcile_only:
+        from release_artifacts import ReleaseArtifactError
+        raise ReleaseArtifactError(
+            "The earlier Google Drive delivery could not be confirmed. Check the destination before authorizing another copy.",
+            category="delivery_version_unresolved")
     if rows and idempotency_key:
         result, created = rows[0], False
     elif rows:
@@ -396,31 +464,40 @@ def upload_published(svc, folder_id: str, filename: str, data: bytes, *,
         if idempotency_key:
             props[IDEMPOTENCY_PROPERTY] = idempotency_key
         media = MediaIoBaseUpload(io.BytesIO(data), mimetype=_mime_for(filename), resumable=False)
-        result = svc.files().create(
-            body={"name": upload_name, "parents": [folder_id], "properties": props},
-            media_body=media, fields="id,name,webViewLink,md5Checksum").execute()
+        body = {"name": upload_name, "parents": [folder_id], "properties": props}
+        if target_file_id:
+            body["id"] = target_file_id
+        try:
+            result = svc.files().create(
+                body=body, media_body=media, fields="id,name,webViewLink,md5Checksum").execute()
+        except Exception as exc:
+            if not target_file_id or getattr(getattr(exc, "resp", None), "status", None) != 409:
+                raise
+            # A prior attempt can commit between exact-ID lookup and create. Re-enter the
+            # read-only verification path; never replace a different provider revision.
+            return upload_published(svc, folder_id, filename, data,
+                                    idempotency_key=idempotency_key, return_details=return_details,
+                                    target_file_id=target_file_id, reconcile_only=True)
         created = True
-        if idempotency_key:
-            winner = svc.files().list(
-                q=(f"'{_q(folder_id)}' in parents and trashed=false and properties has "
-                   f"{{ key='{IDEMPOTENCY_PROPERTY}' and value='{_q(idempotency_key)}' }}"),
-                fields="files(id,name,webViewLink,md5Checksum)",
-                orderBy="createdTime,id", pageSize=10).execute().get("files", [])
+        if idempotency_key and not target_file_id:
+            winner = _drive_publication_candidates(
+                svc, f"'{_q(folder_id)}' in parents and trashed=false and properties has "
+                     f"{{ key='{IDEMPOTENCY_PROPERTY}' and value='{_q(idempotency_key)}' }}")
             if winner:
                 created = winner[0].get("id") == result.get("id")
                 result = winner[0]
-    provider_digest = result.get("md5Checksum")
-    if provider_digest and provider_digest != digest:
-        raise IOError("provider checksum did not match corrected content")
+    _verify_drive_publication(svc, result, data)
     details = {"id": result.get("id"), "url": result.get("webViewLink", ""),
-               "checksum": digest, "verified": True, "created": created}
+               "checksum": digest, "verified": True, "created": created,
+               "filename": result.get("name") or filename}
     return details if return_details else details["url"]
 
 
 def archive_copy_publish(svc, folder_id: str | None, owner: str | None,
                          scan_id: str, filename: str, *, relative_path: str | None = None,
                          source_id: str | None = None, folder_cache: dict | None = None,
-                         return_details: bool = False, expected_digest: str | None = None):
+                         return_details: bool = False, expected_digest: str | None = None,
+                         target_file_id: str | None = None, reconcile_only: bool = False):
     if svc is None or folder_id is None:
         return None
     data = _blob.download_remediated(owner, scan_id, filename)
@@ -430,7 +507,8 @@ def archive_copy_publish(svc, folder_id: str | None, owner: str | None,
         from release_artifacts import ReleaseArtifactError
         raise ReleaseArtifactError("Corrected content changed before delivery; review the new copy.")
     destination, safe_name = ensure_relative_folders(
-        svc, folder_id, relative_path, filename, folder_cache)
+        svc, folder_id, relative_path, filename, folder_cache, read_only=reconcile_only)
     key = publication_key(scan_id, source_id or filename, hashlib.sha256(data).hexdigest())
     return upload_published(svc, destination, safe_name, data,
-                            idempotency_key=key, return_details=return_details)
+                            idempotency_key=key, return_details=return_details,
+                            target_file_id=target_file_id, reconcile_only=reconcile_only)

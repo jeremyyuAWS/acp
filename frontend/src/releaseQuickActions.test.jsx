@@ -1,8 +1,10 @@
 import { createElement as h, act } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createTestRoot, unmountAll } from './testRoots.js'
-const api = vi.hoisted(() => ({ planReleaseContinuation: vi.fn(), authorizeReleaseContinuation: vi.fn(), getReleaseContinuation: vi.fn(), resumeReleaseContinuation: vi.fn() }))
+const api = vi.hoisted(() => ({ planReleaseContinuation: vi.fn(), authorizeReleaseContinuation: vi.fn(), getReleaseContinuation: vi.fn(), resumeReleaseContinuation: vi.fn(), setDriveToken: vi.fn() }))
 vi.mock('./api.js', () => api)
+vi.mock('./driveAuth.js', () => ({reconnectDriveForRelease: vi.fn().mockResolvedValue('grant')}))
+import { reconnectDriveForRelease } from './driveAuth.js'
 import Quick from './ReleaseQuickActions.jsx'
 const plan = { id: 'fixed-intent', status: 'draft', intent: { destination: { folder_name: 'Approved folder' }, files: {
   'ready.pdf': { ready: true, rows: [], blockers: [] },
@@ -183,4 +185,16 @@ it('shows publication feedback beside the disabled in-flight action', async () =
   expect(v.container.querySelector('.release-quick-action [role="status"]').textContent).toContain('Please wait for confirmation')
   await click(v.button('Publishing copies'))
   expect(v.props.onReady).not.toHaveBeenCalled()
+})
+
+it('reconnects Drive and resumes the saved manual authorization without approving again', async () => {
+ reconnectDriveForRelease.mockResolvedValue('grant')
+ const v=await mount()
+ api.getReleaseContinuation.mockResolvedValue({...plan,status:'completed',requires_reconnect:true,progress:{'ready.pdf':{state:'failed',message:'Reconnect Drive'}}})
+ await v.render({runId:'saved-run'})
+ api.resumeReleaseContinuation.mockResolvedValue({...plan,status:'waiting',requires_reconnect:false})
+ await click(v.button('Reconnect Google Drive and resume'))
+ expect(api.setDriveToken).toHaveBeenCalledWith('grant')
+ expect(api.resumeReleaseContinuation).toHaveBeenCalledWith('saved-run','fixed-intent')
+ expect(api.authorizeReleaseContinuation).not.toHaveBeenCalled()
 })

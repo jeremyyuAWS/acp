@@ -55,3 +55,17 @@ def stop(sid: str, authorization_id: str, request: Request, response: Response):
     if not row or row['scan_id'] != sid:
         raise HTTPException(404, 'Automatic release authorization not found')
     return service.public(persistence.stop(core.store, authorization_id, owner), core.store)
+
+
+@router.post('/scans/{sid}/release/automatic/{authorization_id}/resume')
+def resume(sid: str, authorization_id: str, request: Request, response: Response):
+    owner, _ = owner_scan(sid, request)
+    response.headers['Cache-Control'] = 'no-store'
+    row = persistence.get(core.store, authorization_id, owner)
+    if not row or row['scan_id'] != sid:
+        raise HTTPException(404, 'Automatic release authorization not found')
+    credentials(sid, request)
+    try:
+        return service.public(service.resume(core.store, authorization_id, owner, sid), core.store)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc

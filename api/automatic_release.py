@@ -23,6 +23,10 @@ class FileRemediationFinishedWithoutCopy(ValueError):
     pass
 
 
+class DriveReconnectRequired(ValueError):
+    pass
+
+
 def current_run(store, sid, owner):
     with store._db.cursor() as cur:
         store._db.execute(cur, "SELECT * FROM stage_executions WHERE scan_id=%s AND owner_email=%s AND stage='remediate' AND is_current=1 ORDER BY created_at DESC LIMIT 1", (sid, owner))
@@ -106,7 +110,7 @@ def public(row, store=None):
         if store is not None and entry.get('artifact_digest'):
             saved = receipt(store, row, file, entry['artifact_digest'])
             if saved:
-                entry = {**entry, 'state': 'published', 'receipt': saved, 'message': 'Delivered'}
+                entry = {**entry, 'state': 'published', 'receipt': saved, 'message': 'Delivered', 'requires_reconnect': False}
         category = {'published':'published', 'failed':'failed', 'blocked':'blocked', 'stopped':'blocked'}.get(entry['state'], 'pending')
         if row['status'] == 'stopped' and category == 'pending':
             category = 'blocked'
@@ -124,6 +128,9 @@ def public(row, store=None):
                 expires_at=row['intent']['expires_at'], revision=row['revision'],
                 allow_remaining_issues=row['intent'].get('allow_remaining_issues', False),
                 include_reports=row['intent'].get('include_reports', False),
+                requires_reconnect=any(e.get('requires_reconnect') for e in details.values()),
+                can_resume=row['intent'].get('source') == 'drive' and row['status'] in ACTIVE and any(
+                    e.get('state') == 'blocked' and e.get('artifact_digest') for e in details.values()),
                 needs_attention=stalled_files > 0,
                 attention_reason=row['progress'].get('_delivery_watch', {}).get('reason') if stalled_files else None,
                 last_progress_at=row['progress'].get('_delivery_watch', {}).get('last_progress_at'))
@@ -329,6 +336,42 @@ def delivery_watch(progress, pending_jobs):
                         if stalled else None))
 
 
+def resume(store, authorization_id, owner, scan_id):
+    """Wake the original permission after reconnect; never extend or replace it."""
+    with store.transaction():
+        row = persistence.get(store, authorization_id, owner, lock=True)
+        if not row or row['scan_id'] != scan_id or row['status'] not in ACTIVE:
+            raise ValueError('This release permission cannot be resumed. Review a new plan explicitly.')
+        for file in row['intent']['files']:
+            require_authority(store, row, file)
+        progress = dict(row['progress'])
+        entries = {f: dict(e) for f, e in progress.get('files', {}).items()}
+        for file, entry in entries.items():
+            if entry.get('state') == 'published' or entry.get('failure_category') == 'no_corrected_copy':
+                continue
+            if entry.get('artifact_digest'):
+                record = ready(store, row, file)
+                if entry['artifact_digest'] != record['corrected_sha256']:
+                    raise ValueError('The admitted corrected copy changed. Review a new plan explicitly.')
+                entry.update(state='publishing', resume_requested=True, requires_reconnect=False,
+                    message='Checking the saved delivery before resuming.')
+        progress['files'] = entries
+        progress.pop('_delivery_watch', None)
+        return persistence.save(store, row, status='waiting', progress=progress, schedule=True, delay=0)
+
+
+def dispatch(store, row, file, digest):
+    from routes.scans import publish_files
+    request = request_for(row['owner_email'], row['scan_id'])
+    if row['intent']['source'] == 'drive' and not request.headers.get('x-drive-token'):
+        raise DriveReconnectRequired('Reconnect Google Drive to resume this saved release. No new upload has been requested.')
+    return publish_files(row['scan_id'], request,
+        dict(files=[file], destination=row['intent']['destination'] if row['intent']['release_parent_id'] else None,
+             release_folder_name=row['intent']['release_folder_name'], automatic_release_id=row['id'],
+             allow_remaining_issues=row['intent'].get('allow_remaining_issues', False),
+             expected_artifacts={file: digest}, expected_destination=row['intent']['destination'] if row['intent']['release_parent_id'] else None))
+
+
 def advance(store, payload, job):
     from routes.scans import publish_files
     from worker import check_cancel
@@ -356,10 +399,27 @@ def advance(store, payload, job):
                 saved = receipt(store, row, file, entry['artifact_digest'])
                 if saved:
                     persistence.update_file(store,row['id'],row['owner_email'],file,
-                        dict(state='published',receipt=saved,message='Delivered'))
+                        dict(state='published',receipt=saved,message='Delivered',requires_reconnect=False,resume_requested=False))
                 elif pending_jobs.get(file) and all(s in {'dead','cancelled'} for s in pending_jobs[file]):
+                    if row['intent']['source'] == 'drive':
+                        if entry.get('resume_requested') and dispatched < MAX_DISPATCH_PER_TICK:
+                            dispatch(store, row, file, entry['artifact_digest'])
+                            dispatched += 1
+                            persistence.update_file(store,row['id'],row['owner_email'],file,
+                                dict(state='publishing', resume_requested=False, requires_reconnect=False, message='Checking the saved delivery before resuming.'))
+                        else:
+                            persistence.update_file(store,row['id'],row['owner_email'],file,
+                                dict(state='blocked', message='Delivery job stopped or failed. Reconnect Google Drive and resume to check its receipt safely.'))
+                    else:
+                        persistence.update_file(store,row['id'],row['owner_email'],file,
+                            dict(state='failed',message='Delivery job stopped or failed. Reconcile its receipt before authorizing another attempt.'))
+                elif row['intent']['source'] == 'drive' and not pending_jobs.get(file) and dispatched < MAX_DISPATCH_PER_TICK:
+                    # Legacy synchronous delivery has no durable worker. The queue helper
+                    # retains its stage/reservation identities and only admits frozen bytes.
+                    dispatch(store, row, file, entry['artifact_digest'])
+                    dispatched += 1
                     persistence.update_file(store,row['id'],row['owner_email'],file,
-                        dict(state='failed',message='Delivery job stopped or failed. Reconcile its receipt before authorizing another attempt.'))
+                        dict(state='publishing', resume_requested=False, requires_reconnect=False, message='Checking the saved delivery before resuming.'))
                 else:
                     persistence.update_file(store,row['id'],row['owner_email'],file,
                         dict(state='publishing', message='Delivery not yet confirmed. Waiting for a recorded receipt; a copy may already exist.'))
@@ -379,17 +439,13 @@ def advance(store, payload, job):
                 continue
             with store._db.cursor() as cur:
                 store._db.execute(cur, "SELECT execution_id FROM stage_executions WHERE scan_id=%s AND stage='release' AND is_current=1 AND state IN ('accepted','queued','processing','paused')",(row['scan_id'],))
-                if store._db.fetchone(cur):
+                if store._db.fetchone(cur) and row['intent']['source'] != 'drive':
                     persistence.update_file(store,row['id'],row['owner_email'],file,
                         dict(state='waiting', waiting_for_delivery=True, message='Corrected copy is ready. Waiting for the current delivery to finish.'))
                     continue
             row = publish_admission(store, row['id'], row['owner_email'], row['scan_id'], file, digest)
             dispatched += 1
-            result = publish_files(row['scan_id'], request_for(row['owner_email'], row['scan_id']),
-                dict(files=[file], destination=row['intent']['destination'] if row['intent']['release_parent_id'] else None,
-                     release_folder_name=row['intent']['release_folder_name'], automatic_release_id=row['id'],
-                     allow_remaining_issues=row['intent'].get('allow_remaining_issues', False),
-                     expected_artifacts={file:digest}, expected_destination=row['intent']['destination'] if row['intent']['release_parent_id'] else None))
+            result = dispatch(store, row, file, digest)
             outcome = next((r for r in result.get('published',[]) if r.get('file')==file),{})
             confirmed = receipt(store,row,file,digest)
             state = 'published' if confirmed else 'publishing' if outcome.get('status') in {'queued','published'} else 'failed'
@@ -399,10 +455,14 @@ def advance(store, payload, job):
             continue
         except FileRemediationFinishedWithoutCopy as exc:
             persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='failed',message=str(exc),failure_category='no_corrected_copy'))
+        except DriveReconnectRequired as exc:
+            persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc),requires_reconnect=True,waiting_for_delivery=False))
         except (ValueError, ReleaseArtifactError) as exc:
             persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc),waiting_for_delivery=False))
         except Exception:
-            persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='failed',message='Delivery outcome is unknown. Reconcile its receipt before retrying.'))
+            persistence.update_file(store,row['id'],row['owner_email'],file,
+                dict(state='blocked' if row['intent']['source'] == 'drive' else 'failed',
+                     message='Delivery outcome is unknown. Reconcile its receipt before retrying.'))
     with store.transaction():
         row = persistence.get(store,row['id'],row['owner_email'],lock=True)
         if row['status'] not in ACTIVE or payload['revision'] != row['progress'].get('_tick_revision',0):

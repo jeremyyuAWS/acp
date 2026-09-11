@@ -13972,6 +13972,35 @@ class Store:
         return {**self._decode_side_effect_row(row), "acquired": inserted,
                 "reclaimed": reclaimed, "reused": False}
 
+    def prepare_side_effect_provider_id(self, effect_id: str, reservation_token: str,
+                                        candidate_id: str) -> str:
+        """Persist Drive's pre-generated create ID before sending corrected bytes.
+
+        Retries reuse this ID even if Google accepted a write but its response was lost.
+        The current lease/token fences this preparation just like receipt finalization.
+        """
+        import json as _json
+        if not candidate_id or not all(c.isalnum() or c in "_-" for c in candidate_id):
+            raise ValueError("invalid planned provider ID")
+        now = self._now()
+        encoded = _json.dumps({"planned_provider_id": candidate_id}, sort_keys=True)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE side_effect_receipts SET receipt=%s WHERE effect_id=%s "
+                "AND status='reserved' AND reservation_token=%s AND lease_expires_at>%s "
+                "AND receipt IS NULL", (encoded, effect_id, reservation_token, now))
+            self._db.execute(cur, "SELECT * FROM side_effect_receipts WHERE effect_id=%s",
+                             (effect_id,))
+            row = self._db.fetchone(cur)
+        if (not row or row.get("status") != "reserved"
+                or row.get("reservation_token") != reservation_token
+                or not row.get("lease_expires_at") or str(row["lease_expires_at"]) <= now):
+            raise RuntimeError("side-effect reservation token is stale")
+        planned = (self._decode_side_effect_row(row).get("receipt") or {}).get("planned_provider_id")
+        if not planned:
+            raise RuntimeError("existing delivery requires reconciliation before creating a copy")
+        return planned
+
     def finalize_side_effect(self, effect_id: str, reservation_token: str,
                              receipt: dict, *, now: str | None = None) -> dict:
         """Commit provider evidence only for the current reservation fencing token."""
@@ -14892,6 +14921,22 @@ class Store:
                 "WHERE execution_id=%s", (state, terminal, now, execution_id))
         return {"duplicate": False, "event_id": event_id,
                 "resulting_revision": resulting_revision}
+
+    def enqueue_manual_drive_release(self, scan_id, payloads, *, owner, snapshot_id,
+                                     request_fingerprint, input_manifest_id=None):
+        """Migrate an explicit exact Drive retry while preserving delivery reservations."""
+        from automatic_drive_queue import enqueue
+        return enqueue(self, scan_id, payloads, snapshot_id=snapshot_id,
+                       request_fingerprint=request_fingerprint,
+                       input_manifest_id=input_manifest_id, manual_owner=owner)
+
+    def enqueue_automatic_drive_release(self, scan_id, payloads, *, snapshot_id,
+                                        request_fingerprint, input_manifest_id=None):
+        """Attach exact automatic Drive deliveries without replacing a live execution."""
+        from automatic_drive_queue import enqueue
+        return enqueue(self, scan_id, payloads, snapshot_id=snapshot_id,
+                       request_fingerprint=request_fingerprint,
+                       input_manifest_id=input_manifest_id)
 
     def enqueue_stage_batch(self, scan_id: str, stage: str, job_type: str,
                             payloads: list[dict], *, snapshot_id: str,

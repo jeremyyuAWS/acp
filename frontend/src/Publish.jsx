@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
 import RemediationLiveDocuments from './RemediationLiveDocuments.jsx'
 import ScopeBanner from './ScopeBanner.jsx'
+import DriveReleaseReconnect from './DriveReleaseReconnect.jsx'
 import ReleaseQuickActions from './ReleaseQuickActions.jsx'
 import ReleaseCopyDestination from './ReleaseCopyDestination.jsx'
 import ReleaseReports from './ReleaseReports.jsx'
 import { documentSelection, documentScopeSentence, documentsInSelection } from './remediableScope.js'
-import { openReport, publishFile, publishAllFiles, getReleaseStatus, getAutomaticRelease, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage, prepareReleasePackage, downloadPreparedReleasePackage, getQueueJob, putMyReleaseTemplates } from './api.js'
+import { openReport, publishFile, publishAllFiles, getReleaseStatus, getAutomaticRelease, resumeAutomaticRelease, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage, prepareReleasePackage, downloadPreparedReleasePackage, getQueueJob, putMyReleaseTemplates } from './api.js'
 import { releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
@@ -32,6 +33,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   // Release operates on the exact document cohort chosen in Remediate. The banner below explains
   // the restriction; this filter enforces it for selection, delivery, packaging and set status.
   const releaseFiles = documentsInSelection(files, triage)
+  const [automaticAuthorization, setAutomaticAuthorization] = useState(null)
   const [allowRemainingIssues, setAllowRemainingIssues] = useState(false)
   const releaseScopeKey = JSON.stringify([run?.id, [...new Set(releaseFiles.map(file => file.file))].sort()])
   const partialChoice = useRef(null)
@@ -97,11 +99,14 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     let live = true
     const controller = new AbortController()
     partialChoice.current = null
+    setAutomaticAuthorization(null)
     setAllowRemainingIssues(false)
     if (!run?.id || !releaseFiles.length || readOnly) return () => controller.abort()
     getAutomaticRelease(run.id, releaseFiles.map(file => file.file), { signal: controller.signal }).then(result => {
-      if (!live || partialChoice.current === releaseScopeKey) return
+      if (!live) return
       const saved = result?.authorization
+      setAutomaticAuthorization(saved)
+      if (partialChoice.current === releaseScopeKey) return
       if (saved?.allow_remaining_issues === true && ['active', 'waiting', 'publishing', 'blocked', 'completed'].includes(saved.status)
         && releaseFiles.every(file => saved.files?.includes(file.file))) setAllowRemainingIssues(true)
     }).catch(() => { /* Manual choice remains available if saved authorization cannot be read. */ })
@@ -715,6 +720,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           a report could be read as covering an estate that two documents of it were fixed in. */}
       <ScopeBanner run={run} fileCount={files.length}
                    docScope={documentScopeSentence(documentSelection(files, triage))} />
+      {(automaticAuthorization?.requires_reconnect === true || automaticAuthorization?.can_resume === true) && automaticAuthorization.resumable !== false && ['active', 'waiting', 'processing', 'publishing', 'blocked'].includes(automaticAuthorization.status) && <DriveReleaseReconnect
+        key={`${run?.id}:${automaticAuthorization.id}`} scanId={run?.id} authorizationId={automaticAuthorization.id} requiresReconnect={automaticAuthorization.requires_reconnect === true} readOnly={readOnly}
+        onResume={async () => { await resumeAutomaticRelease(run.id, automaticAuthorization.id); setAutomaticAuthorization(previous => previous?.id === automaticAuthorization.id ? {...previous, requires_reconnect:false, can_resume:false} : previous) }} />}
       <section className="panel release-overview" aria-labelledby="release-title">
         <div className="release-overview__heading">
           <div>
