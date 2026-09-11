@@ -250,7 +250,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
       {/* The ordering, said out loud. A list whose order carries a judgement and does not name it
           is one people re-sort by hand because they assume it is arbitrary. */}
       <p className="muted" style={{ fontSize: 12, margin: '8px 0 0', lineHeight: 1.6 }}>
-        Grouped by remediation capability. Open a document to see its success criteria. The accepted plan determines what can run without approval.
+        {scopedFindings} assessed findings across the document categories in this view. Grouped by remediation capability, not recorded outcomes. Change records are separate and are not added to findings. Open a document to see its success criteria. The accepted plan determines what can run without approval.
       </p>
 
       {/* A28 bulk select + bulk action. Only offers the deterministic fixes in the selection — see
