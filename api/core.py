@@ -790,30 +790,27 @@ def _protected_routes() -> list:
 
 
 def enumerate_api_routes(app) -> list:
-    """Every real endpoint `app` will actually dispatch to — the APIRoute objects backing each
-    `include_router()` registration, unwrapped from FastAPI's opaque `_IncludedRouter` wrapper.
+    """Enumerate effective HTTP API endpoints, including nested router prefixes.
 
-    Takes `app` as a parameter rather than importing it, so this stays import-cycle-safe (core.py
-    is imported BY app.py) and callable from both the real startup path and its own test, which
-    both need identical logic — two implementations of "what routes exist" is how one of them
-    ends up silently checking a different (or empty) set than the real gate uses.
-
-    On FastAPI 0.137.1, `app.routes` does NOT hand back flat `APIRoute`s for anything added via
-    `include_router()` — each becomes an opaque `_IncludedRouter`, and `app.routes` holds none of
-    the original `APIRoute`s directly. `_IncludedRouter.original_router` is the actual `APIRouter`
-    instance passed to `include_router()`, whose own `.routes` are ordinary `APIRoute`s with their
-    final paths already resolved (nothing here uses `include_router(prefix=...)`, so no
-    prefix-joining is needed). Falls back to treating `r` itself as the router for older/newer
-    FastAPI internals that don't wrap routers this way."""
+    FastAPI's lazy included-router candidates carry the final path and matcher.
+    Reading original_router.routes alone loses nested inclusions and prefixes;
+    these same effective routes must drive authentication and capability audits.
+    Older FastAPI versions already expose flat APIRoute objects.
+    """
     from fastapi.routing import APIRoute
 
-    def _expand(r):
-        if isinstance(r, APIRoute):
-            return [r]
-        router = getattr(r, "original_router", r)
-        return [sub for sub in getattr(router, "routes", ()) if isinstance(sub, APIRoute)]
+    def expand(route):
+        if isinstance(route, APIRoute):
+            return [route]
+        candidates = getattr(route, "effective_candidates", None)
+        if callable(candidates):
+            return [leaf for child in candidates() for leaf in expand(child)]
+        if isinstance(getattr(route, "original_route", None), APIRoute):
+            return [route]
+        router = getattr(route, "original_router", route)
+        return [leaf for child in getattr(router, "routes", ()) for leaf in expand(child)]
 
-    return [route for r in app.routes for route in _expand(r)]
+    return [leaf for route in app.routes for leaf in expand(route)]
 
 
 def _matches_a_protected_route(path: str) -> bool:

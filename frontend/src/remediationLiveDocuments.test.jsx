@@ -2,10 +2,10 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import RemediationLiveDocuments from './RemediationLiveDocuments.jsx'
-import { getFileRemediationDiffs } from './api.js'
-vi.mock('./api.js', () => ({ getFileRemediationDiffs: vi.fn() }))
+import { getFileRemediationDiffs, getScanRemediationDiffs, getFindingDispositions, listHitlQueue } from './api.js'
+vi.mock('./api.js', () => ({ getFileRemediationDiffs: vi.fn(), getScanRemediationDiffs: vi.fn(), getFindingDispositions: vi.fn(), listHitlQueue: vi.fn() }))
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
-afterEach(async () => { await unmountAll(); vi.clearAllMocks() })
+afterEach(async () => { await unmountAll(); vi.clearAllMocks(); vi.useRealTimers() })
 const files = ['A.docx', 'B.docx'].map(file => ({ file, name: file, status: 'analysed', issues: [{ wcag: 'SC_1_1_1', severity: 'SERIOUS' }] }))
 const fix = { file: 'A.docx', rule_id: 'SC_1_1_1', before: 'Missing alt text', after: 'A mountain lake', page: 2 }
 const props = { scanId: 'run', files, cap: { docx: { '1.1.1': 'assisted' } }, assessment: { docx: { '1.1.1': 'auto' } }, fixes: [fix], fixTotal: 9 }
@@ -85,4 +85,53 @@ it('uses an Assess-style file page with remediation pills and returns focus to V
   expect(container.querySelector('[role=dialog]')).toBeNull()
   await act(async () => [...page.querySelectorAll('button')].find(n => n.textContent === '← All documents').click())
   expect(document.activeElement).toBe(open)
+})
+
+it('moves only confirmed finding categories and keeps totals', async () => {
+  vi.useFakeTimers()
+  const ledger = { available:true, batch_id:'batch', items: files.map((f,i) => ({finding_id:`f${i}`,file:f.file,rule_id:'1.1.1',disposition:'awaiting_review',review_item_id:`q${i}`})) }
+  getFindingDispositions.mockResolvedValue(ledger)
+  listHitlQueue.mockResolvedValue([])
+  getScanRemediationDiffs.mockResolvedValue({items:[],total:0,documents:0,loaded:0,complete:true})
+  const snapshot={batch_id:'batch',state:'processing',documents:{processing:2}}
+  const {root,container}=await mount({snapshot,connected:true})
+  await act(async()=>vi.advanceTimersByTime(400))
+  expect(container.querySelectorAll('.live-document-table tbody tr')).toHaveLength(2)
+  expect(container.querySelector('.live-document-categories').textContent).toContain('AI 1')
+  expect(container.querySelector('.live-document-changed')).toBeNull()
+  getFindingDispositions.mockResolvedValue({...ledger,items:ledger.items.map((r,i)=>i? r:{...r,disposition:'approved_pending_verification'})})
+  listHitlQueue.mockResolvedValue([{id:'q0',file:'A.docx',applied:true,proposals:[{model:'real',model_call_id:'call'}]}])
+  await act(async()=>root.render(createElement(RemediationLiveDocuments,{...props,snapshot,connected:true,events:[{id:1,scan_id:'run',kind:'remediate.fix_applied'}]})))
+  await act(async()=>vi.advanceTimersByTime(400))
+  expect(container.querySelector('.live-document-categories').textContent).toContain('AI applied 1')
+  expect(container.querySelector('.live-document-changed')).not.toBeNull()
+  expect(container.textContent).toContain('Finding categories updated for 1 document.')
+  expect(getFindingDispositions).toHaveBeenCalledTimes(2)
+  await act(async()=>root.render(createElement(RemediationLiveDocuments,{...props,snapshot,connected:true,events:[{id:1,scan_id:'run',kind:'remediate.fix_applied'},{id:2,scan_id:'other',kind:'remediate.fix_applied'}]})))
+  await act(async()=>vi.advanceTimersByTime(400))
+  expect(getFindingDispositions).toHaveBeenCalledTimes(2)
+})
+
+it('does not invent category movement when canonical findings are incomplete', async () => {
+  vi.useFakeTimers()
+  getFindingDispositions.mockResolvedValue({available:true,batch_id:'batch',items:[]})
+  listHitlQueue.mockResolvedValue([])
+  getScanRemediationDiffs.mockResolvedValue({items:[{...fix,verified:true}],total:1,documents:1,loaded:1,complete:true})
+  const {container}=await mount({snapshot:{batch_id:'batch'},connected:true})
+  await act(async()=>vi.advanceTimersByTime(400))
+  expect(container.querySelector('.live-document-table')).toBeNull()
+  expect(container.textContent).toContain('outcomes are reconciling')
+  expect(container.textContent).toContain('AI 2')
+})
+
+it('distinguishes unique WCAG criteria from individual findings without multiplying', async () => {
+  const repeated=[{file:'Many.docx',status:'analysed',issues:[
+    {wcag:'SC_1_1_1',severity:'SERIOUS'},{wcag:'SC_1_1_1',severity:'SERIOUS'},
+    {wcag:'SC_1_3_1',severity:'SERIOUS'},
+  ]}]
+  const {container}=await mount({files:repeated})
+  expect(container.textContent).toContain('WCAG criteria with issues')
+  expect(container.textContent).toContain('Total findings')
+  expect(container.querySelector('.col-criteria').textContent).toBe('2')
+  expect(container.querySelector('.col-findings').textContent).toBe('3')
 })

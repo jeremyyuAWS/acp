@@ -374,7 +374,14 @@ def _verify_residual_scs(fixed_bytes: bytes, filename: str):
 def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_enabled: bool) -> None:
     from assessment_selection import selected_for_file, selection
     scope = core.store.scope_for_file(scan_id, filename, core.store.get_scan_scope(scan_id))
-    with selection(selected_for_file(scope, filename)):
+    from ai_run_policy import optional_current_run_context
+    from document_wide_workflow import suppressed_criteria
+    selected = selected_for_file(scope, filename)
+    suppressed = suppressed_criteria(optional_current_run_context(), filename)
+    if suppressed:
+        # Managed document mode has a frozen explicit scope; no duplicate per-image call.
+        selected = set(selected or ()) - suppressed
+    with selection(selected):
         return _propose_text_findings_selected(scan_id, filename, file_bytes, ai_enabled)
 
 
@@ -685,6 +692,10 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
     draft never had. Passing it here rather than deriving it here is deliberate for the same
     reason: derived, it would apply to all 12."""
     if not proposals:
+        return
+    from ai_run_policy import optional_current_run_context
+    from document_wide_workflow import suppressed_criteria
+    if sc in suppressed_criteria(optional_current_run_context(), filename):
         return
     # OPERATOR SCOPE. One gate here covers every proposer — 19 call sites across 12 criteria —
     # because this is the single boundary where a proposal is still labelled with its SC. Gating
@@ -1298,6 +1309,15 @@ def _remediate_file(payload: dict, job: dict) -> None:
         source_token = SOURCE.set(None)
         try:
             result = _remediate_file_with_policy(payload, job)
+            if context is not None:
+                try:
+                    from document_wide_workflow import process_file
+                    process_file(core.store, context)
+                except Exception as exc:
+                    core.store.log_decision('system', 'document_wide.deferred',
+                        scan_id=context.scan_id, file=context.file,
+                        detail=__import__('json').dumps({'owner_id': context.owner_id, 'run_id': context.run_id,
+                            'reason': f'Document-wide suggestions did not complete: {type(exc).__name__}'}))
             if context is not None and context.policy.get('auto_approve_ai') is True:
                 try:
                     from ai_standing_approval import approve_file
@@ -1416,7 +1436,10 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
     if ext == "docx":
         _propose_form_fields(scan_id, filename, data, _draft_ai)
 
-    if impact_controls is not None and not _eligible_rules:
+    from ai_run_policy import optional_current_run_context
+    from document_wide_workflow import enabled as document_wide_enabled
+    _document_mode = document_wide_enabled(optional_current_run_context(), filename)
+    if impact_controls is not None and not _eligible_rules and not _document_mode:
         review_rules = [{"rule_id": row["rule_id"], "rule_name": row.get("rule_name"),
                          "finding_count": row.get("finding_count")}
                         for row in core.store.get_scan_traces(scan_id, file=filename)
@@ -1602,10 +1625,15 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
                     # evidence is a nicety; never fail a remediation job for a thumbnail
                     swallowed("_remediate_file: attaching 1.1.1 HITL evidence failed", scan_id)
             if not out_path or not _Path(out_path).exists():
-                core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
-                                        file=filename, detail=f".{ext}: no deterministic fixes applied")
-                return
-            fixed_bytes = _Path(out_path).read_bytes()
+                if not _document_mode:
+                    core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
+                                            file=filename, detail=f".{ext}: no deterministic fixes applied")
+                    return
+                # Document AI requires a durable working copy even when deterministic
+                # remediation had nothing to change. This records zero applied fixes.
+                fixed_bytes = data
+            else:
+                fixed_bytes = _Path(out_path).read_bytes()
 
     from output_provenance import stamp_output
     fixed_bytes = stamp_output(fixed_bytes, filename)
@@ -5054,6 +5082,15 @@ def _apply_one_value_kind(
     # every locator failed to resolve: nothing of it was written, so the re-scan says nothing
     # about it and it must not inherit a verified_cleared from its neighbours.
     lane_items = list(review_item_ids)
+    semantic_review = False
+    semantic_review_revision = None
+    if (residual_state or {}).get('retain_unverified'):
+        for item_id in lane_items:
+            item = core.store.get_hitl_item(item_id) or {}
+            if (str(item.get('last_decision_request_id') or '').startswith('standing:')
+                    and any(p.get('requires_semantic_review') is True for p in item.get('proposals', []))):
+                semantic_review = True
+                semantic_review_revision = item.get('approved_source_revision')
     from remediation_contribution import writer_tickets, record_writer_result
     from hashlib import sha256 as _proof_sha256
     import uuid as _proof_uuid
@@ -5175,11 +5212,15 @@ def _apply_one_value_kind(
                     'source_sha256': _proof_sha256(working).hexdigest(),
                     'baseline_residual': sorted(baseline.residual) if baseline is not None and baseline.ok else None,
                     'changes': applied, 'outcome': outcome, 'reason': reason,
-                    'verification': 'not_verified'}))
+                    'verification': 'not_verified', 'requires_semantic_review': semantic_review,
+                    'assessment_revision': semantic_review_revision}))
             _model_outcome(outcome, reason + unresolved_note, regressions=regressions)
         pending_credits.append(commit_unverified)
         residual_state['verification'] = verification
         return fixed, True
+
+    if semantic_review:
+        return preserve_unverified('could_not_verify', 'AI text was applied; meaning and accuracy require human review. Structural presence alone is not semantic verification.')
 
     if not verification.ok:
         # COULD NOT VERIFY — the document was unreadable, the scan errored or timed out, an

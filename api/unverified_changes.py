@@ -32,15 +32,48 @@ def pending_records(store, scan_id, filename):
     if not digest:
         return []
     with store._db.cursor() as cur:
-        store._db.execute(cur, "SELECT id,rule_id,action,detail FROM decision_log WHERE scan_id=%s AND file=%s AND action IN ('apply.saved_unverified','apply.reverified') ORDER BY ts,id", (scan_id, filename))
+        store._db.execute(cur, "SELECT id,ts,rule_id,action,detail FROM decision_log WHERE scan_id=%s AND file=%s AND action IN ('apply.saved_unverified','apply.reverified') ORDER BY ts,id", (scan_id, filename))
         rows = store._db.fetchall(cur)
-    parsed=[]
-    for row in rows:
-        entry=json.loads(row['detail'])
-        if entry.get('artifact_sha256') == digest:
-            parsed.append({**entry, 'event_id':row['id'], 'rule_id':row['rule_id'], 'action':row['action']})
-    cleared={r.get('source_event_id') for r in parsed if r['action']=='apply.reverified'}
-    return [r for r in parsed if r['action']=='apply.saved_unverified' and r['event_id'] not in cleared]
+    parsed=[{**json.loads(row['detail']), 'event_id':row['id'], 'rule_id':row['rule_id'],
+             'action':row['action'], 'recorded_at':row['ts']} for row in rows]
+    # A later edit to a different criterion must not erase an outstanding semantic
+    # obligation. Carry it only along durable writer edges for this file. A new assessment is not semantic confirmation.
+    ancestors = {digest}
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "SELECT actual_source_sha256,artifact_sha256 FROM ai_validation_outcomes WHERE scan_id=%s AND file=%s AND source_revision IS NOT NULL", (scan_id, filename))
+        edges = [(r.get('actual_source_sha256'), r.get('artifact_sha256')) for r in store._db.fetchall(cur)]
+    edges.extend((r.get('source_sha256'),r.get('artifact_sha256')) for r in parsed
+                 if r.get('assessment_revision') and r['action']=='apply.saved_unverified')
+    while True:
+        earlier={before for before,after in edges if before and after in ancestors}
+        if earlier.issubset(ancestors):
+            break
+        ancestors.update(earlier)
+    relevant=[r for r in parsed if r.get('artifact_sha256')==digest or
+              (r.get('requires_semantic_review') is True and
+               r.get('assessment_revision') and r.get('artifact_sha256') in ancestors)]
+    cleared={r.get('source_event_id') for r in parsed if r['action']=='apply.reverified'
+             and r.get('artifact_sha256') in ancestors}
+    with store._db.cursor() as cur:
+        store._db.execute(cur, '''SELECT v.item_id,v.rule_id,v.artifact_sha256,v.proposal_snapshot_id,
+            v.actual_approved_value_sha256,v.created_at,e.approved_value_sha256,e.proposal_snapshot_ids
+            FROM ai_validation_outcomes v JOIN hitl_events e ON e.id=v.approval_event_id
+            WHERE v.scan_id=%s AND v.file=%s AND e.scan_id=v.scan_id AND e.file=v.file
+              AND e.item_id=v.item_id AND e.action IN ('approve','edit')
+              AND v.outcome='verified_cleared' ''', (scan_id,filename))
+        confirmations=store._db.fetchall(cur)
+    human_confirmed=[r for r in confirmations
+        if r.get('artifact_sha256') in ancestors and r.get('actual_approved_value_sha256')
+        and r['actual_approved_value_sha256']==r.get('approved_value_sha256')
+        and r.get('proposal_snapshot_id') in json.loads(r.get('proposal_snapshot_ids') or '[]')]
+    def confirmed(entry):
+        return (entry.get('requires_semantic_review') is True and bool(entry.get('item_ids'))
+                and all(any(r['item_id']==item and r['rule_id']==entry['rule_id']
+                            and r.get('created_at') and r['created_at'] > entry['recorded_at']
+                            for r in human_confirmed) for item in entry['item_ids']))
+    return [{**r, 'artifact_sha256': digest, 'applied_artifact_sha256': r.get('artifact_sha256')}
+            for r in relevant if r['action']=='apply.saved_unverified' and r['event_id'] not in cleared
+            and not confirmed(r)]
 
 
 def blocks_certification(store, scan_id, filename):
@@ -72,6 +105,8 @@ def record_verification(store, scan_id, filename, data, verification):
             return 0
         diffs=list(store.get_remediation_diffs(scan_id, filename) or [])
         for entry in pending_records(store, scan_id, filename):
+            if entry.get('requires_semantic_review') is True:
+                continue  # Presence-only scans cannot certify model-generated meaning.
             baseline=entry.get('baseline_residual')
             if not verification.cleared({entry['rule_id']}) or (verification.residual - set(baseline or ())):
                 continue

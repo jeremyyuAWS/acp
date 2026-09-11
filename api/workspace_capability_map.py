@@ -499,6 +499,9 @@ for _stream, _twin in STREAM_TWINS.items():
     _map(_stream[0], _stream[1], ROUTE_CAPABILITIES[_twin])
 
 
+_map_many([("GET", "/scans/{sid}/remediation/accepted-plan/{run_id}")], {"remediate.view"})
+
+
 # ── exempt, with reasons ──────────────────────────────────────────────────────
 # Each entry says WHY. An exemption without one is indistinguishable from an oversight, and the
 # completeness test refuses a route that is in neither table.
@@ -555,7 +558,17 @@ def required_capabilities(method: str, path: str) -> frozenset[str] | None:
 def unmapped_routes(routes) -> list[tuple[str, str]]:
     """Every (method, path) that is neither mapped nor exempt. Empty is the invariant."""
     out = []
+    from types import SimpleNamespace
+    from core import enumerate_api_routes
+    # Readiness also accepts already-normalized route descriptors. Preserve
+    # those rather than silently dropping them through APIRoute-only discovery.
+    effective = []
     for route in routes:
+        if hasattr(route, "path") and hasattr(route, "methods"):
+            effective.append(route)
+        else:
+            effective.extend(enumerate_api_routes(SimpleNamespace(routes=[route])))
+    for route in effective:
         for method in (route.methods or ()):
             if method in ("HEAD", "OPTIONS"):
                 continue

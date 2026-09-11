@@ -96,7 +96,7 @@ describe('the Run Remediation button is reachable after a review', () => {
     // Starting a run now belongs to the planner, so saved defaults cannot bypass a
     // user's No AI or review-first selection through a second execution button.
     expect(rem).toMatch(/autoBatch && autoBatch\.count > 0/)
-    expect(rem).toContain("label: 'Review remediation plan', onClick: openRemediationPlan")
+    expect(rem).toContain("label: 'Start remediation', onClick: openRemediationPlan")
     expect(rem).not.toContain('runServerRemediation(autoBatch.files)')
     expect(rem).not.toContain('runServerRemediation(remediable)')
     expect(rem).toContain('runServerRemediation(impactScope, policy, intent)')

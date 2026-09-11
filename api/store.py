@@ -7800,13 +7800,24 @@ class Store:
                     metadata = {row["file"]: row for row in self._db.fetchall(cur)}
                     traces = [{**metadata.get(group["file"], {}), **group} for group in groups]
                 break
+            # Freeze real detector locations when they cover the complete counted group.
+            # Legacy/missing locations retain aggregate identities and cannot be guessed
+            # into per-element AI edits later.
+            self._db.execute(cur, "SELECT file,wcag,location FROM issue_records WHERE scan_id=%s", (scan_id,))
+            issue_locations = {}
+            for issue in self._db.fetchall(cur):
+                issue_locations.setdefault(issue['file'], []).append(issue)
+            from document_wide_manifest import assessed_locations
             for trace in traces:
                 document_id = resolve_doc_id(
                     run.get("source") or "local", trace.get("drive_file_id"), trace["file"],
                     trace.get("checksum"))
-                for ordinal in range(1, int(trace.get("finding_count") or 0) + 1):
+                count = int(trace.get("finding_count") or 0)
+                locations = assessed_locations(issue_locations.get(trace['file'], []), trace['rule_id'], count)
+                for ordinal in range(1, count + 1):
                     instance_key = normalize_instance_key(
-                        None, ordinal=ordinal, aggregate_scope=snapshot_id or scan_id)
+                        locations[ordinal - 1] if locations else None, ordinal=ordinal,
+                        aggregate_scope=snapshot_id or scan_id)
                     finding_id = stable_finding_id(document_id, trace["rule_id"], instance_key)
                     self._db.execute(cur,
                         "INSERT INTO finding_disposition(scan_id,batch_id,finding_id,workflow_id,"

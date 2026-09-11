@@ -284,7 +284,8 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
               )}
             </th>
             <th scope="col" style={{ width: '36%' }}>Document</th>
-            <th scope="col">Findings</th>
+            <th scope="col">WCAG criteria with issues</th>
+            <th scope="col">Total findings</th>
             <th scope="col" style={{ width: '40%' }}>Remediation categories</th>
             <th scope="col"><span className="vh">Action</span></th>
           </tr>
@@ -327,6 +328,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
               </td>
               {row.opened ? (
                 <>
+                  <td className="col-criteria" style={numCell}>{new Set(row.findings.map(f => f.sc)).size}</td>
                   <td className="col-findings" style={numCell}>
                     <span className="n">{row.totalFindings}</span>
                   </td>
@@ -350,7 +352,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
                 // No counts at all, rather than zeros: a file ACP never read has no findings, no
                 // auto-fixable work and nothing awaiting review, and a 0 in any of those columns
                 // would read as a document that came back clean.
-                <td className="muted" colSpan={3} style={{ fontSize: 12 }}>
+                <td className="muted" colSpan={4} style={{ fontSize: 12 }}>
                   No result from this run — it holds no work until the file can be opened.
                 </td>
               )}

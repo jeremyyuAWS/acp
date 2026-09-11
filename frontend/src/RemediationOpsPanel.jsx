@@ -236,7 +236,7 @@ function Activity({ events = [], status = 'ready', terminal = false, compact = f
 // by its own endpoint, which groups the exceptions BY RESPONSE and decides on the server which of
 // them ACP may act on. See RemediationExceptions.jsx.
 
-export default function RemediationOpsPanel({ snapshot = null, connected = false, receivedAt = null, events = [], activityStatus = 'ready', updateMode = 'idle', onViewMonitor = null, compactLayout = null, exceptions = null, assessmentContext = null }) {
+export default function RemediationOpsPanel({ snapshot = null, connected = false, receivedAt = null, events = [], activityStatus = 'ready', updateMode = 'idle', onViewMonitor = null, compactLayout = null, exceptions = null, assessmentContext = null, streamlined = false }) {
   const activityConfirmed = useConfirmedRemediationActivity(snapshot)
   const [paused, setPaused] = useState(false)
   const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.hidden)
@@ -255,7 +255,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   // the view; the hook is what a mounted panel uses. Both, rather than either, because the hook
   // cannot be called conditionally and a test cannot run an effect through renderToStaticMarkup.
   const fetchedExceptions = useRemediationExceptions(
-    exceptions ? null : (snapshot?.run_id || null), snapshot?.revision ?? null)
+    exceptions || streamlined ? null : (snapshot?.run_id || null), snapshot?.revision ?? null)
   const exceptionState = exceptions || fetchedExceptions
   // ONE LIVE REGION FOR THE WHOLE PANEL. PRD §12 asks for "a polite live region" — singular —
   // and two of them do not add up to one: a screen reader interleaves their updates, so the
@@ -273,6 +273,15 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   // are actionable. The predicate this replaces read `snapshot.delivery.failures` — a field the
   // snapshot has never carried — so its delivery term was always false.
   const exceptionTotal = exceptionCount(exceptionState.view)
+  // Retired presentation remains available to existing callers. Live View opts
+  // into one AI graph and one activity list, without parallel progress totals.
+  if (streamlined) return <section className={`panel remops${hidden ? ' remops-motion-paused' : ''}`} aria-label="Remediation live view">
+    {['failed', 'cancelled', 'paused', 'stalled'].includes(snapshot.state) && <p role="status" className="remops-error">{line}{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>View in Monitor →</button>}</p>}
+    <RemediationWaterfallCard key={`${snapshot.scan_id || snapshot.run_id}:${snapshot.batch_id || "legacy"}`} snapshot={snapshot} paused={hidden} assessmentContext={assessmentContext} streamlined />
+    <div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /></div>
+    <Activity events={events} status={activityStatus} terminal={snapshot.terminal} />
+    <p aria-live="polite" className="sr-only" data-testid="rem-ops-announce">{line}</p>
+  </section>
   return <section className={`panel remops${paused || hidden ? ' remops-motion-paused' : ''}`} aria-label="Remediation run status">
     <header className="remops-header"><div><span className="remops-eyebrow">{({ failed: 'Remediation failed', cancelled: 'Remediation stopped', paused: 'Remediation paused', stalled: 'Remediation stalled' })[snapshot.state] || (snapshot.terminal ? 'Remediation results' : activityConfirmed ? 'Remediation in progress' : 'Remediation run')}</span><h2>{line}</h2>{snapshot.source?.breadcrumb && <p>{snapshot.source.breadcrumb}</p>}<p className="muted">{snapshot.source?.locked_at ? `Snapshot locked ${new Date(snapshot.source.locked_at).toLocaleString()} · ` : ''}{snapshot.run_id}</p></div><div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /><button type="button" className="ghost" aria-pressed={paused} onClick={() => setPaused((value) => !value)}>{paused ? 'Resume visual updates' : 'Pause visual updates'}</button>{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>View in Monitor →</button>}</div></header>
     {suspect && <div className="remops-integrity" role="status"><b>{documentCountsSuspect ? 'Document status is temporarily inconsistent.' : 'Some supporting totals are catching up.'}</b> ACP cannot currently reconcile {(snapshot.integrity.affected || []).join(', ') || 'one or more values'}. {documentCountsSuspect ? 'Document counts below are the last ACP confirmed.' : 'Live document progress remains available.'}</div>}

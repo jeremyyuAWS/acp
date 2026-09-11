@@ -139,3 +139,16 @@ it('never offers reconnect for stopped or expired authorization', async () => {
  const v = await mount()
  expect(v.button('Reconnect Google Drive')).toBeUndefined()
 })
+it('reports server-confirmed execution identity for read-only absence of automatic publishing', async () => {
+ const onStatus = vi.fn()
+ const v = await mount({ statusOnly: true, onStatus })
+ expect(v.container.textContent).toBe('')
+ expect(onStatus.mock.calls.at(-1)[0]).toEqual({ scanId: 'scan', runId: 'execution-one', authorization: null })
+ expect(enableAutomaticRelease).not.toHaveBeenCalled()
+})
+it('does not report confirmed absence when the initial status request fails', async () => {
+ getAutomaticRelease.mockRejectedValue(new Error('unavailable'))
+ const onStatus = vi.fn()
+ await mount({ statusOnly: true, onStatus })
+ expect(onStatus.mock.calls.at(-1)[0]).toEqual({ scanId: 'scan', runId: undefined, authorization: undefined })
+})

@@ -42,7 +42,16 @@ def detect(path: Path) -> list[dict]:
             fields: list = []
             for f in root["/AcroForm"]["/Fields"]:
                 acroform.terminal_fields(f, fields, set())
+            # Use the exact writer's all-field ordering, not an ordinal over
+            # failing fields (which changes as neighboring fields are fixed).
+            from remediate_pdf import _collect_form_fields, _form_field_locators
+            writer_fields = _collect_form_fields(pdf)
+            writer_locators = _form_field_locators(writer_fields, pdf)
+            by_object = {tuple(f.objgen): writer_locators[id(f)] for f in writer_fields
+                         if tuple(f.objgen) != (0, 0)}
             for fld in fields:
+                location = by_object.get(tuple(fld.objgen))
+                identity = {"location": location} if location else {}
                 name = ""
                 try:
                     name = str(fld.get("/T", "")).strip()
@@ -52,6 +61,7 @@ def detect(path: Path) -> list[dict]:
                 if acroform.field_unnamed(fld):
                     findings.append({
                         "ruleId": "PDF_FORM_NO_ACCESSIBLE_NAME",
+                        **identity,
                         "wcag": "4.1.2 Name, Role, Value",
                         "severity": "CRITICAL",
                         "detail": f"form field {label} has no accessible name (/TU)" if name
@@ -60,6 +70,7 @@ def detect(path: Path) -> list[dict]:
                 if acroform.field_bad_type(fld):
                     findings.append({
                         "ruleId": "PDF_FORM_NO_FIELD_TYPE",
+                        **identity,
                         "wcag": "4.1.2 Name, Role, Value",
                         "severity": "CRITICAL",
                         "detail": f"form field {label} has no recognized /FT — its role (button, "
@@ -68,6 +79,7 @@ def detect(path: Path) -> list[dict]:
                 if acroform.field_required_no_value(fld):
                     findings.append({
                         "ruleId": "PDF_FORM_REQUIRED_NO_VALUE",
+                        **identity,
                         "wcag": "4.1.2 Name, Role, Value",
                         "severity": "SERIOUS",
                         "detail": f"required form field {label} has no value (/V) and no "

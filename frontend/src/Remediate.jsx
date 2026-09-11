@@ -1,3 +1,6 @@
+import useAcceptedRemediationIdentity from './useAcceptedRemediationIdentity.js'
+import AcceptedRemediationPlanSummary from './AcceptedRemediationPlanSummary.jsx'
+import { getAcceptedRemediationPlan } from './api.js'
 import { assessMetrics } from './assessMetrics.js'
 import { reviewableRemediationItems } from './remediationReviewAvailability.js'
 import RemediationLiveDocuments from './RemediationLiveDocuments.jsx'
@@ -576,6 +579,23 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // cursor" — a first connection, which the server answers with live frames and no backfill.
   const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
   const [runDetailsOpen, setRunDetailsOpen] = useState(false)  // the Run details disclosure (PRD §11)
+  const [acceptedLaunch, setAcceptedLaunch] = useState(null)
+  const [acceptedPlan, setAcceptedPlan] = useState(null)
+  const { batchId: acceptedBatchId, authorization: acceptedAuthorization } = useAcceptedRemediationIdentity({
+    scanId: runId, snapshot: runStream?.snapshot, launch: acceptedLaunch, clearLaunch: setAcceptedLaunch, releaseState: automaticReleaseState,
+  })
+  useEffect(() => {
+    let active = true
+    setAcceptedPlan(null)
+    if (runId && acceptedBatchId) {
+      setAcceptedPlan({ scanId: runId, batchId: acceptedBatchId, loading: true })
+      getAcceptedRemediationPlan(runId, acceptedBatchId).then(result => {
+        if (active) setAcceptedPlan({ scanId: runId, batchId: acceptedBatchId, policy: result.policy, loading: false })
+      }).catch(() => { if (active) setAcceptedPlan({ scanId: runId, batchId: acceptedBatchId, loading: false }) })
+    }
+    return () => { active = false }
+  }, [runId, acceptedBatchId])
+
   const pollRef = useRef(null)
   const remStartRef = useRef(false)   // synchronous guard — remBusy is state, two clicks in one frame both read false
   useEffect(() => () => clearInterval(pollRef.current), [])
@@ -794,6 +814,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   + `remediated elsewhere; re-scan to refresh.`)
         setRemBusy(false); return
       }
+      setAcceptedLaunch({ scanId: runId, batchId: r.batch_id || r.execution_id || r.stage_execution_id })
       setPlanRevision(value => value + 1)
       setWorkspaceRequest({ mode: 'live' })
       if (releaseIntent) {
@@ -1198,11 +1219,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // ORIGINAL document (see RemediationVerify's own footnote), which is not a re-run over the
   // corrected copy. A button claiming otherwise would claim an action ACP cannot perform, so the
   // awaiting-revalidation count is reported as state in the summary line instead.
-  const openRemediationPlan = () => setWorkspaceRequest({ mode: 'plan' })
+  const planAccepted = !!acceptedBatchId || !!(acceptedLaunch && acceptedLaunch.scanId === runId)
+  const openRemediationPlan = () => planAccepted ? setRunDetailsOpen(true) : setWorkspaceRequest({ mode: 'plan' })
   const primary = readOnly ? null
     : remRunning ? { label: 'Applying fixes…', disabled: true }
-    : autoBatch && autoBatch.count > 0
-      ? { label: 'Review remediation plan', onClick: openRemediationPlan, disabled: !runId }
+    : !planAccepted && autoBatch && autoBatch.count > 0
+      ? { label: 'Start remediation', onClick: openRemediationPlan, disabled: !runId }
     : reviewCount > 0
       ? { label: 'Review next finding',
           onClick: () => setWorkspaceRequest({ mode: 'review' }) }
@@ -1589,7 +1611,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             <button disabled={remBusy || !runId || readOnly} onClick={openRemediationPlan}
                     title="Review permissions and impact before starting remediation."
                     style={{ flexShrink: 0 }}>
-              {remBusy ? '⏳ Enqueueing…' : 'Review remediation plan'}
+              {remBusy ? '⏳ Enqueueing…' : planAccepted ? 'Run details' : 'Start remediation'}
             </button>
             {(serverFixed > 0 || remProg) && <TraceChip scanId={runId} kind="session" label="View scan traces" />}
           </div>
@@ -1868,10 +1890,22 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   manual: reviewCounts.manual, revalidating: revalidatingCount, blocked: blockedCount }}
         primary={primary}
         readOnly={readOnly}
+        runDetailsOpen={runDetailsOpen}
         onOpenRunDetails={() => { setRunDetailsOpen((v) => !v); setWorkspaceRequest({ mode: 'live' }) }} />
-      <RemediationReleaseAccess files={impactScope} readOnly={readOnly} onNavigate={onNavigate} />
+      <section id="accepted-run-details" hidden={!runDetailsOpen} aria-label="Run details">
+        {runDetailsOpen && <AcceptedRemediationPlanSummary
+          policy={acceptedPlan?.scanId === runId && acceptedPlan?.batchId === acceptedBatchId ? acceptedPlan.policy : null}
+          loading={acceptedPlan?.loading === true}
+          authorization={acceptedAuthorization} />}
+        <RemediationAutoRelease statusOnly onStatus={setAutomaticReleaseState} scanId={runId} files={impactScope} readOnly={readOnly} />
+        {runDetailsOpen && <details><summary>Additional run information</summary>
+          <RemediationRunDetails sections={runDetailSections} open />
+          <RemediationReleaseAccess files={impactScope} readOnly={readOnly} onNavigate={onNavigate} />
+        </details>}
+      </section>
       <RemediationWorkspaceTabs
-        reviewOptional={automaticReleaseState?.scanId === runId && automaticReleaseState?.authorization?.allow_remaining_issues === true && ['active', 'waiting', 'publishing', 'blocked', 'completed'].includes(automaticReleaseState?.authorization?.status)}
+        planAccepted={planAccepted}
+        reviewOptional={acceptedAuthorization?.allow_remaining_issues === true && ['active', 'waiting', 'publishing', 'blocked', 'completed'].includes(acceptedAuthorization?.status)}
         runId={runId}
         workspaceRequest={workspaceRequest}
         plan={<>
@@ -1899,20 +1933,18 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         live={<>
           {releasePlanNotice && <div role="status">{releasePlanNotice}</div>}
           {remMsg && <div role="status">{remMsg}</div>}
-          <RemediationLiveDocuments key={runId} scanId={runId} files={impactScope} cap={cap} assessment={assessment}
+          <RemediationLiveDocuments snapshot={scopedSnapshot} events={runStream?.events || []} connected={!!runStream?.connected} key={runId} scanId={runId} files={impactScope} cap={cap} assessment={assessment}
             fixes={fixSource} fixTotal={fixTotal} refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`} />
-          <RemediationAutoRelease onStatus={setAutomaticReleaseState} scanId={runId} files={impactScope} readOnly={readOnly} />
           {/* The large panel consumes the App-owned controller. Mounting this view opens no
               stream of its own, so the compact card, global card and panel stay on one cursor. */}
-          <RemediationOpsPanel snapshot={runStream?.snapshot || null}
+          <RemediationOpsPanel streamlined snapshot={runStream?.snapshot || null}
                                assessmentContext={{ files, cap, assessment, scanId: runId, runStatus: run?.status }}
                                connected={!!runStream?.connected}
                                receivedAt={runStream?.receivedAt || null}
                                events={runStream?.events || []}
                                activityStatus={runStream?.activityStatus || 'loading'}
                                updateMode={remUpdates} />
-          <RemediationRunDetails sections={runDetailSections}
-                                 open={runDetailsOpen} onToggle={setRunDetailsOpen} />
+
         </>} />
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} context="remediate" aiEnabled={aiEnabled} scanId={run?.id} readOnly={readOnly} onClose={() => setSel(null)} />}

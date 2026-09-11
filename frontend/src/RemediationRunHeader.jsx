@@ -63,6 +63,7 @@ export default function RemediationRunHeader({
   secondary = null,
   readOnly = false,
   onOpenRunDetails = null,
+  runDetailsOpen = false,
 }) {
   const segments = summarySegments(counts)
   // The empty case is a sentence, not a blank line: a header with no summary reads as a component
@@ -127,7 +128,7 @@ export default function RemediationRunHeader({
         )}
         {onOpenRunDetails && (
           <button type="button" className="linklike" style={{ fontSize: 12 }}
-                  onClick={onOpenRunDetails}>
+                  aria-expanded={runDetailsOpen} aria-controls="accepted-run-details" onClick={onOpenRunDetails}>
             Run details
           </button>
         )}

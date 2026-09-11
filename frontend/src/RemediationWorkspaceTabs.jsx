@@ -11,7 +11,7 @@ function modeFromLocation() {
 }
 
 export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snapshot = null,
-  plan, review, live, reviewOptional = false, workspaceRequest = null }) {
+  plan, review, live, reviewOptional = false, workspaceRequest = null, planAccepted = false }) {
   // Live is the default workspace. Legacy Plan links open the required planning dialog.
   const [chosen, setChosen] = useState(() => modeFromLocation())
   const tabs = useRef([])
@@ -65,8 +65,8 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
   useEffect(() => {
     if (lastWorkspaceRequest.current === workspaceRequest) return
     lastWorkspaceRequest.current = workspaceRequest
-    if (['plan', ...MODES].includes(workspaceRequest?.mode)) select(workspaceRequest.mode, { focusPanel: true })
-  }, [workspaceRequest])
+    if (['plan', ...MODES].includes(workspaceRequest?.mode) && !(planAccepted && workspaceRequest.mode === 'plan')) select(workspaceRequest.mode, { focusPanel: true })
+  }, [workspaceRequest, planAccepted])
 
   const onKeyDown = (event, index) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
@@ -89,8 +89,8 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
         {value === 'live' && activeWork && <span className="rem-mode-live-dot" aria-label="active">●</span>}
       </button>)}
     </div>
-    <button type="button" className="ghost" onClick={() => select('plan')}>Remediation plan</button>
-    <RemediationPlanDialog open={chosen === 'plan' || chosen === 'modes'} onClose={() => select(mode)}>
+    {!planAccepted && <button type="button" className="ghost" onClick={() => select('plan')}>Remediation plan</button>}
+    <RemediationPlanDialog open={!planAccepted && (chosen === 'plan' || chosen === 'modes')} onClose={() => select(mode)}>
       {plan}
     </RemediationPlanDialog>
     <div ref={node => { panels.current.review = node }} id="rem-panel-review" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-review"

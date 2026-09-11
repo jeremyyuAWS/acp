@@ -2632,3 +2632,7 @@ export const resumeAutomaticRelease = (scanId, authorizationId) => fetch(
   `${BASE}/scans/${encodeURIComponent(scanId)}/release/automatic/${encodeURIComponent(authorizationId)}/resume`, {
     method: 'POST', headers: headers(),
   }).then(j)
+
+export const getAcceptedRemediationPlan = (scanId, batchId) => SIM
+  ? sim({ scan_id: scanId, run_id: batchId, policy: null, available: false })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/accepted-plan/${encodeURIComponent(batchId)}`, { headers: headers(), cache: 'no-store' }).then(j)

@@ -163,9 +163,19 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const questionsComplete = !requireAnswers || (budgetValid && answers.rule_based && answers.tools && releaseAnswered)
   const change = (key, value) => {
     setAnswers(current => ({ ...current, [key]: true, ...(['ai', 'ai_mode'].includes(key) ? { tools: true } : {}) }))
+    if (key === 'document_wide_ai' && value === true) {
+      setPolicy(current => {
+        const next = { ...(current || selected), document_wide_ai: true }
+        if (next.generation_chain?.steps?.length > 2) next.generation_chain = { ...next.generation_chain, steps: next.generation_chain.steps.slice(0, 2) }
+        return next
+      })
+      setNotice(''); setFilter(null); setImpactDetails(null)
+      return
+    }
     if (key === 'ai_mode') {
       const next = { ...selected, ai: 1, ai_zone: value, auto_approve_ai: false }
       if (value === 'local') {
+        if (Object.hasOwn(next, 'document_wide_ai')) next.document_wide_ai = false
         next.ai_budget_usd = '0.00'
         delete next.generation_chain
         next.ai_review = { enabled: false }
@@ -173,7 +183,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       setPolicy(next); setNotice(''); setFilter(null); setImpactDetails(null)
       return
     }
-    setNotice(''); setFilter(null); setImpactDetails(null); setPolicy(current => ({ ...(current || selected), [key]: value, ...(((key === 'ai' && value !== 1) || (key === 'ai_review' && value?.enabled !== true) || (key === 'ai_budget_usd' && !(Number(value) > 0))) && Object.hasOwn(current || selected, 'auto_approve_ai') ? { auto_approve_ai: false } : {}) })) }
+    setNotice(''); setFilter(null); setImpactDetails(null); setPolicy(current => ({ ...(current || selected), [key]: value, ...(key === 'ai' && value === 0 && Object.hasOwn(current || selected, 'document_wide_ai') ? { document_wide_ai: false } : {}), ...(((key === 'ai' && value !== 1) || (key === 'ai_review' && value?.enabled !== true) || (key === 'ai_budget_usd' && !(Number(value) > 0))) && Object.hasOwn(current || selected, 'auto_approve_ai') ? { auto_approve_ai: false } : {}) })) }
   const categoryFiles = (data?.files || []).filter(file => !filter || filter.type === 'all' || (filter.type === 'human' ? file.review > 0 || file.manual > 0 : filter.type === 'outlook' ? file.outlook === filter.key : file[filter.key] > 0))
   const fileTypes = [...new Set(categoryFiles.map(file => fileType(file.file)))].sort()
   const searchText = fileSearch.trim().toLowerCase()
