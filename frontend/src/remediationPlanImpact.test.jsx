@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs'
 import { act } from 'react'
 import { afterEach, expect, it } from 'vitest'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import RemediationPlanImpact, { planCategoryCounts } from './RemediationPlanImpact.jsx'
+const css = name => readFileSync(new URL(name, import.meta.url), 'utf8')
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 afterEach(unmountAll)
 const data = (automatic, manual) => ({ open: { findings: automatic + manual }, findings: [
@@ -67,4 +69,32 @@ it('offers explanation and examples for every tile by hover, keyboard and click'
   await act(async () => outside.dispatchEvent(new MouseEvent('mouseover', {bubbles:true})))
   expect(container.querySelector('[role=tooltip]').textContent).toContain('a review finding omitted from the preview')
   expect(container.querySelector('[role=tooltip]').textContent).toContain('possible reasons, not confirmed')
+})
+
+
+it('keeps tile info controls centered and transparent inside the plan card', async () => {
+  const style = document.createElement('style')
+  style.textContent = css('./info-tip.css') + css('./remediation-impact-card.css') + css('./remediation-plan-impact.css')
+  document.head.append(style)
+  try {
+    const { root, container } = createTestRoot()
+    await act(async () => root.render(<div className="remediation-impact remediation-plan-choices__grid">
+      <RemediationPlanImpact identity="layout" policyKey="rules" ready data={data(8,0)} />
+    </div>))
+    for (const button of container.querySelectorAll('.plan-impact__help button')) {
+      const control = getComputedStyle(button)
+      expect(control.backgroundColor).toBe('rgba(0, 0, 0, 0)')
+      expect(parseFloat(control.padding)).toBe(0)
+      expect(parseFloat(control.margin)).toBe(0)
+      expect(control.width).toBe('24px')
+      expect(control.height).toBe('24px')
+      expect(control.display).toBe('grid')
+      expect(control.placeItems).toBe('center')
+      const icon = getComputedStyle(button.firstElementChild)
+      expect(icon.display).toBe('grid')
+      expect(icon.width).toBe('14px')
+      expect(icon.height).toBe('14px')
+      expect(icon.lineHeight).toBe('1')
+    }
+  } finally { style.remove() }
 })
