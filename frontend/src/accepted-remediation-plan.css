@@ -1,0 +1,8 @@
+.accepted-remediation-plan { border: 1px solid var(--line, #ded9e2); border-radius: 12px; padding: 1rem; }
+.accepted-remediation-plan h3 { margin: 0; }
+.accepted-remediation-plan > p { color: var(--muted); font-size: .875rem; line-height: 1.5; }
+.accepted-remediation-plan dl { margin: 1rem 0; display: grid; gap: .75rem; }
+.accepted-remediation-plan dl > div { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(0, 2fr); gap: .75rem; }
+.accepted-remediation-plan dt { font-weight: 600; }
+.accepted-remediation-plan dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 480px) { .accepted-remediation-plan dl > div { grid-template-columns: 1fr; gap: .2rem; } }
