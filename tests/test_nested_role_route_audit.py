@@ -44,3 +44,10 @@ def test_flat_routes_remain_auditable():
 def test_accepted_plan_is_a_view_only_permission():
     path = '/scans/{sid}/remediation/accepted-plan/{run_id}'
     assert capmap.required_capabilities('GET', path) == frozenset({'remediate.view'})
+
+
+def test_normalized_route_descriptors_are_audited_alongside_nested_routers():
+    from types import SimpleNamespace
+    routes = [*nested_app().routes, SimpleNamespace(path='/normalized/new', methods={'POST'})]
+    assert capmap.unmapped_routes(routes) == [
+        ('GET', '/outer/nested/secret/{item}'), ('POST', '/normalized/new')]

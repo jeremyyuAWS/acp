@@ -560,7 +560,15 @@ def unmapped_routes(routes) -> list[tuple[str, str]]:
     out = []
     from types import SimpleNamespace
     from core import enumerate_api_routes
-    for route in enumerate_api_routes(SimpleNamespace(routes=routes)):
+    # Readiness also accepts already-normalized route descriptors. Preserve
+    # those rather than silently dropping them through APIRoute-only discovery.
+    effective = []
+    for route in routes:
+        if hasattr(route, "path") and hasattr(route, "methods"):
+            effective.append(route)
+        else:
+            effective.extend(enumerate_api_routes(SimpleNamespace(routes=[route])))
+    for route in effective:
         for method in (route.methods or ()):
             if method in ("HEAD", "OPTIONS"):
                 continue
