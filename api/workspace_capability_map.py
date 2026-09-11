@@ -93,10 +93,13 @@ _map_many([
 # management belong to whoever may RUN discovery, since they are that scan's controls.
 _map_many([("POST", "/scans/{sid}/cancel")], {"assess.cancel", "discover.run"})
 _map_many([
-    ("DELETE", "/scans/{sid}"), ("POST", "/scans/{sid}/drive-token"),
-    ("POST", "/scans/{sid}/sp-token"), ("DELETE", "/scans/{sid}/tokens"),
+    ("DELETE", "/scans/{sid}"), ("DELETE", "/scans/{sid}/tokens"),
     ("PUT", "/scans/{sid}/acknowledge"), ("DELETE", "/scans/{sid}/acknowledge"),
 ], {"discover.run"})
+# Existing scan owners may refresh credentials needed to execute their allowed stage.
+# This does not grant token revocation, new discovery, or access to another owner's scan.
+_map_many([("POST", "/scans/{sid}/drive-token"), ("POST", "/scans/{sid}/sp-token")],
+          {"discover.run", "assess.run", "remediate.run"})
 _map_many([("POST", "/scans/{sid}/comments")], _SCAN_READ)   # commenting is part of reviewing
 _map_many([
     ("PUT", "/scans/{sid}/decisions"), ("PUT", "/scans/{sid}/decisions/{filename:path}"),

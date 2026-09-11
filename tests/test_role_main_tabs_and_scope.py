@@ -145,3 +145,25 @@ def test_acr_workspace_operate_does_not_confer_report_approval(isolated_store, m
                                          permissions={"acr": "hidden"})
     response = client.get("/acr", headers={"Authorization": f"Bearer {user}"})
     assert response.status_code == 403, response.text
+
+
+@pytest.mark.parametrize("tab", ["assess", "remediate"])
+@pytest.mark.parametrize("provider", ["drive", "sp"])
+def test_stage_operator_can_refresh_only_own_credentials(scan_scope_store, monkeypatch, tab, provider):
+    import routes.scans as scans
+    caps = rbac.capabilities_for({tab: "operate"})
+    assert capmap.allows("POST", f"/scans/{{sid}}/{provider}-token", caps)
+    assert not capmap.allows("DELETE", "/scans/{sid}/tokens", caps)
+    assert not capmap.allows("DELETE", "/scans/{sid}", caps)
+    assert not capmap.allows("POST", f"/scans/{{sid}}/{provider}-token",
+                            rbac.capabilities_for({tab: "view"}))
+    writes = []
+    monkeypatch.setattr(scans, "_register_scan_tokens", lambda *args, **kwargs: writes.append((args, kwargs)))
+    req = Request({"type": "http", "method": "POST", "path": "/",
+                   "headers": [(f"x-{provider}-token".encode(), b"fixture-token")]})
+    handler = scans.refresh_scan_drive_token if provider == "drive" else scans.refresh_scan_sp_token
+    assert handler("mine", req)["refreshed"] is True
+    with pytest.raises(HTTPException) as exc:
+        handler("other", req)
+    assert exc.value.status_code == 404
+    assert len(writes) == 1
