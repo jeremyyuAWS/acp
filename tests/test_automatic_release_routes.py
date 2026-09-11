@@ -176,3 +176,22 @@ def test_actual_partial_automatic_queue_preserves_evidence_and_requires_authoriz
     assert payload['allow_remaining_issues'] is True
     assert payload['release_review']['compliant'] is False
     assert payload['automatic_release_id'] == row['id']
+
+
+def test_planning_reports_every_blocking_file_without_claiming_connection_failure(prepared, monkeypatch):
+    monkeypatch.setattr(prepared.store, 'get_decisions', lambda *a, **kw: {})
+    monkeypatch.setattr(prepared.store, 'get_file_records', lambda *a, **kw: {
+        'pending.docx': {'status': 'processing', 'score': None},
+        'failed.pdf': {'status': 'error', 'score': None},
+        'unrecorded.docx': {'status': 'analysed', 'score': None},
+    })
+    result = flow.planning_preview(prepared.store, SID, OWNER,
+        ['pending.docx', 'failed.pdf', 'unrecorded.docx', 'missing.pdf'])
+    assert result['available'] is False
+    assert len(result['blocked_files']) == 4
+    assert result['reason'] == '4 of 4 selected files need attention before automatic publishing.'
+    reasons = {row['file']: row['reason'] for row in result['blocked_files']}
+    assert 'queued or running' in reasons['pending.docx']
+    assert 'failed' in reasons['failed.pdf']
+    assert 'completion is not recorded' in reasons['unrecorded.docx']
+    assert 'No assessment record' in reasons['missing.pdf']

@@ -940,7 +940,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                           ariaLabel="Latest discovery results" defaultOpen
                           style={{ marginBottom: 14 }}>
           <LastSuccessfulScanSummary run={run} scope={scope} runAt={runAt}
-                                     files={estateFiles} inventory={scope?.inventory || null} />
+                                     files={estateFiles} inventory={scope?.inventory || null} inventoryCount={inv?.total ?? null} />
         </AccordionSection>
       )}
 

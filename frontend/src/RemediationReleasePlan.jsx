@@ -42,7 +42,10 @@ export default function RemediationReleasePlan({ scanId, files, intent, onChange
     <p>Unapproved suggestions remain unapplied. Remaining issues are included in the follow-up checklist.</p>
     <p><b>Destination:</b> {preview?.destination_label ? `${preview.destination_label} / Remediated / Timestamp + user email` : (preview || error ? 'Not available' : 'Checking destination…')}</p>
     {preview?.reason && <p>{preview.reason}</p>}
-    {preview && !ready && <p>Connect an authorized destination to enable automatic publishing. You can still run remediation.</p>}
+    {preview?.blocked_files?.length > 0 && <ul aria-label="Files blocking automatic publishing">
+      {preview.blocked_files.map(({file, reason}) => <li key={file}><b>{file}</b> — {reason}</li>)}
+    </ul>}
+    {preview && !ready && <p>You can still run remediation. Resolve the issue above, then <button type="button" className="linklike" disabled={disabled} onClick={() => setReload(n => n + 1)}>Refresh publishing readiness</button>.</p>}
     {error && <p role="alert">{error} <button className="linklike" type="button" disabled={disabled} onClick={() => setReload(n => n + 1)}>Refresh destination</button></p>}
   </section>
 }

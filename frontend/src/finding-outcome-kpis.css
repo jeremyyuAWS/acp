@@ -1,0 +1,7 @@
+.finding-outcome-kpis { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+.finding-outcome-kpis > div { flex: 1 1 150px; border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
+.finding-outcome-kpis span { display: block; font-size: 12px; }
+.finding-outcome-kpis strong { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
+.finding-outcome-kpis__verified { background: #e5f4e8; color: #236538; }
+.finding-outcome-kpis__remaining { background: #fff3d6; color: #805000; }
+.finding-outcome-kpis > p { flex-basis: 100%; margin: 0; font-size: 12px; }

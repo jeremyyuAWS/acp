@@ -112,3 +112,17 @@ describe('LastSuccessfulScanSummary', () => {
     expect(container.textContent).toContain('Assessable count was not recorded')
   })
 })
+
+it('reconciles the production source listing with saved inventory and eligibility', async () => {
+  const c = await render({run:{id:'same-scan',status:'discovered',source:'drive'},files:[],
+    inventory:{discovered:7101,assessment_eligible:986,by_status:{excluded:185}},inventoryCount:6916})
+  expect(c.textContent).toContain('6,916 inventoried + 185 excluded = 7,101 files found at the source')
+  expect(c.textContent).toContain('986 eligible + 5,930 not eligible = 6,916 inventoried files')
+  expect(c.querySelector('[aria-label="Excluded: 185"]')).toBeTruthy()
+})
+it('does not invent exclusions when listing and inventory really disagree', async () => {
+  const c = await render({run:{status:'discovered'},files:[],
+    inventory:{discovered:7101,assessment_eligible:986,by_status:{excluded:0}},inventoryCount:6916})
+  expect(c.textContent).toContain('not yet reconciled')
+  expect(c.textContent).not.toContain('185 excluded')
+})

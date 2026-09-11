@@ -30,7 +30,7 @@ function primaryOutcome(model) {
 /** The sole outer shell for all four workflow stages. Detail nodes stay mounted under `hidden`
  * so disclosure changes do not end live subscriptions or reset rolling heartbeat history. */
 export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = null,
-  stageDetails = {}, activeStage = null, assessmentActivity = null, assessmentFindings = null }) {
+  stageDetails = {}, activeStage = null, assessmentActivity = null, assessmentFindings = null, discoveryScope = null }) {
   const snapshots = useMemo(() => canonicalWorkflowStages(lineage), [lineage])
   const current = useMemo(() => currentCanonicalStage(lineage), [lineage])
   const key = storageKey(lineage)
@@ -43,7 +43,9 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
   const byStage = new Map(snapshots.map((snapshot) => {
     const sameAssessment = assessmentFindings?.scanId === lineage?.scan_id
       && (!snapshot.input_manifest_id || !assessStage?.output_manifest_id || snapshot.input_manifest_id === assessStage.output_manifest_id)
-    const aligned = alignRemediationAssessment(snapshot, sameAssessment ? assessmentFindings?.total : null)
+    const scoped = snapshot.stage === 'discover' && discoveryScope?.scanId === lineage?.scan_id && discoveryScope?.scope
+      ? { ...snapshot, scope: discoveryScope.scope } : snapshot
+    const aligned = alignRemediationAssessment(scoped, sameAssessment ? assessmentFindings?.total : null)
     const omitted = sameAssessment && snapshot.stage === 'remediate'
       ? omittedAssessmentGroups(snapshot, assessStage?.assessment_summary, assessmentFindings?.rows) : []
     const omittedTotal = omitted.reduce((sum, group) => sum + group.count, 0)

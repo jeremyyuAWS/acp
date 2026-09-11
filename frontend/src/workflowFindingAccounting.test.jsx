@@ -81,3 +81,10 @@ it('does not invent a balancing equation when recorded buckets disagree with the
   expect(html).not.toContain('= 23 assessed findings')
   expect(html).toContain('Accounting is reconciling')
 })
+
+it('shows verified plus remaining equal to all 23 findings, including missing outcomes', () => {
+  const html = renderToStaticMarkup(<Card snapshot={{stage:'remediate',state:'processing_complete',
+    domain_reconciliation:{total:23,accounted:15,exact:false,buckets:{resolved_verified:9,awaiting_review:6}}}} />)
+  expect(html).toContain('9 verified fixed + 14 remaining = 23 assessed findings')
+  expect(html).toContain('Remaining · not verified')
+})

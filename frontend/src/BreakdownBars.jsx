@@ -12,11 +12,14 @@ import BucketFiles from './BucketFiles.jsx'
 // A bucket with no member rows to show stays a plain row: an inert button that opens an empty
 // panel is a worse answer than not offering the affordance.
 
+export const chartPercent = (count, base) => count > 0 && base > 0 && count / base * 100 < 0.1 ? '<0.1' : (base > 0 ? count / base * 100 : 0).toFixed(1)
+
 export default function BreakdownBars({
-  buckets, columns, colorOf, membersOf = null, idPrefix,
+  buckets, columns, colorOf, membersOf = null, idPrefix, denominator = null,
 }) {
   const [open, setOpen] = useState(null)
-  const max = Math.max(1, ...buckets.map((b) => b.count))
+  const hasBase = Number.isFinite(denominator) && denominator >= 0
+  const max = hasBase ? Math.max(1, denominator) : Math.max(1, ...buckets.map((b) => b.count))
 
   return buckets.map((b) => {
     const rows = membersOf ? (membersOf(b) || []) : null
@@ -32,7 +35,7 @@ export default function BreakdownBars({
       <span className="track">
         <i style={{ width: `${(b.count / max) * 100}%`, background: colorOf(b) }} />
       </span>
-      <span style={{ textAlign: 'right', fontSize: 13 }}>{b.count.toLocaleString()}</span>
+      <span style={{ textAlign: 'right', fontSize: 13 }}>{b.count.toLocaleString()}{hasBase && ` · ${chartPercent(b.count, denominator)}%`}</span>
     </>
 
     return (

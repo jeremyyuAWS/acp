@@ -76,9 +76,9 @@ describe('a scan that found something is unchanged', () => {
     expect(t, 'the empty panel fired on a scan that found a file').not.toContain('NOTHING WAS FOUND')
   })
 
-  it('keeps the original read-confirmation sentence', () => {
+  it('describes metadata evidence without claiming document contents were read', () => {
     const t = render({ files: [FILE], inventory: { discovered: 1 } })
-    expect(t).toContain('was read. Nothing was skipped.')
+    expect(t).toContain('Discovery does not assess document contents.')
   })
 })
 
