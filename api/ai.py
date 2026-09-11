@@ -1545,45 +1545,27 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     # codebase keeps writing down: a true state reported as a working one. Every OTHER managed
     # run still defers above, so the legacy-path exclusion stands where budget applies.
     try:
-        import httpx
-        r = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
-                  # num_predict is a CEILING, not a target: a model that finishes stops at its own
-                  # EOS, so raising this costs a non-reasoning model nothing. 60 was sized for the
-                  # answer alone — "under 30 words" — and that silently excluded every REASONING
-                  # model from this lane. qwen3 and its kind emit a thinking pass first and spend
-                  # the whole budget on it, so the answer is never reached: the response comes back
-                  # EMPTY, `if not text: return None` fires, and the card says "no draft".
-                  #
-                  # Measured on qwen3:14b with this exact prompt: num_predict=60 returns 0
-                  # characters in 2.2s; num_predict=400 returns "Access the benchmark document for
-                  # detailed information." in 14.0s. Nothing was wrong with the model — the budget
-                  # ran out mid-thought, and the failure was indistinguishable from a model that
-                  # cannot do the task. Every comparison of a reasoning model against this lane was
-                  # measuring the cap.
-                  "options": {"temperature": 0.4, "num_predict": 800}},
-            headers=_OLLAMA_HEADERS,
-            timeout=90,
-        )
-        r.raise_for_status()
-        _data = r.json()
-        text = (_data.get("response", "") or "").strip().strip('"').strip()
-        call_id = _trace_ai("suggest", prompt, text, _t0, ok=bool(text),
-                  prompt_tokens=_data.get("prompt_eval_count"),
-                  completion_tokens=_data.get("eval_count"), temperature=0.4,
-                  prompt_version="suggest-v1", scan_id=scan_id, file=file)
-        if not text:
+        from local_text_waterfall import generate
+        from providers import zone_for_url
+        def record_attempt(model, text, data, started, reason):
+            return _trace_ai("suggest", prompt, text, started, ok=reason is None,
+                provider="ollama", zone=zone_for_url(OLLAMA_BASE_URL), model=model,
+                prompt_tokens=data.get("prompt_eval_count"), completion_tokens=data.get("eval_count"),
+                temperature=0.4, prompt_version="suggest-v1", scan_id=scan_id, file=file)
+        result = generate(prompt, OLLAMA_BASE_URL, OLLAMA_MODEL, headers=_OLLAMA_HEADERS,
+            local_only=_managed_run is not None, on_attempt=record_attempt)
+        if result is None:
             return None
+        text, call_id = result['text'], result['call_id']
         kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
         out = {"suggestion": text, "kind": kind,
-               "is_template": rule_id == "1.1.1", "model": OLLAMA_MODEL}
+               "is_template": rule_id == "1.1.1", "model": result["model"]}
         if _managed_run is not None:
             # Same shape the cloud branch returns, so nothing downstream has to know which
             # path drew the draft: it still needs approval, it cost a measured zero, and the
             # zone it was processed in is the one provenance actually reports.
-            out.update(approval_required=True, attempts=[], provider="ollama",
-                       processing_zone=provenance().get("zone"), cost_usd=0.0)
+            out.update(approval_required=True, attempts=result["attempts"], provider="ollama",
+                       processing_zone=result["zone"], cost_usd=0.0)
         if call_id:
             out["ai_call_id"] = call_id
         if out["is_template"]:

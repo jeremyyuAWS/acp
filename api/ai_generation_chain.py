@@ -100,24 +100,7 @@ def chain_options(rows=()):
                and row.get('finding_count') == 1 for row in rows):
         result['reason'] = 'Second fallback requires a supported PPTX slide-title finding with an exact source binding.'
         return result
-    # `default_steps` and `supported` are set together, and deliberately so. Defaulting the
-    # third step on a scope this server would not ADMIT for execution was tried and reverted:
-    # the frontend derives its toggle state from default_steps
-    # (remediationGenerationChain.js:9 falls back to it when the policy carries no chain, and
-    # RemediationGenerationChain.jsx reads `steps.length === 3`), while it takes its
-    # availability reason from `supported`. Split the two and the panel renders "Second
-    # fallback enabled" beside "a second fallback is not available for this scope", with the
-    # run then using two models — a control reporting itself on while stating it cannot run.
-    # Nothing executes wrongly (a chain only reaches the policy through the explicit toggle,
-    # so remediation_impact.py:228's refusal never fires), which is exactly what would have
-    # made it ship.
-    #
-    # So "set the fallbacks automatically" reaches as far as admission does, and no further.
-    # Widening it means widening `supported`, which guards the fail-closed adapter and exact
-    # source-binding checks before any third-model dispatch — a different decision, and not
-    # one a default should make quietly.
-    result['default_steps'].append({'step_id': STEP_IDS[2], 'position': 2,
-        'provider': third_spec.provider, 'model': third.name, 'enabled': True,
-        'capabilities': ['text']})
+    # A supported third model remains an explicit option. The simple default is
+    # always primary plus one fallback, even for eligible PPTX title findings.
     result.update(supported=True, reason=None)
     return result
