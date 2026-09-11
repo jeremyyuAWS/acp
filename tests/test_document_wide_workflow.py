@@ -207,3 +207,58 @@ def test_pdf_figure_proposal_reaches_existing_review_lane(monkeypatch):
     assert kwargs['validated'] is False
     assert workflow.suppressed_criteria(ctx, 'file.pdf') == {'1.1.1', '4.1.2'}
     assert workflow.suppressed_criteria(ctx, 'file.docx') == {'1.1.1'}
+
+
+def test_native_pdf_sends_exact_current_bytes_without_duplicate_images(monkeypatch):
+    store, ctx, calls, logs, queued = setup(monkeypatch)
+    ctx.policy['document_wide_input_mode'] = 'native_pdf'
+    module = sys.modules['document_wide_manifest']
+    data = sys.modules['blob'].download_remediated()
+    native = []
+    module.package_native_pdf = lambda value, manifest: native.append(value) or value
+    module.package_images = lambda *args: (_ for _ in ()).throw(AssertionError('duplicate image packaging'))
+    original = sys.modules['document_wide_provider'].generate_document
+    received = []
+    def generate(request, **kwargs):
+        received.append(kwargs)
+        return original(request, **kwargs)
+    sys.modules['document_wide_provider'].generate_document = generate
+    workflow.process_file(store, ctx)
+    assert native == [data]
+    assert received == [{'pdf_bytes': data}]
+    assert queued[0][0][3][0]['document_wide_input_mode'] == 'native_pdf'
+    assert queued[0][1]['validated'] is False
+    assert 'native_pdf' in logs[0][1]['detail']
+
+
+def test_native_mode_has_distinct_request_identity(monkeypatch):
+    store, ctx, calls, logs, queued = setup(monkeypatch)
+    workflow.process_file(store, ctx)
+    extracted_id = calls[0].request_id
+    ctx.policy['document_wide_input_mode'] = 'native_pdf'
+    sys.modules['document_wide_manifest'].package_native_pdf = lambda data, manifest: data
+    workflow.process_file(store, ctx)
+    assert calls[1].request_id != extracted_id
+
+
+def test_native_preparation_failure_defers_without_provider_or_queue(monkeypatch):
+    store, ctx, calls, logs, queued = setup(monkeypatch)
+    ctx.policy['document_wide_input_mode'] = 'native_pdf'
+    def reject(*args):
+        raise ValueError('document_wide_pdf_hash_mismatch')
+    sys.modules['document_wide_manifest'].package_native_pdf = reject
+    workflow.process_file(store, ctx)
+    assert not calls and not queued
+    assert 'document_wide_pdf_hash_mismatch' in logs[0][1]['detail']
+
+
+def test_native_provider_limit_is_explained_without_claiming_a_fix(monkeypatch):
+    store, ctx, calls, logs, queued = setup(monkeypatch)
+    ctx.policy['document_wide_input_mode'] = 'native_pdf'
+    sys.modules['document_wide_manifest'].package_native_pdf = lambda data, manifest: data
+    sys.modules['document_wide_provider'].generate_document = lambda *args, **kwargs: {
+        'deferred': True, 'reason': 'document_wide_native_pdf_context_limit', 'envelope': None}
+    workflow.process_file(store, ctx)
+    assert not queued
+    assert 'input allowance' in logs[0][1]['detail']
+    assert 'document_wide_native_pdf_context_limit' not in logs[0][1]['detail']

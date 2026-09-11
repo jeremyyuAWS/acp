@@ -127,7 +127,26 @@ export default function RemediationPlanChoices({ step = null, answers, policy, d
             <span><strong>Review the document together</strong><span>Send document context and selected findings together for a coordinated set of suggestions. Preview · Cloud AI</span></span>
           </label>
         </div>
-        <p id={`${id}-document-wide-note`}>Document review sends extracted text and supported images, rather than uploading the original file. It currently supports Word image descriptions, PDF form-field names, and descriptions for existing tagged PDF images, within extraction and spending limits. PDF image suggestions require unambiguous page-image evidence. Other findings follow the usual process. Document review uses the primary model and at most one fallback.</p>
+        <p id={`${id}-document-wide-note`}>Document review supports Word image descriptions, PDF form-field names, and descriptions for existing tagged PDF images, within extraction and spending limits. Extracted PDF image suggestions require unambiguous page-image evidence. Other findings follow the usual process. Document review uses the configured primary model and at most one fallback.</p>
+        {policy.document_wide_ai && <fieldset className="remediation-document-input">
+          <legend>What should Cloud AI receive?</legend>
+          <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
+            <label className={policy.document_wide_input_mode !== 'native_pdf' ? 'is-selected' : ''}>
+              <input type="radio" name={`${id}-document-input`} checked={policy.document_wide_input_mode !== 'native_pdf'}
+                disabled={disabled || localOnly || !budgetSupported || !(Number(policy.ai_budget_usd) > 0)}
+                onChange={() => onChange('document_wide_input_mode', 'extracted')} />
+              <span><strong>Document context</strong><span>Send extracted text, selected findings and supported images. The full PDF is not uploaded.</span></span>
+            </label>
+            <label className={policy.document_wide_input_mode === 'native_pdf' ? 'is-selected' : ''}>
+              <input type="radio" name={`${id}-document-input`} checked={policy.document_wide_input_mode === 'native_pdf'}
+                disabled={disabled || localOnly || !budgetSupported || !(Number(policy.ai_budget_usd) > 0)}
+                onChange={() => onChange('document_wide_input_mode', 'native_pdf')} aria-describedby={`${id}-native-pdf-note`} />
+              <span><strong>Full PDF — advanced preview</strong><span>Send the full current PDF copy and selected findings to your configured cloud AI model, so it can consider the document together.</span></span>
+            </label>
+          </div>
+          {!(Number(policy.ai_budget_usd) > 0) && <p>Set a positive AI spending limit in Spending, then return here to choose Full PDF.</p>}
+          <p id={`${id}-native-pdf-note`}>Only supported tagged-image descriptions and form-field names can be applied. This does not fix every PDF issue. Full-file processing may cost more and stays within your spending limit. Other file formats keep using extracted context.</p>
+        </fieldset>}
         {policy.document_wide_ai && <p>Your approval choice still applies. AI-written content stays marked as needing verification until its meaning is reviewed.</p>}
         {localOnly && <p>Choose Cloud AI to review the document together. Local Ollama can provide individual suggestions.</p>}
       </fieldset>}

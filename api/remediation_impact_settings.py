@@ -56,6 +56,10 @@ def normalize_policy(policy):
         if value and result.get('ai_zone') == 'local':
             raise ValueError('Document-wide AI is currently available only with Cloud AI. Local Ollama remains available for individual suggestions.')
         result['document_wide_ai'] = value
+    if "document_wide_input_mode" in policy:
+        from ai_run_policy import normalize_document_input_mode
+        result['document_wide_input_mode'] = normalize_document_input_mode(
+            {**policy, **result}, positive_budget=Decimal(result.get('ai_budget_usd', '0')) > 0)
     if "auto_approve_ai" in policy:
         from ai_standing_approval import normalize
         result['auto_approve_ai'] = normalize(policy['auto_approve_ai'])

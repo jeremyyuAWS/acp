@@ -577,12 +577,13 @@ it.each(['any', 'local'])('automatic release previews and submits AI application
 
 
 it.each(['Rules only', 'Rules + Ollama · Local only'])('clears document-wide consent when choosing %s', async label => {
-  const initial = { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '1.00', document_wide_ai: true }
+  const initial = { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '1.00', document_wide_ai: true, document_wide_input_mode: 'native_pdf' }
   getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || initial), capabilities: { ...result().capabilities, ai_budget: true } }))
   const { container } = await mount()
   const option = [...container.querySelectorAll('label')].find(node => node.querySelector('strong')?.textContent === label)
   await act(async () => option.querySelector('input').click())
   expect(getRemediationImpact.mock.calls.at(-1)[1].document_wide_ai).toBe(false)
+  expect(getRemediationImpact.mock.calls.at(-1)[1]).not.toHaveProperty('document_wide_input_mode')
 })
 
 it('document review previews one fallback while preserving other accepted choices', async () => {
@@ -595,4 +596,16 @@ it('document review previews one fallback while preserving other accepted choice
   await vi.waitFor(() => expect(getRemediationImpact.mock.calls.at(-1)[1]).toMatchObject({ document_wide_ai: true, ai_budget_usd: '1.00', auto_approve_ai: true }))
   expect(getRemediationImpact.mock.calls.at(-1)[1].generation_chain.steps).toHaveLength(2)
   expect(initial.generation_chain.steps).toHaveLength(3)
+})
+
+it('preserves explicit full-PDF mode in the accepted run policy', async () => {
+  const initial = { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '1.00', document_wide_ai: true }
+  getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || initial), capabilities: { execute: true, ai_budget: true } }))
+  const onRun = vi.fn()
+  const { container } = await mount({ onRun })
+  const native = [...container.querySelectorAll('label')].find(n => n.querySelector('strong')?.textContent === 'Full PDF — advanced preview')
+  await act(async () => native.querySelector('input').click())
+  await vi.waitFor(() => expect(getRemediationImpact.mock.calls.at(-1)[1]).toMatchObject({ document_wide_input_mode: 'native_pdf', ai_zone: 'any' }))
+  await act(async () => button(container, 'Approve plan and start').click())
+  expect(onRun.mock.calls[0][0]).toMatchObject({ document_wide_input_mode: 'native_pdf' })
 })

@@ -41,6 +41,16 @@ def _zone(value):
     return value
 
 
+def normalize_document_input_mode(snapshot, *, positive_budget):
+    value = snapshot['document_wide_input_mode']
+    if type(value) is not str or value not in {'extracted', 'native_pdf'}:
+        raise BudgetError("document_wide_input_mode must be 'extracted' or 'native_pdf'")
+    if (snapshot.get('document_wide_ai') is not True or snapshot.get('ai') != 1
+            or snapshot.get('ai_zone') != 'any' or not positive_budget):
+        raise BudgetError('Document input selection requires document-wide Cloud AI and a positive spending limit')
+    return value
+
+
 def normalize_run_policy(snapshot):
     """None means legacy/unmanaged; an explicit zero is managed and denies AI."""
     if snapshot is None:
@@ -48,6 +58,8 @@ def normalize_run_policy(snapshot):
     if not isinstance(snapshot, dict):
         raise BudgetError("invalid remediation policy snapshot")
     if "ai_budget_usd" not in snapshot:
+        if "document_wide_input_mode" in snapshot:
+            raise BudgetError("Document input selection requires a managed run spending limit")
         if snapshot.get("document_wide_ai"):
             raise BudgetError("Document-wide AI requires a managed run spending limit")
         if snapshot.get("auto_approve_ai"):
@@ -75,6 +87,8 @@ def normalize_run_policy(snapshot):
         if value and snapshot.get('ai_zone') == 'local':
             raise BudgetError('Document-wide AI is currently available only with Cloud AI. Local Ollama remains available for individual suggestions.')
         result['document_wide_ai'] = value
+    if 'document_wide_input_mode' in snapshot:
+        result['document_wide_input_mode'] = normalize_document_input_mode(snapshot, positive_budget=cap > 0)
     if 'auto_approve_ai' in snapshot:
         from ai_standing_approval import normalize
         result['auto_approve_ai'] = normalize(snapshot['auto_approve_ai'])
