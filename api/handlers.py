@@ -1435,7 +1435,10 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
     if ext == "docx":
         _propose_form_fields(scan_id, filename, data, _draft_ai)
 
-    if impact_controls is not None and not _eligible_rules:
+    from ai_run_policy import optional_current_run_context
+    from document_wide_workflow import enabled as document_wide_enabled
+    _document_mode = document_wide_enabled(optional_current_run_context(), filename)
+    if impact_controls is not None and not _eligible_rules and not _document_mode:
         review_rules = [{"rule_id": row["rule_id"], "rule_name": row.get("rule_name"),
                          "finding_count": row.get("finding_count")}
                         for row in core.store.get_scan_traces(scan_id, file=filename)
@@ -1621,10 +1624,15 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
                     # evidence is a nicety; never fail a remediation job for a thumbnail
                     swallowed("_remediate_file: attaching 1.1.1 HITL evidence failed", scan_id)
             if not out_path or not _Path(out_path).exists():
-                core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
-                                        file=filename, detail=f".{ext}: no deterministic fixes applied")
-                return
-            fixed_bytes = _Path(out_path).read_bytes()
+                if not _document_mode:
+                    core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
+                                            file=filename, detail=f".{ext}: no deterministic fixes applied")
+                    return
+                # Document AI requires a durable working copy even when deterministic
+                # remediation had nothing to change. This records zero applied fixes.
+                fixed_bytes = data
+            else:
+                fixed_bytes = _Path(out_path).read_bytes()
 
     from output_provenance import stamp_output
     fixed_bytes = stamp_output(fixed_bytes, filename)

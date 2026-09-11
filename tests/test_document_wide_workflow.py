@@ -125,3 +125,41 @@ def test_document_mode_suppresses_only_supported_criterion(monkeypatch):
     monkeypatch.setattr(handlers,'_propose_text_findings_selected',lambda *a:checks.extend([selected('1.1.1'),selected('1.3.1')]))
     handlers._propose_text_findings('scan','file.docx',b'',True)
     assert checks==[False,True]
+
+
+def test_ai_only_document_still_stores_working_copy(monkeypatch):
+    import io
+    import pytest
+    import handlers
+    import ai_run_policy
+    import activity
+    import output_provenance
+    import remediate_office
+    from docx import Document
+    doc=Document(); doc.add_paragraph('Original content')
+    stream=io.BytesIO(); doc.save(stream); original=stream.getvalue()
+    ctx=SimpleNamespace(policy={'document_wide_ai':True})
+    store=SimpleNamespace(is_shadowed_output=lambda *a:False,get_ai_enabled=lambda:True,
+        list_auto_fail_rules=lambda *a:[],get_scan=lambda *a:{'run':{'owner_email':'owner'}},
+        attach_hitl_evidence=lambda *a:None)
+    monkeypatch.setattr(handlers.core,'store',store)
+    monkeypatch.setattr(ai_run_policy,'optional_current_run_context',lambda:ctx)
+    monkeypatch.setattr(handlers,'_phase',lambda *a:None)
+    monkeypatch.setattr(activity,'record',lambda *a,**kw:None)
+    monkeypatch.setattr(handlers,'_remediation_source_bytes',lambda *a:(original,None))
+    monkeypatch.setattr(handlers,'_propose_text_findings',lambda *a:None)
+    monkeypatch.setattr(handlers,'_propose_form_fields',lambda *a:None)
+    monkeypatch.setattr(handlers,'_record_applied_fixes',lambda *a:None)
+    monkeypatch.setattr(handlers,'_rem_event',lambda *a,**kw:None)
+    monkeypatch.setattr(handlers,'_remediation_scope',lambda *a:lambda sc:False)
+    monkeypatch.setattr(remediate_office,'remediate_office',lambda *a,**kw:(None,[],[]))
+    monkeypatch.setattr(output_provenance,'stamp_output',lambda b,f:b)
+    class Stored(Exception): pass
+    def upload(owner,sid,file,data,mime):
+        assert data==original
+        assert Document(io.BytesIO(data)).paragraphs[0].text=='Original content'
+        raise Stored()
+    monkeypatch.setitem(sys.modules,'blob',SimpleNamespace(upload_remediated=upload))
+    with pytest.raises(Stored):
+        handlers._remediate_file_with_policy({'scan_id':'scan','file':'file.docx','source':'local',
+            'remediation_impact_policy':{'rule_based':0,'ai':1},'remediation_impact_allowed_rules':[]},{})
