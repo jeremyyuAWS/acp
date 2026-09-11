@@ -1,0 +1,9 @@
+/* Keep counts in distinct columns; narrow screens scroll this table, not the page. */
+.document-findings-scroll { max-width: 100%; min-width: 0; overflow-x: auto; }
+.document-findings-scroll:focus-visible { outline: 3px solid var(--plum, #493446); outline-offset: 2px; }
+.document-findings-scroll .document-findings-table { min-width: 760px; width: 100%; table-layout: auto; }
+.document-findings-scroll .document-findings-table th,
+.document-findings-scroll .document-findings-table td { padding-left: .75rem; padding-right: .75rem; vertical-align: top; }
+.document-findings-scroll .document-findings-table th[scope="col"] { white-space: normal; overflow-wrap: normal; line-height: 1.4; padding-bottom: .75rem; }
+.document-findings-scroll .document-findings-table .findings-criteria-heading { min-width: 7.5rem; width: 7.5rem; }
+.document-findings-scroll .document-findings-table .findings-total-heading { min-width: 6rem; width: 6rem; }

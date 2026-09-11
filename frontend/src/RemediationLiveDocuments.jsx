@@ -1,3 +1,4 @@
+import './document-findings-table.css'
 import RemediationCategoryPill from './RemediationCategoryPill.jsx'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import AssessWorklist from './AssessWorklist.jsx'
@@ -90,14 +91,14 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
     <p className="muted">{currentDocuments ? "Open a document to inspect its findings and saved changes." : "Assessment findings stay visible below. Applied-change records remain separate from finding counts."}</p>
     {currentDocuments ? <section aria-label="Documents"><h3>Documents <small>· {currentDocuments.length}</small></h3>
       <p className="muted">Each finding appears once. Counts update after saved results arrive{connected === false ? ' · reconnecting to live updates' : ''}.</p>
-      <table className="live-document-table"><thead><tr><th scope="col">Document</th><th scope="col">WCAG criteria with issues</th><th scope="col">Total findings</th><th scope="col">Remediation categories</th><th scope="col"><span className="vh">Details</span></th></tr></thead>
+      <div className="document-findings-scroll" role="region" aria-label="Document findings table" tabIndex={0}><table className="live-document-table document-findings-table"><thead><tr><th scope="col">Document</th><th scope="col" className="findings-criteria-heading">WCAG criteria <br />with issues</th><th scope="col" className="findings-total-heading">Total <br />findings</th><th scope="col">Remediation categories</th><th scope="col"><span className="vh">Details</span></th></tr></thead>
         <tbody>{currentDocuments.map(row => <tr key={row.file} className={changed.includes(row.file) ? 'live-document-changed' : undefined}>
           <th scope="row">{row.file}</th><td>{new Set(row.findings.map(f => f.sc)).size}</td><td>{row.totalFindings}</td><td><div className="live-document-categories">{Object.entries(row.liveCounts).map(([category, count]) =>
             ['remaining','excluded','superseded','approved'].includes(category) ? <span key={category}>{({ remaining:'Remaining', excluded:'Excluded', superseded:'Superseded', approved:'Approved · awaiting application' })[category]} <strong>{count}</strong></span>
             : <RemediationCategoryPill key={category} category={category} count={count} />)}</div></td>
           <td><button type="button" onClick={() => { opener.current = document.activeElement; setSelected(row.file) }}>View fixes</button></td>
         </tr>)}</tbody>
-      </table>
+      </table></div>
     </section> : <AssessWorklist changeRows={scopedFixes.map(fix => ({ ...fix, category: changeCategory(fix) }))} files={files} cap={cap} assessment={assessment} initialFilter="all" openLabel="View fixes"
       renderProgress={row => {
         return <span>{['applied', 'ai_applied', 'verified'].map(category => {
