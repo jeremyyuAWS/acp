@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { authEpoch } from './apiIdentity.js'
 import { getRunInsights } from './remediationRunInsightsClient.js'
 import './remediation-run-insights.css'
+import DocumentWideAiOutcomes from './DocumentWideAiOutcomes.jsx'
 import RemediationContribution from './RemediationContribution.jsx'
 
 const rows = value => Array.isArray(value) ? value : []
@@ -71,6 +72,7 @@ export default function RemediationRunInsights({ scanId, batchId, inlineDrilldow
       {!scanId || !batchId ? <p>Select a remediation run.</p> : current?.error && !data ? <p role="alert">Saved history could not be loaded. Try refreshing.</p> : !current || (current.loading && !data) ? <p role="status">Loading saved model history…</p> : !data ? <p>Saved model history is unavailable in this environment.</p> : <>
         <p><strong>{data.standing_approval?.enabled ? 'Auto-approval on for this run' : 'Manual AI approval for this run'}</strong>. {data.standing_approval?.enabled ? 'The saved plan authorizes eligible suggestions, including fallbacks. Exceptions still need review; publishing stays separate.' : 'AI suggestions require your approval before application.'}</p>
         <AiActivitySummary summary={data.activity_summary} />
+        <DocumentWideAiOutcomes snapshot={data.document_wide} />
         <RemediationContribution key={identity} snapshot={data.measured_contribution} inlineDrilldown={inlineDrilldown} />
         <h4>Saved suggestions by AI step</h4>
         <p>{data.contribution?.note || 'Proposal versions are not findings or verified fixes.'}</p>

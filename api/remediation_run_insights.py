@@ -13,7 +13,7 @@ from ai_attempt_history import AttemptHistory
 from remediation_impact_estimates import build_impact_estimate
 
 MAX_PROPOSAL_BYTES = 128 * 1024
-PROPOSAL_KEYS = frozenset({'locator', 'before', 'proposed_value', 'rationale', 'source', 'model', 'model_call_id', 'document_wide_request_id',
+PROPOSAL_KEYS = frozenset({'locator', 'before', 'proposed_value', 'rationale', 'source', 'model', 'model_call_id', 'document_wide_request_id', 'requires_semantic_review',
                            'source_sha256', 'assessment_revision', 'finding_ids', 'baseline_finding_ids'})
 SCHEMA = RUN_INSIGHTS_SCHEMA = (
     """CREATE TABLE IF NOT EXISTS ai_proposal_snapshots (
@@ -257,7 +257,11 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
         'not_used_reason': not_used_reason,
     }
 
+    from document_wide_insights import read_document_wide
+    document_wide = read_document_wide(store, owner, scan_id, run_id,
+        enabled=json.loads(saved_policy['policy_json']).get('document_wide_ai') is True if saved_policy else False)
     return {
+        'document_wide': document_wide,
         'contract_version': 'remediation-run-insights.v1', 'scan_id': scan_id, 'run_id': run_id, 'batch_id': run_id,
         'standing_approval': {'enabled': standing_approval, 'authorized_by': owner if standing_approval else None},
         'attempts': attempts, 'proposals': proposals, 'review_receipts': reviews,
