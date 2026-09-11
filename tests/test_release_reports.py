@@ -16,7 +16,7 @@ def setup(store):
 def test_real_release_honest_outcomes_and_unknown_audit(isolated_store):
     release = setup(isolated_store)
     assets = build_release_reports(isolated_store, 'scan', OWNER, release)
-    assert len(assets) == 4
+    assert len(assets) == 6
     summary = assets[0]['content'].decode()
     assert 'Files published in this release</td><td>1' in summary
     assert 'Publication failures</td><td>1' in summary
@@ -71,7 +71,7 @@ def test_only_release_documents_and_selected_unfinished_checks(isolated_store, m
     ])
     monkeypatch.setattr(isolated_store, 'get_scan_scope', lambda *a: {'1.1.1': {'pdf'}, '2.4.4': {'pdf'}})
     assets = build_release_reports(isolated_store, 'scan', OWNER, release)
-    assert len(assets) == 4
+    assert len(assets) == 6
     summary = assets[0]['content'].decode()
     assert 'unselected.pdf' not in summary
     assert 'Checks not completed (current recorded traces)</td><td>1' in summary
@@ -142,6 +142,9 @@ def test_branded_documents_categories_and_escaped_change_details(isolated_store,
     detail = next(a['content'].decode() for a in assets if a['name'].startswith('checklist-one'))
     assert '<th scope="col">Severity</th>' not in detail
     assert 'Severity: critical' in detail
+    assert '&lt;unsafe&gt;' not in detail
+    assert 'Recorded changes by success criterion' not in detail
+    detail = next(a['content'].decode() for a in assets if a['name'].startswith('changes-one'))
     assert '&lt;unsafe&gt;' in detail
     assert 'SC 2.4.2' in detail
     assert 'Document title' in detail
@@ -178,13 +181,13 @@ def test_pdf_reports_include_brand_evidence_and_no_csv(isolated_store, tmp_path)
     import io
     release = setup(isolated_store)
     assets = build_pdfs(isolated_store, 'scan', OWNER, release)
-    assert len(assets) == 3
+    assert len(assets) == 5
     for asset in assets:
         assert asset['name'].endswith('.pdf')
         assert asset['content_type'] == 'application/pdf'
         reader = PdfReader(io.BytesIO(asset['content']))
         text = '\n'.join(page.extract_text() for page in reader.pages)
-        assert 'Not recorded' in text
+        assert 'Not recorded' in text or 'No change records' in text
         assert 'Mova iO' in text
         assert 'Publication' in text
         assert reader.trailer['/Root'].get('/StructTreeRoot')
@@ -192,7 +195,7 @@ def test_pdf_reports_include_brand_evidence_and_no_csv(isolated_store, tmp_path)
         (tmp_path / asset['name']).write_bytes(asset['content'])
 
 
-def test_printable_pdf_preserves_locations_all_criteria_and_human_checkboxes(isolated_store, monkeypatch):
+def test_printable_pdf_preserves_locations_all_criteria_and_human_checkboxes(isolated_store, monkeypatch, tmp_path):
     from release_reports import build_release_reports as build_pdfs
     from pypdf import PdfReader
     import io
@@ -206,11 +209,68 @@ def test_printable_pdf_preserves_locations_all_criteria_and_human_checkboxes(iso
         {'file': 'one.pdf', 'rule_id': 'SC_1_1_1', 'outcome': 'FAIL', 'finding_count': 2},
         {'file': 'one.pdf', 'rule_id': 'SC_3_1_1', 'outcome': 'PASS', 'finding_count': 0},
     ])
+    isolated_store.record_remediation_diffs('scan', 'one.pdf', [{'rule_id': 'SC_3_1_1', 'before': 'Not declared', 'after': 'en-US', 'note': 'Document language declaration rechecked.'}])
     for asset in build_pdfs(isolated_store, 'scan', OWNER, release):
-        if asset['name'].startswith('checklist-two'):
+        (tmp_path / asset['name']).write_bytes(asset['content'])
+        if asset['name'].startswith(('checklist-two', 'changes-')):
             continue
         text = '\n'.join(p.extract_text() for p in PdfReader(io.BytesIO(asset['content'])).pages)
         for expected in ['Figure missing alt text', 'Second figure needs context', 'Page: 3', 'Page: 5',
                          'Figure 2', 'Remediated and rechecked', 'Reviewer / date / notes:',
-                         '3.1.1', 'PASS', 'Non-text Content']:
+                         'Non-text Content']:
             assert expected in text
+
+
+def test_checklist_omits_automatic_review_coverage_and_unselected_issues(isolated_store, monkeypatch):
+    release = setup(isolated_store)
+    isolated_store.save_file_result('scan', {'file': 'one.pdf', 'engine': 'pdf', 'status': 'fail', 'score': 0,
+        'compliant': False, 'skipped_rules': 0, 'issues': [
+            {'ruleId': 'PDF-LANG-001', 'wcag': '3.1.1', 'severity': 'serious', 'detail': 'Language missing', 'location': 'Location: document properties'},
+            {'ruleId': 'SC_1_4_3', 'wcag': '1.4.3', 'severity': 'serious', 'detail': 'Unselected contrast issue'},
+        ]}, '2026-09-09T10:00:00Z')
+    monkeypatch.setattr(isolated_store, 'get_scan_scope', lambda *a: {'3.1.1': {'pdf'}, '2.4.6': {'pdf'}})
+    monkeypatch.setattr(isolated_store, 'get_scan_traces', lambda *a: [
+        {'file': 'one.pdf', 'rule_id': 'SC_2_4_6', 'outcome': 'REVIEW', 'fix_mode': 'auto', 'plain_name': 'Automatic heading review'},
+    ])
+    assets = build_release_reports(isolated_store, 'scan', OWNER, release)
+    checklist = next(a['content'].decode() for a in assets if a['name'].startswith('checklist-one'))
+    assert 'Language missing' in checklist
+    assert '<td>3.1.1</td>' in checklist
+    assert 'PDF-LANG-001' not in checklist
+    assert 'Location: Location:' not in checklist
+    assert 'Automatic heading review' not in checklist
+    assert 'Unselected contrast issue' not in checklist
+    assert 'Success criteria coverage' not in checklist
+    assert 'Recorded changes' not in checklist
+
+
+def test_verified_original_issue_removed_only_with_complete_ledger(isolated_store, monkeypatch):
+    release = setup(isolated_store)
+    isolated_store.save_file_result('scan', {'file': 'one.pdf', 'engine': 'pdf', 'status': 'fail', 'score': 0,
+        'compliant': False, 'skipped_rules': 0, 'issues': [
+            {'wcag': '2.4.2', 'ruleId': 'SC_2_4_2', 'severity': 'serious', 'detail': 'Original missing title'},
+        ]}, '2026-09-09T10:00:00Z')
+    isolated_store.record_remediation_diffs('scan', 'one.pdf', [{'rule_id': 'SC_2_4_2', 'before': '', 'after': 'Title'}])
+    monkeypatch.setattr(isolated_store, 'canonical_stage_lineage', lambda *a, **kw: {'stages': [{'stage': 'remediate', 'execution_id': 'batch', 'input_manifest_id': 'manifest'}]})
+    monkeypatch.setattr(isolated_store, 'get_stage_output_manifest', lambda *a, **kw: {'entries': [{'assessment_summary': {'findings_recorded': 1, 'finding_groups': [{'file': 'one.pdf', 'rule_id': 'SC_2_4_2', 'finding_count': 1}]}}]})
+    monkeypatch.setattr(isolated_store, 'list_finding_dispositions', lambda *a: [
+        {'finding_id': 'a', 'file': 'one.pdf', 'rule_id': 'SC_2_4_2', 'disposition': 'resolved_verified', 'verified_at': '2026-09-09', 'fix_evidence_ids': ['remediation_diff:one.pdf:SC_2_4_2:0']},
+    ])
+    assets = build_release_reports(isolated_store, 'scan', OWNER, release)
+    checklist = next(a['content'].decode() for a in assets if a['name'].startswith('checklist-one'))
+    assert 'Original missing title' not in checklist
+    assert '<td>2.4.2</td>' not in checklist
+
+
+def test_report_scope_uses_per_file_effective_selection(isolated_store, monkeypatch):
+    release = setup(isolated_store)
+    monkeypatch.setattr(isolated_store, 'get_scan_scope', lambda *a: {'1.1.1': {'pdf'}})
+    monkeypatch.setattr(isolated_store, 'scope_for_file', lambda sid, name, scope: {'2.4.4': {'pdf'}} if name == 'one.pdf' else scope)
+    monkeypatch.setattr(isolated_store, 'get_scan_traces', lambda *a: [
+        {'file': 'one.pdf', 'rule_id': 'SC_1_1_1', 'outcome': 'FAIL', 'finding_count': 1},
+        {'file': 'one.pdf', 'rule_id': 'SC_2_4_4', 'outcome': 'FAIL', 'finding_count': 1},
+    ])
+    assets = build_release_reports(isolated_store, 'scan', OWNER, release)
+    checklist = next(a['content'].decode() for a in assets if a['name'].startswith('checklist-one'))
+    assert '<td>2.4.4</td>' in checklist
+    assert '<td>1.1.1</td>' not in checklist

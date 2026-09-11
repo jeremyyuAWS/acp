@@ -40,7 +40,7 @@ def queue_release_reports(store, scan_id, owner, release_id):
     release = store.release_status(release_id, owner)
     if not release or release['scan_id'] != scan_id:
         raise KeyError('Release not found')
-    fingerprint = hashlib.sha256(json.dumps(['pdf-v1', release_id, release['documents'], release['roots']], sort_keys=True).encode()).hexdigest()
+    fingerprint = hashlib.sha256(json.dumps(['pdf-v2-action-checklist', release_id, release['documents'], release['roots']], sort_keys=True).encode()).hexdigest()
     identity = fingerprint[:24]
     with store.transaction():
         # Serialize creation and retries for this owner's release.
@@ -88,7 +88,7 @@ def retry_release_reports(store, sid, owner):
     latest = get_latest_release_reports(store, sid, owner)
     if not latest['bundle_id']:
         raise KeyError('Report not found')
-    if latest['status'] == 'completed' and any(report['content_type'] != 'application/pdf' for report in latest['reports']):
+    if latest['status'] == 'completed' and (any(report['content_type'] != 'application/pdf' for report in latest['reports']) or not any(report['name'].startswith('changes-') for report in latest['reports'])):
         result = queue_if_release_settled(store, sid, owner, _get(store, latest['bundle_id'], owner)['release_id'])
         if not result:
             raise ValueError('Wait for publication to finish before generating PDF reports')
