@@ -1,12 +1,8 @@
 """`ai_zone`: where a run's AI may process, and what that changes about the budget gate.
 
-Two claims are under test, and they are opposite in direction:
-
-  * A local-only run (`ai_zone='local'`) may carry standing approval with a zero cap,
-    because the self-hosted Ollama floor costs nothing per request (providers.py:442 —
-    cost_usd is "0 for local Ollama") and a limit that can never be spent is not a control.
-  * A cloud-capable run — `ai_zone='any'`, or the field ABSENT, which is what every
-    snapshot stored before this field says — keeps the positive-cap requirement exactly.
+Standing approval authorizes applying available suggestions; it does not authorize
+spending. A zero-budget cloud run may retain that permission while RunContext.enabled
+continues to block cloud generation. Local-only runs may draft without cloud charges.
 
 The absent case is the one that has to be watched: `persist_run_policy` compares the
 canonical JSON of a re-normalized policy against the stored one and raises
@@ -69,16 +65,19 @@ def test_standing_approval_on_a_local_run_needs_no_positive_cap():
 
 
 @pytest.mark.parametrize("zone", [{"ai_zone": "any"}, {}])
-def test_standing_approval_on_a_cloud_capable_run_still_needs_a_positive_cap(zone):
-    with pytest.raises(BudgetError, match="positive run budget"):
-        normalize_run_policy({**ZERO, **zone, "auto_approve_ai": True})
+def test_standing_approval_with_zero_cap_never_authorizes_cloud_spending(zone):
+    policy = normalize_run_policy({**ZERO, **zone, "auto_approve_ai": True})
+    assert policy['auto_approve_ai'] is True
+    context = RunContext(None, "owner", "scan", "run", policy)
+    assert context.enabled is False
+    assert context.local_drafting is False
 
 
 @pytest.mark.parametrize("ai", [0, 2, 3])
 @pytest.mark.parametrize("amount", ["0.00", "1.00"])
 @pytest.mark.parametrize("zone", [{"ai_zone": "local"}, {"ai_zone": "any"}, {}])
 def test_standing_approval_still_requires_ai_level_one_in_every_zone(ai, amount, zone):
-    with pytest.raises(BudgetError, match="positive run budget"):
+    with pytest.raises(BudgetError, match="requires AI enabled"):
         normalize_run_policy({"ai": ai, "ai_budget_usd": amount, **zone,
                               "auto_approve_ai": True})
 
