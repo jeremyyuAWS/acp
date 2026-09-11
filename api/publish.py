@@ -464,12 +464,11 @@ def upload_published(svc, folder_id: str, filename: str, data: bytes, *,
         if idempotency_key:
             props[IDEMPOTENCY_PROPERTY] = idempotency_key
         media = MediaIoBaseUpload(io.BytesIO(data), mimetype=_mime_for(filename), resumable=False)
-        body = {"name": upload_name, "parents": [folder_id], "properties": props}
-        if target_file_id:
-            body["id"] = target_file_id
         try:
             result = svc.files().create(
-                body=body, media_body=media, fields="id,name,webViewLink,md5Checksum").execute()
+                body={"name": upload_name, "parents": [folder_id], "properties": props,
+                      **({"id": target_file_id} if target_file_id else {})},
+                media_body=media, fields="id,name,webViewLink,md5Checksum").execute()
         except Exception as exc:
             if not target_file_id or getattr(getattr(exc, "resp", None), "status", None) != 409:
                 raise
