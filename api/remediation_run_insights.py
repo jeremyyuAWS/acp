@@ -5,6 +5,7 @@ post-write events identify a call and queue item, not a proposal digest; they re
 recorded evidence rather than proof that this exact saved version was fixed.
 """
 from datetime import datetime, timezone
+from decimal import Decimal
 from hashlib import sha256
 import json
 
@@ -210,6 +211,52 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
         proposal['verification_reason'] = ('Exact approved values and source were written and verified in the saved artifact.'
             if proposal['version_verified'] else 'Actual writer source and approved-value proof unavailable.')
 
+    # ── Concise AI activity summary — the "was AI actually used, and what happened" line, over
+    #    the FULL run population, never just the current page of `attempts`/`proposals` above.
+    #    Aggregated with its own queries rather than reduced from the paginated lists, so the
+    #    summary is exact regardless of which page a caller happens to be viewing.
+    with db.cursor() as cur:
+        db.execute(cur, '''SELECT provider,model,COUNT(*) AS attempts,
+                SUM(CASE WHEN status IN ('drafted','accepted') THEN 1 ELSE 0 END) AS completed
+            FROM ai_attempt_history WHERE owner_id=%s AND scan_id=%s AND run_id=%s
+            GROUP BY provider,model ORDER BY attempts DESC''', scope)
+        by_model = [dict(row) for row in db.fetchall(cur)]
+        # A proposal counts as APPLIED only once a real decision event accepted it — standing
+        # approval included, since that IS the automatic-release path's own acceptance record.
+        # Awaiting review, rejected and superseded proposals are the remainder, never inferred.
+        db.execute(cur, '''SELECT COUNT(DISTINCT p.snapshot_id) AS n FROM ai_proposal_snapshots p
+            JOIN hitl_events e ON e.model_call_id=p.model_call_id AND e.scan_id=p.scan_id
+              AND e.file=p.file AND e.item_id=p.item_id AND e.rule_id=p.rule_id
+            WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s
+              AND e.action IN ('approve','edit','standing_approve')''', scope)
+        applied_row = db.fetchone(cur)
+    attempted_total = totals['total_attempts']
+    completed_total = sum(row['completed'] or 0 for row in by_model)
+    generated_total = totals['total_proposals']
+    suggestions_applied = applied_row['n'] if applied_row else 0
+    policy = json.loads(saved_policy['policy_json']) if saved_policy else {}
+    ai_level = policy.get('ai')
+    ai_zone = policy.get('ai_zone', 'any')
+    budget_usd = policy.get('ai_budget_usd')
+    # Populated ONLY when nothing was attempted — an explanation is a claim about an ABSENCE, and
+    # must not be guessed when there were real, if unsuccessful, attempts to point to instead.
+    not_used_reason = None
+    if attempted_total == 0:
+        if not ai_level:
+            not_used_reason = "AI suggestions were not enabled for this run's plan."
+        elif ai_zone != 'local' and (budget_usd is None or Decimal(budget_usd) <= 0):
+            not_used_reason = 'Cloud AI not used: the run spending limit prevents a request.'
+        else:
+            not_used_reason = 'AI was enabled for this run, but no eligible findings needed a suggestion.'
+    activity_summary = {
+        'by_model': by_model, 'attempted': attempted_total, 'completed': completed_total,
+        'suggestions_generated': generated_total, 'suggestions_applied': suggestions_applied,
+        'suggestions_needs_input': max(0, generated_total - suggestions_applied),
+        'verified': measured_contribution.get('outcomes', {}).get('fixed'),
+        'ai_policy': {'level': ai_level, 'zone': ai_zone, 'budget_usd': budget_usd},
+        'not_used_reason': not_used_reason,
+    }
+
     return {
         'contract_version': 'remediation-run-insights.v1', 'scan_id': scan_id, 'run_id': run_id, 'batch_id': run_id,
         'standing_approval': {'enabled': standing_approval, 'authorized_by': owner if standing_approval else None},
@@ -224,4 +271,5 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
         'outcomes': {'verified_fix_count': measured_contribution.get('outcomes', {}).get('fixed'),
                      'unit':'baseline_findings', 'reason': 'exact_writer_proof_required'},
         'estimate': build_impact_estimate([], config_id='unavailable', change_family='unavailable'),
+        'activity_summary': activity_summary,
     }
