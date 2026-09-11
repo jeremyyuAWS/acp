@@ -112,6 +112,7 @@ async Task Run()
     string[]? Disabled(string[] ruleIds, string filename)
     {
         if (allowedRules is null) return null;
+        if (allowedRules.TryGetValue(filename, out var explicitRules) && explicitRules is null) return null;
         var selected = allowedRules.GetValueOrDefault(filename) ?? allowedRules.GetValueOrDefault("*");
         // A supplied selection never defaults to running everything for an unknown file.
         return ruleIds.Where(id => selected is null || !selected.Contains(id)).ToArray();

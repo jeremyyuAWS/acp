@@ -5396,6 +5396,13 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                      exclude_remediated=exclude_remediated, scope_out=scope,
                      scope_files=_scope_for_listing(user), inventory_out=inventory_out,
                      drive_delta=drive_delta, sp_delta=sp_delta)
+        # Freeze per-file rules with the same listing, before any assessment starts.
+        import core as _scope_core
+        scope["scope_rules"] = [
+            {k: r.get(k) for k in ("rule_id", "selector", "value", "codes",
+                                   "priority", "is_override", "enabled")}
+            for r in _scope_core.store.list_scope_rules(enabled_only=True)
+        ]
         n = len(items)
         # Metadata completeness: derivable from the listing itself before any download.
         exc_missing_optional = sum(
@@ -5478,12 +5485,15 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         from assessment_policy import scope_from_json
         from assessment_selection import selection, selected_for_file, filter_findings
         _execution_scope = scope_from_json((scope or {}).get("scan_scope"))
+        from assessment_policy import resolve_file_scope
+        scopes_by_file = {it["name"]: resolve_file_scope(it, _execution_scope, scope.get("scope_rules"))
+                          for it in items}
         rule_allowlists = None
-        if _execution_scope:
+        if _execution_scope or scope.get("scope_rules"):
             from assessment_selection import allowed_rules
             rule_allowlists = {}
             for item in items:
-                with selection(selected_for_file(_execution_scope, item["name"])):
+                with selection(selected_for_file(scopes_by_file[item["name"]], item["name"])):
                     rule_allowlists[item["name"]] = allowed_rules()
         if rule_allowlists is not None:
             office = _analyse_office(tmp, rule_allowlists=rule_allowlists)
@@ -5503,7 +5513,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         # emitted sequentially from the main thread (one trace, no concurrent writes).
         # Opt-out (detect_pii=False) skips PII text extraction — faster on PDF estates.
         def _analyse_one(it):
-            with selection(selected_for_file(_execution_scope, it["name"])):
+            with selection(selected_for_file(scopes_by_file[it["name"]], it["name"])):
                 name, ext = it["name"], Path(it["name"]).suffix.lower()
                 _act.record_file(scan_id, name, phase="analysing",
                                  action="running the accessibility engine", force=True)
@@ -5621,7 +5631,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         # value. None (unscoped / no restriction) is a no-op.
         from store import scope_from_json
         _frozen_scope = scope_from_json((scope or {}).get("scan_scope"))
-        assessed = {k: rb.assess(r["succeeded"], _scoped_for_scoring(r["issues"], k, _frozen_scope),
+        assessed = {k: rb.assess(r["succeeded"], _scoped_for_scoring(r["issues"], k, scopes_by_file[k]),
                                  r["errors"])
                     for k, r in raw.items()}
         summary = rb.aggregate(assessed)

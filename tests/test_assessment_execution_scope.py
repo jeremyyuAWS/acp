@@ -101,3 +101,31 @@ def test_real_office_engine_honors_selected_rules(tmp_path, ext):
         result = scanner._analyse_office(tmp_path)[p.name]
         assert result['succeeded'], result
         assert result['issues'] == []
+
+
+def test_media_does_not_check_captions_when_only_audio_alternative_selected(monkeypatch):
+    from types import SimpleNamespace
+    from formats.av.detectors import captions
+    monkeypatch.setattr(captions.media, 'probe', lambda p: SimpleNamespace(has_video=True, has_audio=True, has_captions=False))
+    def forbidden(*args):
+        raise AssertionError('Unselected captions check executed')
+    monkeypatch.setattr(captions, '_sidecars', forbidden)
+    with selection({'1.2.1'}):
+        assert captions.detect('video.mp4') == []
+
+
+def test_monolithic_scan_resolves_per_file_criterion_rules(tmp_path, monkeypatch):
+    import core
+    source = tmp_path/'source.html'; source.write_text(HTML)
+    def listing(*args, scope_out, **kwargs):
+        scope_out['scan_scope'] = {'2.4.2': ['docx']}
+        return [{'name':'finance.html', 'path':str(source), 'parent_folder':'Finance'}]
+    monkeypatch.setattr(scanner, '_list', listing)
+    monkeypatch.setattr(core.store, 'list_scope_rules', lambda **kwargs: [
+        {'rule_id':'r','selector':'folder','value':'Finance','codes':['1.1.1'],
+         'priority':1,'is_override':True,'enabled':True}])
+    monkeypatch.setattr(scanner, '_analyse_office', lambda *args, **kwargs: {})
+    report = scanner.run_scan(source='local', ai_enabled=False)
+    issues = report['files'][0]['issues']
+    assert issues and {i['wcag'].split()[0] for i in issues} == {'1.1.1'}
+    assert report['scope']['scope_rules'][0]['codes'] == ['1.1.1']
