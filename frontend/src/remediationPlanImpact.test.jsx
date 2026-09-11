@@ -46,3 +46,25 @@ it('adds the unclassified remainder to reconcile the plan with Assess without co
     assessmentTotal={32} data={data(17,12)} />))
   expect(container.querySelector('.plan-impact__outside')).toBeNull()
 })
+it('offers explanation and examples for every tile by hover, keyboard and click', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(<RemediationPlanImpact identity="help" policyKey="cloud" ready
+    assessmentTotal={32} data={data(17,12)} />))
+  const buttons = [...container.querySelectorAll('.plan-impact__tile button')]
+  expect(buttons).toHaveLength(9)
+  for (const button of buttons) {
+    await act(async () => button.focus())
+    const tip = container.querySelector('[role=tooltip]')
+    expect(tip.textContent).toMatch(/Example/)
+    expect(button.getAttribute('aria-describedby')).toBe(tip.id)
+    await act(async () => button.click())
+    expect(container.querySelector('[role=tooltip]')).not.toBeNull()
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true})))
+    expect(container.querySelector('[role=tooltip]')).toBeNull()
+  }
+  const outside = buttons.at(-1)
+  await act(async () => outside.blur())
+  await act(async () => outside.dispatchEvent(new MouseEvent('mouseover', {bubbles:true})))
+  expect(container.querySelector('[role=tooltip]').textContent).toContain('a review finding omitted from the preview')
+  expect(container.querySelector('[role=tooltip]').textContent).toContain('possible reasons, not confirmed')
+})

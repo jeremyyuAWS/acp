@@ -16,3 +16,15 @@
 .plan-impact__outside { grid-column: 1 / -1; color: #765000; background: #fff8e6; }
 .plan-impact__outside > span:first-child { min-height: auto; }
 .plan-impact__outside p { margin: 6px 0 0; }
+
+.plan-impact__tile > span:first-child { padding-right: 20px; }
+.plan-impact__help { position: absolute; top: 7px; right: 7px; }
+.plan-impact__help .info-tip > button { color: inherit; min-width: 24px; min-height: 24px; }
+.plan-impact__help .info-tip__text { top: 100%; }
+.plan-impact__tile:nth-child(4n) .info-tip__text,
+.plan-impact__tile:nth-child(4n - 1) .info-tip__text,
+.plan-impact__outside .info-tip__text { left: auto; right: 0; }
+@media (max-width: 560px) {
+  .plan-impact__tile .info-tip__text { width: min(260px, calc(100vw - 110px)); left: auto; right: 0; }
+  .plan-impact__tile:nth-child(odd):not(.plan-impact__outside) .info-tip__text { left: -80px; right: auto; }
+}
