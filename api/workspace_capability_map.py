@@ -379,6 +379,8 @@ _map_many([
 _map_many([("PUT", "/admin/people/{email}/role"),
            ("GET", "/admin/people/{email}/role-impact")], {"people.manage"})
 _map_many([
+    ("GET", "/admin/workspace-roles/enforcement"),
+    ("PUT", "/admin/workspace-roles/enforcement"),
     ("GET", "/admin/roles"), ("GET", "/admin/roles/{role_id}"), ("GET", "/admin/capabilities"),
     ("POST", "/admin/roles"), ("PUT", "/admin/roles/{role_id}"),
     ("DELETE", "/admin/roles/{role_id}"), ("POST", "/admin/workspace-roles/bootstrap"),
