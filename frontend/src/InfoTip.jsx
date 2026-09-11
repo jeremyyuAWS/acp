@@ -1,3 +1,4 @@
+import './tooltip-typography.css'
 import { useEffect, useId, useRef, useState } from 'react'
 import './info-tip.css'
 

@@ -1,3 +1,4 @@
+import './tooltip-typography.css'
 import { useId, useRef, useState } from 'react'
 import { GLOSSARY } from './glossary.js'
 
