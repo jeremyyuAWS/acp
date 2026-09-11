@@ -31,6 +31,11 @@ tr { break-inside: avoid; }
 details { display: block; border: 1px solid #ded5e4; padding: 8px; margin: 7px 0; break-inside: auto; }
 summary { display: block; font-weight: bold; break-after: avoid; }
 a { color: #573352; }
+.pdf-evidence-pair { break-inside: avoid; margin-top: 16px; }
+.pdf-evidence-images { display: flex; gap: 12px; }
+.pdf-evidence-images figure { width: 48%; margin: 0; }
+.pdf-evidence-images img { width: 100%; height: auto; border: 1px solid #d9cfdf; }
+.pdf-evidence-images figcaption { font-weight: bold; margin-bottom: 6px; }
 '''
 
 
@@ -77,7 +82,7 @@ def render_report_pdf(source):
             anchor.drop_tag()
     def fetch(url, *args, **kwargs):
         if not url.startswith('data:image/png;base64,'):
-            raise ValueError('Only the embedded brand image may be loaded')
+            raise ValueError('Only embedded PNG images may be loaded')
         return default_url_fetcher(url, *args, **kwargs)
     markup = html.tostring(document, encoding='unicode').replace('Expand a category to see SCs by file.', 'Detailed SC checklists follow for each file.')
     return HTML(string=markup, url_fetcher=fetch).write_pdf(
