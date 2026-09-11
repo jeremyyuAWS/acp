@@ -117,3 +117,22 @@ def test_explicit_saved_off_overrides_deployment_enforce(toggle_client, monkeypa
     monkeypatch.setenv(rollout.MODE_VAR, "enforce")
     st.set_setting(rollout.SETTING_KEY, "off")
     assert rollout.mode() == "off"
+
+
+def test_mode_read_failure_refuses_protected_request_but_not_public_health(toggle_client, monkeypatch):
+    client, st = toggle_client
+    calls = []
+    original = st.get_setting
+    def unavailable(key, default=None):
+        if key == rollout.SETTING_KEY:
+            calls.append(key)
+            raise RuntimeError("database unavailable")
+        return original(key, default)
+    monkeypatch.setattr(st, "get_setting", unavailable)
+    # The public health route must not depend on role settings.
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    assert calls == []
+    response = client.get("/admin/roles")
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"] == "role_permissions_unavailable"
