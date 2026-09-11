@@ -1,3 +1,4 @@
+import './tooltip-typography.css'
 import { useEffect, useId, useState } from 'react'
 import './remediation-option-help.css'
 
