@@ -5283,7 +5283,7 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
                 import blob as _blob
                 data = _blob.download_remediated(payload['standing_approval']['owner'], scan_id, filename)
                 if data:
-                    record_verification(core.store, scan_id, filename, data, _verify_residual(data, filename))
+                    record_verification(core.store, scan_id, filename, data, _verify_residual(data, filename, scan_id=scan_id))
             return
     from ai_standing_approval import check_file_approvals
     check_file_approvals(core.store, scan_id, filename)
