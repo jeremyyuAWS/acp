@@ -140,7 +140,7 @@ def planning_preview(store, sid, owner, files):
     """Describe a local pre-Start choice without accepting release permission."""
     from assessment_policy import selected_documents
     result = dict(available=False, reason=None, files=[], source_revision=None,
-                  destination=None, destination_label=None)
+                  destination=None, destination_label=None, blocked_files=[])
     try:
         scan = store.get_scan(sid, owner=owner)
         if not scan:
@@ -157,12 +157,26 @@ def planning_preview(store, sid, owner, files):
         if source not in {'drive', 'sharepoint'}:
             raise ValueError('Automatic release requires a connected Google Drive or SharePoint destination.')
         records = store.get_file_records(sid, owner=owner, files=files)
+        blocked = []
         for file in files:
             record = records.get(file) or {}
-            if record.get('score') is None or record.get('status') in {'error', 'queued', 'pending', 'processing'}:
-                raise ValueError('Assess every selected file before planning automatic release.')
-            if not record.get('drive_file_id') or not record.get('source_modified') or (source == 'sharepoint' and not record.get('drive_id')):
-                raise ValueError('Tracked source identity and assessment freshness are required for every selected file.')
+            status = record.get('status')
+            if not record:
+                reason = 'No assessment record. Assess this file first.'
+            elif status == 'error':
+                reason = 'Assessment failed. Retry assessment for this file.'
+            elif status in {'queued', 'pending', 'processing'}:
+                reason = 'Assessment is still queued or running. Wait for it to finish, then refresh.'
+            elif record.get('score') is None:
+                reason = 'Assessment completion is not recorded. Recheck this file in Assess.'
+            elif not record.get('drive_file_id') or not record.get('source_modified') or (source == 'sharepoint' and not record.get('drive_id')):
+                reason = 'Source identity or freshness is missing. Refresh the source and reassess this file.'
+            else:
+                continue
+            blocked.append(dict(file=file, reason=reason))
+        if blocked:
+            result.update(blocked_files=blocked, reason=f'{len(blocked)} of {len(files)} selected files need attention before automatic publishing.')
+            return result
         destination = destination_for(store, sid, owner, source, records, files)
         result.update(available=True, files=sorted(files), source_revision=store.remediation_source_revision(sid),
                       destination=destination, destination_label=destination_label(destination))

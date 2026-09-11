@@ -70,3 +70,19 @@ it('requires a choice in the compact publishing question and preserves approval 
   expect(onAnswered).toHaveBeenLastCalledWith(true)
   expect(v.onChange).toHaveBeenLastCalledWith(expect.objectContaining({ allow_remaining_issues: true, include_reports: true }))
 })
+
+it('explains blocked files and refreshes readiness without blaming the connection', async () => {
+  const read = vi.fn().mockResolvedValueOnce({planning:{available:false,
+    reason:'1 of 1 selected files need attention before automatic publishing.',
+    blocked_files:[{file:'a',reason:'Assessment is still queued or running.'}]}})
+    .mockResolvedValueOnce({planning})
+  const v = await mount({read,requireChoice:true})
+  expect(v.input().disabled).toBe(true)
+  expect(v.container.querySelector('[aria-label="Files blocking automatic publishing"]').textContent).toContain('a — Assessment')
+  expect(v.container.textContent).not.toContain('Connect an authorized destination')
+  const refresh = [...v.container.querySelectorAll('button')].find(b=>b.textContent==='Refresh publishing readiness')
+  await act(async()=>refresh.click())
+  expect(read).toHaveBeenCalledTimes(2)
+  expect(v.input().disabled).toBe(false)
+  expect(v.input().checked).toBe(false)
+})
