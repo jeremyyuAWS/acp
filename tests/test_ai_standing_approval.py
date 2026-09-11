@@ -208,7 +208,7 @@ def test_real_office_writer_only_credits_saved_verified_output(isolated_store,mo
     blob=_Blob(original)
     monkeypatch.setitem(sys.modules,'blob',blob)
     seen=[]
-    def verify(data,file):
+    def verify(data,file,**kwargs):
         seen.append(data)
         if outcome=='cannot_verify':return Verification(False,())
         if outcome=='cancel_before_storage' and data!=original:
@@ -393,3 +393,11 @@ def test_saved_writer_receipt_attaches_to_system_authorization(isolated_store):
     after=contribution.read_contribution(s,'owner','scan',run)
     assert after['outcomes']['fixed']==1
     assert after['findings'][0]['approval_kind']=='run_authorization'
+
+
+def test_automatic_approval_rejects_out_of_scope_before_reading_proposal():
+    from types import SimpleNamespace
+    from ai_standing_approval import eligible_item
+    store = SimpleNamespace(_selected_sc=lambda *args: False)
+    with pytest.raises(ValueError, match='outside the selected assessment criteria'):
+        eligible_item(store, 'owner', 'scan', 'run', {'file': 'a.docx', 'rule_id': '1.1.1'})
