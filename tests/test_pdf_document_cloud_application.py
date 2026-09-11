@@ -3,6 +3,7 @@ import io
 import json
 from hashlib import sha256
 import pikepdf
+import pytest
 
 import handlers
 import document_wide_workflow
@@ -16,12 +17,14 @@ from test_document_wide_pdf_context import pdf_context
 import test_ai_standing_approval as base
 
 
-def test_pdf_document_figure_reaches_real_writer_and_exact_saved_delivery(isolated_store, monkeypatch, tmp_path):
+@pytest.mark.parametrize('corrupt_writer', [False, True])
+def test_pdf_document_figure_reaches_real_writer_and_exact_saved_delivery(isolated_store, monkeypatch, tmp_path, corrupt_writer):
     store = isolated_store
     monkeypatch.setattr(base, 'FILE', 'file.pdf')
     original = pdf_context()
     with pikepdf.open(io.BytesIO(original)) as pdf:
         pdf.docinfo['/Title'] = 'Previously corrected title'
+        pdf.Root.AcroForm.Fields[0].V = pikepdf.String('Alice Patient')
         stream = io.BytesIO(); pdf.save(stream); candidate = stream.getvalue()
     job = base.seed(store, monkeypatch)
     sid, filename = base.SID, base.FILE
@@ -75,13 +78,29 @@ def test_pdf_document_figure_reaches_real_writer_and_exact_saved_delivery(isolat
             approve_file(store, ctx)
         jobs = base.apply_jobs(store)
         assert len(jobs) == 1 and len(captured) == 1
+        if corrupt_writer:
+            import remediate_pdf
+            actual_writer = remediate_pdf.apply_pdf_approved
+            def lose_form_value(data, values):
+                fixed, applied, unresolved = actual_writer(data, values)
+                with pikepdf.open(io.BytesIO(fixed)) as pdf:
+                    del pdf.Root.AcroForm.Fields[0]['/V']
+                    out = io.BytesIO(); pdf.save(out)
+                return out.getvalue(), applied, unresolved
+            monkeypatch.setattr(remediate_pdf, 'apply_pdf_approved', lose_form_value)
         handlers._apply_approved_values(json.loads(jobs[0]['payload']), {})
+        if corrupt_writer:
+            assert not blob.uploads
+            assert blob.data == candidate
+            assert any(r['action'] == 'apply.integrity_failed' for r in base.rows(store, 'decision_log'))
+            return
         assert blob.uploads and blob.data != candidate, [(r['action'],r['detail']) for r in base.rows(store,'decision_log')]
         with pikepdf.open(io.BytesIO(blob.data)) as pdf:
             assert str(pdf.Root.StructTreeRoot.K[0].Alt) == 'Red circle'
             assert str(pdf.docinfo['/Title']) == 'Previously corrected title'
             assert len(pdf.pages) == 2
             assert len(pdf.Root.AcroForm.Fields) == 2
+            assert str(pdf.Root.AcroForm.Fields[0].V) == 'Alice Patient'
             assert '/TU' not in pdf.Root.AcroForm.Fields[0]  # unselected SC4.1.2 untouched
         with pikepdf.open(io.BytesIO(original)) as pdf:
             assert '/Alt' not in pdf.Root.StructTreeRoot.K[0]
@@ -110,3 +129,19 @@ def test_pdf_integrity_uses_deployed_runtime_and_rejects_lost_pages_or_corruptio
     with pikepdf.open(io.BytesIO(original)) as pdf:
         stream = io.BytesIO(); pdf.save(stream, encryption=pikepdf.Encryption(owner='fixture-owner', user=''))
     assert not structurally_readable(original, stream.getvalue(), 'file.pdf')
+
+
+def test_pdf_semantic_guard_checks_exact_value_and_unselected_targets():
+    from unverified_changes import structurally_readable
+    from remediate_pdf import apply_pdf_approved
+    original = pdf_context()
+    expected = {'pdf:fig:1:0': 'Red circle'}
+    corrected, applied, unresolved = apply_pdf_approved(original, expected)
+    assert applied and not unresolved
+    assert structurally_readable(original, corrected, 'file.pdf', pdf_semantic_targets=expected)
+    assert not structurally_readable(original, corrected, 'file.pdf',
+                                     pdf_semantic_targets={'pdf:fig:1:0': 'Blue circle'})
+    with pikepdf.open(io.BytesIO(corrected)) as pdf:
+        pdf.Root.AcroForm.Fields[0].TU = pikepdf.String('Unapproved field label')
+        out = io.BytesIO(); pdf.save(out)
+    assert not structurally_readable(original, out.getvalue(), 'file.pdf', pdf_semantic_targets=expected)
