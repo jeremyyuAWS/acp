@@ -23,6 +23,7 @@ function primaryOutcome(model) {
     const assessed = model.domain?.buckets.find(([label]) => label === 'Assessed')?.[1]
     return `${assessed ?? '—'} assessed of ${model.domain?.total ?? '—'} eligible documents`
   }
+  if (model.stage === 'remediate' && model.domain) return `${model.domain.total ?? '—'} assessed findings`
   return `${model.domain?.accounted ?? model.accounted ?? '—'} of ${model.domain?.total ?? model.total ?? '—'} ${model.domain?.unit || model.unit}`
 }
 

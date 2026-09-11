@@ -6,9 +6,9 @@ it('names accounted findings and the missing outcome instead of claiming fix com
     reconciliation: {total:2,accounted:2,exact:true}, integrity:{ok:false},
     domain_reconciliation:{unit:'assessed findings',total:8,accounted:7,exact:false,
       buckets:{resolved_verified:4,awaiting_review:3}} }} />)
-  expect(html).toContain('assessed findings accounted for')
+  expect(html).toContain('8 assessed findings')
   expect(html).toContain('1 assessed finding still lack a recorded outcome')
-  expect(html).toContain('88% accounted for')
+  expect(html).toContain('88% with recorded outcomes')
   expect(html).not.toContain('88% complete')
 })
 
@@ -27,12 +27,12 @@ it('shows all 32 Assess findings and makes the 29-item historical breakdown add 
   expect(original.domain_reconciliation.total).toBe(29)
   const html = renderToStaticMarkup(<Stack lineage={{scan_id:'scan', workflow_revision:1, stages:[original]}}
     assessmentFindings={{scanId:'scan', total:32}} />)
-  expect(html).toContain('22 of 32')
+  expect(html).toContain('32 assessed findings')
   expect(html).toContain('Not in remediation breakdown')
   expect(html).toContain('10 assessed findings still lack a recorded outcome')
   const other = renderToStaticMarkup(<Stack lineage={{scan_id:'scan',workflow_revision:1,stages:[original]}}
     assessmentFindings={{scanId:'other-scan',total:32}} />)
-  expect(other).not.toContain('of 32')
+  expect(other).not.toContain('32 assessed findings')
 })
 
 import { omittedAssessmentGroups } from './canonicalStageCard.js'
@@ -50,4 +50,34 @@ it('traces omitted findings to recorded file/SC evidence and refuses inconsisten
   expect(html).toContain('2 with recorded outcomes + 1 awaiting an outcome = 3 assessed findings')
   expect(html).toContain('one.pdf')
   expect(html).toContain('SC 1.4.1')
+})
+
+
+it('makes the screenshot outcome buckets sum to the same 23 assessed findings without claiming 23 fixes', () => {
+  const snapshot = { stage: 'remediate', state: 'processing_complete',
+    integrity: { ok: false },
+    domain_reconciliation: { total: 23, accounted: 15, exact: false,
+      unit: 'assessed findings', buckets: { resolved_verified: 9, awaiting_review: 6,
+        approved_awaiting_verification: 0, unchanged_no_fix: 0, failed: 0, excluded: 0, superseded: 0 } } }
+  const aligned = alignRemediationAssessment(snapshot, 23)
+  expect(Object.values(aligned.domain_reconciliation.buckets).reduce((sum, n) => sum + n, 0)).toBe(23)
+  expect(aligned.domain_reconciliation.accounted).toBe(15)
+  const html = renderToStaticMarkup(<Stack lineage={{scan_id:'scan',workflow_revision:1,
+    stages:[{...snapshot,workflow_revision:1}]}} assessmentFindings={{scanId:'scan',total:23}} />)
+  expect(html).toContain('23 assessed findings')
+  expect(html).not.toContain('15 of 23')
+  expect(html).toContain('9 resolved · verified + 6 awaiting review + 8 awaiting recorded outcome = 23 assessed findings')
+  expect(html).toContain('65% with recorded outcomes')
+  expect(html).not.toContain('100%')
+  expect(snapshot.domain_reconciliation.buckets.awaiting_recorded_outcome).toBeUndefined()
+})
+
+
+it('does not invent a balancing equation when recorded buckets disagree with the ledger', () => {
+  const html = renderToStaticMarkup(<Card snapshot={{stage:'remediate',state:'processing_complete',
+    integrity:{ok:false}, domain_reconciliation:{total:23,accounted:15,exact:false,
+      buckets:{resolved_verified:20,awaiting_review:6}}}} />)
+  expect(html).toContain('23 assessed findings')
+  expect(html).not.toContain('= 23 assessed findings')
+  expect(html).toContain('Accounting is reconciling')
 })

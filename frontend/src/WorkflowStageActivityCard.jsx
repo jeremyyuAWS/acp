@@ -1,11 +1,11 @@
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
-import { canonicalStageCardModel } from './canonicalStageCard.js'
+import { canonicalStageCardModel, alignRemediationAssessment } from './canonicalStageCard.js'
 
 const terminal = (state) => ['processing_complete', 'succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed'].includes(state)
 const shown = (value) => value == null ? '—' : Number(value).toLocaleString()
 
 export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen }) {
-  const model = canonicalStageCardModel(snapshot)
+  const model = canonicalStageCardModel(alignRemediationAssessment(snapshot, null))
   if (!model) return null
   const domain = model.domain
   const done = domain?.accounted ?? model.accounted
@@ -14,6 +14,9 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
     ? Math.max(0, Math.min(100, Math.round(done / total * 100))) : 0
   const findingAccounting = model.stage === 'remediate' && !!domain
   const missingOutcomes = findingAccounting && Number.isSafeInteger(total) && Number.isSafeInteger(done) && total > done ? total - done : 0
+  const balanced = findingAccounting && Number.isSafeInteger(total) && Number.isSafeInteger(done)
+    && done >= 0 && done <= total && domain.buckets.every(([, value]) => Number.isSafeInteger(value) && value >= 0)
+    && domain.buckets.reduce((sum, [, value]) => sum + value, 0) === total
   const live = !terminal(snapshot.state)
   return <section className={`workflow-sse-card stage-${model.stage}`} aria-label={`${model.stageLabel} activity`}>
     <header className="workflow-sse-card__header">
@@ -23,14 +26,18 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
         historyKey={`${snapshot.workflow_id || 'workflow'}:${model.executionId || model.stage}`} showText />}
       {onOpen && <button type="button" className="linklike" onClick={onOpen}>Open details →</button>}
     </header>
-    <p className="workflow-sse-card__outcome"><b>{shown(done)} of {shown(total)}</b> {domain?.unit || model.unit}{findingAccounting ? ' accounted for' : ''}</p>
-    <div className="workflow-sse-card__track" aria-label={`${pct}% ${findingAccounting ? 'accounted for' : 'complete'}`} role="progressbar"
+    <p className="workflow-sse-card__outcome">{findingAccounting
+      ? <><b>{shown(total)} assessed findings</b> · Outcome breakdown</>
+      : <><b>{shown(done)} of {shown(total)}</b> {domain?.unit || model.unit}</>}</p>
+    {findingAccounting && <p className="workflow-sse-card__notice">Outcomes show what happened to the findings. Document categories show how they can be remediated; individual bucket counts can differ.</p>}
+    <div className="workflow-sse-card__track" aria-label={`${pct}% ${findingAccounting ? 'with recorded outcomes' : 'complete'}`} role="progressbar"
       aria-valuemin="0" aria-valuemax="100" aria-valuenow={pct}><span style={{ width: `${pct}%` }} /></div>
     {domain?.buckets?.length > 0 && <dl className="workflow-sse-card__metrics">
       {domain.buckets.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{shown(value)}</dd></div>)}
     </dl>}
-    {findingAccounting && missingOutcomes > 0 && <p className="workflow-sse-card__notice">
-      {shown(done)} with recorded outcomes + {shown(missingOutcomes)} awaiting an outcome = {shown(total)} assessed findings.
+    {balanced && <p className="workflow-sse-card__notice">
+      {domain.buckets.filter(([, value]) => value > 0).map(([label, value]) => `${shown(value)} ${label.toLowerCase()}`).join(' + ') || '0'} = {shown(total)} assessed findings.
+      <br />{shown(done)} with recorded outcomes + {shown(missingOutcomes)} awaiting an outcome = {shown(total)} assessed findings.
     </p>}
     {snapshot.omitted_assessment_groups?.length > 0 && <details>
       <summary>Findings not in the remediation breakdown — by file and SC</summary>

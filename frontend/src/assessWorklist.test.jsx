@@ -542,3 +542,14 @@ describe('what the component is not allowed to derive itself', () => {
     expect(src, 'the worklist re-sorts the module’s order').not.toMatch(/\.sort\(/)
   })
 })
+
+
+it('labels the screenshot category total as 23 findings and keeps change records separate', async () => {
+  const c = await mount({ files: [
+    doc('automatic.docx', Array.from({length:11}, () => finding('1.3.1'))),
+    doc('suggestions.docx', Array.from({length:6}, () => finding('1.1.1'))),
+    doc('manual.pdf', Array.from({length:6}, () => finding('1.3.1'))),
+  ] })
+  expect(c.textContent).toContain('23 assessed findings across the document categories')
+  expect(c.textContent).toContain('Change records are separate and are not added to findings')
+})
