@@ -87,3 +87,41 @@ it('describes saved remaining-issue authorization without claiming reviews block
  getAutomaticRelease.mockResolvedValue({...authorized,authorization:{...authorized.authorization,allow_remaining_issues:true,include_reports:true}})
  const v=await mount();expect(v.container.textContent).toContain('Human inspection is optional');expect(v.container.textContent).toContain('per-file checklist');expect(v.container.textContent).not.toContain('required approvals and verification pass')
 })
+
+it('shows stalled delivery reasons by file without presenting repeated checks as progress', async()=>{
+ const reason='No delivery progress for 10 minutes. Check the destination and delivery receipt before retrying; a copy may already exist.'
+ getAutomaticRelease.mockResolvedValue({...authorized,authorization:{...authorized.authorization,status:'blocked',needs_attention:true,attention_reason:reason,last_progress_at:'2026-09-10T06:00:00Z',files:['a.docx','b.docx'],progress:{published:0,pending:0,blocked:2,failed:0},file_progress:{
+  'a.docx':{state:'publishing',message:'Checking delivery receipt. A copy may already exist.'},
+  'b.docx':{state:'waiting',message:'Corrected copy is ready. Waiting for the current delivery to finish.'}
+ }}})
+ const v=await mount({files:[{file:'a.docx'},{file:'b.docx'}]})
+ expect(v.container.querySelector('[role=status]').textContent).toContain(reason)
+ expect(v.container.textContent).not.toContain('release continues in the background')
+ expect(v.container.textContent).not.toContain('Waiting for this run to finish remediating')
+ expect(v.container.querySelector('details').open).toBe(true)
+ expect(v.container.querySelectorAll('li')).toHaveLength(2)
+ expect(v.container.textContent).toContain('Checking delivery')
+ expect(v.container.textContent).toContain('Corrected copy is ready')
+ const attention=[...v.container.querySelectorAll('dt')].find(el=>el.textContent==='Needs attention')
+ expect(attention.nextElementSibling.textContent).toBe('2')
+ expect(v.checkbox().checked).toBe(true)
+ expect(v.button('Stop future releases')).toBeTruthy()
+ expect(enableAutomaticRelease).not.toHaveBeenCalled()
+})
+
+it('keeps an actively processing authorization enabled without a stall banner',async()=>{
+ getAutomaticRelease.mockResolvedValue({...authorized,authorization:{...authorized.authorization,status:'processing',needs_attention:false,file_progress:{'a.docx':{state:'published',message:'Delivered'}}}})
+ const v=await mount()
+ expect(v.checkbox().checked).toBe(true)
+ expect(v.container.querySelector('[role=status]')).toBeNull()
+ expect(v.container.querySelector('details').open).toBe(false)
+ expect(v.container.textContent).toContain('Delivered')
+ expect(v.button('Stop future releases')).toBeTruthy()
+})
+
+it('does not claim an uncertain terminal delivery never reached the destination',async()=>{
+ getAutomaticRelease.mockResolvedValue({...authorized,authorization:{...authorized.authorization,status:'failed'}})
+ const v=await mount()
+ expect(v.container.textContent).toContain('Delivery is not confirmed for files needing attention.')
+ expect(v.container.textContent).not.toContain('Files needing attention have not been released.')
+})

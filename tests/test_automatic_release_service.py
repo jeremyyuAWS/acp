@@ -368,3 +368,76 @@ def test_automatic_folder_uses_owner_timezone_and_freezes_on_replay(prepared, mo
     assert row['intent']['release_folder_name'] == '2026-09-10 20-35 CDT - ' + OWNER
     prepared.store.set_user_setting(OWNER, 'release_timezone', 'Asia/Kolkata')
     assert authorize(prepared)['intent']['release_folder_name'] == row['intent']['release_folder_name']
+
+
+def test_delivery_stall_ignores_ticks_backs_off_and_recovers_exact_receipt(prepared, monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    clock = [datetime.now(timezone.utc)]
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+    monkeypatch.setattr(flow, 'datetime', Clock)
+    row = authorize(prepared)
+    row = tick(prepared, row)
+    # Reproduce the uncertain queued receipt with no publish job to recover it.
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, "DELETE FROM jobs WHERE type='publish_file'")
+    row = tick(prepared, row)
+    first_progress = row['progress']['_delivery_watch']['last_progress_at']
+    assert not flow.public(row)['needs_attention']
+    clock[0] += timedelta(seconds=601)
+    row = tick(prepared, row)
+    shown = flow.public(row)
+    assert shown['needs_attention'] and row['status'] == 'blocked'
+    assert shown['progress'] == dict(published=0, pending=0, blocked=1, failed=0)
+    assert shown['last_progress_at'] == first_progress
+    assert 'copy may already exist' in shown['attention_reason']
+    assert len(prepared.calls) == 1
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, "SELECT run_after FROM jobs WHERE type='release_continue' ORDER BY run_after DESC LIMIT 1")
+        scheduled = prepared.store._db.fetchone(cur)['run_after']
+    # Persistence uses its real clock; stalled polling has a five minute delay.
+    assert (datetime.fromisoformat(scheduled) - datetime.now(timezone.utc)).total_seconds() > 250
+    prepared.mode = 'receipt'
+    release = prepared.store.ensure_release_execution(SID, OWNER, 'sharepoint', 1,
+        preferred_folder_name=row['intent']['release_folder_name'],
+        parent_folder_id=row['intent']['release_parent_id'])
+    prepared.store.record_release_document(release['id'], OWNER,
+        dict(file=FILE, status='published', artifact_digest='sha256:' + DIGEST))
+    row = tick(prepared, row)
+    assert row['status'] == 'completed'
+    assert not flow.public(row)['needs_attention']
+    assert len(prepared.calls) == 1
+
+
+def test_waiting_for_human_is_not_a_delivery_stall(monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    progress = {'files': {FILE: {'state': 'blocked', 'message': 'Waiting for approval'}}}
+    progress['_delivery_watch'] = flow.delivery_watch(progress, {})
+    progress['_delivery_watch']['last_progress_at'] = (datetime.now(timezone.utc)-timedelta(hours=2)).isoformat()
+    assert not flow.delivery_watch(progress, {})['needs_attention']
+
+
+def test_ready_copy_waits_for_current_delivery_with_correct_reason(prepared):
+    row = authorize(prepared)
+    prepared.store.enqueue_stage_batch(SID, 'release', 'publish_file',
+        [{'owner': OWNER, 'scan_id': SID, 'file': 'other.docx'}],
+        snapshot_id='release-fixture', request_fingerprint='busy-release')
+    row = tick(prepared, row)
+    entry = flow.public(row)['file_progress'][FILE]
+    assert entry['waiting_for_delivery']
+    assert entry['message'] == 'Corrected copy is ready. Waiting for the current delivery to finish.'
+    assert not prepared.calls
+
+
+def test_delivery_job_transition_resets_stall_but_heartbeat_does_not():
+    from datetime import datetime, timezone, timedelta
+    progress = {'files': {FILE: {'state': 'publishing', 'artifact_digest': DIGEST}}}
+    progress['_delivery_watch'] = flow.delivery_watch(progress, {FILE: ['queued']})
+    progress['_delivery_watch']['last_progress_at'] = (datetime.now(timezone.utc)-timedelta(minutes=11)).isoformat()
+    progress['_tick_revision'] = 99
+    assert flow.delivery_watch(progress, {FILE: ['queued']})['needs_attention']
+    changed = flow.delivery_watch(progress, {FILE: ['running']})
+    assert not changed['needs_attention']
+    assert changed['last_progress_at'] != progress['_delivery_watch']['last_progress_at']

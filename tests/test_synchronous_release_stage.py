@@ -1,6 +1,8 @@
 """Drive and local Release use canonical job-less work and durable effect receipts."""
 from types import SimpleNamespace
 
+import pytest
+
 
 OWNER = "owner@example.com"
 
@@ -236,7 +238,8 @@ def test_drive_release_reuses_completed_receipt_without_provider_write(monkeypat
     assert store.events[-3:] == ["publish", "document", ("finish", "completed")]
 
 
-def test_drive_release_keeps_uncertain_provider_outcome_queued(monkeypatch):
+@pytest.mark.parametrize("error_type,status", [(OSError, 503), (PermissionError, 403)])
+def test_drive_release_keeps_uncertain_provider_outcome_queued(monkeypatch, caplog, error_type, status):
     import core
     import handlers
     import publish
@@ -251,13 +254,57 @@ def test_drive_release_keeps_uncertain_provider_outcome_queued(monkeypatch):
     monkeypatch.setattr(core, "store", store)
     monkeypatch.setattr(handlers, "_drive_client", lambda token: object())
     monkeypatch.setattr(publish, "remediated_content_digest", lambda *args: "sha256-content")
+    error = error_type("Bearer secret-token; document content; connection ended after request")
+    error.response = SimpleNamespace(status_code=status, headers={
+        "x-request-id": "provider-request-123", "Authorization": "Bearer secret-token"},
+        text="private document content")
     monkeypatch.setattr(publish, "archive_copy_publish", lambda *args, **kwargs: (
-        _ for _ in ()).throw(IOError("connection ended after request")))
+        _ for _ in ()).throw(error))
 
     response = scans.publish_files(
         "scan-1", _request({"x-drive-token": "token"}), {"files": ["one.pdf"]})
 
     assert response["published"][0]["status"] == "queued"
     assert "uncertain" in response["published"][0]["explanation"]
+    assert f"HTTP {status}" in response["published"][0]["explanation"]
+    assert "secret-token" not in str(response)
+    assert "secret-token" not in caplog.text
+    assert "document content" not in caplog.text
+    assert '"provider_request_id": "provider-request-123"' in caplog.text
+    assert f'"http_status": {status}' in caplog.text
+    assert '"scan_id": "scan-1"' in caplog.text
+    assert '"release_id": "release-1"' in caplog.text
+    assert '"file": "one.pdf"' not in caplog.text
+    assert store.document["explanation"] == response["published"][0]["explanation"]
     assert not any(isinstance(event, tuple) and event[0] == "finish"
                    for event in store.events)
+
+
+def test_provider_diagnostics_accept_google_metadata_and_ignore_unsafe_values(caplog, monkeypatch):
+    from routes import scans
+
+    class GoogleResponse(dict):
+        status = 429
+
+    monkeypatch.setenv("ACP_TELEMETRY_SALT", "test-salt")
+    error = OSError("https://example.test?access_token=secret-token")
+    error.resp = GoogleResponse({"x-guploader-uploadid": "upload-123", "cookie": "secret-token"})
+    result = scans._log_release_provider_error(
+        error, scan_id="scan-1", file="one.pdf\nforged-log", release_id="release-1",
+        provider="drive", uncertain=True)
+    assert result == {"error_type": "OSError", "http_status": 429,
+                      "provider_request_id": "upload-123"}
+    assert "secret-token" not in caplog.text
+    from telemetry import document_id
+    assert document_id("scan-1", "one.pdf\nforged-log") in caplog.text
+    assert "one.pdf" not in caplog.text
+    monkeypatch.delenv("ACP_TELEMETRY_SALT")
+    caplog.clear()
+    error.resp = GoogleResponse({"request-id": "Bearer secret-token\nforged-log"})
+    error.resp.status = "503 secret-token"
+    result = scans._log_release_provider_error(
+        error, scan_id="scan-1", file="one.pdf", release_id="release-1",
+        provider="drive", uncertain=False)
+    assert result == {"error_type": "OSError"}
+    assert "secret-token" not in caplog.text
+    assert "document_id" not in caplog.text

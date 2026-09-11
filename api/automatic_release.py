@@ -10,6 +10,8 @@ from release_artifacts import ReleaseArtifactError, artifact_tag, require_curren
 ACTIVE = {'active', 'waiting', 'blocked'}
 MAX_FILES = 500
 MAX_DISPATCH_PER_TICK = 1
+STALL_AFTER_SECONDS = 600
+STALLED_CHECK_SECONDS = 300
 
 
 class DeliveryAlreadyAdmitted(ValueError):
@@ -96,6 +98,7 @@ def public(row, store=None):
     progress = row['progress'].get('files', {})
     counts = dict(published=0, pending=0, blocked=0, failed=0)
     details = {}
+    stalled_files = 0
     for file in files:
         entry = dict(progress.get(file, {'state': 'waiting', 'message': 'Waiting for a saved corrected copy' if row['intent'].get('allow_remaining_issues') else 'Waiting for approval and verification'}))
         # A delivery admitted before Stop may finish afterward. Its exact durable
@@ -109,6 +112,9 @@ def public(row, store=None):
             category = 'blocked'
         elif row['status'] == 'failed' and category == 'pending':
             category = 'failed'
+        if category in {'pending', 'blocked'} and row['status'] in ACTIVE and row['progress'].get('_delivery_watch', {}).get('needs_attention') and (entry.get('artifact_digest') or entry.get('waiting_for_delivery')):
+            category = 'blocked'
+            stalled_files += 1
         counts[category] += 1
         details[file] = entry
     return dict(id=row['id'], status=row['status'], run_id=row['run_id'], files=list(files),
@@ -117,7 +123,10 @@ def public(row, store=None):
                 progress=counts, file_progress=details, stopped_at=row.get('stopped_at'),
                 expires_at=row['intent']['expires_at'], revision=row['revision'],
                 allow_remaining_issues=row['intent'].get('allow_remaining_issues', False),
-                include_reports=row['intent'].get('include_reports', False))
+                include_reports=row['intent'].get('include_reports', False),
+                needs_attention=stalled_files > 0,
+                attention_reason=row['progress'].get('_delivery_watch', {}).get('reason') if stalled_files else None,
+                last_progress_at=row['progress'].get('_delivery_watch', {}).get('last_progress_at'))
 
 
 def planning_preview(store, sid, owner, files):
@@ -281,7 +290,7 @@ def publish_admission(store, authorization_id, owner, sid, file, digest, *, queu
             raise ValueError('This authorization already admitted a different artifact. Confirm a new authorization.')
         if digest != record['corrected_sha256']:
             raise ValueError('The verified artifact changed after dispatch was requested.')
-        return persistence.update_file(store, row['id'], owner, file, dict(state='publishing', artifact_digest=digest,
+        return persistence.update_file(store, row['id'], owner, file, dict(state='publishing', artifact_digest=digest, waiting_for_delivery=False,
             remediated_at=record['remediated_at'], message='Delivery admitted; an in-flight request may finish after Stop.'))
 
 
@@ -293,6 +302,31 @@ def publish_job(store, payload, job, callback):
     except ValueError as exc:
         raise FatalJobError(str(exc)) from exc
     return callback(payload, job)
+
+
+def delivery_watch(progress, pending_jobs):
+    """Watch actual delivery transitions, never continuation heartbeats or row updates."""
+    entries = progress.get('files', {})
+    eligible = any(e.get('state') not in {'published', 'failed'} and
+                   (e.get('artifact_digest') or e.get('waiting_for_delivery'))
+                   for e in entries.values())
+    signature = json.dumps({
+        'files': {f: {k: e.get(k) for k in ('state', 'artifact_digest', 'receipt', 'waiting_for_delivery')}
+                  for f, e in entries.items()},
+        'jobs': {f: sorted(states) for f, states in pending_jobs.items()},
+    }, sort_keys=True)
+    previous = progress.get('_delivery_watch', {})
+    now = datetime.now(timezone.utc)
+    changed = previous.get('signature') != signature
+    last = now.isoformat() if changed else previous.get('last_progress_at', now.isoformat())
+    try:
+        elapsed = (now - datetime.fromisoformat(last)).total_seconds()
+    except (ValueError, TypeError):
+        last, elapsed = now.isoformat(), 0
+    stalled = eligible and elapsed >= STALL_AFTER_SECONDS
+    return dict(signature=signature, last_progress_at=last, needs_attention=stalled,
+                reason=('No delivery progress for 10 minutes. Check the destination and delivery receipt before retrying; a copy may already exist.'
+                        if stalled else None))
 
 
 def advance(store, payload, job):
@@ -326,6 +360,9 @@ def advance(store, payload, job):
                 elif pending_jobs.get(file) and all(s in {'dead','cancelled'} for s in pending_jobs[file]):
                     persistence.update_file(store,row['id'],row['owner_email'],file,
                         dict(state='failed',message='Delivery job stopped or failed. Reconcile its receipt before authorizing another attempt.'))
+                else:
+                    persistence.update_file(store,row['id'],row['owner_email'],file,
+                        dict(state='publishing', message='Delivery not yet confirmed. Waiting for a recorded receipt; a copy may already exist.'))
                 # Once admitted, freeze the artifact and reconcile its receipt.
                 # A changed artifact or lost provider result never buys a new delivery.
                 continue
@@ -343,6 +380,8 @@ def advance(store, payload, job):
             with store._db.cursor() as cur:
                 store._db.execute(cur, "SELECT execution_id FROM stage_executions WHERE scan_id=%s AND stage='release' AND is_current=1 AND state IN ('accepted','queued','processing','paused')",(row['scan_id'],))
                 if store._db.fetchone(cur):
+                    persistence.update_file(store,row['id'],row['owner_email'],file,
+                        dict(state='waiting', waiting_for_delivery=True, message='Corrected copy is ready. Waiting for the current delivery to finish.'))
                     continue
             row = publish_admission(store, row['id'], row['owner_email'], row['scan_id'], file, digest)
             dispatched += 1
@@ -361,7 +400,7 @@ def advance(store, payload, job):
         except FileRemediationFinishedWithoutCopy as exc:
             persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='failed',message=str(exc),failure_category='no_corrected_copy'))
         except (ValueError, ReleaseArtifactError) as exc:
-            persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc)))
+            persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc),waiting_for_delivery=False))
         except Exception:
             persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='failed',message='Delivery outcome is unknown. Reconcile its receipt before retrying.'))
     with store.transaction():
@@ -391,8 +430,10 @@ def advance(store, payload, job):
                                 dict(file=file, status='failed', failure_category='no_corrected_copy', explanation=entry['message']))
                 # Freeze reports and enqueue delivery in the same transaction as completion.
                 queue_release_reports(store, row['scan_id'], row['owner_email'], release['id'])
-        persistence.save(store,row,status='completed' if completed else 'failed' if terminal or expired else 'waiting',
-                         progress=row['progress'],schedule=not terminal and not expired,delay=20)
+        progress = {**row['progress'], '_delivery_watch': delivery_watch(row['progress'], pending_jobs)}
+        stalled = progress['_delivery_watch']['needs_attention']
+        persistence.save(store,row,status='completed' if completed else 'failed' if terminal or expired else 'blocked' if stalled else 'waiting',
+                         progress=progress,schedule=not terminal and not expired,delay=STALLED_CHECK_SECONDS if stalled else 20)
 
 
 def validate_publish_request(store, sid, owner, files, body):
