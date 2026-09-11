@@ -1,0 +1,46 @@
+{
+  "document_id": "sample-pdf-1",
+  "provider_call_count": 1,
+  "outcomes": [
+    {
+      "finding_id": "pdf-field-0",
+      "outcome": "applied_semantic_review_needed",
+      "detail": ""
+    },
+    {
+      "finding_id": "pdf-field-1",
+      "outcome": "invalid_or_conflicting",
+      "detail": "invalid_value"
+    },
+    {
+      "finding_id": "pdf-field-2",
+      "outcome": "missing_context",
+      "detail": "insufficient_evidence"
+    }
+  ],
+  "summary": {
+    "applied_semantic_review_needed": 1,
+    "invalid_or_conflicting": 1,
+    "missing_context": 1
+  },
+  "cost_record": {
+    "request_id": "req-sample-pdf-1",
+    "stable_prefix_chars": 1480,
+    "stable_prefix_tokens_estimated": 370,
+    "suffix_chars": 479,
+    "image_count": 0,
+    "output_edit_count": 2,
+    "output_unresolved_count": 1,
+    "latency_ms": 0.027649000003293622,
+    "provider_cost_usd": null,
+    "is_estimate": true
+  },
+  "cost_comparison": {
+    "finding_count": 3,
+    "document_wide_requests": 1,
+    "document_wide_prefix_chars_sent": 1480,
+    "repeated_per_finding_requests": 3,
+    "repeated_per_finding_prefix_chars_sent": 4440,
+    "is_estimate": true
+  }
+}
