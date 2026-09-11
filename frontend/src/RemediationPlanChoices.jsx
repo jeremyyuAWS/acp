@@ -121,7 +121,7 @@ export default function RemediationPlanChoices({ step = null, answers, policy, d
             aria-describedby={`${id}-document-wide-note`} />
           <span>Document-wide AI fixes (preview)</span>
         </label>
-        <p id={`${id}-document-wide-note`}>Give AI document context and the selected assessment findings together. Initially supports PDF form-field names. Word image descriptions need visual evidence and are not supported by this preview. Other findings continue through the usual process. Your spending limit and approval choice still apply.</p>
+        <p id={`${id}-document-wide-note`}>Give AI document context and the selected assessment findings together. Initially supports PDF form-field names and Word image descriptions with available image evidence. Other findings continue through the usual process. Your spending limit and approval choice still apply.</p>
         {localOnly && <p>Document-wide AI is currently available only with Cloud AI. Local Ollama continues to support individual suggestions; no document is sent to a cloud provider.</p>}
       </details>}
     </fieldset>

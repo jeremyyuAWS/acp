@@ -17,7 +17,7 @@ it('shows a collapsed, opt-in preview with honest support scope and an associate
   const advanced = container.querySelector('.remediation-document-wide')
   expect(advanced.open).toBe(false)
   expect(advanced.textContent).toContain('Initially supports PDF form-field names')
-  expect(advanced.textContent).toContain('not supported by this preview')
+  expect(advanced.textContent).toContain('Word image descriptions with available image evidence')
   const checkbox = advanced.querySelector('input')
   expect(checkbox.checked).toBe(false)
   expect(checkbox.closest('label').textContent).toContain('Document-wide AI fixes (preview)')
