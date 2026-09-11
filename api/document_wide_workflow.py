@@ -71,15 +71,32 @@ def process_file(store, context):
             raise
         _record(store, context, 'deferred', {'reason': reasons[str(exc)]})
         return
-    request_id = hashlib.sha256((context.run_id + manifest.to_json()).encode()).hexdigest()
+    input_mode = ('native_pdf' if filename.lower().endswith('.pdf')
+                  and context.policy.get('document_wide_input_mode') == 'native_pdf'
+                  else 'extracted')
+    # Preserve legacy request identities; native input must never reuse an
+    # extracted-context reply when the accepted mode changes for a new execution.
+    request_key = context.run_id + manifest.to_json()
+    if input_mode == 'native_pdf':
+        request_key += ':native-pdf.v1'
+    request_id = hashlib.sha256(request_key.encode()).hexdigest()
     if not manifest.findings:
         _record(store, context, 'deferred', {'reason': 'No remaining findings have a supported document-wide target.',
             'extraction_issues': [{'kind': e.kind, 'detail': e.detail, 'finding_ids': list(e.related_finding_ids)} for e in manifest.extraction_issues]})
         return
     result = _saved(store, context, request_id)
     if result is None:
-        response = generate_document(build_request(manifest, request_id=request_id),
-                                     images=package_images(data, manifest))
+        if input_mode == 'native_pdf':
+            from document_wide_manifest import package_native_pdf
+            try:
+                payload = {'pdf_bytes': package_native_pdf(data, manifest)}
+            except ValueError as exc:
+                _record(store, context, 'deferred', {'request_id': request_id,
+                    'input_mode': input_mode, 'reason': str(exc)})
+                return
+        else:
+            payload = {'images': package_images(data, manifest)}
+        response = generate_document(build_request(manifest, request_id=request_id), **payload)
         if not response.get('envelope'):
             _record(store, context, 'deferred', {'request_id': request_id, 'reason': response.get('reason', 'No valid AI response was returned.')})
             return
@@ -98,8 +115,10 @@ def process_file(store, context):
                 'model_call_id': response.get('model_call_id'),
                 'finding_ids': list(edit.finding_ids), 'baseline_finding_ids': list(edit.finding_ids), 'document_wide_request_id': request_id,
                 'source_sha256': digest, 'assessment_revision': manifest.assessment_revision,
+                'document_wide_input_mode': input_mode,
             })
-        result = {'request_id': request_id, 'proposals': proposals,
+        result = {'request_id': request_id, 'input_mode': input_mode,
+                  'source_sha256': digest, 'proposals': proposals,
                   'unresolved': [{'finding_id': u.finding_id, 'reason': u.reason} for u in validation.unresolved],
                   'omitted_finding_ids': list(validation.model_omitted_finding_ids),
                   'rejected': [{'edit_id': e.edit_id, 'reason': e.reason} for e in validation.rejected_edits],
