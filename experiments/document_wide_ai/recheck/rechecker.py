@@ -67,7 +67,8 @@ def recheck_pdf(
         reopened_ok=True,
         still_failing_locators=frozenset(still_failing),
         new_failure_locators=frozenset(new_failures),
-        text_preserved=reopened.text_context == baseline.text_context,
+        text_preserved=getattr(reopened, "page_text", reopened.text_context)
+        == getattr(baseline, "page_text", baseline.text_context),
         unexpected_changes=unexpected,
     )
 
