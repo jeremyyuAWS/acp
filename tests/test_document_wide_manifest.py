@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from document_wide_manifest import assessed_locations, build_manifest, package_images
+from document_wide_manifest import assessed_locations, build_manifest, criterion, package_images
 from experiments.document_wide_ai.fixtures.make_fixtures import make_docx, make_pdf
 from finding_ledger import stable_finding_id
 
@@ -81,3 +81,22 @@ def test_freeze_locations_requires_complete_unique_assessment_group():
     assert assessed_locations(rows, '1.1.1', 2) == ['drawing:1', 'drawing:2']
     assert assessed_locations(rows, '1.1.1', 3) is None
     assert assessed_locations(rows + [rows[0]], '1.1.1', 3) is None
+
+
+@pytest.mark.parametrize("value", ["4.1.2", "SC_4_1_2", "4.1.2 Name, Role, Value"])
+def test_detector_criterion_labels_keep_the_exact_sc(value):
+    assert criterion(value) == "4.1.2"
+
+
+@pytest.mark.parametrize("value", ["4.1.2x", "prefix4.1.2", "4.1.2.3", "4.1.2\nother"])
+def test_malformed_criterion_labels_are_not_inferred(value):
+    assert criterion(value) is None
+
+
+def test_multiple_pdf_fields_preserve_assessed_identities(isolated_store, monkeypatch):
+    data = make_pdf(field_names=("Text1", "Text2"))
+    rows = setup_manifest(isolated_store, monkeypatch, data, "a.pdf", "4.1.2", ["pdf:field:1:1", "pdf:field:1:0"])
+    manifest = build_manifest(isolated_store, "scan", "a.pdf", data)
+    assert len(manifest.findings) == 2
+    assert manifest.findings[0].finding_id == rows[1]["finding_id"]
+    assert manifest.findings[1].finding_id == rows[0]["finding_id"]

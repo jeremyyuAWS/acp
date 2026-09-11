@@ -14,7 +14,7 @@ LIMITS = ExtractionLimits(max_text_chars=60000, max_pages=100, max_images=8, max
 
 
 def criterion(value):
-    match = re.fullmatch(r'(?:SC_)?([1-4])[._]([0-9]+)[._]([0-9]+)', str(value or ''))
+    match = re.fullmatch(r'(?:SC_)?([1-4])[._]([0-9]+)[._]([0-9]+)(?:[ \t]+[^\r\n]+)?', str(value or ''))
     return '.'.join(match.groups()) if match else None
 
 
