@@ -713,3 +713,9 @@ it('shows the planned waterfall in the selected assessment before a run exists',
   expect(html).toContain('local or cloud')
   expect(html).not.toContain('verified changes')
 })
+
+it('shows a yellow retry only for a recorded retry, not for a failed verification', () => {
+  const base={snapshot:SNAP,streamlined:true,events:[{key:'retry',kind:'scan.retrying',tone:'attention',line:'Attempt scheduled to retry',documentKey:'A'}]}
+  expect(render(base)).toContain('remops-activity-retry')
+  expect(render({...base,events:[{key:'failed',kind:'remediate.verification_failed',tone:'error',line:'Did not pass re-scan',documentKey:'A'}]})).not.toContain('remops-activity-retry')
+})

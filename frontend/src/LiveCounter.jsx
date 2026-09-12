@@ -44,6 +44,11 @@ export default function LiveCounter({ value }) {
       deltaTimerRef.current = setTimeout(() => setDelta(null), DELTA_VISIBLE_MS)
     }
 
+    if (d == null && prev !== value) {
+      setDelta(null)
+      clearTimeout(deltaTimerRef.current)
+    }
+
     if (!shouldAnimate(prev, value) || prefersReducedMotion()) {
       setDisplay(value)
       return undefined

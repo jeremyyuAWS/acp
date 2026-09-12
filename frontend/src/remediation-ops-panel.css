@@ -16,3 +16,9 @@
 .remops-activity details{margin:8px 0 0 141px}.remops-activity summary{font-size:13px;color:var(--muted);cursor:pointer}.remops-activity details ul{padding-left:16px;list-style:disc}.remops-activity details li{display:list-item;font-size:14px;padding:4px 0;animation:none}.remops-activity p{font-size:14px;line-height:1.6}
 @media(max-width:760px){.remops-activity-event{grid-template-columns:26px minmax(0,1fr);gap:6px 10px}.remops-activity-event time{grid-column:2}.remops-activity-event>span:first-of-type{grid-column:1;grid-row:1 / span 2}.remops-activity-event>span:last-of-type{grid-column:2}.remops-activity details{margin-left:36px}}
 @media(prefers-reduced-motion:reduce){.remops-activity>ol>li{animation:none}}
+
+.remops-activity>ol>li.remops-activity-retry { --activity-accent:#956500; animation:remops-retry-in 1.5s ease-out both; }
+.remops-activity-retry .remops-activity-event>span:first-of-type { animation:remops-retry-turn 1.2s ease-out 2; }
+@keyframes remops-retry-in { from { background-color:#fff0b8; box-shadow:0 0 0 3px #e9bd49; } to { box-shadow:0 0 0 0 transparent; } }
+@keyframes remops-retry-turn { from { transform:rotate(-180deg); } to { transform:rotate(0deg); } }
+@media(prefers-reduced-motion:reduce) { .remops-activity>ol>li.remops-activity-retry, .remops-activity-retry .remops-activity-event>span:first-of-type { animation:none; } }

@@ -1,7 +1,7 @@
 .remediation-live-documents .live-document-categories { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; }
 .remediation-live-documents .live-document-table { width:100%; border-collapse:collapse; }
 .remediation-live-documents .live-document-table th,.remediation-live-documents .live-document-table td { padding:.8rem .6rem; border-bottom:1px solid #e7e1eb; text-align:left; }
-.remediation-live-documents .live-document-table th[scope=row] { max-width:24rem; overflow-wrap:anywhere; font-weight:500; font-family:var(--font-mono); font-size:12.5px; }
+.remediation-live-documents .live-document-table th[scope=row] { max-width:24rem; overflow-wrap:anywhere; font-weight:500; font-family:inherit; font-size:12.5px; }
 .remediation-live-documents .live-document-table .live-document-changed { animation:document-count-change 1.4s ease-out; }
 @keyframes document-count-change { from { background-color:#eee6f5; } to { background-color:transparent; } }
 @media(prefers-reduced-motion:reduce) { .remediation-live-documents .live-document-table .live-document-changed { animation:none; outline:1px solid #8c769e; } }

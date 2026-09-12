@@ -20,7 +20,7 @@ export default function RemediationProgressSummary({ documents = [], selected, o
     {onSelect && <p className="remediation-progress-filter-help">Select a status to filter the document list below.</p>}
     <div className="remediation-progress-summary-counts">{PROGRESS_STATES.map(([key, label]) => {
       const count = documents.filter(document => document.progressState === key).length
-      const content = <><strong>{animate && ['verified', 'published', 'ready'].includes(key) ? <LiveCounter value={count} /> : count}</strong><span>{label}</span></>
+      const content = <><strong>{animate ? <LiveCounter value={count} /> : count}</strong><span>{label}</span></>
       return onSelect ? <button type="button" key={key} className={`progress-${key}`} aria-label={`Show documents: ${label} (${count})`} aria-pressed={selected === key} onClick={() => onSelect(key)}>{content}<small>{selected === key ? 'Selected filter' : 'Filter document list'}</small></button>
         : <div key={key} className={`progress-${key}`}>{content}</div>
     })}</div>

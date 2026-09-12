@@ -44,7 +44,7 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
     <div className="workflow-sse-card__track" aria-label={`${pct}% ${findingAccounting ? 'with recorded outcomes' : 'complete'}`} role="progressbar"
       aria-valuemin="0" aria-valuemax="100" aria-valuenow={pct}><span style={{ width: `${pct}%` }} /></div>
     {domain?.buckets?.length > 0 && <dl className="workflow-sse-card__metrics">
-      {domain.buckets.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{shown(value)}</dd></div>)}
+      {domain.buckets.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{model.stage === 'remediate' && Number.isSafeInteger(value) ? <LiveCounter value={value} /> : shown(value)}</dd></div>)}
     </dl>}
     {balanced && <p className="workflow-sse-card__notice">
       {domain.buckets.filter(([, value]) => value > 0).map(([label, value]) => `${shown(value)} ${label.toLowerCase()}`).join(' + ') || '0'} = {shown(total)} assessed findings.

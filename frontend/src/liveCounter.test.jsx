@@ -84,3 +84,12 @@ describe('LiveCounter', () => {
 })
 
 function c() { return container }
+
+it('clears an earlier positive delta when the count decreases before its badge expires', async () => {
+  await mount({value:1})
+  await update({value:2})
+  expect(container.querySelector('.livecounter-delta').textContent).toBe('+1')
+  await update({value:0})
+  expect(container.querySelector('.livecounter-delta')).toBeNull()
+  expect(container.querySelector('.livecounter-n').textContent).toBe('0')
+})
