@@ -392,6 +392,129 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
 
   return (
     <div className="remediation-detail" style={{ display: 'flex', flexDirection: 'column' }}>
+      {/* Decision controls come first so reviewers can act without scrolling. */}
+      <div className="remediation-detail-actions" role="group" aria-label={`Decision actions for ${displayText(r.issue)}`}
+           style={{ borderTop: '1px solid var(--line,#e2dce4)', background: 'var(--bg, #fff)' }}>
+        {/* W8 — batch a decision across every other queued finding of the same rule/SC. Explicit and
+            reversible-feeling: it names the count, and each target routes through the same onDecide
+            (so approvals re-validate and rejections hand off) as if the reviewer acted on them one by
+            one. Offered only for actionable (non-manual, unresolved) findings that actually have
+            matches. */}
+        {!resolved && !isManual && matchingCount > 0 && (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+                        padding: '10px 22px', borderBottom: '1px solid var(--line,#e2dce4)',
+                        background: 'var(--surface-2,#f6f5f8)', fontSize: 12.5 }}>
+            {/* The scope, stated in full before the decision. A batch is the one control here that
+                reaches findings the reviewer has not looked at, so it names the criterion, the format,
+                the number of documents, and — because severity is deliberately not part of what
+                groups a cluster — the severity mix it spans. */}
+            <span className="muted">
+              You are looking at one of {matchingCount + 1} findings that share this issue
+              {cluster ? <> — {scKeyOf(f) ? `WCAG ${scKeyOf(f)}` : 'the same criterion'} in {formatList(cluster.formats)} files,
+                across {cluster.fileCount} document{cluster.fileCount === 1 ? '' : 's'}</> : null}.
+              {cluster && cluster.formats.length > 1
+                ? <> This decision covers more than one document format.</> : null}
+              {cluster && severityLine(cluster.severities)
+                ? <> The group spans {severityLine(cluster.severities)}.</> : null}
+              {' '}The other {matchingCount} carry the same criterion and an actionable proposal; manual,
+              blocked and already-decided findings are excluded.
+            </span>
+            <div>
+              <button type="button" className="linklike" aria-expanded={matchingPreviewOpen}
+                      onClick={() => setMatchingPreviewOpen((open) => !open)}>Review matching items</button>
+              {matchingPreviewOpen && <MatchingReviewPreview findings={matchingFindings} />}
+            </div>
+            <div style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+                          padding: '10px 12px', border: '1px solid var(--line,#e2dce4)', borderRadius: 9,
+                          background: 'var(--bg,#fff)' }}>
+              <span style={{ lineHeight: 1.4 }}>
+                <b style={{ display: 'block', color: 'var(--ink)', fontSize: 13 }}>Review a batch of matching proposals</b>
+                Select from this item and {matchingCount} similar finding{matchingCount === 1 ? '' : 's'}
+                {' '}across {new Set([f.file, ...matchingFindings.map((x) => x.file)]).size} files.
+              </span>
+              <button type="button" className="primary" disabled={saving}
+                      onClick={() => onApplyToMatching?.(f)}
+                      style={{ flex: '0 0 auto', fontWeight: 750, padding: '9px 14px' }}>
+                {`Select matching proposals (${matchingCount + 1})`}
+              </button>
+            </div>
+          </div>
+        )}
+        <div style={{ padding: '12px 22px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          {resolved ? (
+            // Verification appears only AFTER a fix is saved (spec §10): the decision is recorded and a
+            // fresh scan re-validates it before it can be certified — shown here, not before the work.
+            // A rejection writes nothing, so it gets its own line: saying "Written → Re-scan →
+            // Certified" under a declined fix would describe a change that was never made.
+            <span className="muted" style={{ fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {String(f?.status || '').toLowerCase() === 'rejected' || decisions[f?.id]?.state === 'rejected' ? (
+                <>
+                  <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 600 }}>✓ Decision recorded.</span>
+                  <span>You rejected this suggestion — nothing was written to the document.</span>
+                </>
+              ) : f?.validated ? (
+                <>
+                  <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 600 }}>✓ Verified.</span>
+                  <span>Verification: Written → Re-scan → <b>Certified</b> — a fresh scan confirmed this fix.</span>
+                </>
+              ) : (
+                <>
+                  <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 600 }}>✓ Saved.</span>
+                  <span>Verification: <b>Written</b> → Re-scan → Certified — a fresh scan confirms it before it’s certified.</span>
+                </>
+              )}
+            </span>
+          ) : isManual ? (
+            <>
+              {onOpenWord && <button className="primary" disabled={saving} onClick={() => onOpenWord(f)}>Open in Word</button>}
+              {onRecheck && <button className="ghost" disabled={saving} onClick={() => onRecheck(f)}>Upload &amp; recheck</button>}
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
+              {/* Out of scope — this criterion doesn't apply to the document. Resolves the finding and
+                  takes it out of the coverage denominator (persisted as an out_of_scope resolution). */}
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
+            </>
+          ) : isAutoFix ? (
+            /* An auto-applied fix: the change is already written, so the decision is a clear approve or
+               a flag that it looks wrong — not an edit-and-apply. "This looks wrong" hands the finding
+               back for a person; it does NOT auto-revert the applied change (no backend undo exists —
+               see PR body), so it is labelled as a flag, not a "reject & revert". */
+            <>
+              <button className="primary" disabled={saving} onClick={() => onDecide?.(f, { state: 'accepted' })}>
+                {saving ? 'Saving…' : f.autoApplied ? 'Mark inspected →' : 'Yes, apply fix'}
+              </button>
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
+              {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
+            </>
+          ) : (
+            <>
+              <button className="primary" disabled={saving}
+                      onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>
+                {saving ? 'Saving…' : 'Yes, apply fix'}
+              </button>
+              {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
+                  person (the handoff lane), so the label names that outcome rather than leaving the
+                  reviewer to guess what "Reject" does. */}
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>No, needs manual work</button>
+              <details><summary>More options</summary>
+              {canEdit && <button className="ghost" disabled={saving} onClick={() => draftRef.current?.focus()}>Edit proposed fix</button>}
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
+              {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
+              </details>
+            </>
+          )}
+        </div>
+        {/* The decision that did NOT save, stated where the reviewer pressed the button. The finding
+            stays selected and unresolved behind this — nothing advanced, and nothing was recorded. */}
+        {error && (
+          <div role="alert"
+               style={{ margin: '0 22px 14px', padding: '10px 12px', borderRadius: 8, fontSize: 12.5,
+                        border: '1px solid #C0392B', background: '#FDEDEC', color: '#7B241C' }}>
+            <b>Not saved.</b> {error.message} This finding is still waiting for your decision — nothing was recorded and you have not moved on.
+          </div>
+        )}
+      </div>
       {/* Keep this content-sized. The workspace owns scrolling; making this child 100% tall
           pushed the decision bar to the bottom of a tall review canvas and left a large blank
           region between the evidence accordions and their actions. */}
@@ -496,127 +619,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
         {detailExtra}
       </div>
 
-      {/* 4 · Decision bar — follows the evidence so actions stay visually connected to it. */}
-      <div className="remediation-detail-actions" role="group" aria-label={`Decision actions for ${displayText(r.issue)}`}
-           style={{ borderTop: '1px solid var(--line,#e2dce4)', background: 'var(--bg, #fff)' }}>
-        {/* W8 — batch a decision across every other queued finding of the same rule/SC. Explicit and
-            reversible-feeling: it names the count, and each target routes through the same onDecide
-            (so approvals re-validate and rejections hand off) as if the reviewer acted on them one by
-            one. Offered only for actionable (non-manual, unresolved) findings that actually have
-            matches. */}
-        {!resolved && !isManual && matchingCount > 0 && (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
-                        padding: '10px 22px', borderBottom: '1px solid var(--line,#e2dce4)',
-                        background: 'var(--surface-2,#f6f5f8)', fontSize: 12.5 }}>
-            {/* The scope, stated in full before the decision. A batch is the one control here that
-                reaches findings the reviewer has not looked at, so it names the criterion, the format,
-                the number of documents, and — because severity is deliberately not part of what
-                groups a cluster — the severity mix it spans. */}
-            <span className="muted">
-              You are looking at one of {matchingCount + 1} findings that share this issue
-              {cluster ? <> — {scKeyOf(f) ? `WCAG ${scKeyOf(f)}` : 'the same criterion'} in {formatList(cluster.formats)} files,
-                across {cluster.fileCount} document{cluster.fileCount === 1 ? '' : 's'}</> : null}.
-              {cluster && cluster.formats.length > 1
-                ? <> This decision covers more than one document format.</> : null}
-              {cluster && severityLine(cluster.severities)
-                ? <> The group spans {severityLine(cluster.severities)}.</> : null}
-              {' '}The other {matchingCount} carry the same criterion and an actionable proposal; manual,
-              blocked and already-decided findings are excluded.
-            </span>
-            <div>
-              <button type="button" className="linklike" aria-expanded={matchingPreviewOpen}
-                      onClick={() => setMatchingPreviewOpen((open) => !open)}>Review matching items</button>
-              {matchingPreviewOpen && <MatchingReviewPreview findings={matchingFindings} />}
-            </div>
-            <div style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-                          padding: '10px 12px', border: '1px solid var(--line,#e2dce4)', borderRadius: 9,
-                          background: 'var(--bg,#fff)' }}>
-              <span style={{ lineHeight: 1.4 }}>
-                <b style={{ display: 'block', color: 'var(--ink)', fontSize: 13 }}>Review a batch of matching proposals</b>
-                Select from this item and {matchingCount} similar finding{matchingCount === 1 ? '' : 's'}
-                {' '}across {new Set([f.file, ...matchingFindings.map((x) => x.file)]).size} files.
-              </span>
-              <button type="button" className="primary" disabled={saving}
-                      onClick={() => onApplyToMatching?.(f)}
-                      style={{ flex: '0 0 auto', fontWeight: 750, padding: '9px 14px' }}>
-                {`Select matching proposals (${matchingCount + 1})`}
-              </button>
-            </div>
-          </div>
-        )}
-        <div style={{ padding: '12px 22px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          {resolved ? (
-            // Verification appears only AFTER a fix is saved (spec §10): the decision is recorded and a
-            // fresh scan re-validates it before it can be certified — shown here, not before the work.
-            // A rejection writes nothing, so it gets its own line: saying "Written → Re-scan →
-            // Certified" under a declined fix would describe a change that was never made.
-            <span className="muted" style={{ fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              {String(f?.status || '').toLowerCase() === 'rejected' || decisions[f?.id]?.state === 'rejected' ? (
-                <>
-                  <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 600 }}>✓ Decision recorded.</span>
-                  <span>You rejected this suggestion — nothing was written to the document.</span>
-                </>
-              ) : f?.validated ? (
-                <>
-                  <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 600 }}>✓ Verified.</span>
-                  <span>Verification: Written → Re-scan → <b>Certified</b> — a fresh scan confirmed this fix.</span>
-                </>
-              ) : (
-                <>
-                  <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 600 }}>✓ Saved.</span>
-                  <span>Verification: <b>Written</b> → Re-scan → Certified — a fresh scan confirms it before it’s certified.</span>
-                </>
-              )}
-            </span>
-          ) : isManual ? (
-            <>
-              {onOpenWord && <button className="primary" disabled={saving} onClick={() => onOpenWord(f)}>Open in Word</button>}
-              {onRecheck && <button className="ghost" disabled={saving} onClick={() => onRecheck(f)}>Upload &amp; recheck</button>}
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
-              {/* Out of scope — this criterion doesn't apply to the document. Resolves the finding and
-                  takes it out of the coverage denominator (persisted as an out_of_scope resolution). */}
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
-            </>
-          ) : isAutoFix ? (
-            /* An auto-applied fix: the change is already written, so the decision is a clear approve or
-               a flag that it looks wrong — not an edit-and-apply. "This looks wrong" hands the finding
-               back for a person; it does NOT auto-revert the applied change (no backend undo exists —
-               see PR body), so it is labelled as a flag, not a "reject & revert". */
-            <>
-              <button className="primary" disabled={saving} onClick={() => onDecide?.(f, { state: 'accepted' })}>
-                {saving ? 'Saving…' : f.autoApplied ? 'Mark inspected →' : 'Save and continue →'}
-              </button>
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
-              {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
-            </>
-          ) : (
-            <>
-              <button className="primary" disabled={saving}
-                      onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>
-                {saving ? 'Saving…' : 'Save and continue →'}
-              </button>
-              {canEdit && <button className="ghost" disabled={saving} onClick={() => draftRef.current?.focus()}>Edit proposed fix</button>}
-              {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
-                  person (the handoff lane), so the label names that outcome rather than leaving the
-                  reviewer to guess what "Reject" does. */}
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>Reject to manual</button>
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
-              {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
-            </>
-          )}
-        </div>
-        {/* The decision that did NOT save, stated where the reviewer pressed the button. The finding
-            stays selected and unresolved behind this — nothing advanced, and nothing was recorded. */}
-        {error && (
-          <div role="alert"
-               style={{ margin: '0 22px 14px', padding: '10px 12px', borderRadius: 8, fontSize: 12.5,
-                        border: '1px solid #C0392B', background: '#FDEDEC', color: '#7B241C' }}>
-            <b>Not saved.</b> {error.message} This finding is still waiting for your decision — nothing was recorded and you have not moved on.
-          </div>
-        )}
-      </div>
+
     </div>
   )
 }

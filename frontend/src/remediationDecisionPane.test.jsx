@@ -58,13 +58,13 @@ describe('Preview — the "invisible structure/metadata" copy bug is fixed', () 
 })
 
 describe('Guided pane — decision-first ordering + grounded evidence', () => {
-  it('keeps the decision actions directly after the detail instead of pinning them below empty space', async () => {
+  it('puts the decision actions before the detail so no scrolling is needed to act', async () => {
     await renderInbox({ queue: [CONTRAST_APPLY], decisions: {} })
     const detail = container.querySelector('.remediation-detail')
     const content = container.querySelector('.remediation-detail-content')
     const actions = container.querySelector('.remediation-detail-actions')
     expect(detail).toBeTruthy()
-    expect(content?.nextElementSibling).toBe(actions)
+    expect(actions?.nextElementSibling).toBe(content)
     expect(detail.style.height).toBe('')
     expect(content.style.flex).toBe('')
     expect(content.style.overflowY).toBe('')
@@ -117,17 +117,23 @@ describe('Guided pane — preserves the #412/#415 behaviours', () => {
     expect(ta).toBeTruthy()
     const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
     await act(async () => { setValue.call(ta, '#595959'); ta.dispatchEvent(new Event('input', { bubbles: true })) })
-    await click(btnByText('Save and continue'))
+    await click(btnByText('Yes, apply fix'))
     expect(calls[0].state).toBe('accepted')
     expect(calls[0].value).toBe('#595959')
   })
 
 
-  it('puts Apply, Edit, Reject and Defer in one labelled decision footer', async () => {
+  it('shows Yes and No at the top and collapses additional decisions under More options', async () => {
     await renderInbox({ queue: [CONTRAST_APPLY], decisions: {}, onDecide: () => {} })
     const actions = container.querySelector('[role="group"][aria-label^="Decision actions for"]')
     expect(actions).toBeTruthy()
-    for (const label of ['Save and continue', 'Edit proposed fix', 'Reject to manual', 'Defer']) {
+    const more = [...actions.querySelectorAll('details')].find(d => d.querySelector('summary')?.textContent === 'More options')
+    expect(more.open).toBe(false)
+    expect(btnByText('Yes, apply fix').closest('details')).toBeNull()
+    expect(btnByText('No, needs manual work').closest('details')).toBeNull()
+    expect(btnByText('Edit proposed fix').closest('details')).toBe(more)
+    await click(more.querySelector('summary'))
+    for (const label of ['Yes, apply fix', 'Edit proposed fix', 'No, needs manual work', 'Defer']) {
       expect([...actions.querySelectorAll('button')].some((button) => button.textContent.includes(label))).toBe(true)
     }
     await click(btnByText('Edit proposed fix'))
