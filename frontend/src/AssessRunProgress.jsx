@@ -370,7 +370,6 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
                     <li key={row.file} className="done">
                       <span className="alstate" aria-hidden="true">✓</span>
                       <span className="alname" title={row.file}>{row.file}</span>
-                      <span className="alscore">{row.score == null ? '—' : `${row.score}/100`}</span>
                       {row.criteria.length
                         ? <span className="alscs">{row.criteria.map((criterion) => (
                             <b key={criterion} title={criterion}>{criterionTag(criterion)}</b>
