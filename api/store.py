@@ -7991,7 +7991,7 @@ class Store:
             self, scan_id: str, file: str, rule_id: str, disposition: str, *,
             event_key: str, review_item_id: str | None = None,
             fix_evidence_ids: list[str] | None = None, verified_at: str | None = None,
-            limit: int | None = None) -> int:
+            limit: int | None = None, batch_id: str | None = None) -> int:
         """Idempotently move findings in the latest batch, in stable instance order."""
         from finding_ledger import DISPOSITIONS
         if disposition not in DISPOSITIONS:
@@ -7999,11 +7999,12 @@ class Store:
         with self._db.cursor() as cur:
             # The canonical current marker, not whichever job happens to sort newest. Historical
             # jobs remain in the queue ledger forever and timestamp ties are routine in a batch.
-            self._db.execute(cur,
-                "SELECT execution_id AS batch_id FROM stage_executions WHERE scan_id=%s "
-                "AND stage='remediate' AND is_current=1 ORDER BY created_at DESC,execution_id DESC "
-                "LIMIT 1", (scan_id,))
-            batch_id = (self._db.fetchone(cur) or {}).get("batch_id")
+            if batch_id is None:
+                self._db.execute(cur,
+                    "SELECT execution_id AS batch_id FROM stage_executions WHERE scan_id=%s "
+                    "AND stage='remediate' AND is_current=1 ORDER BY created_at DESC,execution_id DESC "
+                    "LIMIT 1", (scan_id,))
+                batch_id = (self._db.fetchone(cur) or {}).get("batch_id")
             if not batch_id:
                 return 0
             self._db.execute(cur,
@@ -8037,7 +8038,7 @@ class Store:
             moved += 1
         return moved
 
-    def sync_hitl_finding_dispositions(self, item_id: str, status: str) -> int:
+    def sync_hitl_finding_dispositions(self, item_id: str, status: str, *, batch_id: str | None = None) -> int:
         """Project one review-card state onto its assessed-finding rows."""
         item = self.get_hitl_item(item_id)
         if not item or not item.get("scan_id") or not item.get("file") or not item.get("rule_id"):
@@ -8050,7 +8051,7 @@ class Store:
         return self.set_finding_group_disposition(
             item["scan_id"], item["file"], item["rule_id"], disposition,
             event_key=f"hitl:{item_id}:{status}", review_item_id=item_id,
-            limit=int(item.get("finding_count") or 1))
+            limit=int(item.get("finding_count") or 1), batch_id=batch_id)
 
     def record_hitl_event(self, scan_id: str, file: str, rule_id: str, item_id: str,
                           action: str, *, edited: bool = False, review_ms: int | None = None,
@@ -10164,7 +10165,14 @@ class Store:
         created: list[dict] = []
         for c in candidates:
             if (c["file"], c["rule_id"]) in already:
-                continue  # idempotent — skip already-queued items
+                with self._db.cursor() as cur:
+                    self._db.execute(cur, "SELECT id FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s",
+                                     (scan_id, c["file"], c["rule_id"]))
+                    existing = self._db.fetchone(cur)
+                item = self.get_hitl_item(existing["id"]) if existing else None
+                if item:
+                    self.sync_hitl_finding_dispositions(item["id"], item["status"])
+                continue  # Reuse the card, but reconcile its current batch evidence.
             item_id = uuid.uuid4().hex[:12]
             with self._db.cursor() as cur:
                 pages = self._pages_for(cur, scan_id, c["file"], c["rule_id"])
@@ -10454,7 +10462,7 @@ class Store:
         return any((r.get("status") or "pending") != "approved" for r in rows)
 
     def queue_hitl_review_for_file(self, scan_id: str, file: str,
-                                   rules: list[dict]) -> list[dict]:
+                                   rules: list[dict], *, batch_id: str | None = None) -> list[dict]:
         """Queue HITL review items for specific FAILing rules of ONE file — the human-
         judgment findings a remediate_file run could NOT verifiably auto-clear (contrast
         sign-off, link purpose, structure, or an auto fix that didn't take on re-scan).
@@ -10467,6 +10475,7 @@ class Store:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         created: list[dict] = []
+        reused: list[str] = []
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT id, rule_id, finding_count FROM hitl_queue WHERE scan_id=%s AND file=%s",
@@ -10486,6 +10495,7 @@ class Store:
                     if (r.get("finding_count") or 0) > (prev.get("finding_count") or 0):
                         self._db.execute(cur, "UPDATE hitl_queue SET finding_count=%s WHERE id=%s",
                                          (r["finding_count"], prev["id"]))
+                    reused.append(prev["id"])
                     continue
                 item_id = uuid.uuid4().hex[:12]
                 name = r.get("rule_name") or rid
@@ -10500,8 +10510,50 @@ class Store:
                 created.append({"id": item_id, "scan_id": scan_id, "file": file,
                                 "rule_id": rid, "rule_name": name, "finding_count": count,
                                 "status": "pending", "created_at": now})
-        for item in created:
-            self.sync_hitl_finding_dispositions(item["id"], "pending")
+        for item_id in reused + [item["id"] for item in created]:
+            item = self.get_hitl_item(item_id)
+            if item:
+                self.sync_hitl_finding_dispositions(item_id, item["status"], batch_id=batch_id)
+        return created
+
+    def reconcile_completed_remediation_reviews(self, scan_id: str) -> list[dict]:
+        """Repair missing review routing on an authorized queue reconciliation.
+
+        Only completed documents in the current successful batch are eligible. This writes
+        review/audit evidence only: no models, document writes, approvals or delivery jobs.
+        NULL findings remain unresolved and enter review; existing decisions are preserved.
+        """
+        import json
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT execution_id FROM stage_executions WHERE scan_id=%s "
+                             "AND stage='remediate' AND is_current=1 AND state='succeeded'",
+                             (scan_id,))
+            execution = self._db.fetchone(cur)
+            if not execution:
+                return []
+            batch_id = execution['execution_id']
+            self._db.execute(cur, "SELECT payload FROM jobs WHERE scan_id=%s AND batch_id=%s "
+                             "AND type='remediate_file' AND status='done'", (scan_id, batch_id))
+            files = set()
+            for row in self._db.fetchall(cur):
+                payload = row['payload']
+                try:
+                    payload = json.loads(payload) if isinstance(payload, str) else payload
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(payload, dict) and payload.get('file'):
+                    files.add(payload['file'])
+            self._db.execute(cur, "SELECT file,rule_id,COUNT(*) AS finding_count "
+                             "FROM finding_disposition WHERE scan_id=%s AND batch_id=%s "
+                             "AND assessment_status IN ('fail','review') "
+                             "GROUP BY file,rule_id HAVING SUM(CASE WHEN disposition IS NULL THEN 1 ELSE 0 END)>0",
+                             (scan_id, batch_id))
+            groups = self._db.fetchall(cur)
+        created = []
+        for file in sorted(files):
+            rules = [row for row in groups if row['file'] == file]
+            if rules:
+                created.extend(self.queue_hitl_review_for_file(scan_id, file, rules, batch_id=batch_id))
         return created
 
     def enqueue_proposals(self, scan_id: str, file: str, sc: str, proposals: list[dict],

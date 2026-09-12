@@ -1,3 +1,4 @@
+import { remediationWorkRunning } from './remediationWorkRunning.js'
 import useAcceptedRemediationIdentity from './useAcceptedRemediationIdentity.js'
 import AcceptedRemediationPlanSummary from './AcceptedRemediationPlanSummary.jsx'
 import { getAcceptedRemediationPlan } from './api.js'
@@ -417,7 +418,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                                    // The run's live state and its ONE stream, owned by
                                    // useRemediationRun at App level so both survive this
                                    // component being unmounted on every tab change.
-                                   runStream = null, delivery = null }) {
+                                   runStream = null, delivery = null, progressHostId = null }) {
   const [queue, setQueue] = useState([])
   // The master/detail RemediationInbox owns its own view state (search, tabs, sort, selection),
   // so the old accordion/prefs plumbing (single-open openId, the search/severity/criterion/group
@@ -983,7 +984,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // completions (ticks every poll), so the card moves in real time with the worker queue.
   const liveFixed = remProg ? Math.max(0, remProg.done - (remProg.failed || 0)) : 0
   const reVerified = verified + serverFixed + liveFixed
-  const remLive = !!remProg || remBusy
+  const remLive = remediationWorkRunning(runStream?.snapshot, acceptedBatchId, remBusy, remProg)
+  useEffect(() => {
+    if (remBusy && !remLive && acceptedBatchId && runStream?.snapshot?.batch_id === acceptedBatchId) setRemBusy(false)
+  }, [remBusy, remLive, acceptedBatchId, runStream?.snapshot?.batch_id])
   const pendingHitlFiles = new Set(queue.map((q) => q.file))
   // The run's review total, from the queue the SERVER holds: outstanding rows plus rows that
   // already carry a decision. It used to be the pending count plus this session's own tally, so
@@ -1209,7 +1213,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // is true as soon as `acted.approved + acted.rejected + acted.deferred > 0`. So clearing the
   // review queue — the step that unblocks remediation — was exactly what removed the button
   // that runs it. The two branches were mutually exclusive and nobody could reach the second.
-  const remRunning = remBusy || (remProg != null && remProg.done < remProg.total)
+  const remRunning = remLive
   // ONE action, and which one it is follows the state of the run (PRD §5.2): apply what ACP can do
   // unattended, then work the exceptions, then publish. It never approves an AI draft — the automatic
   // branch is scoped to `autoBatch`, the deterministic partition, and drafts are not in it.
@@ -1899,7 +1903,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           loading={acceptedPlan?.loading === true}
           authorization={acceptedAuthorization} />
       </details>}
-      {delivery}
+      {delivery && <details className="panel" aria-label="Publish corrected copies"><summary>Publish corrected copies</summary>{delivery}</details>}
       <section id="accepted-run-details" hidden={!runDetailsOpen} aria-label="Run details">
         <RemediationAutoRelease statusOnly onStatus={setAutomaticReleaseState} scanId={runId} files={impactScope} readOnly={readOnly} />
         {runDetailsOpen && <details><summary>Additional run information</summary>
@@ -1939,11 +1943,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         live={<>
           {releasePlanNotice && <div role="status">{releasePlanNotice}</div>}
           {remMsg && <div role="status">{remMsg}</div>}
-          <RemediationLiveDocuments snapshot={scopedSnapshot} events={runStream?.events || []} connected={!!runStream?.connected} key={runId} scanId={runId} files={impactScope} cap={cap} assessment={assessment}
+          <RemediationLiveDocuments progressHostId={progressHostId} onShowDocuments={() => setWorkspaceRequest({ mode: 'live' })} snapshot={scopedSnapshot} events={runStream?.events || []} connected={!!runStream?.connected} key={runId} scanId={runId} files={impactScope} cap={cap} assessment={assessment}
             fixes={fixSource} fixTotal={fixTotal} refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`} />
+        </>}
+        waterfall={<>
           {/* The large panel consumes the App-owned controller. Mounting this view opens no
               stream of its own, so the compact card, global card and panel stay on one cursor. */}
-          <RemediationOpsPanel streamlined snapshot={runStream?.snapshot || null}
+          <RemediationOpsPanel streamlined hideActivity snapshot={runStream?.snapshot || null}
                                assessmentContext={{ files, cap, assessment, scanId: runId, runStatus: run?.status }}
                                connected={!!runStream?.connected}
                                receivedAt={runStream?.receivedAt || null}

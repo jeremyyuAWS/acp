@@ -1,3 +1,4 @@
+import { RemediationActivityPanel } from './RemediationOpsPanel.jsx'
 import { reviewBadgeTitle } from './remediationCountSummary.js'
 import { prepareWorkflowEntry } from './workflowEntry.js'
 import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
@@ -14,7 +15,7 @@ import RemediationRunCard from './RemediationRunCard.jsx'
 import { useRemediationRun } from './useRemediationRun.js'
 import useReleaseReadinessRefresh from './useReleaseReadinessRefresh.js'
 import WorkflowStageStack from './WorkflowStageStack.jsx'
-import { currentCanonicalStage } from './canonicalStageCard.js'
+import { canonicalWorkflowStages, currentCanonicalStage } from './canonicalStageCard.js'
 import { useCanonicalStageLineage } from './useCanonicalStageLineage.js'
 import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notificationsSupported, notifyPermission } from './scanNotify.js'
 import { refreshDriveToken } from './driveAuth.js'
@@ -566,6 +567,9 @@ export default function App() {
   const canonicalRun = useCanonicalStageLineage(primaryWorkflow?.scan_id || scan?.run?.id || null,
     getStageLineage)
   const canonicalStage = currentCanonicalStage(canonicalRun.lineage)
+  const remediationStage = canonicalWorkflowStages(canonicalRun.lineage).find(stage => stage.stage === 'remediate')
+  const remediationProgressHostId = view === 'remediate' && isVisible(access, 'remediate') && remediationStage?.execution_id
+    ? `remediation-document-progress-${remediationStage.execution_id}` : null
   const canonicalScanId = canonicalStage?.scan_id || canonicalRun.lineage?.scan_id || null
   // Durable (background queue) is the default (2026-08-21). The session-scoped path runs as a
   // bare in-process thread with no queue behind it — the code's own comment on it has always said
@@ -2261,12 +2265,17 @@ export default function App() {
         onViewPrevious={(scanId) => { switchScan(scanId); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
         onLiveOps={() => { goToView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
       />
-      <WorkflowStageStack lineage={canonicalRun.lineage} receivedAt={canonicalRun.receivedAt}
+      <WorkflowStageStack lineage={canonicalRun.lineage} receivedAt={canonicalRun.receivedAt} progressHostId={remediationProgressHostId}
         assessmentActivity={assessmentActivity}
         discoveryScope={{scanId: run?.id, scope: run?.scope}}
         assessmentFindings={assessed && resultsReady ? { scanId: run?.id, rows: assessNavRows, total: assessNavRows.reduce((sum, row) => sum + row.totalFindings, 0) } : null}
         activeStage={view === 'publish' ? 'release'
           : ['discover', 'assess', 'remediate'].includes(view) ? view : null}
+        stageAfter={{remediate: view === 'remediate' && isVisible(access, 'remediate')
+          && remRun.snapshot?.scan_id === canonicalScanId ? <RemediationActivityPanel
+            snapshot={remRun.snapshot} events={remRun.events} connected={remRun.connected}
+            receivedAt={remRun.receivedAt} activityStatus={remRun.activityStatus}
+            updateMode={remRun.connected ? 'live' : 'polling'} /> : null}}
         stageDetails={{
           discover: canonicalStage?.stage === 'discover' && busy && progress
             && (!canonicalScanId || liveScanId === canonicalScanId) ? (
@@ -2461,7 +2470,7 @@ export default function App() {
           </>
         ) : (overviewPreview ? <AssessPreviewCard preview={overviewPreview} /> : placeholder))}
 
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} runStream={remRun} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} delivery={deliveryAccess(access, isTimeTravel).visible ? <Publish embedded run={run} files={files} cap={cap} assessment={assessment} certified={certifiedDocs} readOnly={deliveryAccess(access, isTimeTravel).readOnly} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} onOpenDetails={() => setView('publish')} /> : null} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} runStream={remRun} progressHostId={remediationProgressHostId} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} delivery={deliveryAccess(access, isTimeTravel).visible ? <Publish embedded run={run} files={files} cap={cap} assessment={assessment} certified={certifiedDocs} readOnly={deliveryAccess(access, isTimeTravel).readOnly} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} onOpenDetails={() => setView('publish')} /> : null} /> : placeholder)}
 
         {view === 'publish' && (run ? <Publish run={run} files={files} cap={cap} assessment={assessment} certified={certifiedDocs} readOnly={isTimeTravel} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 

@@ -256,3 +256,122 @@ def test_review_card_transitions_exact_finding_count_without_double_counting(iso
     summary = isolated_store.finding_reconciliation(sid, batch)
     assert summary["awaiting_review"] == 0
     assert summary["approved_pending_verification"] == 2
+
+
+def test_reused_review_card_reconciles_new_batch_and_count_growth(isolated_store):
+    sid = _assessment(isolated_store)
+    item = isolated_store.queue_hitl_review_for_file(sid, 'a.docx', [
+        {'rule_id': '2.4.4', 'finding_count': 1}])[0]
+    batch = _batch(isolated_store, sid)
+    isolated_store.seed_finding_dispositions(sid, batch)
+    assert isolated_store.queue_hitl_review_for_file(sid, 'a.docx', [
+        {'rule_id': '2.4.4', 'finding_count': 2}]) == []
+    rows = [r for r in isolated_store.list_finding_dispositions(sid, batch)
+            if r['rule_id'] == '2.4.4']
+    assert len(rows) == 2
+    assert {r['disposition'] for r in rows} == {'awaiting_review'}
+    assert {r['review_item_id'] for r in rows} == {item['id']}
+
+
+@pytest.mark.parametrize('status,expected', [('approved', 'approved_pending_verification'),
+                                            ('rejected', 'unchanged_no_fix')])
+def test_reused_review_card_keeps_decision_and_verified_rows(isolated_store, status, expected):
+    sid = _assessment(isolated_store)
+    item = isolated_store.queue_hitl_review_for_file(sid, 'a.docx', [
+        {'rule_id': '1.1.1', 'finding_count': 3}])[0]
+    isolated_store.update_hitl_item(item['id'], status)
+    batch = _batch(isolated_store, sid)
+    rows = isolated_store.seed_finding_dispositions(sid, batch)
+    first = next(r for r in rows if r['rule_id'] == '1.1.1')
+    isolated_store.transition_finding_disposition(sid, batch, first['finding_id'],
+        'resolved_verified', expected_revision=0, event_id='verified-one',
+        fix_evidence_ids=['real-write'], verified_at='2026-09-12T15:00:00Z')
+    isolated_store.queue_hitl_review_for_file(sid, 'a.docx', [
+        {'rule_id': '1.1.1', 'finding_count': 3}])
+    rows = [r for r in isolated_store.list_finding_dispositions(sid, batch) if r['rule_id'] == '1.1.1']
+    assert sorted(r['disposition'] for r in rows) == sorted(['resolved_verified', expected, expected])
+    assert isolated_store.get_hitl_item(item['id'])['status'] == status
+
+
+def test_authorized_queue_reconciliation_repairs_completed_run_without_more_jobs(isolated_store, monkeypatch):
+    from routes import hitl
+    import core
+    sid = _assessment(isolated_store)
+    monkeypatch.setattr(core, 'store', isolated_store)
+    monkeypatch.setattr(core, 'fire_webhook', lambda rows: None)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "UPDATE scan_rule_traces SET outcome='REVIEW',fix_mode='human' "
+                                  "WHERE scan_id=%s AND rule_id='1.1.1'", (sid,))
+    isolated_store.queue_hitl_review_for_file(sid, 'a.docx', [{'rule_id': '2.4.4', 'finding_count': 1}])
+    batch = _batch(isolated_store, sid)
+    isolated_store.seed_finding_dispositions(sid, batch)
+    assert isolated_store.reconcile_completed_remediation_reviews(sid) == []
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "UPDATE jobs SET status='done' WHERE batch_id=%s", (batch,))
+        isolated_store._db.execute(cur, "UPDATE stage_executions SET state='succeeded' WHERE execution_id=%s", (batch,))
+        isolated_store._db.execute(cur, 'SELECT COUNT(*) AS n FROM jobs WHERE scan_id=%s', (sid,))
+        job_count = isolated_store._db.fetchone(cur)['n']
+    result = hitl.hitl_auto_queue(sid, None)
+    assert result['queued'] == 1
+    summary = isolated_store.finding_reconciliation(sid, batch)
+    assert summary['exact'] and summary['awaiting_review'] == 5 and summary['resolved_verified'] == 0
+    assert hitl.hitl_auto_queue(sid, None)['queued'] == 0
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, 'SELECT COUNT(*) AS n FROM jobs WHERE scan_id=%s', (sid,))
+        assert isolated_store._db.fetchone(cur)['n'] == job_count
+
+
+def test_ai_queue_reuse_projects_actual_status_into_new_ledger(isolated_store):
+    sid = _assessment(isolated_store)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "UPDATE scan_rule_traces SET fix_mode='ai-assisted' WHERE scan_id=%s", (sid,))
+    items = isolated_store.queue_hitl_items(sid)
+    for item in items:
+        isolated_store.update_hitl_item(item['id'], 'rejected')
+    batch = _batch(isolated_store, sid)
+    isolated_store.seed_finding_dispositions(sid, batch)
+    assert isolated_store.queue_hitl_items(sid) == []
+    summary = isolated_store.finding_reconciliation(sid, batch)
+    assert summary['exact'] and summary['unchanged_no_fix'] == 5
+
+
+def test_completed_30_finding_run_repairs_11_missing_without_changing_13_verified(isolated_store):
+    sid = _assessment(isolated_store)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "UPDATE scan_rule_traces SET finding_count=CASE rule_id "
+                                  "WHEN '1.1.1' THEN 13 ELSE 17 END WHERE scan_id=%s", (sid,))
+    batch = _batch(isolated_store, sid)
+    isolated_store.seed_finding_dispositions(sid, batch)
+    isolated_store.record_remediation_diffs(sid, 'a.docx', [
+        {'rule_id': '1.1.1', 'before': 'missing', 'after': 'verified description'}])
+    isolated_store.queue_hitl_review_for_file(sid, 'a.docx', [{'rule_id': '2.4.4', 'finding_count': 6}])
+    before = isolated_store.finding_reconciliation(sid, batch)
+    assert (before['assessed'], before['resolved_verified'], before['awaiting_review'], before['unaccounted']) == (30, 13, 6, 11)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "UPDATE jobs SET status='done' WHERE batch_id=%s", (batch,))
+        isolated_store._db.execute(cur, "UPDATE stage_executions SET state='succeeded' WHERE execution_id=%s", (batch,))
+    assert isolated_store.reconcile_completed_remediation_reviews(sid) == []
+    after = isolated_store.finding_reconciliation(sid, batch)
+    assert after['exact']
+    assert (after['resolved_verified'], after['awaiting_review'], after['unaccounted']) == (13, 17, 0)
+
+
+def test_completed_repair_cannot_mutate_a_concurrently_started_batch(isolated_store, monkeypatch):
+    sid = _assessment(isolated_store)
+    old = _batch(isolated_store, sid)
+    isolated_store.seed_finding_dispositions(sid, old)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "UPDATE jobs SET status='done' WHERE batch_id=%s", (old,))
+        isolated_store._db.execute(cur, "UPDATE stage_executions SET state='succeeded' WHERE execution_id=%s", (old,))
+    original = isolated_store.queue_hitl_review_for_file
+    new_batches = []
+    def concurrent_start(*args, **kwargs):
+        if not new_batches:
+            fresh = _batch(isolated_store, sid, 'concurrent-new')
+            new_batches.append(fresh)
+            isolated_store.seed_finding_dispositions(sid, fresh)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(isolated_store, 'queue_hitl_review_for_file', concurrent_start)
+    isolated_store.reconcile_completed_remediation_reviews(sid)
+    assert all(r['disposition'] is None for r in isolated_store.list_finding_dispositions(sid, new_batches[0]))
+    assert isolated_store.finding_reconciliation(sid, old)['exact']

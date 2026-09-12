@@ -443,7 +443,8 @@ it('locks repeated publish clicks and confirms the delivered copies beside the a
   expect(button(c, 'All files published ✓').disabled).toBe(true)
   await click(button(c, 'All files published ✓'))
   expect(publishAllFiles).toHaveBeenCalledTimes(1)
-  expect(c.querySelector('[aria-label="Delivery receipt"] [aria-label="Release reports"]')).not.toBeNull()
+  expect(c.querySelector('[aria-label="Publication outcomes"] [aria-label="Release reports"]')).not.toBeNull()
+  expect(c.querySelector('[aria-label="Delivery receipt"] [aria-label="Release reports"]')).toBeNull()
 })
 
 

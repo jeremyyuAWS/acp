@@ -103,7 +103,8 @@ describe('the Run Remediation button is reachable after a review', () => {
   })
 
   it('but a run in flight shows as running rather than re-offering the button', () => {
-    expect(rem).toMatch(/const remRunning = remBusy \|\| \(remProg != null && remProg\.done < remProg\.total\)/)
+    expect(rem).toContain('const remRunning = remLive')
+    expect(rem).toContain('remediationWorkRunning(runStream?.snapshot, acceptedBatchId, remBusy, remProg)')
     expect(rem).toMatch(/remRunning \? \{ label: 'Applying fixes…', disabled: true \}/)
   })
 

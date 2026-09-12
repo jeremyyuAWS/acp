@@ -863,11 +863,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           }
         }} />
 
-      <ReleaseCompletionDocuments files={releaseFiles} states={states} progressDocuments={progressDocuments} results={releaseResults} urls={pubUrls}
-        filter={outcomeFilter} onFilter={setOutcomeFilter} readOnly={readOnly} publishing={publishing}
-        onRetry={names => publishAll(names, releaseFolder?.name || releaseFolderName, true)} />
-
-        {(releaseId || publishedList.length > 0) && <section className="release-receipt" aria-label="Delivery receipt">
+      <ReleaseReports scanId={run?.id} releaseId={releaseId} files={releaseFiles} results={releaseResults} publishedCount={publishedCount} readOnly={readOnly}>
+        {({ reportSummary, reportsByFile }) => <ReleaseCompletionDocuments files={releaseFiles} states={states} progressDocuments={progressDocuments} results={releaseResults} urls={pubUrls}
+          filter={outcomeFilter} onFilter={setOutcomeFilter} readOnly={readOnly} publishing={publishing}
+          onRetry={names => publishAll(names, releaseFolder?.name || releaseFolderName, true)} reportSummary={reportSummary} reportsByFile={reportsByFile}
+          receipt={(releaseId || publishedList.length > 0) && <section className="release-receipt" aria-label="Delivery receipt">
           <h3>{failedCount ? 'Partial delivery receipt' : deliveringCount ? 'Delivery in progress' : 'Delivery receipt'}</h3>
           <p><b>{publishedCount} delivered</b> · {failedCount} failed · {deliveringCount} in progress · {releaseFiles.length - publishedCount} in-scope files not delivered.</p>
           <p className="muted">Recorded delivery within this document scope; changing the checkboxes does not change this receipt. Originals unchanged.</p>
@@ -875,9 +875,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           {releaseFolders.filter((folder) => folder.url).map((folder) => <p key={folder.id}><a href={folder.url} target="_blank" rel="noopener noreferrer">Open {folder.name || 'delivery folder'} ↗</a></p>)}
           <button className="ghost small" onClick={downloadReleaseManifest}>Download delivery receipt (manifest)</button>
           {manifestError && <p role="alert">{manifestError}</p>}
-          {publishedEntries.map((entry) => <div className="release-receipt__file" key={entry.file}><b>{entry.file}</b><span>{fmtPublished(entry)}</span>{pubUrls[entry.file] && <a href={pubUrls[entry.file]} target="_blank" rel="noopener noreferrer">Open delivered copy ↗</a>}</div>)}
-          <ReleaseReports scanId={run?.id} publishedCount={publishedCount} readOnly={readOnly} />
-        </section>}
+        </section>} />}
+      </ReleaseReports>
 
       {packageJob && <section className="release-notice release-package-job" role="status" aria-label="Prepared package status">
         <span><b>{packageJob.status === 'done' ? 'Download package ready' : packageJob.status === 'dead' ? 'Download package failed' : 'Download package in progress'}</b><br />
@@ -1295,4 +1294,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       })()}
     </>
   )
+}
+
+// Retired: duplicate per-file receipt list; report actions now live in Publication outcomes.
+export function RetiredDeliveryReceiptFiles({ publishedEntries, fmtPublished, pubUrls }) {
+  return <>{publishedEntries.map(entry => <div className="release-receipt__file" key={entry.file}><b>{entry.file}</b><span>{fmtPublished(entry)}</span>{pubUrls[entry.file] && <a href={pubUrls[entry.file]} target="_blank" rel="noopener noreferrer">Open delivered copy ↗</a>}</div>)}</>
 }

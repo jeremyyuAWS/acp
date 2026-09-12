@@ -697,3 +697,10 @@ describe('document activity milestones', () => {
     expect(markup).toContain('Saved in ACP')
   })
 })
+
+it('separates the prominent activity feed from the third-tab waterfall without duplicating events', () => {
+  const html = render({snapshot:SNAP,streamlined:true,hideActivity:true,events:[{key:'one',line:'Saved corrected copy'}]})
+  expect(html).toContain('AI waterfall')
+  expect(html).not.toContain('Recent remediation activity')
+  expect(html).not.toContain('Saved corrected copy')
+})

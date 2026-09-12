@@ -333,8 +333,8 @@ def build_release_report_sources(store, scan_id, owner, release_id):
             detail += '<p>No change records are available for this file.</p>'
         detail += visual_evidence
         appendices.append(f'<section class="document-appendix"><h2>Document: {_text(name)}</h2>{checklist_detail}</section>')
-        assets.append({'name': report_name.replace('checklist-', 'changes-', 1), 'content': _page(f'Change record — {name}', detail), 'content_type': 'text/html; charset=utf-8'})
-        assets.append({'name': report_name, 'content': _page(f'Follow-up checklist — {name}', checklist_detail), 'content_type': 'text/html; charset=utf-8'})
+        assets.append({'name': report_name.replace('checklist-', 'changes-', 1), 'content': _page(f'Change record — {name}', detail), 'content_type': 'text/html; charset=utf-8', 'report_kind': 'changes', 'file': name, 'artifact_digest': outcome.get('artifact_digest')})
+        assets.append({'name': report_name, 'content': _page(f'Follow-up checklist — {name}', checklist_detail), 'content_type': 'text/html; charset=utf-8', 'report_kind': 'checklist', 'file': name, 'artifact_digest': outcome.get('artifact_digest')})
         category_groups = ''
         for key, label in CATEGORIES.items():
             matches = [r for category, r in categorized if category == key]
@@ -353,7 +353,7 @@ def build_release_report_sources(store, scan_id, owner, release_id):
     summary += _table(['Measure', 'Count'], [[_text(k), _text(v)] for k, v in metrics])
     summary += '<h2>Documents and follow-up checklists</h2><p>Remediation categories describe recorded capability or state; future automatic fixes still require an accepted plan. Checklist entries, findings and change records use separate counts. Expand a category to see SCs by file.</p>' + _table(['Document', 'File type', 'Publication status', 'Original findings', 'Fixed and verified', 'Remediation category / SC', 'Incomplete checks', 'Published file', 'Follow-up'], index)
     summary += '<h2>Detailed printable checklists by document</h2>' + ''.join(appendices)
-    assets.insert(0, {'name': 'scan-summary.html', 'content': _page('Remediation and publication summary', summary), 'content_type': 'text/html; charset=utf-8'})
+    assets.insert(0, {'name': 'scan-summary.html', 'content': _page('Remediation and publication summary', summary), 'content_type': 'text/html; charset=utf-8', 'report_kind': 'scan_summary'})
     stream = io.StringIO(newline='')
     writer = csv.writer(stream)
     writer.writerow(['File', 'Published URL', 'Criterion', 'Issue', 'Location', 'Remediation category', 'Recommended action', 'Owner', 'Status'])
@@ -367,7 +367,7 @@ def build_release_report_sources(store, scan_id, owner, release_id):
 def build_release_reports(store, scan_id, owner, release_id):
     """PDF is the delivery format; retain legacy source generation for audit tests."""
     from release_report_pdf import render_report_pdf
-    return [dict(name=asset['name'].removesuffix('.html') + '.pdf',
-                 content=render_report_pdf(asset['content']), content_type='application/pdf')
+    return [{**asset, **dict(name=asset['name'].removesuffix('.html') + '.pdf',
+                 content=render_report_pdf(asset['content']), content_type='application/pdf')}
             for asset in build_release_report_sources(store, scan_id, owner, release_id)
             if asset['content_type'].startswith('text/html')]

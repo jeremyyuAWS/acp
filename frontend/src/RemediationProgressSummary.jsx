@@ -1,3 +1,4 @@
+import LiveCounter from './LiveCounter.jsx'
 import './RemediationProgressSummary.css'
 
 export const PROGRESS_STATES = [
@@ -7,7 +8,7 @@ export const PROGRESS_STATES = [
 
 // Callers supply recorded document states. Unknown documents remain explicit;
 // neither a corrected copy nor an AI approval proves verification or publication.
-export default function RemediationProgressSummary({ documents = [], selected, onSelect, reconciling = false }) {
+export default function RemediationProgressSummary({ documents = [], selected, onSelect, reconciling = false, animate = false }) {
   const known = new Set(PROGRESS_STATES.map(([key]) => key))
   const unknown = documents.filter(document => !known.has(document.progressState)).length
   const selectedLabel = PROGRESS_STATES.find(([key]) => key === selected)?.[1]
@@ -19,7 +20,7 @@ export default function RemediationProgressSummary({ documents = [], selected, o
     {onSelect && <p className="remediation-progress-filter-help">Select a status to filter the document list below.</p>}
     <div className="remediation-progress-summary-counts">{PROGRESS_STATES.map(([key, label]) => {
       const count = documents.filter(document => document.progressState === key).length
-      const content = <><strong>{count}</strong><span>{label}</span></>
+      const content = <><strong>{animate && ['verified', 'published', 'ready'].includes(key) ? <LiveCounter value={count} /> : count}</strong><span>{label}</span></>
       return onSelect ? <button type="button" key={key} className={`progress-${key}`} aria-label={`Show documents: ${label} (${count})`} aria-pressed={selected === key} onClick={() => onSelect(key)}>{content}<small>{selected === key ? 'Selected filter' : 'Filter document list'}</small></button>
         : <div key={key} className={`progress-${key}`}>{content}</div>
     })}</div>

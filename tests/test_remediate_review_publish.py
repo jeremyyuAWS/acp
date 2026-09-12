@@ -43,13 +43,9 @@ def _seed_pptx(store, scan_id="s1", file="deck.pptx"):
 
 
 def _residual_review_rules(store, scan_id, file, cleared):
-    """Mirror handlers._remediate_file: the FAILing rules NOT verifiably auto-cleared."""
-    return [
-        {"rule_id": r["rule_id"], "rule_name": r.get("rule_name"),
-         "finding_count": r.get("finding_count")}
-        for r in store.get_scan_traces(scan_id, file=file)
-        if r.get("outcome") == "FAIL" and r["rule_id"] not in cleared
-    ]
+    from handlers import residual_remediation_review_rules
+    return residual_remediation_review_rules(store, scan_id, file, cleared)
+
 
 
 def test_remediate_routes_residual_findings_to_review(store):
@@ -166,3 +162,14 @@ def test_unremediated_file_never_certifies_on_approval(store):
                                                [{"rule_id": "2.4.4", "rule_name": "Link"}])
     store.update_hitl_item(created[0]["id"], "approved")
     assert store.mark_file_compliant_if_reviewed("s1", "raw.pptx") is False
+
+
+def test_review_only_pdf_judgement_is_routed_by_real_terminal_helper(store):
+    _seed_pptx(store, file='document.pdf')
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "UPDATE scan_rule_traces SET outcome='REVIEW',fix_mode='human' "
+                          "WHERE scan_id='s1' AND rule_id='2.4.4'")
+    rules = _residual_review_rules(store, 's1', 'document.pdf', cleared={'1.4.3'})
+    assert [r['rule_id'] for r in rules] == ['2.4.4']
+    store.queue_hitl_review_for_file('s1', 'document.pdf', rules)
+    assert store.list_hitl_queue(scan_id='s1')[0]['status'] == 'pending'

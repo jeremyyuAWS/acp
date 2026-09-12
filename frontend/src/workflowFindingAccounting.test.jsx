@@ -88,3 +88,12 @@ it('shows verified plus remaining equal to all 23 findings, including missing ou
   expect(html).toContain('9 verified fixed + 14 remaining = 23 assessed findings')
   expect(html).toContain('Remaining · not verified')
 })
+
+it('replaces finding KPIs with the document KPI host without mixing their units', () => {
+  const html=renderToStaticMarkup(<Card progressHostId="five-status-tiles" progressScanId="scan" snapshot={{stage:'remediate',execution_id:'batch',state:'processing_complete',domain_reconciliation:{total:30,accounted:30,exact:true,buckets:{resolved_verified:13,awaiting_review:17}}}} />)
+  expect(html).toContain('id="five-status-tiles"')
+  expect(html).toContain('data-batch-id="batch"')
+  expect(html).not.toContain('Total assessed</span>')
+  expect(html).not.toContain('Verified fixed</span>')
+  expect(html).toContain('30 assessed findings')
+})

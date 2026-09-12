@@ -213,3 +213,37 @@ def test_optional_render_precedes_local_release_transaction(setup, monkeypatch):
         return build(*args)
     monkeypatch.setattr(release_reports, 'build_release_reports', render)
     delivery.queue_release_reports(store, SID, OWNER, release['id'])
+
+
+def test_report_identity_metadata_survives_frozen_bundle(setup, monkeypatch):
+    import release_reports
+    store, release = setup
+    digest = 'sha256:' + 'a' * 64
+    monkeypatch.setattr(release_reports, 'build_release_reports', lambda *a: [
+        dict(name='scan-summary.pdf', content=b'summary', content_type='application/pdf', report_kind='scan_summary'),
+        dict(name='changes-doc.pdf', content=b'changes', content_type='application/pdf', report_kind='changes', file='doc.pdf', artifact_digest=digest)])
+    bundle = delivery.queue_release_reports(store, SID, OWNER, release['id'])
+    current = delivery.get_latest_release_reports(store, SID, OWNER)
+    assert current == bundle
+    assert current['scan_id'] == SID
+    assert current['release_id'] == release['id']
+    assert current['reports'][1]['file'] == 'doc.pdf'
+    assert current['reports'][1]['artifact_digest'] == digest
+    assert current['reports'][0]['report_kind'] == 'scan_summary'
+
+
+def test_legacy_identity_recovery_requires_exact_frozen_release(setup, monkeypatch):
+    import release_reports
+    import hashlib
+    store, release = setup
+    file_hash = hashlib.sha256(b'doc.pdf').hexdigest()[:10]
+    monkeypatch.setattr(release_reports, 'build_release_reports', lambda *a: [dict(
+        name=f'checklist-doc.pdf-{file_hash}.pdf', content=b'legacy', content_type='application/pdf')])
+    bundle = delivery.queue_release_reports(store, SID, OWNER, release['id'])
+    assert bundle['reports'][0]['file'] == 'doc.pdf'
+    assert bundle['reports'][0]['report_kind'] == 'checklist'
+    assert bundle['reports'][0]['artifact_digest'] == 'sha256:' + 'a' * 64
+    store.record_release_document(release['id'], OWNER, dict(file='doc.pdf', status='published', artifact_digest='sha256:' + 'b'*64))
+    refreshed = delivery.get_latest_release_reports(store, SID, OWNER)
+    assert refreshed['reports'][0]['file'] is None
+    assert refreshed['reports'][0]['artifact_digest'] is None

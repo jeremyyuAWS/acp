@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import re
 from urllib.parse import quote
 
 
@@ -19,16 +20,39 @@ def _get(store, bundle_id, owner):
     return row
 
 
-def _public(row):
+def _legacy_asset_identity(release, row, asset):
+    """Recover exact generated identities only while the frozen release still matches."""
+    if asset.get('report_kind'):
+        return {}
+    if not release or release.get('scan_id') != row['scan_id'] or _fingerprint(row['release_id'], release)[:24] != row['id']:
+        return {}
+    suffix = '-' + row['id'][:10]
+    if asset['name'] in {f'scan-summary{suffix}.pdf', f'scan-summary{suffix}.html'}:
+        return {'report_kind': 'scan_summary'}
+    matches = []
+    for document in release['documents']:
+        name = document['file']
+        slug = re.sub(r'[^A-Za-z0-9._-]+', '-', name)[:65].strip('.-') or 'document'
+        identity = hashlib.sha256(name.encode()).hexdigest()[:10]
+        for kind in ('changes', 'checklist'):
+            if asset['name'] in {f'{kind}-{slug}-{identity}{suffix}.pdf', f'{kind}-{slug}-{identity}{suffix}.html'}:
+                matches.append(dict(report_kind=kind, file=name, artifact_digest=document.get('artifact_digest')))
+    return matches[0] if len(matches) == 1 else {}
+
+
+def _public(row, store=None):
     if not row:
         return dict(status='not_started', bundle_id=None, reports=[], error=None)
     reports = []
+    legacy_release = store.release_status(row['release_id'], row['owner_email']) if store and any(not asset.get('report_kind') for asset in row['assets']) else None
     for index, asset in enumerate(row['assets']):
+        asset = {**asset, **_legacy_asset_identity(legacy_release, row, asset)}
         receipts = [v for k, v in row['receipts'].items() if k.endswith(':' + str(index))]
         reports.append(dict(name=asset['name'], content_type=asset['content_type'],
+                            report_kind=asset.get('report_kind'), file=asset.get('file'), artifact_digest=asset.get('artifact_digest'),
                             url=next((r.get('url') for r in receipts if r.get('url')), None),
                             download_url=f"/scans/{quote(row['scan_id'], safe='')}/release/reports/{row['id']}/{index}"))
-    return dict(status=row['status'], bundle_id=row['id'], reports=reports, error=row.get('error'))
+    return dict(status=row['status'], bundle_id=row['id'], scan_id=row['scan_id'], release_id=row['release_id'], reports=reports, error=row.get('error'))
 
 
 def _enqueue(store, row):
@@ -51,7 +75,7 @@ def queue_release_reports(store, scan_id, owner, release_id):
     identity = fingerprint[:24]
     existing = _get(store, identity, owner)
     if existing:
-        return _public(existing)
+        return _public(existing, store)
     # Download/render optional visuals before taking the local release row lock.
     # Recheck the snapshot and bundle under the lock before freezing any assets.
     assets = build_release_reports(store, scan_id, owner, release_id)
@@ -61,7 +85,7 @@ def queue_release_reports(store, scan_id, owner, release_id):
             store._db.execute(cur, 'UPDATE release_executions SET id=id WHERE id=%s AND owner_email=%s', (release_id, owner))
         existing = _get(store, identity, owner)
         if existing:
-            return _public(existing)
+            return _public(existing, store)
         current = store.release_status(release_id, owner)
         if not current or _fingerprint(release_id, current) != fingerprint:
             raise ValueError('Release changed while preparing reports; retry with the current release')
@@ -73,7 +97,7 @@ def queue_release_reports(store, scan_id, owner, release_id):
             if asset['content_type'].startswith('text/html'):
                 for old, new in names.items():
                     content = content.replace('href="' + old + '"', 'href="' + new + '"')
-            frozen.append(dict(name=names[asset['name']], content_type=asset['content_type'], content=content, encoding='base64' if binary else 'utf-8'))
+            frozen.append(dict(report_kind=asset.get('report_kind'), file=asset.get('file'), artifact_digest=asset.get('artifact_digest'), name=names[asset['name']], content_type=asset['content_type'], content=content, encoding='base64' if binary else 'utf-8'))
         with store._db.cursor() as cur:
             store._db.execute(cur, '''INSERT INTO release_report_bundles
                 (id,release_id,scan_id,owner_email,assets,roots,receipts,status,created_at,updated_at)
@@ -81,14 +105,14 @@ def queue_release_reports(store, scan_id, owner, release_id):
                 (identity, release_id, scan_id, owner, json.dumps(frozen), json.dumps(release['roots']), store._now(), store._now()))
         row = _get(store, identity, owner)
         _enqueue(store, row)
-        return _public(row)
+        return _public(row, store)
 
 
 def get_latest_release_reports(store, sid, owner):
     with store._db.cursor() as cur:
         store._db.execute(cur, 'SELECT id FROM release_report_bundles WHERE scan_id=%s AND owner_email=%s ORDER BY created_at DESC,id DESC LIMIT 1', (sid, owner))
         row = store._db.fetchone(cur)
-    return _public(_get(store, row['id'], owner)) if row else _public(None)
+    return _public(_get(store, row['id'], owner), store) if row else _public(None)
 
 
 def get_release_report_asset(store, sid, owner, bundle_id, index):
@@ -115,7 +139,7 @@ def retry_release_reports(store, sid, owner):
         row = _get(store, latest['bundle_id'], owner)
         if retry:
             _enqueue(store, row)
-        return _public(row)
+        return _public(row, store)
 
 
 def _upload(root, asset, tokens, key):
@@ -161,7 +185,7 @@ def process_release_reports(store, bundle_id, owner):
     if not row:
         raise KeyError('Report not found')
     if row['status'] == 'completed':
-        return _public(row)
+        return _public(row, store)
     try:
         require_grants(store, owner, review=False)
         release = store.release_status(row['release_id'], owner)
@@ -192,7 +216,7 @@ def process_release_reports(store, bundle_id, owner):
         # Keep provider errors/tokens out of public metadata and leave document receipts intact.
         with store._db.cursor() as cur:
             store._db.execute(cur, "UPDATE release_report_bundles SET status='failed',error=%s,updated_at=%s WHERE id=%s AND owner_email=%s AND status!='completed'", ('Reports could not be delivered. Download them here or reconnect and retry.', store._now(), bundle_id, owner))
-    return _public(_get(store, bundle_id, owner))
+    return _public(_get(store, bundle_id, owner), store)
 
 
 def queue_if_release_settled(store, sid, owner, release_id=None):

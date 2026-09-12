@@ -266,3 +266,30 @@ it('shows a leased document processing while its finding ledger is unavailable',
   expect(container.querySelectorAll('tbody tr')).toHaveLength(1)
   expect(container.querySelector('tbody').textContent).toContain('A.docx')
 })
+
+it('moves the existing five document KPIs into the matching workflow card and retains filtering', async () => {
+  const {root,container}=createTestRoot()
+  const reveal=vi.fn()
+  await act(async()=>root.render(<>
+    <div id="progress-host" data-scan-id="run" data-batch-id="batch" />
+    <RemediationLiveDocuments {...props} snapshot={{batch_id:'batch'}} progressHostId="progress-host" onShowDocuments={reveal}
+      progressDocuments={[{file:'A.docx',progressState:'published'},{file:'B.docx',progressState:'attention'}]} />
+  </>))
+  const host=container.querySelector('#progress-host')
+  expect(host.querySelectorAll('.remediation-progress-summary-counts button')).toHaveLength(5)
+  expect(host.querySelector('.progress-published strong').textContent).toBe('1')
+  expect(container.querySelector('.remediation-live-documents .remediation-progress-summary')).toBeNull()
+  await act(async()=>host.querySelector('.progress-published').click())
+  expect(reveal).toHaveBeenCalledOnce()
+  expect(container.querySelectorAll('tbody tr')).toHaveLength(1)
+  expect(container.querySelector('tbody').textContent).toContain('A.docx')
+})
+it('never puts another batch document counts in the workflow card', async () => {
+  const {root,container}=createTestRoot()
+  await act(async()=>root.render(<>
+    <div id="stale-host" data-scan-id="run" data-batch-id="new-batch" />
+    <RemediationLiveDocuments {...props} snapshot={{batch_id:'old-batch'}} progressHostId="stale-host" />
+  </>))
+  expect(container.querySelector('#stale-host').textContent).toBe('')
+  expect(container.querySelector('.remediation-live-documents .remediation-progress-summary')).not.toBeNull()
+})
