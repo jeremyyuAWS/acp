@@ -50,8 +50,10 @@ from jinja2 import Environment, BaseLoader
 # as a customer-facing number differing between two PDFs of the same scan.
 from report_tagged import (  # noqa: F401  (re-exported for tests)
     REPORT_LANG,
+    AUDIT_GUIDE_TEMPLATE,
     _logo_data_uri,
     _prepare_context,
+    _safe_guide_thumb,
     _sc_label,
 )
 
@@ -231,6 +233,16 @@ tr:nth-child(even) th[scope="row"], tr:nth-child(even) td { background: #faf8fb;
 .sev-moderate { color: #2B2330; }
 .sev-minor    { color: #6B6670; }
 
+/* Follow-up guidance may span pages; keep long hashes and proposals in bounds. */
+.remediation-guide { break-before: page; break-inside: auto; }
+.guide-document { margin-top: 12px; overflow-wrap: anywhere; }
+.guide-item { border-left: 3px solid #854F0B; padding: 7px 10px; margin: 8px 0; }
+.guide-item.applied { border-color: #3B6D11; }
+.guide-item img { max-width: 100%; max-height: 220px; object-fit: contain; }
+h4, h5 { font-size: 9.5pt; margin: 8px 0 4px; }
+.guide-item ol { padding-left: 20px; margin: 5px 0; }
+.guide-item li { margin-bottom: 4px; }
+.guide-value { white-space: pre-wrap; overflow-wrap: anywhere; background: #f6f3f7; padding: 5px 7px; }
 figure { margin: 10px 0; }
 figcaption { font-size: 8pt; color: #6B6670; margin-top: 4px; }
 
@@ -440,18 +452,21 @@ dd { color: #2B2330; margin-left: 12px; }
 </section>
 {% endif %}
 
+""" + AUDIT_GUIDE_TEMPLATE + r"""
 </body>
 </html>
 """
 
 _jinja_env = Environment(loader=BaseLoader(), autoescape=True)
+_jinja_env.filters["safe_guide_thumb"] = _safe_guide_thumb
 
 
-def render_html(run: dict, files: list, meta: dict, facts: dict | None = None) -> str:
+def render_html(run: dict, files: list, meta: dict, facts: dict | None = None,
+                decisions: dict | None = None, evidence: list | None = None) -> str:
     """The HTML the PDF is made of. Exported so tests can assert on the markup directly —
     a semantic defect is far easier to read here than in a structure-tree dump, and the two
     are checked against each other by the structural tests."""
-    ctx = _prepare_context(run, files, meta, facts)
+    ctx = _prepare_context(run, files, meta, facts, decisions, evidence)
 
     score = ctx.get("avg_score")
     ctx["ring_uri"] = _svg_data_uri(_score_ring_svg(score)) if score is not None else ""
@@ -487,6 +502,6 @@ def build_weasy_report(run: dict, files: list, meta: dict,
     """
     import weasyprint
 
-    html = render_html(run, files, meta, facts)
+    html = render_html(run, files, meta, facts, decisions, evidence)
     return weasyprint.HTML(string=html, base_url=str(Path(__file__).resolve().parent)).write_pdf(
         pdf_variant="pdf/ua-1")

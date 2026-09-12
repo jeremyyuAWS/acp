@@ -189,12 +189,33 @@ def test_the_heading_outline_starts_at_h1_and_skips_no_level(walked):
         assert nxt <= prev + 1, f"heading level jumps {prev} -> {nxt}: {headings}"
 
 
-def test_every_section_has_a_heading(walked):
-    """Five <section>s, five H2s. A section whose heading was dropped from the tree is a section
-    a screen-reader user cannot navigate to."""
-    tags, headings, _ = walked
-    assert headings.count("H2") == tags["Sect"], (
-        f"{tags['Sect']} sections but {headings.count('H2')} H2 headings")
+def test_every_section_has_a_heading(report):
+    """Each section/article retains its own heading, including nested guide items."""
+    def children(node):
+        kids = node.get("/K")
+        return list(kids) if isinstance(kids, pikepdf.Array) else [kids]
+
+    def own_heading(node):
+        for kid in children(node):
+            if not isinstance(kid, pikepdf.Dictionary):
+                continue
+            role = str(kid.get("/S") or "")
+            if role in ("/H1", "/H2", "/H3", "/H4", "/H5", "/H6"):
+                return True
+            if role != "/Sect" and own_heading(kid):
+                return True
+        return False
+
+    def visit(node):
+        if not isinstance(node, pikepdf.Dictionary):
+            return
+        if str(node.get("/S") or "") == "/Sect":
+            assert own_heading(node), "Section has no own navigable heading"
+        for kid in children(node):
+            visit(kid)
+
+    with pikepdf.open(str(report)) as pdf:
+        visit(pdf.Root.StructTreeRoot)
 
 
 # ── tables ───────────────────────────────────────────────────────────────────────────────────

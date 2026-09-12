@@ -121,6 +121,29 @@ def _table(headers, rows):
     return '<div class="table-scroll"><table><thead><tr>' + ''.join(f'<th scope="col">{_text(h)}</th>' for h in headers) + '</tr></thead><tbody>' + ''.join('<tr>' + ''.join(f'<td>{c}</td>' for c in row) + '</tr>' for row in rows) + '</tbody></table></div>'
 
 
+def _offline_guide(document):
+    """Print concrete recorded recommendations without creating a second findings count."""
+    content = ('<h2>Offline remediation guide</h2><p>In-app review is optional. '
+               'Work through the remaining actions in the saved document when convenient. '
+               'AI recommendations require checking the target and meaning before use.</p>')
+    for row in document['remaining']:
+        content += (f'<section class="report-card"><h3>SC {_text(row["criterion"])} — {_text(row["title"])}</h3>'
+                    f'<p><strong>Priority:</strong> {_text(row["priority"])}<br>'
+                    f'<strong>Location:</strong> {_text(row["location"])}<br>'
+                    f'<strong>Status:</strong> {_text(row["status"])}</p>')
+        if row.get('description'):
+            content += f'<p><strong>Issue:</strong> {_text(row["description"])}</p>'
+        if row.get('original_value') is not None:
+            content += f'<p><strong>Original recorded value:</strong> {_text(row["original_value"])}</p>'
+        if row.get('proposed_value') is not None:
+            content += f'<p><strong>AI recommended value — not recorded as saved:</strong> {_text(row["proposed_value"])}</p>'
+        if row.get('reason'):
+            content += f'<p><strong>Recorded rationale:</strong> {_text(row["reason"])}</p>'
+        content += '<p><strong>How to fix:</strong></p><ol>' + ''.join(f'<li>{_text(step)}</li>' for step in row['editor_steps']) + '</ol>'
+        content += f'<p>{_text(row["technical_status"])} · {_text(row["human_status"])}</p></section>'
+    return content if document['remaining'] else ''
+
+
 def build_release_report_sources(store, scan_id, owner, release_id):
     """Return separate checklist/change HTML assets per release document and a CSV.
 
@@ -228,6 +251,12 @@ def build_release_report_sources(store, scan_id, owner, release_id):
         slug = re.sub(r'[^A-Za-z0-9._-]+', '-', name)[:65].strip('.-') or 'document'
         report_name = f'checklist-{slug}-{sha256(name.encode()).hexdigest()[:10]}.html'
         detail = f'<p>Publication: {_text(status)} · {_link(url, "Open published file") if url else "Not published"}</p>'
+        detail += ('<section class="notice"><h2>Document version for follow-up</h2>'
+                   f'<p>Scan: {_text(scan_id)} · Release: {_text(release_id)}<br>'
+                   f'Recorded released artifact identity: {_text(outcome.get("artifact_digest"))}</p>'
+                   '<p>Use the published corrected copy for follow-up. Recommendations below are guidance, '
+                   'not additional edits saved to that copy. If you edit the file externally, reassess '
+                   'the new version; this report describes the recorded version.</p></section>')
         if status != 'published' and outcome.get('explanation'):
             detail += f'<p>Release explanation: {_text(outcome["explanation"])}</p>'
         original_file = sum(n for (f, _), n in original_groups.items() if f == name) if groups is not None else None
@@ -245,6 +274,16 @@ def build_release_report_sources(store, scan_id, owner, release_id):
             categorized.append((category, row))
         detail += _table(['Criterion', 'Issue', 'Location', 'Remediation category', 'Recommended action', 'Owner', 'Status'],
                          [[_text(r[0]), _text(r[1]) + '<br><small>Severity: ' + _text(r[3]) + '</small>', _text(r[2]), _text(CATEGORIES[key]), *[_text(v) for v in r[4:]]] for key, r in categorized]) if checklist else '<p>No remaining issues are recorded in the available evidence. This is not a guarantee of compliance.</p>'
+        from remediation_audit_guide import build_remediation_audit_guide
+        # Unlike legacy category accounting, the offline guide preserves each target.
+        # A processing task for one image must not hide another finding under its SC.
+        guide_issues = [i for i in issues if (name, _rule(i.get('wcag') or i.get('rule_id') or i.get('ruleId'))) not in fully_resolved]
+        guide_tasks = [q for q in open_queue if q['file'] == name and (name, _rule(q['rule_id'])) not in fully_resolved
+                       and not q.get('applied')]
+        guide = build_remediation_audit_guide(
+            [{'file': name, 'issues': guide_issues, 'artifact_digest': outcome.get('artifact_digest')}],
+            facts={'audit_review_tasks': guide_tasks})[0]
+        detail += _offline_guide(guide)
         checklist_detail = detail
         from wcag_codeset import _name_for
         detail = f'<p>Document: {_text(name)}<br>Publication: {_text(status)}</p>'

@@ -20,6 +20,14 @@ def test_conformance_report_uses_the_same_immutable_snapshot_identity_as_release
         def get_decisions(self, sid): return []
         def get_remediation_evidence(self, sid): return []
         def get_certification_facts(self, sid, apply_document_selection=True): return {}
+        def get_scan_scope(self, sid): return {'1.1.1': ['pdf']}
+        def scope_for_file(self, sid, name, scope): return scope
+        def list_hitl_queue(self, *, scan_id, owner):
+            captured["queue_owner"] = owner
+            return [
+                {"file": "a.pdf", "rule_id": "SC_1_1_1", "proposals": [{"proposed_value": "Parking"}]},
+                {"file": "a.pdf", "rule_id": "2.4.4", "proposals": [{"proposed_value": "Outside selected scope"}]},
+            ]
 
     lineage = {"available": True, "integrity": {"ok": True},
                "workflow_id": "workflow-1", "workflow_revision": 7}
@@ -36,6 +44,7 @@ def test_conformance_report_uses_the_same_immutable_snapshot_identity_as_release
     monkeypatch.setattr(scans, "_release_finding_reconciliation", reconcile)
     def render(run, files, meta, **kw):
         captured["meta"] = meta
+        captured["facts"] = kw["facts"]
         return b"pdf"
 
     monkeypatch.setattr(scans, "_render_report", render)
@@ -46,3 +55,8 @@ def test_conformance_report_uses_the_same_immutable_snapshot_identity_as_release
     assert captured["meta"]["finding_reconciliation"]["identifiers"]["snapshot_id"] == \
         "immutable-snapshot-digest"
     assert response.media_type == "application/pdf"
+
+    assert captured["queue_owner"] == "owner@example.org"
+    tasks = captured["facts"]["audit_review_tasks"]
+    assert len(tasks) == 1
+    assert tasks[0]["proposals"][0]["proposed_value"] == "Parking"

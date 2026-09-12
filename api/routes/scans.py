@@ -3455,7 +3455,21 @@ def report_pdf(sid: str, request: Request):
                 lineage_export["lineage"]["integrity"]["ok"] else "inconsistent")}
     decisions = core.store.get_decisions(sid)
     evidence = core.store.get_remediation_evidence(sid)
-    facts = core.store.get_certification_facts(sid, apply_document_selection=True)
+    facts = dict(core.store.get_certification_facts(sid, apply_document_selection=True))
+    # Preserve exact queued proposals for offline follow-up. The legacy evidence
+    # rollup groups by criterion and cannot identify multiple affected objects.
+    from assessment_selection import selected_for_file
+    scope = core.store.get_scan_scope(sid)
+    tasks = core.store.list_hitl_queue(scan_id=sid, owner=owner)
+    scoped_tasks = []
+    for task in tasks:
+        name = task.get("file") or ""
+        codes = selected_for_file(core.store.scope_for_file(sid, name, scope), name)
+        match = re.search(r"(?:SC_)?(\d+)[._](\d+)[._](\d+)",
+                          str(task.get("rule_id") or task.get("wcag") or ""))
+        if codes is None or (match and ".".join(match.groups()) in codes):
+            scoped_tasks.append(task)
+    facts["audit_review_tasks"] = scoped_tasks
     pdf = _render_report(res["run"], res["files"], meta,
                          decisions=decisions, evidence=evidence, facts=facts)
     return Response(pdf, media_type="application/pdf",

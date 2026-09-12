@@ -2,7 +2,7 @@
 
 R-C distinguishes three assurance tiers for applied fixes in the evidence appendix:
   1. Deterministic — rule-based fixer, no model, re-scan cleared.
-  2. AI · human-confirmed — model-generated + human approval + re-scan validated.
+  2. AI · approval recorded — model-generated + human approval + re-scan validated.
   3. AI · re-scan-validated — model-generated + re-scan cleared, no human approval.
 
 R14 adds a per-criterion compliance table scoped to criteria that fired at least one
@@ -79,10 +79,10 @@ def test_deterministic_fix_shows_deterministic_badge():
     assert "Deterministic" in t
 
 
-def test_ai_human_fix_shows_human_confirmed_badge():
+def test_ai_approved_fix_shows_approval_recorded_badge():
     from report import build_report
     t = _flat(build_report(_RUN, _FILES_CERT, _META, evidence=_EVIDENCE_ALL_TIERS))
-    assert "human-confirmed" in t
+    assert "approval recorded" in t
 
 
 def test_ai_no_human_fix_shows_re_scan_validated_badge():
@@ -122,7 +122,7 @@ def test_three_tiers_all_present_in_same_report():
     from report import build_report
     t = _flat(build_report(_RUN, _FILES_CERT, _META, evidence=_EVIDENCE_ALL_TIERS))
     assert "Deterministic" in t
-    assert "human-confirmed" in t
+    assert "approval recorded" in t
     assert "re-scan-validated" in t
 
 

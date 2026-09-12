@@ -124,6 +124,57 @@ def _horiz_bars(by_crit: list[tuple[str, int, int]]) -> str:
 
 # ── HTML template ────────────────────────────────────────────────────────────
 
+AUDIT_GUIDE_TEMPLATE = """{% if remediation_guide %}
+<section class="remediation-guide" aria-labelledby="remediation-guide-heading">
+<h2 id="remediation-guide-heading">Your remediation guide</h2>
+<p>Use this guide with the downloaded documents. Remaining work is prioritized within each document.
+Recommendations guide future work; they are not changes already made. In-app review is optional;
+unapproved suggestions are not applied.</p>
+<p class="muted">Technical checks confirm only the recorded condition. They do not confirm an AI
+suggestion's meaning or establish full accessibility. After editing, save a new copy, check the
+meaning in context, and reassess that copy.</p>
+{% for doc in remediation_guide %}
+<div class="guide-document">
+<h3>{{ doc.file }}{% if doc.format %} · {{ doc.format }}{% endif %}</h3>
+{% if doc.artifact %}<p class="muted">Document version: {{ doc.artifact.display }}</p>{% endif %}
+{% if doc.remaining %}<h4>What to address next · {{ doc.remaining|length }} item(s)</h4>{% endif %}
+{% for item in doc.remaining %}
+<article class="guide-item">
+<h5>{{ item.priority }} · {{ item.criterion }} · {{ item.title }}</h5>
+<p><strong>Location:</strong> {{ item.location }}</p>
+<p><strong>Status:</strong> {{ item.status }}</p>
+{% if item.original_value is defined and item.original_value is not none %}<p><strong>Original value:</strong></p><p class="guide-value">{{ item.original_value }}</p>{% endif %}
+{% if item.recommendation %}<p><strong>Recommended action:</strong> {{ item.recommendation }}</p>{% endif %}
+{% if item.proposed_value is defined and item.proposed_value is not none %}<p><strong>Suggested value — not saved:</strong></p><p class="guide-value">{{ item.proposed_value }}</p>{% endif %}
+{% if item.reason %}<p><strong>Why:</strong> {{ item.reason }}</p>{% endif %}
+{% if item.editor_steps %}<p><strong>How to make the change:</strong></p><ol>{% for step in item.editor_steps %}<li>{{ step }}</li>{% endfor %}</ol>{% endif %}
+{% if item.technical_status %}<p class="muted">Technical check: {{ item.technical_status }}</p>{% endif %}
+{% if item.human_status %}<p class="muted">Meaning confirmation: {{ item.human_status }}</p>{% endif %}
+</article>
+{% endfor %}
+{% if doc.applied %}<h4>Recorded changes · {{ doc.applied|length }} item(s)</h4>{% endif %}
+{% for item in doc.applied %}
+<article class="guide-item applied">
+<h5>{{ item.criterion }} · {{ item.title }}</h5>
+<p><strong>Location:</strong> {{ item.location }}</p>
+<p><strong>Status:</strong> {{ item.status }}</p>
+{% if item.original_value is defined and item.original_value is not none %}<p><strong>Original value:</strong></p><p class="guide-value">{{ item.original_value }}</p>{% endif %}
+{% if item.saved_value is defined and item.saved_value is not none %}<p><strong>Saved value:</strong></p><p class="guide-value">{{ item.saved_value }}</p>{% endif %}
+{% if item.technical_status %}<p class="muted">Technical check: {{ item.technical_status }}</p>{% endif %}
+{% if item.human_status %}<p class="muted">Meaning confirmation: {{ item.human_status }}</p>{% endif %}
+{% if item.reason %}<p><strong>Why:</strong> {{ item.reason }}</p>{% endif %}
+{% if not item.before_thumb and not item.after_thumb and item.thumb|safe_guide_thumb %}<figure><img class="guide-thumb" src="{{ item.thumb|safe_guide_thumb }}" alt="Recorded component image at {{ item.location }}"><figcaption>Recorded component image — not a before/after comparison</figcaption></figure>{% endif %}
+{% for key, caption in [("before_thumb", "Recorded original screenshot"), ("after_thumb", "Recorded saved screenshot")] %}
+{% if item[key]|safe_guide_thumb %}<figure><img class="guide-thumb" src="{{ item[key]|safe_guide_thumb }}" alt="{{ caption }} at {{ item.location }}"><figcaption>{{ caption }} · {{ item.location }}</figcaption></figure>{% endif %}
+{% endfor %}
+</article>
+{% endfor %}
+</div>
+{% endfor %}
+</section>
+{% endif %}
+"""
+
 _TEMPLATE = r"""<!DOCTYPE html>
 <html lang="{{ lang }}">
 <head>
@@ -184,6 +235,15 @@ figure { margin: 10px 0; }
 figcaption { font-size: 8pt; color: #6B6670; margin-top: 4px; }
 
 section { page-break-inside: avoid; }
+.remediation-guide { page-break-before: always; page-break-inside: auto; }
+.guide-document { margin-top: 12px; overflow-wrap: anywhere; }
+.guide-item { border-left: 3px solid #854F0B; padding: 7px 10px; margin: 8px 0; }
+.guide-item.applied { border-color: #3B6D11; }
+.guide-item ol { padding-left: 20px; margin: 5px 0; }
+.guide-item li { margin-bottom: 4px; }
+.guide-thumb { max-width: 100%; max-height: 220px; object-fit: contain; }
+h4, h5 { font-size: 9.5pt; margin: 8px 0 4px; }
+.guide-value { white-space: pre-wrap; overflow-wrap: anywhere; background: #f6f3f7; padding: 5px 7px; }
 .page-break { page-break-before: always; }
 .scope-list { list-style: disc; padding-left: 18px; font-size: 8.5pt;
               color: #2B2330; line-height: 1.5; }
@@ -315,6 +375,7 @@ dd { color: #2B2330; margin-left: 12px; }
 </section>
 
 {% if open_by_crit %}
+""" + AUDIT_GUIDE_TEMPLATE + r"""
 <!-- Open findings summary -->
 <section aria-labelledby="findings-heading">
 <h2 id="findings-heading">Open Issues by Criterion</h2>
@@ -429,7 +490,10 @@ def _sc_label(wcag_key: str) -> tuple[str, str]:
 
 
 def _prepare_context(run: dict, files: list, meta: dict,
-                     facts: dict | None = None) -> dict:
+                     facts: dict | None = None, decisions: dict | None = None,
+                     evidence: list | None = None) -> dict:
+    from remediation_audit_guide import build_remediation_audit_guide
+
     target = (meta.get("target") or "Level AA").strip()
     std = target if target.upper().startswith("WCAG") else f"WCAG 2.1 {target}"
 
@@ -506,7 +570,8 @@ def _prepare_context(run: dict, files: list, meta: dict,
             ai_summary = (
                 f"This scan used AI assistance for {ai_calls} call"
                 f"{'s' if ai_calls != 1 else ''}. "
-                "AI-generated proposals were reviewed by a human before being applied."
+                "Suggestions and recorded changes are distinguished in the remediation guide. "
+                "Human confirmation is shown only when recorded."
             )
 
     return {
@@ -532,20 +597,42 @@ def _prepare_context(run: dict, files: list, meta: dict,
         "bars_svg": bars_svg,
         "not_evaluated": not_evaluated,
         "ai_summary": ai_summary,
+        "remediation_guide": build_remediation_audit_guide(files, decisions, evidence, facts),
     }
 
 
 # ── HTML rendering ───────────────────────────────────────────────────────────
 
+def _safe_guide_thumb(value):
+    """Render only bounded embedded raster evidence, never external URLs or SVG."""
+    if not isinstance(value, str) or len(value) > 6_000_000:
+        return ''
+    if not value.startswith(('data:image/png;base64,', 'data:image/jpeg;base64,')):
+        return ''
+    try:
+        import io
+        from PIL import Image
+        raw = base64.b64decode(value.split(',', 1)[1], validate=True)
+        with Image.open(io.BytesIO(raw)) as image:
+            if image.format not in ('PNG', 'JPEG') or image.width * image.height > 16_000_000:
+                return ''
+            image.verify()
+        return value
+    except Exception:
+        return ''
+
+
 _jinja_env = Environment(loader=BaseLoader(), autoescape=True)
+_jinja_env.filters["safe_guide_thumb"] = _safe_guide_thumb
 _jinja_env.filters["selectattr"] = lambda seq, attr, *_: [
     item for item in seq if item.get(attr) is not None
 ]
 
 
 def _render_html(run: dict, files: list, meta: dict,
-                 facts: dict | None = None) -> str:
-    ctx = _prepare_context(run, files, meta, facts)
+                 facts: dict | None = None, decisions: dict | None = None,
+                 evidence: list | None = None) -> str:
+    ctx = _prepare_context(run, files, meta, facts, decisions, evidence)
     tmpl = _jinja_env.from_string(_TEMPLATE)
     return tmpl.render(**ctx)
 
@@ -568,7 +655,7 @@ def build_tagged_report(run: dict, files: list, meta: dict,
     if not Path(_CHROMIUM).exists():
         raise RuntimeError(f"Chromium not found at {_CHROMIUM}")
 
-    html = _render_html(run, files, meta, facts)
+    html = _render_html(run, files, meta, facts, decisions, evidence)
 
     with tempfile.TemporaryDirectory(prefix="acp_report_") as td:
         html_path = Path(td) / "report.html"
