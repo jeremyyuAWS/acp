@@ -9,3 +9,10 @@
 @media(max-width:420px) {.wds-outcomes {grid-template-columns:1fr}.wds-outcomes>div {display:flex;align-items:center;justify-content:space-between;gap:8px}.wds-outcomes dd {margin:0}}
 
 .wds-journey li[data-stage=review] {border-color:#9a3f62;background:linear-gradient(110deg,#f9edf3,transparent)}
+
+.wds-process {list-style:none;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.wds-process li {border-left:4px solid #8a7ba0;border-radius:8px;background:#f4eff9}
+.wds-process li[data-recorded=true] {border-color:#227a61;background:#edf8f2}
+.wds-process button {display:grid;gap:5px;text-align:left;width:100%;padding:12px;background:transparent;border:0;color:inherit;font:inherit;cursor:pointer}
+.wds-process strong {font-size:15px}.wds-process span {font-size:12px}
+@media(max-width:420px) {.wds-process {grid-template-columns:1fr}}

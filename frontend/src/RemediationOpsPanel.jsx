@@ -6,6 +6,7 @@ import RemediationThroughput from './RemediationThroughput.jsx'
 import { counterRows, secondaryRows, freshness, headline, integrityAffects, partitionSums } from './remediationSnapshot.js'
 import { attemptStage, milestoneCrossings, retrySeconds } from './remediationLivePanel.js'
 import ActivityPulse from './ActivityPulse.jsx'
+import { activityGroups } from './remediationEventFeed.js'
 import RemediationExceptions, { useRemediationExceptions, exceptionCount } from './RemediationExceptions.jsx'
 import { getFindingDispositions } from './api.js'
 import './remediation-ops-panel.css'
@@ -227,7 +228,7 @@ function FindingReconciliation({ snapshot }) {
 }
 
 function Activity({ events = [], status = 'ready', terminal = false, compact = false }) {
-  return <section className="remops-activity">{!compact && <h3>Live activity</h3>}{events.length ? <ol aria-label="Recent remediation activity">{events.slice(0, 10).map((event) => <li key={event.key}><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span>{event.line}</span></li>)}</ol> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
+  return <section className="remops-activity">{!compact && <h3>Live activity</h3>}{events.length ? <ol aria-label="Recent remediation activity">{activityGroups(events.slice(0, 10)).map((group) => { const event = group.lead; return <li key={group.key} className={`remops-activity-${event.tone}`}><div className="remops-activity-event"><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span>{event.line}</span></div>{group.rows.length > 1 && <details><summary>{group.rows.length - 1} other updates for this document</summary><ul>{group.rows.filter(row => row !== event).map(row => <li key={row.key}>{row.line}</li>)}</ul></details>}</li> })}</ol> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
 }
 
 // The stub this replaces summed four numbers into "Needs attention · N" and offered nothing to do

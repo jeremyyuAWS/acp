@@ -6,3 +6,5 @@
 @keyframes document-count-change { from { background-color:#eee6f5; } to { background-color:transparent; } }
 @media(prefers-reduced-motion:reduce) { .remediation-live-documents .live-document-table .live-document-changed { animation:none; outline:1px solid #8c769e; } }
 @media(max-width:640px) { .remediation-live-documents .live-document-table th,.remediation-live-documents .live-document-table td { padding:.5rem .3rem; } }
+.remediation-live-documents .live-document-categories button { border:1px solid #ded3e7; border-radius:18px; padding:5px 9px; background:#fff; color:#35283e; }
+.remediation-live-documents .live-document-categories button[aria-pressed=true] { outline:2px solid #77539d; outline-offset:1px; }

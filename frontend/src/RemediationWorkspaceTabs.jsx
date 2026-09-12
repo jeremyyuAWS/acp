@@ -2,6 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import RemediationPlanDialog from './RemediationPlanDialog.jsx'
 import useConfirmedRemediationActivity from './useConfirmedRemediationActivity.js'
 const MODES = ['live', 'review']
+const shownPlans = new Set()
+function planWasShown(runId) {
+  if (shownPlans.has(runId)) return true
+  try { return localStorage.getItem(`acp.remediation.plan.shown:${runId}`) === 'yes' } catch { return false }
+}
+function rememberPlan(runId) {
+  if (!runId) return
+  shownPlans.add(runId)
+  try { localStorage.setItem(`acp.remediation.plan.shown:${runId}`, 'yes') } catch { /* memory fallback */ }
+}
 
 function modeFromLocation() {
   try {
@@ -11,7 +21,8 @@ function modeFromLocation() {
 }
 
 export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snapshot = null,
-  plan, review, live, reviewOptional = false, workspaceRequest = null, planAccepted = false }) {
+  plan, review, live, reviewOptional = false, workspaceRequest = null, planAccepted = false, assessmentReady = false, assessmentIdentity }) {
+  const planIdentity = assessmentIdentity || runId
   // Live is the default workspace. Legacy Plan links open the required planning dialog.
   const [chosen, setChosen] = useState(() => modeFromLocation())
   const tabs = useRef([])
@@ -24,23 +35,36 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
   const lastWorkspaceRequest = useRef(workspaceRequest)
   const activeWork = useConfirmedRemediationActivity(snapshot)
   const lastPanel = useRef('live')
+  const introduction = useRef(null)
   if (MODES.includes(chosen)) lastPanel.current = chosen
   const mode = MODES.includes(chosen) ? chosen : lastPanel.current
 
   useEffect(() => {
     cancelPanelFocus()
-    setChosen(modeFromLocation())
+    const locationMode = modeFromLocation()
+    const planning = locationMode === 'plan' || locationMode === 'modes'
+    const introductionKey = `${planIdentity}:${assessmentReady}:${planAccepted}`
+    if (introduction.current === introductionKey) return cancelPanelFocus
+    introduction.current = introductionKey
+    const shouldIntroduce = assessmentReady && runId && !planAccepted && !planWasShown(planIdentity)
+    setChosen(shouldIntroduce ? 'plan' : assessmentReady && planning && planWasShown(planIdentity) ? 'live' : locationMode)
+    if (shouldIntroduce || (assessmentReady && planning)) rememberPlan(planIdentity)
     return cancelPanelFocus
-  }, [runId])
+  }, [runId, planIdentity, assessmentReady, planAccepted])
 
   useEffect(() => {
-    const restore = () => { cancelPanelFocus(); setChosen(modeFromLocation()) }
+    const restore = () => {
+      cancelPanelFocus()
+      const next = modeFromLocation()
+      setChosen(assessmentReady && planWasShown(planIdentity) && ['plan', 'modes'].includes(next) ? 'live' : next)
+    }
     window.addEventListener('popstate', restore)
     return () => window.removeEventListener('popstate', restore)
-  }, [runId])
+  }, [runId, planIdentity, assessmentReady])
 
   const select = (next, { focusPanel = false } = {}) => {
     cancelPanelFocus()
+    if (next === 'plan' || next === 'modes') rememberPlan(planIdentity)
     setChosen(next)
     try {
       const url = new URL(window.location.href)

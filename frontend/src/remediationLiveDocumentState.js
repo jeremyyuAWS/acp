@@ -1,3 +1,4 @@
+import { releaseReadiness, releaseSourceState, hasSavedCorrectedCopy } from './releaseClarityModel.js'
 import { remediationCategory, aiAppliedUnverified } from './remediationCategories.js'
 
 export function materialKey(scanId, snapshot, events = []) {
@@ -30,11 +31,37 @@ export function liveDocumentCounts(documents, ledger, review = [], batchId) {
       else {
         const sameSC = doc.findings.filter(r => r.sc === finding.rule_id)
         const categories = new Set(sameSC.map(remediationCategory))
-        category = categories.size === 1 ? [...categories][0] : 'remaining'
+        category = categories.size === 1 && ['manual', 'unsupported', 'blocked'].includes([...categories][0]) ? [...categories][0] : 'remaining'
       }
       counts[category] = (counts[category] || 0) + 1
     }
     result.push({ ...doc, liveCounts: counts })
   }
   return result
+}
+
+export function findingOutcomeTotals(documents = []) {
+  return documents.reduce((totals, document) => {
+    for (const [category, count] of Object.entries(document.liveCounts || {})) totals[category] = (totals[category] || 0) + count
+    return totals
+  }, {})
+}
+
+export function releaseProgressState(state) {
+  return ({ ready: 'ready', released: 'published', delivering: 'processing' })[state?.status] || 'attention'
+}
+
+export function confirmedReleaseProgress(file, release, source, review = []) {
+  if (!release || !Array.isArray(release.documents) || !source || !Array.isArray(source.files) || !hasSavedCorrectedCopy(file)) return undefined
+  const receipt = release.documents.find(row => row.file === file.file)
+  // Only a receipt for this corrected artifact can establish publication here.
+  const currentReceipt = receipt?.status === 'published' && receipt.artifact_digest === `sha256:${file.corrected_sha256}`
+    ? receipt : receipt?.status === 'published' ? undefined : receipt
+  const sourceByFile = Object.fromEntries(source.files.map(row => [row.file, row]))
+  const pending = review.filter(item => item.file === file.file && item.status === 'pending').length
+  const state = releaseReadiness({ ...file, published_at: null }, {
+    results: currentReceipt ? { [file.file]: currentReceipt } : {},
+    sourceState: row => releaseSourceState(sourceByFile[row.file]), pending: { [file.file]: pending },
+  })
+  return releaseProgressState(state)
 }

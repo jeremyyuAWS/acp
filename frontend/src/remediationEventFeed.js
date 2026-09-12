@@ -35,7 +35,7 @@ export function remediationEventLine(event) {
     case 'remediate.accepted':
       return `Remediation accepted${Number.isFinite(Number(detail.documents)) ? ` for ${n(detail.documents, 'document')}` : ''}`
     case 'remediate.fix_applied':
-      return `${n(detail.fixes, 'approved fix')} applied to ${file(event)}`
+      return Number(detail.fixes) === 0 ? null : `${n(detail.fixes, 'recorded change')} applied to ${file(event)}`
     case 'remediate.verified':
       return `${n(detail.fixes, 'fix')} independently verified for ${file(event)}`
     case 'remediate.verification_failed':
@@ -43,6 +43,9 @@ export function remediationEventLine(event) {
     case 'remediate.delivered':
       return `Corrected copy of ${file(event)} saved to the source provider`
     case 'remediate.delivery_failed':
+      if (detail.reason === 'delivery_disabled') return `Corrected copy of ${file(event)} saved in ACP · source delivery is disabled`
+      if (detail.delivery_status === 'saved_in_acp') return `Corrected copy of ${file(event)} saved in ACP · source delivery is unavailable`
+      if (detail.reason === 'write_permission_required') return `Corrected copy of ${file(event)} retained in ACP · provider write permission required`
       return `Corrected copy of ${file(event)} retained in ACP; provider delivery failed`
     case 'remediate.review_requested':
       return `Manual review requested for ${file(event)}${detail.criterion ? ` · WCAG ${detail.criterion}` : ''}`
@@ -72,7 +75,8 @@ export function remediationEventLine(event) {
   }
 }
 
-export function eventTone(kind) {
+export function eventTone(kind, detail = {}) {
+  if (kind === 'remediate.delivery_failed' && detail.delivery_status === 'saved_in_acp') return 'neutral'
   if (kind === 'remediate.verification_failed' || kind === 'remediate.delivery_failed') return 'error'
   if (kind === 'remediate.review_requested' || kind === 'remediate.delivery_retry_refused'
       || kind === 'remediate.cancel_requested' || kind === 'remediate.paused'
@@ -87,7 +91,7 @@ export function addRemediationEvent(previous, event, id, limit = MAX_VISIBLE_REM
   const key = id == null ? `${event.kind}:${event.occurred_at || ''}:${line}` : String(id)
   if (previous.some((row) => row.key === key)) return previous
   return [{ key, id: id == null ? null : String(id), line, kind: event.kind,
-            tone: eventTone(event.kind), occurredAt: event.occurred_at || null,
+            tone: eventTone(event.kind, event.detail), occurredAt: event.occurred_at || null,
             documentKey: eventDocumentKey(event),
             // The SERVER classifies material vs lease/heartbeat activity; the browser must not
             // re-derive it from the kind string, or the two ends drift the moment a kind is
@@ -127,4 +131,20 @@ export function documentHistories(rows = []) {
     })
   }
   return byDocument
+}
+
+// Group the bounded recent history, retaining actionable exceptions ahead of routine milestones.
+export function activityGroups(rows = []) {
+  const groups = new Map()
+  for (const row of rows) {
+    const key = row.documentKey || `run:${row.key}`
+    if (!groups.has(key)) groups.set(key, { key, rows: [] })
+    groups.get(key).rows.push(row)
+  }
+  return [...groups.values()].map(group => ({ ...group,
+    lead: group.rows.find((row, index) => (row.tone === 'error' || row.tone === 'attention')
+      && !(row.kind === 'remediate.delivery_failed'
+        && group.rows.slice(0, index).some(newer => newer.kind === 'remediate.delivered')))
+      || group.rows.find(row => row.tone === 'success') || group.rows[0],
+  }))
 }

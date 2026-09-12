@@ -1650,7 +1650,11 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
     blob_url = _blob.upload_remediated(owner, scan_id, filename, fixed_bytes, mimetype)
 
     web_url = None
+    delivery_status = "saved_in_acp"
+    delivery_reason = "source_delivery_unavailable"
     if source == "drive" and core.store.get_drive_mirror_enabled():
+        delivery_status = "failed"
+        delivery_reason = "provider_error"
         _phase(job, "writing the corrected copy to Drive")
         import io
         from googleapiclient.http import MediaIoBaseUpload
@@ -1707,6 +1711,7 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
                 core.store.log_decision("system", "remediate.stamp_not_persisted",
                                         scan_id=scan_id, file=filename, detail=_detail[:200])
         except HttpError as e:
+            delivery_reason = "write_permission_required" if getattr(e, "resp", None) is not None and e.resp.status == 403 else "provider_error"
             # A 403 here means the user's Drive grant lacks write access (drive.file) --
             # no longer fatal now that Blob has the durable copy; log and move on.
             reason = ("Drive write denied (403) — the signed-in user hasn't granted write "
@@ -1723,6 +1728,7 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
             core.store.log_decision("system", "remediate.drive_mirror_failed", scan_id=scan_id,
                                     file=filename, detail=f"{type(e).__name__}: {e}"[:200])
     elif source == "drive":
+        delivery_reason = "delivery_disabled"
         # The third silence: with the mirror switched off nothing was written and nothing was
         # said, so "no mirror line" could also mean "the operator turned it off". Say it.
         print(f"[remediate] drive mirror: {filename} skipped — disabled "
@@ -1743,7 +1749,9 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
     # class — and the snapshot counts it as pending. Saying `delivered` for it would make a
     # lost corrected copy invisible, which is the whole reason the two are counted apart.
     _rem_event(scan_id, "remediate.delivered" if web_url else "remediate.delivery_failed",
-               job, filename, destination="provider" if web_url else "acp_only")
+               job, filename, destination="provider" if web_url else "acp_only",
+               delivery_status="delivered" if web_url else delivery_status,
+               reason=None if web_url else delivery_reason)
     # G4: the Remediate span now carries what the fix pass DID — how many fixes applied vs
     # skipped/deferred — not just where the copy was written. `applied` and `rem_skipped` are
     # lists of prose messages; only their counts reach the trace (lf.remediate_span is PHI-safe).

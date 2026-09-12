@@ -8,3 +8,11 @@
 .remops-bottom .remops-activity, .remops-bottom .remops-exceptions { overflow-wrap:anywhere; }
 .remops-bottom-empty .remops-activity { border-right:0; border-bottom:1px solid var(--line); }
 @media(max-width:760px) { .remops-bottom { grid-template-columns:minmax(0,1fr); } }
+
+/* Outcome colors and short arrival motion distinguish the activity milestones. */
+.remops-activity h3{font-size:17px}.remops-activity>ol{display:grid;gap:10px}.remops-activity>ol>li{--activity-accent:var(--info-fg);display:block;padding:12px;border:1px solid var(--line);border-left:4px solid var(--activity-accent);border-radius:10px;background:color-mix(in srgb,var(--activity-accent) 5%,var(--surface));font-size:15px;line-height:1.55;animation:remops-event-in .35s ease both}
+.remops-activity>ol>li.remops-activity-success{--activity-accent:var(--success-fg)}.remops-activity>ol>li.remops-activity-attention{--activity-accent:var(--warn-fg,#956500)}.remops-activity>ol>li.remops-activity-error{--activity-accent:var(--error-fg)}
+.remops-activity-event{display:grid;grid-template-columns:105px 26px minmax(0,1fr);align-items:start;gap:10px}.remops-activity time{font-size:12px;white-space:nowrap}.remops-activity-event>span:first-of-type{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;color:var(--activity-accent);background:color-mix(in srgb,var(--activity-accent) 12%,var(--surface));font-size:18px;font-weight:750}
+.remops-activity details{margin:8px 0 0 141px}.remops-activity summary{font-size:13px;color:var(--muted);cursor:pointer}.remops-activity details ul{padding-left:16px;list-style:disc}.remops-activity details li{display:list-item;font-size:14px;padding:4px 0;animation:none}.remops-activity p{font-size:14px;line-height:1.6}
+@media(max-width:760px){.remops-activity-event{grid-template-columns:26px minmax(0,1fr);gap:6px 10px}.remops-activity-event time{grid-column:2}.remops-activity-event>span:first-of-type{grid-column:1;grid-row:1 / span 2}.remops-activity-event>span:last-of-type{grid-column:2}.remops-activity details{margin-left:36px}}
+@media(prefers-reduced-motion:reduce){.remops-activity>ol>li{animation:none}}

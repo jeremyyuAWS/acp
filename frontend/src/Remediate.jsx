@@ -1230,7 +1230,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           onClick: () => setWorkspaceRequest({ mode: 'review' }) }
     : verifyState === 'running' ? { label: 'Revalidating…', disabled: true }
     : (verifyState === 'complete' || revalidated.length > 0)
-      ? { label: 'Publish certified copies', onClick: () => onNavigate?.('publish') }
+      ? { label: 'Open Release', onClick: () => onNavigate?.('publish') }
     : null
 
   // Documents list (§5): triage + plan merged — one row per doc. Not-yet-fixed first, then
@@ -1892,11 +1892,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         readOnly={readOnly}
         runDetailsOpen={runDetailsOpen}
         onOpenRunDetails={() => { setRunDetailsOpen((v) => !v); setWorkspaceRequest({ mode: 'live' }) }} />
-      <section id="accepted-run-details" hidden={!runDetailsOpen} aria-label="Run details">
-        {runDetailsOpen && <AcceptedRemediationPlanSummary
+      {planAccepted && <details className="panel" aria-label="Saved automation settings">
+        <summary>Saved automation plan · repairs and verification continue automatically</summary>
+        <AcceptedRemediationPlanSummary
           policy={acceptedPlan?.scanId === runId && acceptedPlan?.batchId === acceptedBatchId ? acceptedPlan.policy : null}
           loading={acceptedPlan?.loading === true}
-          authorization={acceptedAuthorization} />}
+          authorization={acceptedAuthorization} />
+      </details>}
+      <section id="accepted-run-details" hidden={!runDetailsOpen} aria-label="Run details">
         <RemediationAutoRelease statusOnly onStatus={setAutomaticReleaseState} scanId={runId} files={impactScope} readOnly={readOnly} />
         {runDetailsOpen && <details><summary>Additional run information</summary>
           <RemediationRunDetails sections={runDetailSections} open />
@@ -1904,6 +1907,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         </details>}
       </section>
       <RemediationWorkspaceTabs
+        assessmentReady={!readOnly && !assessRunning && files.length > 0 && !!assessedAt}
+        assessmentIdentity={runId && assessedAt ? `${runId}:${assessedAt}` : runId}
         planAccepted={planAccepted}
         reviewOptional={acceptedAuthorization?.allow_remaining_issues === true && ['active', 'waiting', 'publishing', 'blocked', 'completed'].includes(acceptedAuthorization?.status)}
         runId={runId}

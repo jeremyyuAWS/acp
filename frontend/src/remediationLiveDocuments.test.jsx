@@ -2,10 +2,10 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import RemediationLiveDocuments from './RemediationLiveDocuments.jsx'
-import { getFileRemediationDiffs, getScanRemediationDiffs, getFindingDispositions, listHitlQueue } from './api.js'
-vi.mock('./api.js', () => ({ getFileRemediationDiffs: vi.fn(), getScanRemediationDiffs: vi.fn(), getFindingDispositions: vi.fn(), listHitlQueue: vi.fn() }))
+import { getFileRemediationDiffs, getScanRemediationDiffs, getFindingDispositions, listHitlQueue, getReleaseStatus, getSourceStatus } from './api.js'
+vi.mock('./api.js', () => ({ getFileRemediationDiffs: vi.fn(), getScanRemediationDiffs: vi.fn(), getFindingDispositions: vi.fn(), listHitlQueue: vi.fn(), getReleaseStatus: vi.fn(), getSourceStatus: vi.fn() }))
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
-afterEach(async () => { await unmountAll(); vi.clearAllMocks(); vi.useRealTimers() })
+afterEach(async () => { await unmountAll(); vi.clearAllMocks(); getReleaseStatus.mockReset(); getSourceStatus.mockReset(); vi.useRealTimers() })
 const files = ['A.docx', 'B.docx'].map(file => ({ file, name: file, status: 'analysed', issues: [{ wcag: 'SC_1_1_1', severity: 'SERIOUS' }] }))
 const fix = { file: 'A.docx', rule_id: 'SC_1_1_1', before: 'Missing alt text', after: 'A mountain lake', page: 2 }
 const props = { scanId: 'run', files, cap: { docx: { '1.1.1': 'assisted' } }, assessment: { docx: { '1.1.1': 'auto' } }, fixes: [fix], fixTotal: 9 }
@@ -100,7 +100,7 @@ it('moves only confirmed finding categories and keeps totals', async () => {
   expect(container.querySelector('.live-document-table').parentElement.className).toBe('document-findings-scroll')
   expect(container.querySelectorAll('.live-document-table .findings-criteria-heading br')).toHaveLength(1)
   expect(container.querySelectorAll('.live-document-table .findings-total-heading br')).toHaveLength(1)
-  expect(container.querySelector('.live-document-categories').textContent).toContain('AI 1')
+  expect(container.querySelector('.live-document-categories').textContent).toContain('Remaining 2')
   expect(container.querySelector('.live-document-changed')).toBeNull()
   getFindingDispositions.mockResolvedValue({...ledger,items:ledger.items.map((r,i)=>i? r:{...r,disposition:'approved_pending_verification'})})
   listHitlQueue.mockResolvedValue([{id:'q0',file:'A.docx',applied:true,proposals:[{model:'real',model_call_id:'call'}]}])
@@ -143,4 +143,66 @@ it('distinguishes unique WCAG criteria from individual findings without multiply
   expect(table.querySelector('.findings-criteria-heading br')).not.toBeNull()
   expect(table.querySelector('.findings-total-heading br')).not.toBeNull()
   expect(table.querySelector('.findings-criteria-heading').nextElementSibling).toBe(table.querySelector('.findings-total-heading'))
+})
+
+it('filters documents with the shared recorded progress counts without conflating verification and release', async () => {
+  vi.useFakeTimers()
+  getFindingDispositions.mockResolvedValue({available:true,batch_id:'batch',items:files.map((f,i)=>({finding_id:`f${i}`,file:f.file,rule_id:'1.1.1',disposition:i ? 'awaiting_review' : 'resolved_verified'}))})
+  listHitlQueue.mockResolvedValue([])
+  getScanRemediationDiffs.mockResolvedValue({items:[],total:0})
+  const {container}=await mount({snapshot:{batch_id:'batch'},connected:true})
+  await act(async()=>vi.advanceTimersByTime(400))
+  expect(container.querySelector('.progress-verified strong').textContent).toBe('1')
+  expect(container.querySelector('.progress-ready strong').textContent).toBe('0')
+  await act(async()=>container.querySelector('.progress-verified').click())
+  expect(container.querySelectorAll('.live-document-table tbody tr')).toHaveLength(1)
+  expect(container.querySelector('.live-document-table tbody th').textContent).toBe(files[0].file)
+  await act(async()=>container.querySelector('.remediation-progress-summary-heading button').click())
+  expect(container.querySelectorAll('.live-document-table tbody tr')).toHaveLength(2)
+})
+
+it('filters assessment fallback by supplied progress and clears filters when assessment changes', async () => {
+  const progressDocuments=[{file:'A.docx',progressState:'ready'},{file:'B.docx',progressState:'attention'}]
+  const {root,container}=await mount({progressDocuments})
+  await act(async()=>container.querySelector('.progress-ready').click())
+  expect(container.querySelectorAll('tbody tr')).toHaveLength(1)
+  expect(container.querySelector('tbody').textContent).toContain('A.docx')
+  expect(container.querySelector('tbody').textContent).not.toContain('B.docx')
+  await act(async()=>root.render(createElement(RemediationLiveDocuments,{...props,scanId:'new',progressDocuments})))
+  expect(container.querySelectorAll('tbody tr')).toHaveLength(2)
+})
+
+it('overlays recorded Release readiness and current delivery receipt onto live findings',async()=>{
+  vi.useFakeTimers()
+  const corrected=files.map(file=>({...file,compliant:true,remediated_at:'2026-09-11T12:00:00Z',corrected_sha256:'current'}))
+  getFindingDispositions.mockResolvedValue({available:true,batch_id:'batch',items:files.map((file,i)=>({finding_id:`f${i}`,file:file.file,rule_id:'1.1.1',disposition:'resolved_verified'}))})
+  listHitlQueue.mockResolvedValue([])
+  getScanRemediationDiffs.mockResolvedValue({items:[],total:0})
+  getSourceStatus.mockResolvedValue({files:[]})
+  getReleaseStatus.mockResolvedValue({documents:[{file:'A.docx',status:'published',artifact_digest:'sha256:current'}]})
+  const {container}=await mount({files:corrected,snapshot:{batch_id:'batch'},connected:true})
+  await act(async()=>vi.advanceTimersByTime(400))
+  expect(container.querySelector('.progress-published strong').textContent).toBe('1')
+  expect(container.querySelector('.progress-ready strong').textContent).toBe('1')
+  expect(container.querySelector('.progress-processing strong').textContent).toBe('0')
+})
+
+it('reuses source freshness for thirty seconds while refreshing new release receipts',async()=>{
+  vi.useFakeTimers()
+  getFindingDispositions.mockResolvedValue({available:true,batch_id:'batch',items:files.map((file,i)=>({finding_id:`f${i}`,file:file.file,rule_id:'1.1.1',disposition:'resolved_verified'}))})
+  listHitlQueue.mockResolvedValue([])
+  getScanRemediationDiffs.mockResolvedValue({items:[],total:0})
+  getSourceStatus.mockResolvedValue({files:[]})
+  getReleaseStatus.mockResolvedValue({documents:[]})
+  const snapshot={batch_id:'batch'}
+  const {root}=await mount({snapshot,connected:true})
+  await act(async()=>vi.advanceTimersByTime(400))
+  await act(async()=>root.render(createElement(RemediationLiveDocuments,{...props,snapshot,connected:true,refreshKey:1})))
+  await act(async()=>vi.advanceTimersByTime(400))
+  expect(getSourceStatus).toHaveBeenCalledTimes(1)
+  expect(getReleaseStatus).toHaveBeenCalledTimes(2)
+  await act(async()=>vi.advanceTimersByTime(30001))
+  await act(async()=>root.render(createElement(RemediationLiveDocuments,{...props,snapshot,connected:true,refreshKey:2})))
+  await act(async()=>vi.advanceTimersByTime(400))
+  expect(getSourceStatus).toHaveBeenCalledTimes(2)
 })
