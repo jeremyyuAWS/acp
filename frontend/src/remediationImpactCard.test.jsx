@@ -19,6 +19,11 @@ async function mount(props = {}) { const { container, root } = createTestRoot();
 const button = (container, label) => [...container.querySelectorAll('button')].find(node => node.textContent === label)
 beforeEach(() => { vi.clearAllMocks(); getRemediationImpact.mockImplementation(async (_id, policy) => result(policy || undefined)); saveRemediationImpactPolicy.mockResolvedValue({}) })
 afterEach(unmountAll)
+const managedChoices = () => getRemediationImpact.mockImplementation(async (_id, policy) => {
+  const chosen = policy || {rule_based:2,ai:1,ai_budget_usd:'25.00'}
+  const resolved = chosen.cloud_input_strategy === 'automatic' ? {...chosen, ai_budget_usd:'25.00', document_wide_ai:true} : chosen
+  return {...result(resolved),capabilities:{...result().capabilities,ai_budget:true}}
+})
 describe('RemediationImpactCard', () => {
   it('passes every findings lane to the assessment and opens blocked details', async () => {
     const data = result()
@@ -116,7 +121,7 @@ describe('RemediationImpactCard', () => {
   it('previews without execution and separates run, reset and future defaults', async () => {
     const onRun = vi.fn(); const { container } = await mount({ onRun })
     await act(async () => button(container, 'Review first').click())
-    expect(getRemediationImpact).toHaveBeenLastCalledWith('run-1', { rule_based: 0, ai: 1 }, undefined)
+    expect(getRemediationImpact.mock.calls.at(-1)[1]).toMatchObject({rule_based:0,ai:1})
     expect(onRun).not.toHaveBeenCalled()
     await act(async () => button(container, 'Eligible fixes').click())
     await act(async () => button(container, 'Save as default for future runs').click())
@@ -263,26 +268,27 @@ describe('RemediationImpactCard', () => {
     expect(container.textContent).toContain('7 unresolved findings across 3 files')
   })
   it('previews guided choices without starting a run or changing AI permission implicitly', async () => {
+    managedChoices()
     const onRun = vi.fn()
     const { container } = await mount({ onRun })
     const choose = async label => act(async () => [...container.querySelectorAll('.remediation-plan-choices label')].find(node => node.textContent.includes(label)).querySelector('input').click())
     await choose('Review every change')
-    expect(getRemediationImpact).toHaveBeenLastCalledWith('run-1', { rule_based: 0, ai: 1 }, undefined)
-    await choose('Rules only')
+    expect(getRemediationImpact.mock.calls.at(-1)[1]).toMatchObject({rule_based:0,ai:1})
+    await choose('Local models')
     await choose('Apply rule-based fixes automatically')
-    expect(getRemediationImpact).toHaveBeenLastCalledWith('run-1', { rule_based: 2, ai: 0 }, undefined)
+    expect(getRemediationImpact.mock.calls.at(-1)[1]).toMatchObject({ rule_based: 2, ai: 1, ai_zone:'local' })
     expect(container.textContent).not.toContain('3. AI providers & budget')
     expect(onRun).not.toHaveBeenCalled()
     await act(async () => button(container, 'Approve plan and start').click())
-    expect(onRun).toHaveBeenCalledWith({ rule_based: 2, ai: 0 }, expect.anything())
+    expect(onRun.mock.calls[0][0]).toMatchObject({rule_based:2,ai:1,ai_zone:'local'})
   })
-  it('keeps budget enforcement limits visible while hiding provider detail', async () => {
+  it('removes spending and provider questions from the plan', async () => {
     getRemediationImpact.mockImplementation(async () => ({ ...result(), providers: { text: { provider: 'anthropic', model: 'configured-model', zone: 'cloud' } } }))
     const { container } = await mount()
     const choices = container.querySelector('.remediation-plan-choices')
     expect(choices.textContent).not.toContain('configured-model')
-    expect(choices.textContent).toContain('Spending limits are not available on this server')
-    expect(choices.querySelector('input[type="number"]').disabled).toBe(true)
+    expect(choices.textContent).not.toContain('AI spending limit')
+    expect(choices.querySelector('input[type="number"]')).toBeNull()
 
   })
   it('keeps assessment totals fixed beside live tiles and opens the matching right drawer', async () => {
@@ -371,33 +377,16 @@ describe('RemediationImpactCard', () => {
   })
 })
 
-it('submits the spending cap and allows correcting an invalid budget', async () => {
-  getRemediationImpact.mockImplementation(async (_id, policy) => { const r = result(policy || undefined); r.capabilities.ai_budget = true; return r })
-  const onRun = vi.fn()
-  const {container} = await mount({onRun})
-  const edit = async value => act(async () => {
-    const input = container.querySelector('input[type=number]')
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value)
-    input.dispatchEvent(new Event('input', {bubbles:true}))
-  })
-  await edit('')
-  expect(button(container, 'Approve plan and start').disabled).toBe(true)
-  expect(container.querySelector('input[type=number]').disabled).toBe(false)
-  await edit('2.50')
-  expect(getRemediationImpact).toHaveBeenLastCalledWith('run-1', {rule_based:2, ai:1, ai_budget_usd:'2.50'}, undefined)
-  await act(async () => button(container, 'Approve plan and start').click())
-  expect(onRun).toHaveBeenCalledWith({rule_based:2, ai:1, ai_budget_usd:'2.50'}, expect.anything())
-})
 
-it('labels recorded spending separately from the selected plan', async () => {
+it('removes spending numbers while preserving an operational pause notice', async () => {
   getRemediationImpact.mockImplementation(async () => ({...result(), ai_spending: {
     cap_units: 2500000, spent_units: 120, held_units: 200000, available_units: 2299880, blocked: true,
   }}))
   const {container} = await mount()
   const spending = container.querySelector('[aria-label="AI spending for the latest remediation run"]')
-  expect(spending.textContent).toContain('Spent: $0.00012')
-  expect(spending.textContent).toContain('Limit: $2.50')
-  expect(spending.textContent).toContain('AI is paused')
+  expect(spending).toBeNull()
+  expect(container.textContent).not.toContain('Limit: $2.50')
+  expect(container.textContent).toContain('Some AI requests are paused')
   expect(container.textContent).toContain('7 unresolved findings across 3 files')
 })
 
@@ -407,93 +396,16 @@ const generationCatalog = () => ({ version: 1, supported: true, max_steps: 3,
   default_steps: ['primary', 'fallback_1', 'fallback_2'].map((step_id, position) => ({ step_id, position, provider: 'fixture', model: `model-${position}`, enabled: true, capabilities: ['text'] })),
   models: [0, 1, 2].map(position => ({ provider: 'fixture', model: `model-${position}`, capabilities: ['text'], allowed: true, available: true })),
 })
-it('previews the exact selected chain and only submits it after explicit plan approval', async () => {
-  const options = generationCatalog(), onRun = vi.fn()
-  getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || { rule_based: 2, ai: 1, ai_budget_usd: '10.00' }), capabilities: { execute: true, ai_budget: true, generation_chain: options } }))
-  const { container } = await mount({ onRun })
-  expect(onRun).not.toHaveBeenCalled()
-  expect(getRemediationImpact.mock.calls[0][1]).toBeNull()
-  await act(async () => container.querySelector('.remediation-generation-chain input').click())
-  await act(async () => container.querySelector('.remediation-generation-chain input').click())
-  const selected = getRemediationImpact.mock.calls.at(-1)[1]
-  expect(selected.generation_chain.steps).toEqual(options.default_steps)
-  expect(onRun).not.toHaveBeenCalled()
-  expect(container.querySelector('.remediation-impact__startbar').textContent).toContain('Up to 3 models')
-  await act(async () => button(container, 'Approve plan and start').click())
-  expect(onRun).toHaveBeenCalledWith(selected, expect.objectContaining({ policy: selected }))
-  expect(saveRemediationImpactPolicy).not.toHaveBeenCalled()
-})
-it('blocks stale third-model permission and never enables it on a different legacy run', async () => {
-  const options = generationCatalog(), onRun = vi.fn()
-  let revoked = false
-  getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || { rule_based: 2, ai: 1, ai_budget_usd: '10.00' }), capabilities: { execute: true, ai_budget: true, generation_chain: { ...options, models: options.models.map(m => ({ ...m, allowed: !revoked })) } } }))
-  const { container, root } = await mount({ onRun })
-  await act(async () => container.querySelector('.remediation-generation-chain input').click())
-  revoked = true
-  await act(async () => root.render(createElement(RemediationImpactCard, { runId: 'run-1', onRun, refreshKey: 1 })))
-  expect(button(container, 'Approve plan and start').disabled).toBe(true)
-  expect(container.querySelector('[role=alert]').textContent).toContain('no longer available or permitted')
-  expect(onRun).not.toHaveBeenCalled()
-  await act(async () => root.render(createElement(RemediationImpactCard, { runId: 'run-2', onRun })))
-  expect(getRemediationImpact.mock.calls.at(-1)[1]).toBeNull()
-  expect(container.querySelector('.remediation-generation-chain input').checked).toBe(false)
-})
 
-it('passes the visible advance authorization into start and saved future defaults',async()=>{
-  // The AI reviewer is a precondition for advance authorization: nothing shows an
-  // auto-approved suggestion to a person before it is applied, so the control is gated
-  // on it and the server refuses to save a policy without it.
-  const initial={rule_based:2,ai:1,ai_budget_usd:'1.00',ai_review:{enabled:true}}
-  getRemediationImpact.mockImplementation(async(_id,policy)=>({...result(policy || initial),capabilities:{...result().capabilities,ai_budget:true,ai_standing_approval:{supported:true}}}))
-  const onRun=vi.fn();const {container}=await mount({onRun})
-  const toggle=container.querySelector('.remediation-auto-approval input')
-  expect(toggle.checked).toBe(false)
-  expect(toggle.closest('details')).toBeNull()
-  expect(getRemediationImpact.mock.calls.at(-1)[1]).toEqual({...initial,auto_approve_ai:true})
-  expect(onRun).not.toHaveBeenCalled()
-  await act(async()=>button(container,'Approve plan and start').click())
-  expect(onRun).toHaveBeenCalledWith({...initial,auto_approve_ai:true},expect.anything())
-  const save=[...container.querySelectorAll('button')].find(el=>/Save.*future|Save.*default/i.test(el.textContent))
-  expect(save).toBeTruthy()
-  await act(async()=>save.click())
-  expect(saveRemediationImpactPolicy.mock.calls[0][1].auto_approve_ai).toBe(true)
-})
 
-it('respects electing to review before applying across a preview refresh',async()=>{
-  const initial={rule_based:2,ai:1,ai_budget_usd:'1.00',ai_review:{enabled:true}}
-  getRemediationImpact.mockImplementation(async(_id,policy)=>({...result(policy || initial),capabilities:{...result().capabilities,ai_budget:true,ai_standing_approval:{supported:true}}}))
-  const onRun=vi.fn();const {container,root}=await mount({onRun})
-  await act(async()=>container.querySelector('.remediation-auto-approval input').click())
-  expect(getRemediationImpact.mock.calls.at(-1)[1].auto_approve_ai).toBe(false)
-  await act(async()=>root.render(createElement(RemediationImpactCard,{runId:'run-1',onRun,refreshKey:1})))
-  expect(container.querySelector('.remediation-auto-approval input').checked).toBe(true)
-  await act(async()=>button(container,'Approve plan and start').click())
-  expect(onRun.mock.calls[0][0].auto_approve_ai).toBe(false)
-})
-it.each([{auto_approve_ai:false},{ai_budget_usd:'0.00'},{ai_review:{enabled:false}}])('retains an ineligible or explicitly reviewed plan: %j',async override=>{
-  const initial={rule_based:2,ai:1,ai_budget_usd:'1.00',ai_review:{enabled:true},...override}
-  getRemediationImpact.mockImplementation(async(_id,policy)=>({...result(policy || initial),capabilities:{...result().capabilities,ai_budget:true,ai_standing_approval:{supported:true}}}))
-  const {container}=await mount()
-  expect(container.querySelector('.remediation-auto-approval input').checked).toBe(true)
-  expect(getRemediationImpact.mock.calls.every(([,policy])=>policy?.auto_approve_ai !== true)).toBe(true)
-})
 
-it('returns to human approval when the required AI reviewer is turned off',async()=>{
-  const initial={rule_based:2,ai:1,ai_budget_usd:'1.00',ai_review:{enabled:true}}
-  getRemediationImpact.mockImplementation(async(_id,policy)=>({...result(policy || initial),capabilities:{...result().capabilities,ai_budget:true,ai_standing_approval:{supported:true},ai_review:{review_supported:true}}}))
-  const {container}=await mount()
-  expect(getRemediationImpact.mock.calls.at(-1)[1].auto_approve_ai).toBe(true)
-  await act(async()=>container.querySelector('.remediation-review-policy input[type=checkbox]').click())
-  expect(getRemediationImpact.mock.calls.at(-1)[1]).toMatchObject({auto_approve_ai:false,ai_review:{enabled:false}})
-  expect(container.querySelector('.remediation-auto-approval input').checked).toBe(true)
-})
 
 it('passes a local-only plan to execution with cloud review and fallbacks removed', async () => {
   const initial = { rule_based: 2, ai: 1, ai_budget_usd: '10.00', ai_review: { enabled: true } }
   getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || initial), capabilities: { ...result().capabilities, ai_budget: true } }))
   const onRun = vi.fn()
   const { container } = await mount({ onRun })
-  const choice = [...container.querySelectorAll('label')].find(node => node.textContent.includes('Rules + Ollama'))
+  const choice = [...container.querySelectorAll('label')].find(node => node.textContent.includes('Local models'))
   await act(async () => choice.querySelector('input').click())
   const expected = { rule_based: 2, ai: 1, ai_zone: 'local', ai_budget_usd: '0.00', ai_review: { enabled: false }, auto_approve_ai: false }
   expect(getRemediationImpact).toHaveBeenLastCalledWith('run-1', expected, undefined)
@@ -502,6 +414,7 @@ it('passes a local-only plan to execution with cloud review and fallbacks remove
 })
 
 it('requires explicit answers even when saved defaults are valid, and invalidates answers for a new scope', async () => {
+    managedChoices()
   const onRun = vi.fn()
   const { container, root } = await mount({ onRun, requireAnswers: true, releaseAnswered: false, scopeFiles: ['A.docx'] })
   const start = () => button(container, 'Approve plan and start')
@@ -511,35 +424,37 @@ it('requires explicit answers even when saved defaults are valid, and invalidate
   const choice = text => [...container.querySelectorAll('label')].find(node => node.textContent.includes(text)).querySelector('input')
   await act(async () => choice('Apply rule-based fixes automatically').click())
   await act(async () => button(container, 'Next').click())
-  await act(async () => choice('Rules only').click())
+  await act(async () => choice('Local models').click())
   await act(async () => button(container, 'Next').click())
   expect(start().disabled).toBe(true)
   await act(async () => root.render(createElement(RemediationImpactCard, { runId: 'run-1', onRun, requireAnswers: true, releaseAnswered: true, scopeFiles: ['A.docx'] })))
   expect(start().disabled).toBe(false)
   await act(async () => start().click())
   expect(onRun).toHaveBeenCalledOnce()
-  expect(onRun.mock.calls[0][0]).toMatchObject({ rule_based: 2, ai: 0 })
+  expect(onRun.mock.calls[0][0]).toMatchObject({ rule_based: 2, ai: 1, ai_zone:'local' })
   await act(async () => root.render(createElement(RemediationImpactCard, { runId: 'run-1', onRun, requireAnswers: true, releaseAnswered: true, scopeFiles: ['C.docx'] })))
   expect(start()).toBeUndefined()
   expect(button(container, 'Next').disabled).toBe(true)
 })
 
 it('starts cloud plans with explicit choices without an extra confirmation or expanded approval permissions', async () => {
+    managedChoices()
   const onRun = vi.fn()
   const { container } = await mount({ onRun, requireAnswers: true })
   const choice = text => [...container.querySelectorAll('label')].find(node => node.textContent.includes(text)).querySelector('input')
   await act(async () => choice('Apply rule-based fixes automatically').click())
   await act(async () => button(container, 'Next').click())
-  await act(async () => choice('Rules + Cloud AI').click())
+  await act(async () => choice('Local + cloud models').click())
   await act(async () => button(container, 'Next').click())
   expect(container.textContent).not.toContain('I confirm the AI providers')
   expect([...container.querySelectorAll('.remediation-plan-choices input[type=checkbox]')].filter(node => !node.closest('[hidden]'))).toHaveLength(0)
   expect(button(container, 'Approve plan and start').disabled).toBe(false)
   await act(async () => button(container, 'Approve plan and start').click())
-  expect(onRun.mock.calls[0][0].auto_approve_ai).toBe(false)
+  expect(onRun.mock.calls[0][0]).toMatchObject({auto_approve_ai:false,cloud_input_strategy:'automatic',document_wide_ai:true,ai_budget_usd:'25.00'})
 })
 
 it('shows three bottom dots, prevents skipping, and preserves answers through Back and dot navigation', async () => {
+    managedChoices()
   const { container } = await mount({ requireAnswers: true })
   const dots = () => [...container.querySelectorAll('.plan-wizard-dots button')]
   const choice = text => [...container.querySelectorAll('label')].find(n => n.textContent.includes(text)).querySelector('input')
@@ -551,12 +466,12 @@ it('shows three bottom dots, prevents skipping, and preserves answers through Ba
   expect(dots()[1].getAttribute('aria-current')).toBe('step')
   expect(button(container, 'Next').disabled).toBe(true)
   expect(choice('Review every change').closest('fieldset').hidden).toBe(true)
-  await act(async () => choice('Rules only').click())
+  await act(async () => choice('Local models').click())
   await act(async () => button(container, 'Next').click())
   expect(dots()[2].getAttribute('aria-current')).toBe('step')
   expect(container.querySelector('.plan-step-heading').textContent).toContain('Publishing')
   await act(async () => button(container, 'Back').click())
-  expect(choice('Rules only').checked).toBe(true)
+  expect(choice('Local models').checked).toBe(true)
   await act(async () => dots()[0].click())
   expect(choice('Review every change').checked).toBe(true)
   await act(async () => dots()[2].click())
@@ -576,7 +491,7 @@ it.each(['any', 'local'])('automatic release previews and submits AI application
 })
 
 
-it.each(['Rules only', 'Rules + Ollama · Local only'])('clears document-wide consent when choosing %s', async label => {
+it.each(['Local models'])('clears document-wide consent when choosing %s', async label => {
   const initial = { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '1.00', document_wide_ai: true, document_wide_input_mode: 'native_pdf', document_wide_model_profile: 'native-pdf-quality.v1' }
   getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || initial), capabilities: { ...result().capabilities, ai_budget: true } }))
   const { container } = await mount()
@@ -584,38 +499,5 @@ it.each(['Rules only', 'Rules + Ollama · Local only'])('clears document-wide co
   await act(async () => option.querySelector('input').click())
   expect(getRemediationImpact.mock.calls.at(-1)[1].document_wide_ai).toBe(false)
   expect(getRemediationImpact.mock.calls.at(-1)[1]).not.toHaveProperty('document_wide_input_mode')
-  expect(getRemediationImpact.mock.calls.at(-1)[1]).not.toHaveProperty('document_wide_model_profile')
-})
-
-it('document review previews one fallback while preserving other accepted choices', async () => {
-  const initial = { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '1.00', auto_approve_ai: true,
-    generation_chain: { steps: [{ step_id: 'primary', provider: 'anthropic', model: 'first' }, { step_id: 'fallback_1', provider: 'anthropic', model: 'second' }, { step_id: 'fallback_2', provider: 'anthropic', model: 'third' }] } }
-  getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || initial), capabilities: { execute: true, ai_budget: true } }))
-  const { container } = await mount()
-  const option = [...container.querySelectorAll('label')].find(n => n.textContent.includes('Review the document together')).querySelector('input')
-  await act(async () => option.click())
-  await vi.waitFor(() => expect(getRemediationImpact.mock.calls.at(-1)[1]).toMatchObject({ document_wide_ai: true, ai_budget_usd: '1.00', auto_approve_ai: true }))
-  expect(getRemediationImpact.mock.calls.at(-1)[1].generation_chain.steps).toHaveLength(2)
-  expect(initial.generation_chain.steps).toHaveLength(3)
-})
-
-it('preserves explicit full-PDF mode in the accepted run policy', async () => {
-  const initial = { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '1.00', document_wide_ai: true }
-  getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || initial), capabilities: { execute: true, ai_budget: true } }))
-  const onRun = vi.fn()
-  const { container } = await mount({ onRun })
-  const native = [...container.querySelectorAll('label')].find(n => n.querySelector('strong')?.textContent === 'Full PDF — advanced preview')
-  await act(async () => native.querySelector('input').click())
-  await vi.waitFor(() => expect(getRemediationImpact.mock.calls.at(-1)[1]).toMatchObject({ document_wide_input_mode: 'native_pdf', ai_zone: 'any' }))
-  await act(async () => button(container, 'Approve plan and start').click())
-  expect(onRun.mock.calls[0][0]).toMatchObject({ document_wide_input_mode: 'native_pdf', document_wide_model_profile: 'native-pdf-quality.v1' })
-})
-
-it.each(['Document context', 'Fix findings individually'])('clears optimized PDF models when choosing %s', async label => {
-  const initial = { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '1.00', document_wide_ai: true, document_wide_input_mode: 'native_pdf', document_wide_model_profile: 'native-pdf-quality.v1' }
-  getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || initial), capabilities: { execute: true, ai_budget: true } }))
-  const { container } = await mount()
-  const option = [...container.querySelectorAll('label')].find(n => n.querySelector('strong')?.textContent === label)
-  await act(async () => option.querySelector('input').click())
   expect(getRemediationImpact.mock.calls.at(-1)[1]).not.toHaveProperty('document_wide_model_profile')
 })

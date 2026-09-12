@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createElement, act } from 'react'
-import RemediationPlanChoices from './RemediationPlanChoices.jsx'
+import { RetiredDetailedRemediationPlanChoices as RemediationPlanChoices } from './RemediationPlanChoices.jsx'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true

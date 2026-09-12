@@ -8,9 +8,10 @@ import Summary from './AcceptedRemediationPlanSummary.jsx'
 const render = props => renderToStaticMarkup(createElement(Summary, props))
 it('formats frozen choices without any editable controls', () => {
   const html = render({ policy: { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '2.00', auto_approve_ai: true, document_wide_ai: true }, authorization: { allow_remaining_issues: true } })
-  expect(html).toContain('Rules + Cloud AI')
+  expect(html).toContain('Local + cloud models')
   expect(html).toContain('PDF field names, tagged image descriptions and eligible tagged-text language marks; Word, Excel and PowerPoint image descriptions')
-  expect(html).toContain('$2.00 USD')
+  expect(html).not.toContain('AI spending limit')
+  expect(html).not.toContain('$2.00 USD')
   expect(html).toContain('Apply supported suggestions automatically')
   expect(html).toContain('Publish automatically after processing')
   expect(html).not.toMatch(/<input|<button|<select/)
@@ -24,7 +25,7 @@ it('does not invent absent accepted choices or use owner defaults', () => {
 })
 it('local plans do not show a cloud spending control', () => {
   const html = render({ policy: { ai: 1, ai_zone: 'local', ai_budget_usd: '0.00', rule_based: 0 }, authorization: { allow_remaining_issues: false } })
-  expect(html).toContain('Ollama · Local only')
+  expect(html).toContain('Local models')
   expect(html).not.toContain('AI spending limit')
   expect(html).toContain('Review in Release before publishing')
 })

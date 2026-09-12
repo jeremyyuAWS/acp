@@ -120,7 +120,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     return () => { cancelled = true }
   }, [runId, policy, refreshKey, reload, scopeKey, epoch, myEmail, estimateKey])
 
-  const basePolicy = policy || (validPolicy(data?.policy) ? data.policy : { rule_based: 0, ai: 0 })
+  const basePolicy = (policy?.cloud_input_strategy === 'automatic' && estimateResponse?.key === estimateKey && validPolicy(data?.policy) ? data.policy : policy) || (validPolicy(data?.policy) ? data.policy : { rule_based: 0, ai: 0 })
   const reviewDefault = data?.capabilities?.ai_review?.review_supported === true
     && basePolicy.ai > 0 && basePolicy.ai_zone !== 'local' && basePolicy.ai_review === undefined
   const selected = {
@@ -159,7 +159,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     human: Number.isFinite(data?.lanes?.review?.findings) && Number.isFinite(data?.lanes?.manual?.findings)
       ? data.lanes.review.findings + data.lanes.manual.findings : undefined,
   })
-  const budgetValid = selected.ai === 0 || selected.ai_zone === 'local' || data?.capabilities?.ai_budget !== true || (selected.ai_budget_usd !== undefined && validBudget(selected))
+  const budgetValid = validBudget(selected)
   const questionsComplete = !requireAnswers || (budgetValid && answers.rule_based && answers.tools && releaseAnswered)
   const change = (key, value) => {
     setAnswers(current => ({ ...current, [key]: true, ...(['ai', 'ai_mode'].includes(key) ? { tools: true } : {}) }))
@@ -186,12 +186,21 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       const next = { ...selected, ai: 1, ai_zone: value, auto_approve_ai: false }
       if (value === 'local') {
         if (Object.hasOwn(next, 'document_wide_ai')) next.document_wide_ai = false
+        delete next.cloud_input_strategy
         delete next.document_wide_input_mode
         delete next.document_wide_model_profile
         next.ai_budget_usd = '0.00'
         delete next.generation_chain
         next.ai_review = { enabled: false }
-      } else delete next.ai_review
+      } else {
+        next.cloud_input_strategy = 'automatic'
+        delete next.ai_budget_usd
+        delete next.document_wide_input_mode
+        delete next.document_wide_model_profile
+        delete next.document_wide_ai
+        delete next.generation_chain
+        delete next.ai_review
+      }
       setPolicy(next); setNotice(''); setFilter(null); setImpactDetails(null)
       return
     }
@@ -245,7 +254,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     finally { setSaving(false) }
   }
 
-  const stepNames = ['Changes', 'Tools', selected.ai > 0 && selected.ai_zone !== 'local' ? 'Spending & publishing' : 'Publishing']
+  const stepNames = ['Changes', 'Models', 'Publishing']
   const startButton = <button type="button" className="remediation-impact__run" disabled={!questionsComplete || readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
     onClick={() => { if (questionsComplete && ready) onRun(selected, data) }}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>
   return <section data-wizard={requireAnswers || undefined} data-step={requireAnswers ? step : undefined} id="remediation-plan" tabIndex={-1} className="remediation-impact" aria-labelledby={titleId} aria-busy={loading}>
@@ -258,7 +267,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       <div className="remediation-impact__start-summary">
         <strong>{ready ? `${number(data.open?.findings)} findings · ${number(data.open?.files)} files` : 'Preview not ready'}</strong>
         <span>{ready ? `${number(data.lanes?.automatic?.findings)} automatic · ${number(data.lanes?.review?.findings)} to approve · ${number(data.lanes?.manual?.findings)} manual · ${number(data.lanes?.blocked?.findings)} blocked` : 'Review the current preview before starting.'}</span>
-        <span>{selected.ai > 0 && selected.ai_zone === 'local' ? `Ollama only · ${selected.auto_approve_ai ? 'Automatic application' : 'Human review'} · No cloud AI charges` : selected.ai > 0 ? `${selected.auto_approve_ai ? 'Auto-approval on · Manual exceptions only' : 'AI drafts need approval'} · Up to ${generationSteps(selected, data?.capabilities?.generation_chain).length || 2} models${data?.capabilities?.ai_budget === true ? ` · AI limit $${selected.ai_budget_usd}` : ' · Spending cap unavailable'}` : 'Rules only · No new AI suggestions'}</span>
+        <span>{selected.ai > 0 && selected.ai_zone === 'local' ? `Ollama only · ${selected.auto_approve_ai ? 'Automatic application' : 'Human review'} · No cloud AI charges` : selected.ai > 0 ? `${selected.auto_approve_ai ? 'Auto-approval on · Manual exceptions only' : 'AI drafts need approval'} · Up to ${generationSteps(selected, data?.capabilities?.generation_chain).length || 2} models` : 'Rules only · No new AI suggestions'}</span>
       </div>
       {!requireAnswers && startButton}
     </div>
@@ -278,7 +287,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     <div hidden={requireAnswers && step !== 2}>
     {releaseOption}
     {requireAnswers && (loading || error || !ready) && <p role="status">{loading ? 'Updating plan…' : error ? `Preview unavailable. ${error}` : 'Plan unavailable. Check your selections.'}</p>}
-    {requireAnswers && !budgetValid && <p role="alert">Enter a spending limit from $0 to $1,000,000.</p>}
+    {requireAnswers && !budgetValid && <p role="alert">AI configuration is unavailable. Check application settings.</p>}
     {!questionsComplete && <p role="status">Answer the changes, tools, and publishing questions to start.</p>}
     {!requireAnswers && <RemediationEstimateDisclosure estimate={estimateResponse?.key === estimateKey ? estimateResponse.value : null}
       aiEnabled={selected.ai > 0 && Number(selected.ai_budget_usd ?? 1) > 0}
@@ -325,12 +334,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       {loading ? 'Calculating the impact of these settings…' : error ? `Preview unavailable. ${error}` : !runId ? 'Select an assessment to preview remediation.' : !ready ? 'The preview could not be reconciled. Counts are unavailable.' : `${number(data.lanes?.automatic?.findings)} findings eligible for automatic application. ${number(data.lanes?.review?.findings)} findings require proposal review.`}
       {notice && <span> {notice}</span>}
     </div>
-    {data?.ai_spending && <section aria-label="AI spending for the latest remediation run">
-      <h3>AI spending · Latest remediation run</h3>
-      <p>{[['Spent', 'spent_units'], ['Reserved for requests', 'held_units'], ['Remaining', 'available_units'], ['Limit', 'cap_units']].map(([label, key]) =>
-        <span key={key}>{label}: {Number.isSafeInteger(data.ai_spending[key]) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(data.ai_spending[key] / 1000000) : 'Unavailable'}{' · '}</span>)}</p>
-      <p>{data.ai_spending.blocked ? 'AI is paused while an uncertain charge or spending overrun is reconciled.' : 'Reservations cover requests that may still be charged. Infrastructure costs are separate.'}</p>
-    </section>}
+    {data?.ai_spending?.blocked && <p role="status">Some AI requests are paused while usage is reconciled. Rule-based fixes can continue.</p>}
     {ready && <details className="remediation-impact__details"><summary>Plan details <span>AI impact, finding routes, and document outlook</span></summary>
       <RemediationWaterfallImpact data={data}
         onInspectAI={rows => setImpactDetails({ key: 'ai', rows, filterToRows: true })}
@@ -442,3 +446,11 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     </footer>}
   </section>
 }
+
+// Kept for restoration in an administrative diagnostics view; not mounted in Remediate.
+export function RetiredRemediationSpending({data}) { return data?.ai_spending ? <section aria-label="AI spending for the latest remediation run">
+      <h3>AI spending · Latest remediation run</h3>
+      <p>{[['Spent', 'spent_units'], ['Reserved for requests', 'held_units'], ['Remaining', 'available_units'], ['Limit', 'cap_units']].map(([label, key]) =>
+        <span key={key}>{label}: {Number.isSafeInteger(data.ai_spending[key]) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(data.ai_spending[key] / 1000000) : 'Unavailable'}{' · '}</span>)}</p>
+      <p>{data.ai_spending.blocked ? 'AI is paused while an uncertain charge or spending overrun is reconciled.' : 'Reservations cover requests that may still be charged. Infrastructure costs are separate.'}</p>
+    </section> : null }

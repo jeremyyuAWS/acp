@@ -60,7 +60,7 @@ export function RetiredRemediationPlanChoices({ policy, providers, disabled, onC
 }
 
 // The previous detailed panel is retained above for restoration, but is no longer mounted.
-export default function RemediationPlanChoices({ step = null, answers, policy, disabled, onChange, generationChainOptions, budgetSupported = false, reviewSupported = false, automaticReviewSupported = false, automaticReviewReason = '', reviewAdministratorFloor = null, reviewEligibleFamilies = [], standingApprovalSupported = false, standingApprovalReason = '' }) {
+export function RetiredDetailedRemediationPlanChoices({ step = null, answers, policy, disabled, onChange, generationChainOptions, budgetSupported = false, reviewSupported = false, automaticReviewSupported = false, automaticReviewReason = '', reviewAdministratorFloor = null, reviewEligibleFamilies = [], standingApprovalSupported = false, standingApprovalReason = '' }) {
   const id = useId()
   const ProviderBox = step === null ? 'div' : 'details'
   const localOnly = policy.ai_zone === 'local'
@@ -216,4 +216,56 @@ export function RetiredRemediationPlanSummary({ policy, budgetSupported = false 
       {policy.ai > 0 && <p className="remediation-waterfall-plan__note">Additional issues AI may help resolve and expected AI spending are not estimated yet.</p>}
     </section>
   )
+}
+
+// Detailed input and spending controls are retained above for restoration.
+export default function RemediationPlanChoices({step = null, answers, policy, disabled, onChange, budgetSupported = false}) {
+  const id = useId()
+  const answered = answers === undefined || !!answers.tools
+  return <div className="remediation-plan-choices">
+    <fieldset hidden={step !== null && step !== 0} disabled={disabled}>
+      <legend>1. Which changes may ACP apply?</legend>
+      <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
+        <div className="remediation-plan-option">
+          <label className={(answers === undefined || !!answers.rule_based) && policy.rule_based === 0 ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-automation`} checked={(answers === undefined || !!answers.rule_based) && policy.rule_based === 0} onChange={() => onChange('rule_based', 0)} />
+            <span><strong>Review every change</strong><span>Approve proposed changes before they are applied.</span></span>
+          </label>
+          <RemediationOptionHelp label="review before applying">You approve every proposed fix before application. AI is a separate choice below.</RemediationOptionHelp>
+        </div>
+        <div className="remediation-plan-option">
+          <label className={(answers === undefined || !!answers.rule_based) && policy.rule_based === 2 ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-automation`} checked={(answers === undefined || !!answers.rule_based) && policy.rule_based === 2} onChange={() => onChange('rule_based', 2)} />
+            <span><strong>Apply rule-based fixes automatically</strong><span>Apply supported fixes, verify the results, and review the rest.</span></span>
+          </label>
+          <RemediationOptionHelp label="apply and verify automatically">ACP applies supported fixes using set rules and checks the result. Your AI approval choice below applies to eligible suggestions. Issues that need a person’s judgment go to review.</RemediationOptionHelp>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset hidden={step !== null && step !== 1} disabled={disabled}>
+      <legend>2. Which models may ACP use?</legend>
+      <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
+        <div className="remediation-plan-option">
+          <label className={answered && policy.ai > 0 && policy.ai_zone === 'local' ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-models`} disabled={!budgetSupported}
+              checked={answered && policy.ai > 0 && policy.ai_zone === 'local'}
+              onChange={() => onChange('ai_mode', 'local')} />
+            <span><strong>Local models</strong><span>Use rules and self-hosted AI. Document content stays out of cloud AI.</span></span>
+          </label>
+          <RemediationOptionHelp label="local models">AI uses the configured self-hosted service. Cloud models and cloud fallbacks are off. Unsupported work remains in the follow-up checklist.</RemediationOptionHelp>
+        </div>
+        <div className="remediation-plan-option">
+          <label className={answered && policy.ai > 0 && policy.ai_zone !== 'local' ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-models`} disabled={!budgetSupported}
+              checked={answered && policy.ai > 0 && policy.ai_zone !== 'local'}
+              onChange={() => onChange('ai_mode', 'any')} />
+            <span><strong>Local + cloud models</strong><span>Let ACP use cloud AI when it helps produce a better fix.</span></span>
+          </label>
+          <RemediationOptionHelp label="local and cloud models">ACP selects the document context, supported images, or full supported file needed for the task, and uses configured models and fallbacks. Your application and verification choices still apply.</RemediationOptionHelp>
+        </div>
+      </div>
+      <p>ACP chooses how to review each document. Cloud AI may receive document content, images, or the full supported file. Selecting models previews the plan; starting remediation begins processing.</p>
+    </fieldset>
+  </div>
 }
