@@ -39,7 +39,7 @@ export default function ReleaseDeliveryCard({ ready = [], scopeCount = 0, publis
     {(announcement || deliveringCount > 0) && <p role="status">{announcement || 'Delivery continues in the background. The receipt appears here when confirmed.'}</p>}
     {error && <div role="alert"><strong>{error.summary || 'Delivery needs attention'}</strong>
       <p>{error.details}</p>
-      {error.retry && <button type="button" className="ghost" disabled={unavailable} onClick={error.retry}>Refresh or retry delivery</button>}
+      {error.retry && <button type="button" className="ghost" disabled={unavailable} onClick={error.retry}>{error.retryLabel || 'Refresh delivery status'}</button>}
     </div>}
     {folders.filter(folder => folder.url).map(folder => <p key={folder.id || folder.url}>
       <a href={folder.url} target="_blank" rel="noopener noreferrer">Open published folder ↗</a>

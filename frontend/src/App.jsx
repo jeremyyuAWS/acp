@@ -83,7 +83,8 @@ import ConfirmDialog from './ConfirmDialog.jsx'
 import { AdminInsights } from './AdminInsights.jsx'
 import AcrWorkspace from './AcrWorkspace.jsx'
 import AccessRestricted from './AccessRestricted.jsx'
-import { visibleTabs, isVisible, canOperate, firstPermittedTab, canOpenSettings, hasCapability, mergeBootstrapIdentity } from './access.js'
+import { visibleTabs, isVisible, canOperate, firstPermittedTab, canOpenSettings, mergeBootstrapIdentity } from './access.js'
+import { deliveryAccess } from './deliveryAccess.js'
 import { timezoneBadge } from './userTimezone.js'
 import { handleWorkflowTabKeyDown } from './workflowTabs.js'
 import { isHistoricalScan, narrowScanDefaultContext } from './defaultScan.js'
@@ -2460,7 +2461,7 @@ export default function App() {
           </>
         ) : (overviewPreview ? <AssessPreviewCard preview={overviewPreview} /> : placeholder))}
 
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} runStream={remRun} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} delivery={isVisible(access, 'publish') ? <Publish embedded run={run} files={files} cap={cap} assessment={assessment} certified={certifiedDocs} readOnly={isTimeTravel || !canOperate(access, 'publish') || !hasCapability(access, 'release.publish')} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} onOpenDetails={() => setView('publish')} /> : null} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} runStream={remRun} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} delivery={deliveryAccess(access, isTimeTravel).visible ? <Publish embedded run={run} files={files} cap={cap} assessment={assessment} certified={certifiedDocs} readOnly={deliveryAccess(access, isTimeTravel).readOnly} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} onOpenDetails={() => setView('publish')} /> : null} /> : placeholder)}
 
         {view === 'publish' && (run ? <Publish run={run} files={files} cap={cap} assessment={assessment} certified={certifiedDocs} readOnly={isTimeTravel} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
