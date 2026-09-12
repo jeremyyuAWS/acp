@@ -544,11 +544,11 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
             "different questions and collapsing them would overstate the coverage.", muted))
 
     el.append(Spacer(1, 4))
-    el.append(Paragraph(
+    el.append(KeepTogether([Paragraph(
         "<b>A score of 100 therefore means: no blocking findings among the criteria ACP evaluated "
         "for that document's format.</b> It is a record of what was checked and what was fixed, not "
         "a statement that the document conforms to WCAG 2.1 AA, and it must not be represented as "
-        "such.", muted))
+        "such.", muted)]))
     return el
 
 
@@ -1169,6 +1169,55 @@ _EVIDENCE_MAX_FILES = 25
 _EVIDENCE_MAX_PER_FILE = 20
 
 
+def _remediation_guide_section(files, decisions, evidence, facts, h2, body, cell, muted):
+    """Actionable offline guide, using the same source-bound rows as tagged exports."""
+    from remediation_audit_guide import build_remediation_audit_guide
+
+    documents = build_remediation_audit_guide(files, decisions, evidence, facts)
+    if not documents:
+        return []
+    el = [Paragraph("Your remediation guide", h2), Paragraph(
+        "Use this guide with the downloaded documents. Remaining work is prioritized within each "
+        "document. Recommendations guide future work; they are not changes already made. "
+        "In-app review is optional; unapproved suggestions are not applied.", body), Paragraph(
+        "Technical checks confirm only the recorded condition. They do not confirm an AI "
+        "suggestion's meaning or establish full accessibility. After editing, save a new copy, "
+        "check the meaning in context, and reassess that copy.", muted)]
+    def line(label, value, style=cell):
+        # Values are escaped without silently dropping the recommended repair text.
+        text = html.escape(str(value)).replace("\n", "<br/>")
+        return Paragraph(f"<b>{label}</b> {text}", style)
+    for document in documents:
+        el.append(Paragraph(html.escape(str(document['file'])), h2))
+        artifact = document.get('artifact') or {}
+        if artifact.get('display'):
+            el.append(line("Document version:", artifact['display'], muted))
+        for group, heading in [('remaining', 'What to address next'), ('applied', 'Recorded changes')]:
+            rows = document.get(group) or []
+            if not rows:
+                continue
+            el.append(Paragraph(f"<b>{heading} · {len(rows)} item(s)</b>", body))
+            for item in rows:
+                title = ' · '.join(str(item[k]) for k in ['priority', 'criterion', 'title'] if item.get(k))
+                el.extend([Spacer(1, 7), line('', title, body), line('Location:', item.get('location', 'Not recorded')), line('Status:', item.get('status', 'Not recorded'))])
+                for key, label in [('recommendation', 'Recommended action:'), ('original_value', 'Original value:'), ('saved_value', 'Saved value:'), ('proposed_value', 'Suggested value — not saved:'), ('reason', 'Why:'), ('technical_status', 'Technical check:'), ('human_status', 'Meaning confirmation:')]:
+                    if group == 'applied' and key in ('recommendation', 'proposed_value'):
+                        continue
+                    if item.get(key) is not None and item.get(key) != '':
+                        el.append(line(label, item[key]))
+                for thumb_key, caption in [('before_thumb', 'Recorded original screenshot'), ('after_thumb', 'Recorded saved screenshot')]:
+                    image = _thumb_flowable(item.get(thumb_key), edge=2.5 * inch)
+                    if image:
+                        el.extend([line('', caption, muted), image])
+                steps = (item.get('editor_steps') or []) if group == 'remaining' else []
+                if steps:
+                    el.append(Paragraph('<b>How to make the change:</b>', cell))
+                    for number, step in enumerate(steps, 1):
+                        el.append(line(f'{number}.', step))
+                el.append(HRFlowable(width='100%', color=LINE, thickness=0.5, spaceBefore=5, spaceAfter=5))
+    return el
+
+
 def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
     """Per-issue remediation evidence — the audit artifact (backlog R1).
 
@@ -1207,14 +1256,14 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
             decision_str = (f"{e.get('decision', '')} by {e.get('reviewer') or 'reviewer'}"
                             + (f" · {when} UTC" if when else "")) if has_decision else ""
             if has_ai and has_decision:
-                badge = "<font color='#3B6D11'>&#x25CF; AI &middot; human-confirmed</font>"
-                sign_off = decision_str
+                badge = "<font color='#3B6D11'>&#x25CF; AI &middot; approval recorded</font>"
+                sign_off = decision_str + " · approval does not confirm meaning"
             elif has_ai:
                 badge = "<font color='#854F0B'>&#x25CF; AI &middot; re-scan-validated</font>"
                 sign_off = "AI-generated fix · validated on re-scan · no human approval recorded"
             elif has_decision:
-                badge = "<font color='#3B6D11'>&#x25CF; Deterministic &middot; human-confirmed</font>"
-                sign_off = decision_str
+                badge = "<font color='#3B6D11'>&#x25CF; Deterministic &middot; approval recorded</font>"
+                sign_off = decision_str + " · approval does not confirm meaning"
             else:
                 badge = "<font color='#3B6D11'>&#x25CF; Deterministic</font>"
                 sign_off = "deterministic fixer · auto-applied · no human decision needed"
@@ -1959,6 +2008,8 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
             '<font color="#3B6D11"><b>✓ No open findings.</b></font> Every analysed document '
             "came back clear at the target level: no unresolved failure remains among the "
             "criteria ACP checked.", body))
+
+    el.extend(_remediation_guide_section(files, decisions, evidence, facts, h2, body, cell, note))
 
     # ── Triage & remediation decisions (time-travel snapshot) ────────────────
     if decisions:

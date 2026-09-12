@@ -100,7 +100,7 @@ _META = {"target": "AA", "version": "1.2", "hash": "deadbeef"}
 
 def _pdf_text(pdf: bytes) -> str:
     from pypdf import PdfReader
-    return "".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(pdf)).pages)
+    return "\n".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(pdf)).pages)
 
 
 def _flat(pdf: bytes) -> str:

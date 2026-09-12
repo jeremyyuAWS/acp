@@ -92,7 +92,12 @@ def _section_text(facts) -> str:
     ss = getSampleStyleSheet()
     el = report._scope_section(
         [{"file": "a.docx"}], facts, ss["Heading2"], ss["BodyText"], ss["BodyText"], ss["BodyText"])
-    return " ".join(str(getattr(e, "text", "") or "") for e in el)
+    def text_of(flowable):
+        text = getattr(flowable, "text", None)
+        if text:
+            return str(text)
+        return " ".join(text_of(child) for child in getattr(flowable, "_content", []))
+    return " ".join(text_of(e) for e in el)
 
 
 def _facts(estate=None, remediated_total=0, docs=1):
