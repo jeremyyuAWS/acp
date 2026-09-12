@@ -4200,7 +4200,13 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
         # only — dedup'd results inherit from the original run. Best-effort; never blocks save.
         if not dedup and fdict.get("status") not in ("error", "skipped", "unanalysable"):
             _escalate_low_confidence_findings(fdict, tmp / name, scan_id=scan_id, file=name)
-        core.store.save_file_result(scan_id, fdict, now, job=job)
+        saved = core.store.save_file_result(scan_id, fdict, now, job=job)
+        if saved:
+            try:
+                import assessment_blocked
+                assessment_blocked.record(core.store, scan_id, fdict, job=job)
+            except Exception:
+                swallowed('_analyse_and_persist_one_impl: recording assessment readability failed', scan_id)
         # ADR 0037 Step 0 — record this file's stage timing (side-channel, best-effort: a timing write
         # must never fail the scan). Skipped when nothing was measured — the reuse/dedup path downloads
         # and analyses nothing, so it has no timing to record.

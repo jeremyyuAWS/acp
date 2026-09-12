@@ -31,3 +31,11 @@ it('clearly labels the all-documents reset and current view', async () => {
   expect(container.textContent).toContain('Showing all 32 documents.')
   expect(container.querySelector('.progress-attention').textContent).toContain('Filter document list')
 })
+it('hides only Release document attention while retaining Remediate attention', async () => {
+ const documents=[{file:'a',progressState:'attention'}]
+ await mount({documents,variant:'release',onSelect:vi.fn()})
+ expect(container.querySelector('.progress-attention')).toBeNull()
+ expect(container.querySelectorAll('.remediation-progress-summary-counts button')).toHaveLength(4)
+ await act(async()=>root.render(<RemediationProgressSummary documents={documents} onSelect={()=>{}}/>))
+ expect(container.querySelector('.progress-attention').textContent).toContain('Needs attention')
+})

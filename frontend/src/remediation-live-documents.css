@@ -15,3 +15,5 @@
 .remediation-live-documents .live-finding-filter:focus-visible { outline:2px solid currentColor;outline-offset:-5px; }
 .remediation-live-documents .live-finding-filter:hover { filter:brightness(.97); }
 .remediation-live-documents .live-finding-filter.remediation-category-pill--remaining,.remediation-live-documents .live-finding-filter.remediation-category-pill--excluded,.remediation-live-documents .live-finding-filter.remediation-category-pill--superseded,.remediation-live-documents .live-finding-filter.remediation-category-pill--approved { background:#f5f1f8;color:#5d486f; }
+.assessment-blocked-document { display:flex; flex-direction:column; gap:5px; padding:9px 12px; border-left:3px solid var(--error-fg); background:var(--error-bg); color:var(--error-fg-strong); border-radius:6px; }
+.assessment-blocked-document small { font-size:var(--text-small); }

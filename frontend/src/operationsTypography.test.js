@@ -23,7 +23,10 @@ describe('shared operations typography', () => {
 
   it('uses explicit numeric values rather than card position for mono', () => {
     expect(liveCss).not.toContain('nth-child')
-    expect(liveCss).toMatch(/\.liveops-theme \.ops-kpi__value\s*\{[^}]*font-size:\s*var\(--text-metric, 24px\)/s)
+    expect(liveCss).toMatch(/\.liveops-theme \.ops-kpi__value,[^}]*liveops-infra__value\s*\{[^}]*font-size:\s*var\(--liveops-tile-value\)/s)
+    expect(liveCss).toContain('--liveops-tile-value: 17px')
+    expect(liveCss).toMatch(/ops-kpi__value \.machine-value[^}]*font-family:var\(--font-ui\)/)
+    expect(liveOps).toContain('className="liveops-infra__value"')
     expect(liveCss).toMatch(/:is\(b, strong, h2, h3, h4, summary, button, th\)\s*\{[^}]*font-weight:\s*600/s)
     expect(css).toMatch(/\.ops-kpi__value \.machine-value\s*\{[^}]*font-size:\s*inherit/s)
   })
@@ -35,4 +38,14 @@ describe('shared operations typography', () => {
     }
     expect(liveOps).not.toMatch(/<b style=\{\{ fontSize: 20 \}\}/)
   })
+})
+
+it('keeps Live Azure summary and infrastructure tiles on the same value, label and metadata roles', () => {
+  for (const role of ['value','label','meta']) {
+    expect(liveCss).toContain(`.liveops-theme .liveops-infra__${role}`)
+    expect(liveOps).toContain(`className="liveops-infra__${role}"`)
+  }
+  expect(liveCss).toContain('--liveops-tile-label: 10.5px')
+  expect(liveCss).toContain('--liveops-tile-meta: 11px')
+  expect(css).toContain('font-size: var(--text-metric, 24px)') // analytics remains unchanged
 })

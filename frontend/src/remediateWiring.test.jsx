@@ -224,7 +224,7 @@ describe('R15 (board 10) — undo an applied fix, mounted only for an auto-appli
     // A drafted-AI or manually-authored finding was never something ACP applied on its own — the
     // guard is what keeps this from offering an "undo" that has nothing to undo.
     const s = rem()
-    expect(s).toMatch(/sel\.autoApplied && \([\s\S]{0,200}?<UndoFix\b/)
+    expect(s).toMatch(/sel\.autoApplied && !sel\.inspectionOnly && \([\s\S]{0,200}?<UndoFix\b/)
     expect(s).toMatch(/<UndoFix[\s\S]{0,200}?ruleId=\{sel\.ruleId\}/)
     expect(s).toMatch(/<UndoFix[\s\S]{0,200}?onUndone=\{onRefresh\}/)
   })

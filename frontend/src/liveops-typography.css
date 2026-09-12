@@ -1,5 +1,9 @@
 /* Scoped to Live Operations; shared analytics cards keep their own hierarchy. */
 .liveops-theme {
+  --liveops-tile-value: 17px;
+  --liveops-tile-label: 10.5px;
+  --liveops-tile-meta: 11px;
+  font-family: var(--font-ui);
   font-size: var(--text-body, 14px);
   font-weight: 400;
   line-height: 1.5;
@@ -25,8 +29,9 @@
   box-shadow: none;
 }
 
-.liveops-theme .ops-kpi__label {
-  font-size: var(--text-small, 12px);
+.liveops-theme .ops-kpi__label,
+.liveops-theme .liveops-infra__label {
+  font-size: var(--liveops-tile-label);
   font-weight: 600;
   line-height: 1.45;
   letter-spacing: .025em;
@@ -34,8 +39,9 @@
   margin-bottom: 7px;
 }
 
-.liveops-theme .ops-kpi__value {
-  font-size: var(--text-metric, 24px);
+.liveops-theme .ops-kpi__value,
+.liveops-theme .liveops-infra__value {
+  font-size: var(--liveops-tile-value);
   font-weight: 600;
   line-height: 1.35;
   letter-spacing: 0;
@@ -52,8 +58,9 @@
   line-height: 1.5;
 }
 
-.liveops-theme .ops-kpi__meta {
-  font-size: var(--text-small, 12px);
+.liveops-theme .ops-kpi__meta,
+.liveops-theme .liveops-infra__meta {
+  font-size: var(--liveops-tile-meta);
   line-height: 1.5;
   margin-top: 5px;
 }
@@ -65,3 +72,7 @@
 
 .liveops-theme code { font-weight: 400; }
 .liveops-theme .liveops-tabs [role="tab"] { font-weight: 600; }
+
+.liveops-theme .ops-kpi__value .machine-value { font-family:var(--font-ui); }
+.liveops-theme .liveops-infra__value { display:block; overflow-wrap:anywhere; }
+.liveops-theme :is(.liveops-infra__label,.liveops-infra__meta) { color:var(--muted); overflow-wrap:anywhere; }

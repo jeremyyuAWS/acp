@@ -58,7 +58,7 @@ it.each([
   ['approved', { status: 'approved', applied: 1 }, 'awaiting-validation'],
   ['approved and verified', { status: 'approved', applied: 1, validated: 1 }, 'completed'],
   ['rejected', { status: 'rejected' }, 'completed'],
-  ['skipped', { status: 'skipped' }, 'manual'],
+  ['skipped', { status: 'skipped' }, 'completed'],
   ['pending', {}, 'needs-review'],
 ])('places a %s row from its durable decision, not from this session only', (_label, extra, stage) => {
   const item = dbItemToUi(row(99, extra), [])
@@ -125,4 +125,36 @@ it('loads every status for the run and folds decided items into the inbox and it
   expect(page).toContain('applyHitlRows')
   expect(page).toContain('const inboxQueue = reviewableRemediationItems(dedupeById([...queue, ...rejectedItems, ...decidedItems, ...autoFixItems])')
   expect(page).toContain('const totalHitl = queue.length + decidedItems.length + selfOnly.length')
+})
+
+
+it('treats exact automatic inspection records as optional completed tasks without verification',async()=>{
+ const record={id:'optional',scan_id:'scan-1',file:'auto.docx',rule_id:'auto/verify',rule_name:'Automatic fix applied — verify the result',status:'pending'}
+ const item=dbItemToUi(record,[])
+ expect(item.inspectionOnly).toBe(true)
+ expect(workflowCounts([item])).toMatchObject({completed:1,'needs-review':0,manual:0})
+ expect(remediationReviewCounts([item]).pendingItems).toBe(0)
+ expect(item.validated).toBe(false)
+ const {root,container}=createTestRoot()
+ await act(async()=>root.render(createElement(Inbox,{queue:[item],initialTab:'completed'})))
+ expect(container.textContent).toContain('Saved changes · optional inspection')
+ expect(container.textContent).toContain('no approval or inspection is required')
+ expect(container.textContent).not.toContain('Manual remediation')
+ expect(container.textContent).not.toContain('Human confirmation required')
+ expect(container.textContent).not.toContain('✓ Verified')
+ expect([...container.querySelectorAll('button')].some(button=>['Defer','Not applicable'].includes(button.textContent.trim()))).toBe(false)
+})
+it.each([
+ ['Deferred',{status:'skipped'},'Remaining work stays recorded'],
+ ['Not applicable',{status:'approved',resolution:'out_of_scope'},'This criterion was excluded'],
+])('preserves historical %s decisions as complete review tasks after a server reread',async(label,decision,copy)=>{
+ const item=dbItemToUi(row(44,decision),[])
+ expect(workflowStatusOf(item)).toBe('completed')
+ expect(item.validated).toBe(false)
+ const {root,container}=createTestRoot()
+ await act(async()=>root.render(createElement(Inbox,{queue:[item],initialTab:'completed'})))
+ expect(container.textContent).toContain(label)
+ expect(container.textContent).toContain(copy)
+ expect(container.textContent).not.toContain('Written → Re-scan')
+ expect(container.textContent).not.toContain('✓ Verified')
 })

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { liveDocumentCounts, materialKey, releaseProgressState, confirmedReleaseProgress } from './remediationLiveDocumentState.js'
+import { liveDocumentCounts, materialKey, releaseProgressState, confirmedReleaseProgress, confirmedAssessmentBlock } from './remediationLiveDocumentState.js'
 const docs=[{file:'one.docx',totalFindings:2,findings:[{sc:'1.1.1',fixMode:'assisted'},{sc:'1.1.1',fixMode:'assisted'}]}]
 const ledger={available:true,batch_id:'batch',items:[{file:'one.docx',finding_id:'a',rule_id:'1.1.1',disposition:'resolved_verified'},{file:'one.docx',finding_id:'b',rule_id:'1.1.1',disposition:'approved_pending_verification'}]}
 it('partitions findings and never calls approval an applied edit',()=>{
@@ -63,4 +63,12 @@ it('does not let an applied review record override a recorded failed outcome',()
   const data={...ledger,items:ledger.items.map(row=>({...row,disposition:'remediation_failed',review_item_id:row.finding_id}))}
   const review=ledger.items.map(row=>({id:row.finding_id,file:'one.docx',applied:true}))
   expect(liveDocumentCounts(docs,data,review,'batch')[0].liveCounts).toEqual({blocked:2})
+})
+
+it('refreshes when an assessment blocker changes and accepts explicit server clearance over stale file flags', () => {
+  const before = {batch_id:'batch',assessment_blocked_files:[{file:'bad.pdf',reason:'Parser failed',category:'unreadable'}]}
+  const after = {...before,assessment_blocked_files:[]}
+  expect(materialKey('scan',before)).not.toBe(materialKey('scan',after))
+  expect(confirmedAssessmentBlock({file:'bad.pdf',assessment_blocked:true},after)).toBeNull()
+  expect(confirmedAssessmentBlock({file:'bad.pdf'},before)).toMatchObject({reason:'Parser failed',category:'unreadable'})
 })

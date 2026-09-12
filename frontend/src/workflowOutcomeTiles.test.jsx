@@ -38,3 +38,8 @@ it('shows only admission baselines bound to the same run and scope',()=> {
  expect(other).toContain('Before unavailable')
  expect(other).not.toContain('since starting')
 })
+it('keeps publication failures visible as Delivery issues without duplicating finding attention',()=>{
+ const model=outcomeTileModel('release',{total:2,buckets:{published:1,failed:1}})
+ expect(model.tiles.find(tile=>tile.key==='attention')).toMatchObject({label:'Delivery issues',value:1})
+ expect(model.tiles.some(tile=>tile.label==='Needs attention')).toBe(false)
+})

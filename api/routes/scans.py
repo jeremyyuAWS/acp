@@ -697,6 +697,9 @@ async def remediate_scan(sid: str, request: Request):
         raise HTTPException(404, "scan not found")
     source = (res.get("run") or {}).get("source") or "drive"
     owner = _owner(request)
+    import assessment_blocked
+    assessment_blocks = assessment_blocked.read(core.store, sid, owner=owner, scan=res)
+    blocked_names = {row['file'] for row in assessment_blocks}
     # A Drive token belongs to a Drive job and to nothing else. A SharePoint (or local) scan
     # reads the source bytes Assess cached, so it neither registers nor carries one — and the
     # worker's source dispatch (handlers._remediation_source_bytes) never asks for one either.
@@ -778,6 +781,8 @@ async def remediate_scan(sid: str, request: Request):
         checksums = {}
     payloads = []
     for f in res["files"]:
+        if f['file'] in blocked_names:
+            continue
         # Honour the triage scope: skip files the user marked N/A or deferred.
         if scope_set is not None and f["file"] not in scope_set:
             continue
@@ -860,6 +865,7 @@ async def remediate_scan(sid: str, request: Request):
                             detail={"documents": len(execution["job_ids"]),
                                     "batch_id": execution["batch_id"]})
     return {"scan_id": sid, "enqueued": len(execution["job_ids"]),
+            'assessment_blocked_files': assessment_blocks,
             "job_ids": execution["job_ids"], "batch_id": execution["batch_id"],
             "snapshot_id": snapshot_id, "decision_digest": decision_digest,
             "reused": execution["reused"],
@@ -1223,6 +1229,8 @@ def scan(sid: str, request: Request, response: Response):
     if res is None:
         raise HTTPException(404, "scan not found")
     res["run"]["freshness"] = _scan_freshness(sid, res["run"])
+    import assessment_blocked
+    assessment_blocked.annotate(res, assessment_blocked.read(core.store, sid, owner=owner, scan=res))
     response.headers["ETag"] = etag
     # This payload changes document by document during Assess.  Require revalidation so the
     # two-second progress poll cannot be satisfied from a stale Discover response.
@@ -1903,8 +1911,10 @@ def _remediation_snapshot(sid: str) -> dict:
     import remediation_run
     facts = core.store.remediation_run_facts(sid)
     import progress_evidence
+    import assessment_blocked
     return {**remediation_run.build_snapshot(facts),
-            **progress_evidence.read(core.store, facts.get('batch_id'))}
+            **progress_evidence.read(core.store, facts.get('batch_id')),
+            'assessment_blocked_files': assessment_blocked.read(core.store, sid)}
 
 
 @router.get("/scans/{sid}/remediation/snapshot")
@@ -2178,9 +2188,15 @@ async def retry_remediation_documents(sid: str, request: Request):
     _cancelled, _view, records = _exception_view(sid)
     owner = _owner(request)
     retryable = {"document_failure", "verification_failure"}
+    import assessment_blocked
+    assessment_blocks = {row['file']: row for row in assessment_blocked.read(core.store, sid, owner=owner)}
     results = []
     for record in _selected(records, files):
         file = record.get("file")
+        if file in assessment_blocks:
+            results.append({'file': file, 'outcome': 'refused', 'code': 'assessment_blocked',
+                            'message': assessment_blocks[file]['reason']})
+            continue
         classified = exceptions.classify_exception(record)
         if not classified or classified[0] not in retryable:
             results.append({"file": file, "outcome": "refused", "code": "not_retryable",
@@ -3376,16 +3392,19 @@ def finding_dispositions(sid: str, request: Request,
         raise HTTPException(404, "scan not found")
     facts = core.store.remediation_run_facts(sid)
     batch_id = facts.get("batch_id")
+    import assessment_blocked
+    blocked = assessment_blocked.read(core.store, sid, owner=owner)
     if not batch_id:
         return {"scan_id": sid, "batch_id": None, "disposition": disposition,
-                "items": [], "available": False}
+                "items": [], "available": False, 'assessment_blocked_files': blocked}
     try:
         items = core.store.finding_disposition_drilldown(
             sid, batch_id, disposition=disposition)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"scan_id": sid, "batch_id": batch_id, "snapshot_id": sid,
-            "disposition": disposition, "items": items, "available": True}
+            "disposition": disposition, "items": items, "available": True,
+            'assessment_blocked_files': blocked}
 
 
 @router.get("/scans/{sid}/finding-dispositions/{finding_id}/events")

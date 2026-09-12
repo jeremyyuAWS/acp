@@ -203,6 +203,9 @@ export function dbItemToUi(it, files) {
     // The reviewer's recorded decision. Without it a row that was approved, rejected or skipped
     // came back from the server indistinguishable from untouched work.
     status: uiStatusOf(it),
+    resolution: it.resolution || null,
+    inspectionOnly: it.inspection_only === true || it.rule_id === 'auto/verify',
+    autoApplied: it.rule_id === 'auto/verify',
     aiDraftable: AI_DRAFTABLE_SCS.has(sc),
     source: fileRec.sourceName,
     rule: `WCAG ${sc}${it.rule_name ? ' — ' + it.rule_name : ITEM_NAME[sc] ? ' — ' + ITEM_NAME[sc] : ''}`,
@@ -508,10 +511,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                                    ...previous.filter((row) => !served.has(row.id))])
     return items || []
   }
-  const recordDecided = (item, status) => {
+  const recordDecided = (item, status, resolution = null) => {
     if (!item?.id) return
     setDecidedItems((d) => (d.some((x) => x.id === item.id)
-      ? d : [...d, { ...item, status, validated: false }]))
+      ? d : [...d, { ...item, status, resolution, validated: false }]))
   }
   useEffect(() => {
     setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([]); setRejectedItems([]); setAckd({}); setDecidedItems([])
@@ -918,7 +921,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     // An approval is a recorded decision awaiting the confirming re-scan — it belongs in the
     // inbox's Awaiting-verification stage, and in the run total, from the moment it is taken.
     // (A rejection is already represented by its handoff row above, which the inbox prefers.)
-    if (kind === 'approved') recordDecided(item, 'approved')
+    if (kind === 'approved') recordDecided(item, 'approved', resolution)
     window.dispatchEvent(new Event('acp:hitl-changed'))
     const apiStatus = kind === 'approved' ? 'approved' : kind === 'rejected' ? 'rejected' : null
     // approved_value is the headline text (audit log, telemetry); approvedValues carries one
@@ -1811,12 +1814,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 {/* R15 · only for a row ACP applied itself — a drafted-AI or manually-authored
                     finding was never something ACP claimed to fix on its own, so there is
                     nothing here to un-claim for those rows. */}
-                {sel.autoApplied && (
+                {sel.autoApplied && !sel.inspectionOnly && (
                   <UndoFix scanId={sel.scanId || run?.id} file={sel.file} ruleId={sel.ruleId}
                            onUndone={onRefresh} />
                 )}
+                {sel.inspectionOnly && <DocumentAudit scanId={sel.scanId || run?.id} file={sel.file} />}
                 <ReviewDetails key={sel.id}>
-                <DocumentAudit scanId={sel.scanId || run?.id} file={sel.file} />
+                {!sel.inspectionOnly && <DocumentAudit scanId={sel.scanId || run?.id} file={sel.file} />}
                 <DueDate scanId={sel.scanId || run?.id} file={sel.file}
                          value={decisions[sel.file]?.due_date || ''}
                          assignee={decisions[sel.file]?.assignee || ''} />

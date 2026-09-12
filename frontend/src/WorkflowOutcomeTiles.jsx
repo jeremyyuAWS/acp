@@ -13,7 +13,7 @@ const PUBLICATION = [
   ['queued', 'Queued', 'blue', ['waiting', 'queued']],
   ['processing', 'Publishing', 'purple', ['processing']],
   ['published', 'Published', 'green', ['published', 'completed_unverified']],
-  ['attention', 'Needs attention', 'pink', ['failed', 'cancelled']],
+  ['attention', 'Delivery issues', 'pink', ['failed', 'cancelled']],
   ['skipped', 'Skipped', 'gray', ['skipped']],
 ]
 
@@ -32,7 +32,7 @@ export function outcomeTileModel(stage, domain) {
   })) }
 }
 
-export default function WorkflowOutcomeTiles({ stage, domain, baseline = null, executionId, onFilter }) {
+export default function WorkflowOutcomeTiles({ stage, domain, baseline = null, executionId, onFilter, queueMode = false }) {
   const model = outcomeTileModel(stage, domain)
   if (!model) return null
   const beforeValues = baseline?.available === true && baseline.run_id === executionId
@@ -57,7 +57,7 @@ export default function WorkflowOutcomeTiles({ stage, domain, baseline = null, e
           <span className="workflow-outcome-tiles__fill" aria-hidden="true" style={{ transform: `scaleX(${model.total > 0 && tile.value != null ? tile.value / model.total : 0})` }} />
         </>
         const props = { className: `workflow-outcome-tiles__tile tone-${tile.tone} ${tile.key === 'verified' ? 'finding-outcome-kpis__verified' : ''}`, key: `${executionId}:${tile.key}` }
-        return onFilter ? <button {...props} type="button" onClick={() => onFilter(tile.key)}>{content}</button> : <div {...props}>{content}</div>
+        return onFilter ? <button {...props} type="button" aria-haspopup={queueMode ? 'dialog' : undefined} onClick={() => onFilter(tile.key)}>{content}</button> : <div {...props}>{content}</div>
       })}
     </div>
     <p className="workflow-outcome-tiles__note">{!model.balanced ? 'Updating: outcome totals are being reconciled.' : stage === 'remediate'
