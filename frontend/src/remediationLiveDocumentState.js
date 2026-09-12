@@ -6,7 +6,7 @@ export function materialKey(scanId, snapshot, events = []) {
   const relevant = events.filter(e => (!e.scan_id || e.scan_id === scanId) && /applied|verified|review|completed|failed|proposal|disposition|stored|delivered/.test(e.kind || e.action || ''))
   const eventKeys = relevant.map(event => String(event.id || event.event_id || event.occurred_at || event.key || event.kind)).sort()
   return JSON.stringify([snapshot?.batch_id, snapshot?.state, snapshot?.documents, snapshot?.findings,
-    snapshot?.finding_accounting, snapshot?.finding_reconciliation, snapshot?.fixes, snapshot?.delivery, snapshot?.review, eventKeys])
+    snapshot?.finding_accounting, snapshot?.finding_reconciliation, snapshot?.fixes, snapshot?.delivery, snapshot?.review, snapshot?.file_processing, eventKeys])
 }
 
 export function liveDocumentCounts(documents, ledger, review = [], batchId) {

@@ -3,6 +3,7 @@ import { remediationWorkRunning } from './remediationWorkRunning.js'
 import useAcceptedRemediationIdentity from './useAcceptedRemediationIdentity.js'
 import AcceptedRemediationPlanSummary from './AcceptedRemediationPlanSummary.jsx'
 import { getAcceptedRemediationPlan } from './api.js'
+import useRunAiApproval from './useRunAiApproval.js'
 import { assessMetrics } from './assessMetrics.js'
 import { reviewableRemediationItems } from './remediationReviewAvailability.js'
 import RemediationLiveDocuments from './RemediationLiveDocuments.jsx'
@@ -586,6 +587,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const { batchId: acceptedBatchId, authorization: acceptedAuthorization, scopedSnapshot } = useAcceptedRemediationIdentity({
     scanId: runId, snapshot: runStream?.snapshot, launch: acceptedLaunch, clearLaunch: setAcceptedLaunch, releaseState: automaticReleaseState,
   })
+  const runAiApproval = useRunAiApproval(runId, acceptedBatchId)
   useEffect(() => {
     let active = true
     setAcceptedPlan(null)
@@ -1797,7 +1799,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           // and a JSX comment here is a parse error. Second time tonight.
           <RemediationInbox
             readOnly={readOnly}
-            autoApprove={acceptedPlan?.scanId === runId && acceptedPlan?.batchId === acceptedBatchId && !acceptedPlan.loading ? acceptedPlan.policy?.auto_approve_ai === true : null}
+            autoApprove={runAiApproval.enabled}
+            onAutoApproveChange={readOnly ? undefined : runAiApproval.change}
+            autoApproveSaving={runAiApproval.saving}
+            autoApproveError={runAiApproval.error}
             onPublish={readOnly ? undefined : () => onNavigate?.('publish')}
             onOpenPlan={readOnly ? undefined : openRemediationPlan}
             preparingProposals={!runStream?.snapshot?.terminal && ((runStream?.status?.running ?? remProg?.running ?? 0) > 0 || (runStream?.status?.queued ?? remProg?.queued ?? 0) > 0)}

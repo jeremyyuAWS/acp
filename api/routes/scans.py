@@ -822,10 +822,18 @@ async def remediate_scan(sid: str, request: Request):
          **({"remediation_impact_policy": impact_snapshot,
              "allowed_rules": {name: sorted(impact_allowed.get(name, ())) for name in selected_files}}
             if impact_snapshot else {})}, sort_keys=True)
+    import progress_evidence
+    try:
+        document_baseline = progress_evidence.capture_documents(core.store, res, selected_files,
+            owner=owner, snapshot_id=snapshot_id, request_fingerprint=request_fingerprint)
+    except Exception:
+        document_baseline = None
+        swallowed('routes.scans.remediate_scan: admission progress baseline unavailable', sid)
     for payload in payloads:
         # Provenance only; no decision content enters the queue payload.
         payload["decision_digest"] = decision_digest
         payload["automation_policy"] = policy_snapshot
+        payload['document_progress_baseline'] = document_baseline
         if impact_snapshot:
             payload["remediation_impact_policy"] = impact_snapshot
             payload["remediation_impact_allowed_rules"] = sorted(impact_allowed.get(payload["file"], ()))
@@ -1894,7 +1902,9 @@ def _remediation_snapshot(sid: str) -> dict:
     """
     import remediation_run
     facts = core.store.remediation_run_facts(sid)
-    return remediation_run.build_snapshot(facts)
+    import progress_evidence
+    return {**remediation_run.build_snapshot(facts),
+            **progress_evidence.read(core.store, facts.get('batch_id'))}
 
 
 @router.get("/scans/{sid}/remediation/snapshot")
@@ -3336,6 +3346,8 @@ def _canonical_lineage_export(scan_id: str, owner: str) -> dict:
     lineage.pop("generated_at", None)
     for stage in lineage.get("stages", []):
         stage.pop("generated_at", None)
+        import progress_evidence
+        stage.update(progress_evidence.read(core.store, stage.get('execution_id'), owner=owner))
     encoded = _json.dumps(lineage, sort_keys=True, separators=(",", ":"),
                           ensure_ascii=False, default=str).encode("utf-8")
     return {"lineage": lineage, "content_digest": {

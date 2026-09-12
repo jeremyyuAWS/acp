@@ -2655,3 +2655,11 @@ export const createReleaseFolder = (provider, parent, name) => fetch(`${BASE}/re
   method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
   body: JSON.stringify({ provider, parent, name }),
 }).then(j)
+
+export const getRunAiApproval = (scanId, runId) => fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/ai-approval/${encodeURIComponent(runId)}`, {
+  headers: headers(), cache: 'no-store',
+}).then(j)
+
+export const setRunAiApproval = (scanId, runId, setting) => fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/ai-approval/${encodeURIComponent(runId)}`, {
+  method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(setting),
+}).then(j)

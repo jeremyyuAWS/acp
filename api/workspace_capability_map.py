@@ -640,3 +640,6 @@ def allows(method: str, path: str, held) -> bool:
 
 # Creating a delivery parent is part of explicitly authorized publishing.
 _map_many([("POST", "/release/folders")], {"release.publish"})
+
+_map_many([("GET", "/scans/{sid}/remediation/ai-approval/{run_id}"),
+           ("POST", "/scans/{sid}/remediation/ai-approval/{run_id}")], {"remediate.review"})

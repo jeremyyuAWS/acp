@@ -81,7 +81,9 @@ def execution_detail(execution_id: str, request: Request):
 @router.get("/stage-executions/{execution_id}/snapshot")
 def execution_snapshot(execution_id: str, request: Request):
     _execution_or_404(execution_id, request)
-    return core.store.stage_execution_snapshot(execution_id, owner=_owner(request))
+    import progress_evidence
+    return {**core.store.stage_execution_snapshot(execution_id, owner=_owner(request)),
+            **progress_evidence.read(core.store, execution_id, owner=_owner(request))}
 
 
 @router.get("/stage-executions/{execution_id}/events")

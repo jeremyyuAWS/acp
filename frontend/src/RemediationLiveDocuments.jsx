@@ -23,6 +23,7 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
     setProgressHost(host?.dataset.scanId === scanId && host?.dataset.batchId === snapshot?.batch_id ? host : null)
   }, [progressHostId, scanId, snapshot?.batch_id])
   const [progressFilter, setProgressFilter] = useState(null)
+  const [coverageFilter, setCoverageFilter] = useState(null)
   const [outcomeFilter, setOutcomeFilter] = useState(null)
   const [scanEvidence, setScanEvidence] = useState(null)
   const [liveEvidence, setLiveEvidence] = useState(null)
@@ -45,7 +46,7 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
   const material = materialKey(scanId, snapshot, events)
   const [confirmedRefresh, setConfirmedRefresh] = useState(0)
   useEffect(() => {
-    setLiveEvidence(null); setScanEvidence(null); setProgressFilter(null); setOutcomeFilter(null); signatures.current = null; setChanged([]); setAnnouncement(''); search.clear()
+    setLiveEvidence(null); setScanEvidence(null); setProgressFilter(null); setCoverageFilter(null); setOutcomeFilter(null); signatures.current = null; setChanged([]); setAnnouncement(''); search.clear()
   }, [scanId, snapshot?.batch_id])
   useEffect(() => {
     if (!liveMode || !scanId) return
@@ -109,7 +110,11 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
   const progressFiles = new Set(effectiveProgress.filter(document => !progressFilter || document.progressState === progressFilter).map(document => document.file))
   const fallbackFiles = progressFilter ? files.filter(file => progressFiles.has(file.file)) : files
   const displayedDocuments = currentDocuments || (liveMode ? documentList : null)
-  const searchScope = (displayedDocuments || []).filter(row => (!outcomeFilter || row.liveCounts?.[outcomeFilter] > 0) && (!progressFilter || effectiveProgress.some(document => document.file === row.file && document.progressState === progressFilter)))
+  const coverageEvidence = snapshot?.file_processing
+  const affectedFiles = new Set((coverageEvidence?.files || []).filter(file => file.hasFindings).map(file => file.file))
+  const finishedFiles = new Set((coverageEvidence?.attempts || []).filter(attempt => attempt.attempted && !attempt.retryScheduled && ['completed', 'failed', 'cancelled', 'skipped'].includes(attempt.state)).map(attempt => attempt.file))
+  const searchScope = (displayedDocuments || []).filter(row => (!outcomeFilter || row.liveCounts?.[outcomeFilter] > 0) && (!progressFilter || effectiveProgress.some(document => document.file === row.file && document.progressState === progressFilter))
+    && (!coverageFilter || affectedFiles.has(row.file) && (coverageFilter === 'withFindings' || (coverageFilter === 'processed' ? finishedFiles.has(row.file) : !finishedFiles.has(row.file)))))
   const visibleDocuments = searchScope.filter(matchesFilters(search, facets, row => row.file))
   const signature = JSON.stringify(currentDocuments?.map(r => [r.file, r.liveCounts, r.reconciliation]) || [])
   useEffect(() => {
@@ -123,7 +128,9 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
     return () => clearTimeout(timer)
   }, [signature])
   const progressSummary = <RemediationProgressSummary key={snapshot?.batch_id || scanId} animate={liveMode} documents={effectiveProgress} selected={progressFilter}
-    onSelect={selection => { setProgressFilter(selection); onShowDocuments?.() }} reconciling={liveError} />
+    coverage={coverageEvidence || { available: false }} selectedCoverage={coverageFilter} baselineDocumentCounts={snapshot?.progress_baseline?.documents}
+    onCoverageSelect={coverageEvidence?.available ? selection => { setCoverageFilter(previous => previous === selection ? null : selection); setProgressFilter(null); setOutcomeFilter(null); onShowDocuments?.() } : undefined}
+    onSelect={selection => { setProgressFilter(selection); setCoverageFilter(null); onShowDocuments?.() }} reconciling={liveError} />
   const selectedRow = documentList.find(row => row.file === selected)
   const nextRow = documentList[documentList.findIndex(row => row.file === selected) + 1]
   useEffect(() => { setSelected(null) }, [scanId])

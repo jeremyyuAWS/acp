@@ -212,9 +212,15 @@ describe('Guided pane — auto-fix rows get an obvious, honestly-labelled decisi
   })
 })
 
-it('retires skip-inspection navigation and hides overlapping run approval in automatic mode', async () => {
-  await renderInbox({ queue:[CONTRAST_APPLY], autoApprove:true, onPublish:()=>{}, onDecide:()=>{} })
+it('unifies applying, publishing, and a real green automatic approval switch', async () => {
+  const changes=[]
+  await renderInbox({ queue:[CONTRAST_APPLY], autoApprove:true, onAutoApproveChange:enabled=>changes.push(enabled), onPublish:()=>{}, onDecide:()=>{} })
   expect(btnByText('Skip inspection and publish')).toBeFalsy()
-  expect(btnByText('Apply all ready fixes')).toBeFalsy()
-  expect(btnByText('Auto-apply AI fixes: On')).toBeTruthy()
+  expect(btnByText('Publish saved copies')).toBeTruthy()
+  const control=container.querySelector('[role="switch"][aria-label="Auto-apply AI fixes"]')
+  expect(control.checked).toBe(true)
+  expect(control.closest('label').classList.contains('is-on')).toBe(true)
+  expect(control.closest('.run-approval-actions').contains(btnByText('Publish saved copies'))).toBe(true)
+  await click(control)
+  expect(changes).toEqual([false])
 })

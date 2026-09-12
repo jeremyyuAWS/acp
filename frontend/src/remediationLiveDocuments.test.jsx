@@ -9,6 +9,20 @@ afterEach(async () => { await unmountAll(); vi.clearAllMocks(); getReleaseStatus
 const files = ['A.docx', 'B.docx'].map(file => ({ file, name: file, status: 'analysed', issues: [{ wcag: 'SC_1_1_1', severity: 'SERIOUS' }] }))
 const fix = { file: 'A.docx', rule_id: 'SC_1_1_1', before: 'Missing alt text', after: 'A mountain lake', page: 2 }
 const props = { scanId: 'run', files, cap: { docx: { '1.1.1': 'assisted' } }, assessment: { docx: { '1.1.1': 'auto' } }, fixes: [fix], fixTotal: 9 }
+it('filters recorded file coverage independently of successful remediation and clears it with Show all', async () => {
+  const snapshot = { batch_id: 'batch', file_processing: { available: true,
+    files: files.map(file => ({ file: file.file, hasFindings: true })),
+    attempts: [{ file: 'A.docx', state: 'failed', attempted: true }, { file: 'B.docx', state: 'queued', retryScheduled: true }],
+    counts: { withFindings: 2, processed: 1, remaining: 1 }, baseline: { withFindings: 2, processed: 0, remaining: 2 } } }
+  const { container } = await mount({ snapshot })
+  const processed = container.querySelector('[aria-label="Files processed: 1"]')
+  await act(async () => processed.click())
+  expect(processed.getAttribute('aria-pressed')).toBe('true')
+  expect(container.querySelectorAll('tbody tr')).toHaveLength(1)
+  expect(container.querySelector('tbody').textContent).toContain('A.docx')
+  await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === 'Show all 2 documents').click())
+  expect(container.querySelectorAll('tbody tr')).toHaveLength(2)
+})
 async function mount(extra = {}) {
   const { root, container } = createTestRoot()
   await act(async () => root.render(createElement(RemediationLiveDocuments, { ...props, ...extra })))

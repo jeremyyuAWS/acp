@@ -1339,7 +1339,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
                         scan_id=context.scan_id, file=context.file,
                         detail=__import__('json').dumps({'owner_id': context.owner_id, 'run_id': context.run_id,
                             'reason': f'Document-wide suggestions did not complete: {type(exc).__name__}'}))
-            if context is not None and context.policy.get('auto_approve_ai') is True:
+            if context is not None:
                 try:
                     from ai_standing_approval import approve_file
                     approve_file(core.store, context)
@@ -5758,3 +5758,12 @@ def _release_continue(payload: dict, job: dict) -> None:
         return advance(core.store, payload, job)
     from release_continuation import advance
     advance(core.store, payload, job)
+
+
+@handler("approve_run_ai")
+def _approve_run_ai(payload: dict, job: dict) -> None:
+    from ai_run_approval_override import process_pending
+    try:
+        process_pending(core.store, payload)
+    except ValueError as exc:
+        raise FatalJobError(str(exc)) from exc
