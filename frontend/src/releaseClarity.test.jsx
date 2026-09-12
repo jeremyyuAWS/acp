@@ -296,13 +296,13 @@ it('publishes a saved partial copy only after explicit opt-in without approving 
   expect([...c.querySelectorAll('label')].find(el => el.textContent.includes('Publish with remaining issues')).querySelector('input').checked).toBe(false)
 })
 
-it('offers partial publication in the visible release actions without opening advanced details', async () => {
+it('offers partial publication in optional publishing settings', async () => {
   const files = [held('one.pdf', { remediated_at: '2026-09-09', corrected_sha256: 'one-digest' }),
     held('two.pdf', { remediated_at: '2026-09-09', corrected_sha256: 'two-digest' }), held('draft.pdf')]
   listHitlQueue.mockResolvedValue(files.map((f, i) => ({ id: i, file: f.file, status: 'pending' })))
   const c = await mount({ run, files })
   const optIn = [...c.querySelectorAll('label')].find(el => el.textContent.includes('Publish with remaining issues')).querySelector('input')
-  expect(optIn.closest('details')).toBeNull()
+  expect(optIn.closest('details').open).toBe(false)
   expect(optIn.closest('.release-quick')).not.toBeNull()
   await click(optIn)
   const publish = button(c, 'Publish saved copies (2)')
@@ -484,3 +484,16 @@ it('Release reconnect resumes the exact saved authorization without publishing o
  expect(publishAllFiles).not.toHaveBeenCalled()
  expect(button(c,'Reconnect Google Drive and resume')).toBeUndefined()
 })
+
+ it('keeps assessment details secondary to the one-click publishing path', async () => {
+  const c = await mount({ run: { id: 'simpler-release', status: 'completed' }, files: [verified('ready.pdf', { corrected_sha256: 'current' })] })
+  const details = [...c.querySelectorAll('details')].find(el => el.querySelector(':scope > summary')?.textContent === 'Assessment findings and saved changes (optional)')
+  expect(details.open).toBe(false)
+  expect(details.querySelector('.remediation-live-documents')).not.toBeNull()
+  const publish = button(c, 'Publish ready files (1)')
+  expect(publish.closest('details')).toBeNull()
+  expect(publish.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  await click(publish)
+  expect(publishAllFiles).toHaveBeenCalledTimes(1)
+  expect(c.querySelector('.release-confirm')).toBeNull()
+ })

@@ -775,7 +775,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
         </details>
       </section>
-      <RemediationLiveDocuments key={run?.id} scanId={run?.id} files={releaseFiles} cap={cap} assessment={assessment} refreshKey={publishedCount} />
+
       <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
         folderName={releaseFolderName} readOnly={readOnly} publishing={publishing} destinationLocked={destinationLocked} destinationPending={destinationPending || (settingsPending && !destinationLocked)}
         announcement={releaseError ? 'Publishing needs attention. See the message below.' : releaseAnnouncement}
@@ -809,6 +809,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             } catch { /* The next durable refresh retries. */ }
           }
         }} />
+
+      <details className="panel"><summary>Assessment findings and saved changes (optional)</summary>
+      <RemediationLiveDocuments key={run?.id} scanId={run?.id} files={releaseFiles} cap={cap} assessment={assessment} refreshKey={publishedCount} />
+      </details>
 
         {(releaseId || publishedList.length > 0) && <section className="release-receipt" aria-label="Delivery receipt">
           <h3>{failedCount ? 'Partial delivery receipt' : deliveringCount ? 'Delivery in progress' : 'Delivery receipt'}</h3>

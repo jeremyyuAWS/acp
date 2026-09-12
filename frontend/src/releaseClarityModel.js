@@ -21,7 +21,7 @@ export function releaseReadiness(file, { done = {}, results = {}, sourceState = 
   if (['queued', 'running'].includes(result?.status)) return { status: 'delivering', label: 'Delivering', reason: 'Release continues in the background. Return here for the receipt.' }
   if (sourceState(file) === 'stale') return { status: 'changed', label: 'Needs attention', reason: 'Source changed. Rescan before releasing this copy.' }
   if (sourceState(file) === 'unavailable') return { status: 'unreachable', label: 'Needs attention', reason: 'Source unreachable. Restore access and check again.' }
-  if (allowRemainingIssues && !hasSavedCorrectedCopy(file)) return { status: 'attention', label: 'Needs attention', reason: 'No saved corrected copy with an artifact identifier. Complete a document write before publishing.' }
+  if (allowRemainingIssues && !hasSavedCorrectedCopy(file)) return { status: 'attention', label: 'No saved copy', reason: 'No saved corrected copy is available to publish. This does not indicate an accessibility finding. Save a copy through Remediate first.' }
   if (allowRemainingIssues && hasSavedCorrectedCopy(file)) {
     if (blockers[file.file]) return { status: 'attention', label: 'Needs attention', reason: blockers[file.file] }
     if (!hasCorrectedCopy(file) || pending[file.file]) return { status: 'ready', label: 'Ready with remaining issues', reason: 'Publish the saved copy. Unresolved findings and unapproved suggestions remain recorded; this is not certification.' }
