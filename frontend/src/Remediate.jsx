@@ -985,6 +985,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const liveFixed = remProg ? Math.max(0, remProg.done - (remProg.failed || 0)) : 0
   const reVerified = verified + serverFixed + liveFixed
   const remLive = remediationWorkRunning(runStream?.snapshot, acceptedBatchId, remBusy, remProg)
+  useEffect(() => {
+    if (remBusy && !remLive && acceptedBatchId && runStream?.snapshot?.batch_id === acceptedBatchId) setRemBusy(false)
+  }, [remBusy, remLive, acceptedBatchId, runStream?.snapshot?.batch_id])
   const pendingHitlFiles = new Set(queue.map((q) => q.file))
   // The run's review total, from the queue the SERVER holds: outstanding rows plus rows that
   // already carry a decision. It used to be the pending count plus this session's own tally, so
