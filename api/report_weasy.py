@@ -236,7 +236,7 @@ tr:nth-child(even) th[scope="row"], tr:nth-child(even) td { background: #faf8fb;
 /* Follow-up guidance may span pages; keep long hashes and proposals in bounds. */
 .remediation-guide { break-before: page; break-inside: auto; }
 .guide-document { margin-top: 12px; overflow-wrap: anywhere; }
-.guide-item { border-left: 3px solid #854F0B; padding: 7px 10px; margin: 8px 0; }
+.guide-item { break-inside: avoid; border-left: 3px solid #854F0B; padding: 7px 10px; margin: 8px 0; }
 .guide-item.applied { border-color: #3B6D11; }
 .guide-item img { max-width: 100%; max-height: 220px; object-fit: contain; }
 h4, h5 { font-size: 9.5pt; margin: 8px 0 4px; }

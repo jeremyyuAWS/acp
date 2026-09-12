@@ -17,6 +17,7 @@ EVIDENCE = [{'file': 'patient.pdf', 'applied': [{'sc': '4.1.2', 'before': 'Text1
 def test_default_html_preserves_change_values_and_does_not_invent_human_review():
     html = render_html(RUN, FILES, META, {'ai_calls_total': 2}, evidence=EVIDENCE)
     assert 'Your remediation guide' in html
+    assert 'Missing description for the parking symbol' in html
     assert 'page:2:figure:3' in html
     assert 'Acrobat' in html
     assert 'Patient name' in html

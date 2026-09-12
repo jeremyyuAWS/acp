@@ -90,7 +90,7 @@ def _base(row, fmt):
     sc = _sc(row)
     title, recommendation = _GUIDANCE.get(sc, ('Recorded accessibility finding', 'Inspect the recorded issue and repair it using the editor’s accessibility tools.'))
     return {'criterion': sc, 'title': title, 'finding_id': _id(row),
-            'location': _location(row), 'priority': str(row.get('severity') or 'MINOR').upper(),
+            'location': _location(row), 'priority': str(row.get('severity') or 'UNCLASSIFIED').upper(),
             'recommendation': recommendation, 'editor_steps': [
                 _EDITORS.get(fmt, 'Open the saved file in its authoring application and locate the recorded issue.'),
                 _ACTIONS.get(fmt, {}).get(sc, recommendation),

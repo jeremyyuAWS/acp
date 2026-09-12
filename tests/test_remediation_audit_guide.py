@@ -102,3 +102,8 @@ def test_integer_applied_queue_excluded_and_source_locator_explicit():
     task['applied'] = False
     doc = build_remediation_audit_guide([{'file': 'a.pdf', 'issues': []}], facts={'audit_review_tasks': [task]})[0]
     assert doc['remaining'][0]['location'] == 'Figure:1'
+
+
+def test_missing_severity_is_not_invented_as_minor():
+    guide = build_remediation_audit_guide([{'file': 'review.pdf', 'issues': [{'wcag': '1.1.1'}]}])
+    assert guide[0]['remaining'][0]['priority'] == 'UNCLASSIFIED'

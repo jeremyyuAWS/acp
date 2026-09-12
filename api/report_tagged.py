@@ -137,12 +137,14 @@ meaning in context, and reassess that copy.</p>
 <div class="guide-document">
 <h3>{{ doc.file }}{% if doc.format %} · {{ doc.format }}{% endif %}</h3>
 {% if doc.artifact %}<p class="muted">Document version: {{ doc.artifact.display }}</p>{% endif %}
+{% if doc.coverage_note %}<p class="muted">{{ doc.coverage_note }}</p>{% endif %}
 {% if doc.remaining %}<h4>What to address next · {{ doc.remaining|length }} item(s)</h4>{% endif %}
 {% for item in doc.remaining %}
 <article class="guide-item">
 <h5>{{ item.priority }} · {{ item.criterion }} · {{ item.title }}</h5>
 <p><strong>Location:</strong> {{ item.location }}</p>
 <p><strong>Status:</strong> {{ item.status }}</p>
+{% if item.description %}<p><strong>Recorded issue:</strong> {{ item.description }}</p>{% endif %}
 {% if item.original_value is defined and item.original_value is not none %}<p><strong>Original value:</strong></p><p class="guide-value">{{ item.original_value }}</p>{% endif %}
 {% if item.recommendation %}<p><strong>Recommended action:</strong> {{ item.recommendation }}</p>{% endif %}
 {% if item.proposed_value is defined and item.proposed_value is not none %}<p><strong>Suggested value — not saved:</strong></p><p class="guide-value">{{ item.proposed_value }}</p>{% endif %}
@@ -237,7 +239,7 @@ figcaption { font-size: 8pt; color: #6B6670; margin-top: 4px; }
 section { page-break-inside: avoid; }
 .remediation-guide { page-break-before: always; page-break-inside: auto; }
 .guide-document { margin-top: 12px; overflow-wrap: anywhere; }
-.guide-item { border-left: 3px solid #854F0B; padding: 7px 10px; margin: 8px 0; }
+.guide-item { page-break-inside: avoid; border-left: 3px solid #854F0B; padding: 7px 10px; margin: 8px 0; }
 .guide-item.applied { border-color: #3B6D11; }
 .guide-item ol { padding-left: 20px; margin: 5px 0; }
 .guide-item li { margin-bottom: 4px; }

@@ -76,6 +76,7 @@ def _page(title, content):
             'table{border-collapse:collapse;width:100%;font-size:14px;margin:12px 0}th,td{border-bottom:1px solid #e4dcea;padding:.75rem;text-align:left;vertical-align:top;overflow-wrap:anywhere}'
             'th{background:#f5eff7}caption{text-align:left;font-weight:bold}a{color:#573352}h1{font-size:1.8rem}h2{margin-top:28px}'
             'details{border:1px solid #e4dcea;border-radius:8px;padding:10px;margin:8px 0}summary{cursor:pointer;font-weight:600}'
+            '.report-card{overflow-wrap:anywhere;border-left:3px solid #854f0b;padding:8px 12px;margin:12px 0;break-inside:avoid}'
             '.table-scroll{overflow-x:auto}small{color:#655b6a}.notice{padding:12px;background:#f5eff7;border-radius:8px}'
             '@media(max-width:700px){main{padding:12px}table{min-width:650px}.brand{flex-wrap:wrap}}'
             '@media print{body{background:white;margin:0}main{border:0}.brand img{width:150px}details{break-inside:avoid}table{font-size:10px}}</style>'
