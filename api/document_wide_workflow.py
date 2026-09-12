@@ -18,7 +18,9 @@ _NATIVE_REASONS = {
 }
 
 
-def _reason(value, input_mode=None):
+def _reason(value, input_mode=None, *, automatic=False):
+    if automatic and (value in _NATIVE_REASONS or value == 'request_rejected_before_dispatch'):
+        return 'Automatic document analysis could not complete with the current file and authorized model limits. Remaining findings stay in review; see run details.'
     if input_mode == 'native_pdf' and value == 'request_rejected_before_dispatch':
         return 'The full PDF could not be sent within the current model settings and limits. Try Document context or review your cloud model settings.'
     return _NATIVE_REASONS.get(value, value)
@@ -107,7 +109,7 @@ def process_file(store, context, *, _artifact=None):
         }
         if str(exc) not in reasons and str(exc) not in _NATIVE_REASONS:
             raise
-        _record(store, context, 'deferred', {'reason': reasons.get(str(exc), _reason(str(exc)))})
+        _record(store, context, 'deferred', {'reason': reasons.get(str(exc), _reason(str(exc), automatic=context.policy.get('cloud_input_strategy') == 'automatic'))})
         return
     input_mode = ('native_pdf' if filename.lower().endswith('.pdf')
                   and context.policy.get('document_wide_input_mode') == 'native_pdf'
@@ -132,13 +134,13 @@ def process_file(store, context, *, _artifact=None):
                 payload = {'pdf_bytes': package_native_pdf(data, manifest)}
             except ValueError as exc:
                 _record(store, context, 'deferred', {'request_id': request_id,
-                    'input_mode': input_mode, 'reason': _reason(str(exc))})
+                    'input_mode': input_mode, 'reason': _reason(str(exc), automatic=context.policy.get('cloud_input_strategy') == 'automatic')})
                 return
         else:
             payload = {'images': package_images(data, manifest)}
         response = generate_document(build_request(manifest, request_id=request_id), **payload)
         if not response.get('envelope'):
-            _record(store, context, 'deferred', {'request_id': request_id, 'reason': _reason(response.get('reason', 'No valid AI response was returned.'), input_mode)})
+            _record(store, context, 'deferred', {'request_id': request_id, 'reason': _reason(response.get('reason', 'No valid AI response was returned.'), input_mode, automatic=context.policy.get('cloud_input_strategy') == 'automatic')})
             return
         validation = validate_edit_response(manifest, response['envelope'])
         by_id = {f.finding_id: f for f in manifest.findings}
