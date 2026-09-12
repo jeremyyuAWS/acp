@@ -164,3 +164,18 @@ def test_partial_publish_accepts_saved_applied_changes_even_when_not_verified(pr
         prepared.store._db.execute(cur, 'UPDATE file_records SET compliant=0 WHERE scan_id=%s', (SID,))
     assert flow.recover_approved_writes(prepared.store, row, FILE) is False
     assert flow.ready(prepared.store, row, FILE)['corrected_sha256'] == DIGEST
+
+
+def test_publication_waits_for_current_run_automatic_approval_coordination(prepared):
+    upload(prepared)
+    plan = flow.planning_preview(prepared.store, SID, OWNER, [FILE])
+    row = flow.authorize(prepared.store, SID, OWNER, prepared.run, [FILE],
+        plan['destination'], 'coordinate-approvals', allow_remaining_issues=True)
+    job = prepared.store.enqueue_job('apply_approved_values', {
+        'phase': 'approve_current_run_ai', 'run_id': prepared.run, 'scan_id': SID,
+        'owner': OWNER, 'source_revision': row['intent']['source_revision'] }, scan_id=SID)
+    with pytest.raises(ValueError, match='automatic approval'):
+        flow.ready(prepared.store, row, FILE)
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, "UPDATE jobs SET status='done' WHERE id=%s", (job,))
+    assert flow.ready(prepared.store, row, FILE)['corrected_sha256'] == DIGEST

@@ -5444,7 +5444,11 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         # a previously saved correction that has gone missing.
         if not record.get('remediated_at'):
             from scanner import read_cached_source
-            working = read_cached_source(scan_id, filename, owner, checksum=record.get('checksum'))
+            checksum_reader = getattr(core.store, 'get_source_checksum', None)
+            checksum = (checksum_reader(scan_id, filename) if callable(checksum_reader) else None) or record.get('checksum')
+            working = read_cached_source(scan_id, filename, owner, checksum=checksum)
+            if not working and checksum:
+                working = read_cached_source(scan_id, filename, owner)
         if not working:
             core.store.log_decision("system", "apply.no_remediated_copy", scan_id=scan_id,
                                     file=filename, detail="no stored corrected copy or assessed source available")

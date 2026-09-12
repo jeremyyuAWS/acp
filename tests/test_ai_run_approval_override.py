@@ -43,7 +43,7 @@ def test_local_source_requires_exact_cached_source_and_corrected_bytes(isolated_
     store=isolated_store;job=seed(store,monkeypatch,enabled=False)
     with store._db.cursor() as cur:
         store._db.execute(cur,"UPDATE scan_runs SET source='local' WHERE id=%s",(SID,))
-        store._db.execute(cur,"UPDATE file_records SET checksum=%s WHERE scan_id=%s",(sha256(b'original').hexdigest(),SID))
+        store._db.execute(cur,"INSERT INTO scan_inventory(scan_id,file,checksum) VALUES(%s,%s,%s)",(SID,FILE,sha256(b'original').hexdigest()))
     monkeypatch.setattr(scanner,'read_cached_source',lambda *a,**k:b'original')
     monkeypatch.setattr(blob,'download_remediated',lambda *a:BYTES)
     from ai_standing_approval import _source
@@ -90,3 +90,31 @@ def test_approval_coordination_uses_existing_remediate_worker_lane(isolated_stor
         bad={**claimed['payload'],'file':'unapproved.docx'}
         with pytest.raises(FatalJobError,match='Invalid current-run'):
             handlers._apply_approved_values(bad,claimed)
+
+
+def test_uploaded_null_record_checksum_uses_immutable_contribution_proof(isolated_store,monkeypatch):
+    from hashlib import sha256
+    import scanner,blob
+    store=isolated_store;job=seed(store,monkeypatch,enabled=True)
+    with store._db.cursor() as cur:
+        store._db.execute(cur,"UPDATE scan_runs SET source='local' WHERE id=%s",(SID,))
+    with store._db.cursor() as cur:
+        store._db.execute(cur,"UPDATE stage_executions SET input_snapshot_id=%s WHERE execution_id=%s",(store.remediation_source_revision(SID),job['batch_id']))
+    monkeypatch.setattr(scanner,'read_cached_source',lambda *a,**k:b'original')
+    monkeypatch.setattr(blob,'download_remediated',lambda *a:BYTES)
+    with run_context(store,job['payload'],job) as ctx:
+        item=store.enqueue_proposals(SID,FILE,'2.4.6',[proposal(store)])
+        snapshot=store.get_hitl_item(item)['proposal_snapshot_ids'][0]
+        revision=store.remediation_source_revision(SID)
+        with store._db.cursor() as cur:
+            store._db.execute(cur,"INSERT INTO remediation_contribution_proposals(owner_id,scan_id,run_id,proposal_id,proposal_sha256,source_sha256,assessment_revision,file,rule_id,item_id,finding_ids_json,created_at) VALUES(%s,%s,%s,%s,'immutable-proposal',%s,%s,%s,'2.4.6',%s,'[]','2026-09-12')",
+                (OWNER,SID,ctx.run_id,snapshot,sha256(b'original').hexdigest(),revision,FILE,item))
+        assert store.get_file_record(SID,FILE).get('checksum') is None
+        assert store.get_source_checksum(SID,FILE) is None
+        approve_file(store,ctx)
+        assert store.get_hitl_item(item)['status']=='approved'
+        payload=json.loads([row for row in apply_jobs(store) if not json.loads(row['payload']).get('phase')][0]['payload'])
+        check_application(store,payload,working=BYTES)
+        monkeypatch.setattr(scanner,'read_cached_source',lambda *a,**k:b'corrupt')
+        with pytest.raises(ValueError,match='Exact assessed'):
+            check_application(store,payload,working=BYTES)

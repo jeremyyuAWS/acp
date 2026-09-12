@@ -62,7 +62,7 @@ def authorization(store, owner, sid, run_id, *, approved=False):
     return row['input_snapshot_id']
 
 
-def _source(store, owner, sid, file):
+def _source(store, owner, sid, file, run_id=None):
     import core
     import handlers
     from release_artifacts import require_current_source
@@ -76,11 +76,29 @@ def _source(store, owner, sid, file):
     if source == 'local':
         import blob
         import scanner
-        checksum = record.get('checksum')
-        original = scanner.read_cached_source(sid, file, owner, checksum=checksum) if checksum else None
+        checksum = store.get_source_checksum(sid, file)
+        original = scanner.read_cached_source(sid, file, owner, checksum=checksum)
+        if original is None and checksum:
+            original = scanner.read_cached_source(sid, file, owner)
         corrected = blob.download_remediated(owner, sid, file)
-        if (not checksum or original is None or corrected is None
-                or hashlib.sha256(original).hexdigest() != checksum
+        expected_hashes = set()
+        if run_id:
+            with store._db.cursor() as cur:
+                store._db.execute(cur, '''SELECT DISTINCT c.source_sha256 FROM remediation_contribution_proposals c
+                    JOIN ai_proposal_snapshots p ON p.snapshot_id=c.proposal_id
+                      AND p.owner_id=c.owner_id AND p.scan_id=c.scan_id AND p.run_id=c.run_id AND p.file=c.file
+                    JOIN stage_executions e ON e.execution_id=c.run_id AND e.scan_id=c.scan_id AND e.owner_email=c.owner_id
+                    WHERE c.owner_id=%s AND c.scan_id=%s AND c.run_id=%s AND c.file=%s
+                      AND c.assessment_revision=e.input_snapshot_id ''', (owner, sid, run_id, file))
+                expected_hashes = {row['source_sha256'] for row in store._db.fetchall(cur)}
+        matched = original is not None and hashlib.sha256(original).hexdigest() in expected_hashes
+        # Inventory hashes are captured at discovery, never learned from this read.
+        if original is not None and isinstance(checksum, str):
+            if len(checksum) == 64:
+                matched = matched or hashlib.sha256(original).hexdigest() == checksum.lower()
+            elif len(checksum) == 32:
+                matched = matched or hashlib.md5(original).hexdigest() == checksum.lower()
+        if (not matched or corrected is None
                 or hashlib.sha256(corrected).hexdigest() != record['corrected_sha256']):
             raise ValueError('Exact assessed source and stored corrected copy are required for automatic approval')
         require_current_source(source, record)
@@ -178,7 +196,7 @@ def approve_file(store, ctx):
         return
     owner, sid, run_id, file = ctx.owner_id, ctx.scan_id, ctx.run_id, ctx.file
     revision = authorization(store, owner, sid, run_id)
-    record = _source(store, owner, sid, file)
+    record = _source(store, owner, sid, file, run_id)
     # Fetch only this file's run-bound rows, not the entire scan queue once per file.
     with store._db.cursor() as cur:
         store._db.execute(cur, '''SELECT DISTINCT q.* FROM hitl_queue q JOIN ai_proposal_snapshots p
@@ -278,7 +296,7 @@ def check_application(store, payload, *, working=None):
     # Replays must not attempt another write against its now-replaced artifact.
     if all(applied):
         return True
-    record = _source(store, owner, sid, file)
+    record = _source(store, owner, sid, file, intent['run_id'])
     if revision != intent['source_revision'] or record['corrected_sha256'] != intent['artifact']:
         raise ValueError('Source or corrected artifact changed since automatic approval')
     if working is not None and hashlib.sha256(working).hexdigest() != intent['artifact']:
@@ -299,7 +317,6 @@ def check_file_approvals(store, sid, file):
         store._db.execute(cur, 'SELECT owner_email FROM scan_runs WHERE id=%s', (sid,))
         scan = store._db.fetchone(cur)
     owner = (scan or {}).get('owner_email')
-    _source(store, owner, sid, file)
     for row in automatic:
         with store._db.cursor() as cur:
             store._db.execute(cur, 'SELECT run_id FROM ai_proposal_snapshots WHERE snapshot_id=%s',
@@ -307,6 +324,7 @@ def check_file_approvals(store, sid, file):
             snapshot = store._db.fetchone(cur)
         run_id = (snapshot or {}).get('run_id')
         revision = authorization(store, owner, sid, run_id, approved=True)
+        _source(store, owner, sid, file, run_id)
         eligible_item(store, owner, sid, run_id, row, approved=True)
         values = [str(p.get('approved_value') or '').strip() for p in row['proposals']]
         digest = hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True,

@@ -278,6 +278,8 @@ def ready(store, row, file):
         store._db.execute(cur, "SELECT payload FROM jobs WHERE scan_id=%s AND type='apply_approved_values' AND status IN ('queued','running','processing','retry')", (row['scan_id'],))
         for job in store._db.fetchall(cur):
             payload = json.loads(job['payload']) if isinstance(job['payload'], str) else job['payload']
+            if payload.get('phase') == 'approve_current_run_ai' and payload.get('run_id') == row['run_id']:
+                raise ValueError('Waiting for automatic approval to queue the current run’s corrections.')
             if payload.get('file') == file:
                 raise ValueError('Waiting for active corrections to finish writing this file.')
     if partial and work_state in {'dead', 'cancelled'}:

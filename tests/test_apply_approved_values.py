@@ -497,7 +497,8 @@ def test_batched_unapplied_counts_match_the_per_file_gate(store):
     assert store.count_unapplied_approved_values_by_file("s2") == {}
 
 
-def test_approval_before_remediation_creates_first_corrected_copy_from_assessed_source(store, monkeypatch):
+@pytest.mark.parametrize('cache_checksum', [None, 'inventory-content-key'])
+def test_approval_before_remediation_creates_first_corrected_copy_from_assessed_source(store, monkeypatch, cache_checksum):
     import scanner
     item_id = _seed(store)
     with store._db.cursor() as cur:
@@ -506,7 +507,8 @@ def test_approval_before_remediation_creates_first_corrected_copy_from_assessed_
     store.update_hitl_item(item_id, 'approved', None, None)
     store.approve_proposal_values(item_id, [])
     cached = _deck('Picture 1','Chart 2')
-    monkeypatch.setattr(scanner, 'read_cached_source', lambda *a,**kw:cached)
+    monkeypatch.setattr(store, 'get_source_checksum', lambda *a: cache_checksum)
+    monkeypatch.setattr(scanner, 'read_cached_source', lambda *a, **kw: cached if kw.get('checksum') == cache_checksum else None)
     blob = _Blob(None)
     _run_handler(monkeypatch, store, blob, residual=set())
     assert blob.uploads
