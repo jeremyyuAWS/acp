@@ -7,7 +7,7 @@ import { documentRows } from './assessMetrics.js'
 import { getFileRemediationDiffs, getScanRemediationDiffs } from './api.js'
 import { remediationDiffPage } from './remediationCountSummary.js'
 import RemediationProgressSummary from './RemediationProgressSummary.jsx'
-import { liveDocumentCounts, materialKey, findingOutcomeTotals, confirmedReleaseProgress } from './remediationLiveDocumentState.js'
+import { liveDocumentCounts, materialKey, findingOutcomeTotals, recordedDocumentProgress } from './remediationLiveDocumentState.js'
 import './remediation-live-documents.css'
 import { getFindingDispositions, listHitlQueue, getReleaseStatus, getSourceStatus } from './api.js'
 import { changeCategory } from './remediationCategories.js'
@@ -42,10 +42,18 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
     if (!liveMode || !scanId) return
     let current = true
     const timer = setTimeout(() => {
-      Promise.all([getFindingDispositions(scanId), listHitlQueue(scanId), getScanRemediationDiffs(scanId, true), Promise.resolve().then(() => getReleaseStatus(scanId)).catch(() => null), readSourceStatus()]).then(([ledger, review, changes, release, source]) => {
+      Promise.allSettled([getFindingDispositions(scanId), listHitlQueue(scanId), getScanRemediationDiffs(scanId, true), Promise.resolve().then(() => getReleaseStatus(scanId)), readSourceStatus()]).then(results => {
         if (!current) return
-        setLiveEvidence({ ledger, review: Array.isArray(review) ? review : [], release, source })
-        setScanEvidence(remediationDiffPage(changes)); setLiveError(false)
+        const [ledger, review, changes, release, source] = results
+        setLiveEvidence(previous => ({ ...previous,
+          ...(ledger.status === 'fulfilled' ? { ledger: ledger.value } : {}),
+          ...(review.status === 'fulfilled' ? { review: Array.isArray(review.value) ? review.value : [] } : {}),
+          ...(release.status === 'fulfilled' ? { release: release.value } : {}),
+          ...(source.status === 'fulfilled' ? { source: source.value } : {}),
+        }))
+        if (changes.status === 'fulfilled') setScanEvidence(remediationDiffPage(changes.value))
+        else setScanEvidence(previous => previous || { items: [], total: null, error: true })
+        setLiveError(results.slice(0, 3).some(result => result.status === 'rejected'))
         setConfirmedRefresh(n => n + 1)
       }).catch(() => { if (current) setLiveError(true) })
     }, 400)
@@ -86,11 +94,8 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
   const outcomeTotals = findingOutcomeTotals(currentDocuments || [])
   const effectiveProgress = progressDocuments || documentList.map(row => {
     const confirmed = currentDocuments?.find(document => document.file === row.file && document.liveCounts)
-    const counts = confirmed?.liveCounts
-    const progressState = !counts ? undefined : ['approved', 'applied', 'ai_applied'].some(key => counts[key] > 0) ? 'processing' : counts.verified === row.totalFindings && row.totalFindings > 0 ? 'verified' : 'attention'
     const file = files.find(file => file.file === row.file)
-    const releaseProgress = confirmed && file ? confirmedReleaseProgress(file, liveEvidence?.release, liveEvidence?.source, liveEvidence?.review) : undefined
-    return { file: row.file, progressState: releaseProgress || progressState }
+    return { file: row.file, progressState: recordedDocumentProgress(row, file, { confirmed, release: liveEvidence?.release, source: liveEvidence?.source, review: liveEvidence?.review, snapshot }) }
   })
   const progressFiles = new Set(effectiveProgress.filter(document => !progressFilter || document.progressState === progressFilter).map(document => document.file))
   const fallbackFiles = progressFilter ? files.filter(file => progressFiles.has(file.file)) : files

@@ -219,3 +219,50 @@ it('shows valid live findings despite another document population mismatch',asyn
   expect(container.querySelector('.live-document-table tbody').textContent).toContain('0 recorded / 1 assessed')
   expect(container.querySelector('[aria-label="Live finding outcomes"]').textContent).toContain('Verified 1')
 })
+
+it('counts assessed attention and unopened documents without a legacy finding ledger', async () => {
+  vi.useFakeTimers()
+  getFindingDispositions.mockResolvedValue({available:false,items:[]})
+  listHitlQueue.mockResolvedValue([])
+  getScanRemediationDiffs.mockResolvedValue({items:[{...fix,verified:true}],total:1})
+  const screenshotFiles = [
+    ...Array.from({length:30},(_,i)=>({file:`File-${i}.docx`,status:'analysed',issues:i<6 ? [{wcag:'SC_1_1_1',severity:'SERIOUS'}] : []})),
+    {file:'Unreadable-1.docx',status:'error'}, {file:'Unreadable-2.docx',status:'error'},
+  ]
+  const {container}=await mount({files:screenshotFiles,assessment:{docx:{'1.1.1':'auto','1.3.1':'review'}},snapshot:{terminal:true},connected:true})
+  await act(async()=>vi.advanceTimersByTime(400))
+  expect(container.querySelector('.progress-attention strong').textContent).toBe('32')
+  expect(container.querySelector('.progress-verified strong').textContent).toBe('0')
+  expect(container.textContent).not.toContain('32 documents awaiting confirmed progress')
+  await act(async()=>container.querySelector('.progress-attention').click())
+  expect(container.textContent).toContain('Showing needs attention documents: 32 of 32.')
+})
+
+it('keeps independent release and change evidence when the finding ledger request fails',async()=>{
+  vi.useFakeTimers()
+  getFindingDispositions.mockRejectedValue(new Error('ledger unavailable'))
+  listHitlQueue.mockResolvedValue([])
+  getScanRemediationDiffs.mockResolvedValue({items:[{...fix,verified:true}],total:1})
+  getSourceStatus.mockResolvedValue({files:[]})
+  getReleaseStatus.mockResolvedValue({documents:[{file:'A.docx',status:'published',artifact_digest:'sha256:current'}]})
+  const corrected=files.map(file=>({...file,compliant:true,remediated_at:'2026-09-12T12:00:00Z',corrected_sha256:'current'}))
+  const {container}=await mount({files:corrected,snapshot:{batch_id:'batch'},connected:true})
+  await act(async()=>vi.advanceTimersByTime(400))
+  expect(container.querySelector('.progress-published strong').textContent).toBe('1')
+  expect(container.querySelector('.progress-ready strong').textContent).toBe('1')
+  expect(container.textContent).toContain('1 applied-change records loaded for these documents')
+})
+
+it('shows a leased document processing while its finding ledger is unavailable',async()=>{
+  vi.useFakeTimers()
+  getFindingDispositions.mockResolvedValue({available:false,items:[]})
+  listHitlQueue.mockResolvedValue([])
+  getScanRemediationDiffs.mockResolvedValue({items:[],total:0})
+  const {container}=await mount({snapshot:{active_attempts:[{file:'A.docx',lease_valid:true}]},connected:true})
+  await act(async()=>vi.advanceTimersByTime(400))
+  expect(container.querySelector('.progress-processing strong').textContent).toBe('1')
+  expect(container.querySelector('.progress-attention strong').textContent).toBe('1')
+  await act(async()=>container.querySelector('.progress-processing').click())
+  expect(container.querySelectorAll('tbody tr')).toHaveLength(1)
+  expect(container.querySelector('tbody').textContent).toContain('A.docx')
+})

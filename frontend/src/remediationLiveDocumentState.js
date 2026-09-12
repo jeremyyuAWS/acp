@@ -56,6 +56,24 @@ export function findingOutcomeTotals(documents = []) {
   }, {})
 }
 
+// Document progress does not require an exact per-finding ledger. Use each
+// independent recorded fact without turning individual repair records into
+// whole-document verification.
+export function recordedDocumentProgress(row, file, { confirmed, release, source, review = [], snapshot } = {}) {
+  if (snapshot?.active_attempts?.some(attempt => attempt.file === row.file && attempt.lease_valid === true)) return 'processing'
+  const releaseProgress = file && confirmedReleaseProgress(file, release, source, review)
+  if (releaseProgress) return releaseProgress
+  const counts = confirmed?.liveCounts
+  if (counts) {
+    if (['approved', 'applied', 'ai_applied'].some(key => counts[key] > 0)) return 'processing'
+    return counts.verified === row.totalFindings && row.totalFindings > 0 ? 'verified' : 'attention'
+  }
+  if (review.some(item => item.file === row.file && item.status === 'pending')) return 'attention'
+  if (hasSavedCorrectedCopy(file || {}) && (file.compliant === true || file.compliant === 1)) return 'verified'
+  if (row.opened === false || ['attention', 'awaiting_review'].includes(row.state)) return 'attention'
+  return undefined
+}
+
 export function releaseProgressState(state) {
   return ({ ready: 'ready', released: 'published', delivering: 'processing' })[state?.status] || 'attention'
 }
