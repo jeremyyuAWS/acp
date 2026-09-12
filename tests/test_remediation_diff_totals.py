@@ -37,3 +37,22 @@ def test_route_keeps_legacy_array_and_enforces_owner_before_totals(monkeypatch, 
     with pytest.raises(HTTPException) as exc:
         scan_remediation_diffs('s', foreign, True)
     assert exc.value.status_code == 404
+
+
+def test_sql_route_serializes_verified_changes_without_certifying_the_file(monkeypatch, isolated_store):
+    """The exact SQL-backed payload must not turn saved verified repairs into Pending."""
+    import core
+    from routes.scans import scan_remediation_diffs, file_remediation_diffs
+    seed(isolated_store)
+    monkeypatch.setattr(core, 'store', isolated_store)
+    request = SimpleNamespace(state=SimpleNamespace(user_email='owner'))
+    page = scan_remediation_diffs('s', request, True)
+    assert page['total'] == 2002 and page['loaded'] == 2000 and not page['complete']
+    assert all(row['verified'] is True for row in page['items'])
+    assert all(row['verified'] is True for row in scan_remediation_diffs('s', request))
+    assert all(row['verified'] is True for row in file_remediation_diffs('s', 'a.pptx', request))
+    assert all('compliant' not in row and 'published' not in row for row in page['items'])
+    # Current evidence is replaced on rerun and disappears on undo, not carried forever.
+    isolated_store.record_remediation_diffs('s', 'a.pptx', [])
+    assert file_remediation_diffs('s', 'a.pptx', request) == []
+    assert scan_remediation_diffs('s', request, True)['total'] == 1

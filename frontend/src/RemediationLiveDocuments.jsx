@@ -85,7 +85,7 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
   const currentDocuments = liveDocumentCounts(documentList, liveEvidence?.ledger, liveEvidence?.review, snapshot?.batch_id)
   const outcomeTotals = findingOutcomeTotals(currentDocuments || [])
   const effectiveProgress = progressDocuments || documentList.map(row => {
-    const confirmed = currentDocuments?.find(document => document.file === row.file)
+    const confirmed = currentDocuments?.find(document => document.file === row.file && document.liveCounts)
     const counts = confirmed?.liveCounts
     const progressState = !counts ? undefined : ['approved', 'applied', 'ai_applied'].some(key => counts[key] > 0) ? 'processing' : counts.verified === row.totalFindings && row.totalFindings > 0 ? 'verified' : 'attention'
     const file = files.find(file => file.file === row.file)
@@ -94,8 +94,8 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
   })
   const progressFiles = new Set(effectiveProgress.filter(document => !progressFilter || document.progressState === progressFilter).map(document => document.file))
   const fallbackFiles = progressFilter ? files.filter(file => progressFiles.has(file.file)) : files
-  const visibleDocuments = (currentDocuments || []).filter(row => (!outcomeFilter || row.liveCounts[outcomeFilter] > 0) && (!progressFilter || effectiveProgress.some(document => document.file === row.file && document.progressState === progressFilter)))
-  const signature = JSON.stringify(currentDocuments?.map(r => [r.file, r.liveCounts]) || [])
+  const visibleDocuments = (currentDocuments || []).filter(row => (!outcomeFilter || row.liveCounts?.[outcomeFilter] > 0) && (!progressFilter || effectiveProgress.some(document => document.file === row.file && document.progressState === progressFilter)))
+  const signature = JSON.stringify(currentDocuments?.map(r => [r.file, r.liveCounts, r.reconciliation]) || [])
   useEffect(() => {
     if (!currentDocuments) return
     const next = new Map(currentDocuments.map(r => [r.file, JSON.stringify(r.liveCounts)]))
@@ -117,17 +117,18 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
     {liveMode && !currentDocuments && <p className="muted">Current finding outcomes are reconciling. Assessment counts remain visible below.</p>}
     <p className="muted">{currentDocuments ? "Open a document to inspect its findings and saved changes." : "Assessment findings stay visible below. Applied-change records remain separate from finding counts."}</p>
     {currentDocuments ? <section aria-label="Documents"><h3>Documents <small>· {currentDocuments.length}</small></h3>
-      <p className="muted">Each finding appears once. Counts update after saved results arrive{connected === false ? ' · reconnecting to live updates' : ''}.</p>
+      {currentDocuments.some(row => row.reconciliation) && <p role="status">{currentDocuments.filter(row => row.reconciliation).length} documents have finding counts reconciling. Their outcomes are not included in live totals.</p>}
+      <p className="muted">Each reconciled finding appears once. Counts update after saved results arrive{connected === false ? ' · reconnecting to live updates' : ''}.</p>
       <div className="live-document-categories" aria-label="Live finding outcomes">
         <button type="button" aria-pressed={!outcomeFilter} onClick={() => setOutcomeFilter(null)}>All findings</button>
         {Object.entries(outcomeTotals).map(([category, count]) => <button type="button" key={category} aria-pressed={outcomeFilter === category} onClick={() => setOutcomeFilter(category)}>
           {['remaining','excluded','superseded','approved'].includes(category) ? <span>{({ remaining:'Remaining', excluded:'Excluded', superseded:'Superseded', approved:'Approved · awaiting application' })[category]} <strong>{count}</strong></span> : <RemediationCategoryPill category={category} count={count} />}
         </button>)}
       </div>
-      <p className="muted">{visibleDocuments.length} of {currentDocuments.length} documents shown · outcome counts cover all documents in this view.</p>
+      <p className="muted">{visibleDocuments.length} of {currentDocuments.length} documents shown · outcome counts cover reconciled documents in this view.</p>
       <div className="document-findings-scroll" role="region" aria-label="Document findings table" tabIndex={0}><table className="live-document-table document-findings-table"><thead><tr><th scope="col">Document</th><th scope="col" className="findings-criteria-heading">WCAG criteria <br />with issues</th><th scope="col" className="findings-total-heading">Total <br />findings</th><th scope="col">Remediation categories</th><th scope="col"><span className="vh">Details</span></th></tr></thead>
         <tbody>{visibleDocuments.map(row => <tr key={row.file} className={changed.includes(row.file) ? 'live-document-changed' : undefined}>
-          <th scope="row">{row.file}</th><td>{new Set(row.findings.map(f => f.sc)).size}</td><td>{row.totalFindings}</td><td><div className="live-document-categories">{Object.entries(row.liveCounts).map(([category, count]) =>
+          <th scope="row">{row.file}</th><td>{new Set(row.findings.map(f => f.sc)).size}</td><td>{row.totalFindings}</td><td>{row.reconciliation && <span role="status">Reconciling · {row.reconciliation.recorded} recorded / {row.reconciliation.expected ?? "unknown"} assessed. {row.reconciliation.reason}</span>}<div className="live-document-categories">{Object.entries(row.liveCounts || {}).map(([category, count]) =>
             ['remaining','excluded','superseded','approved'].includes(category) ? <span key={category}>{({ remaining:'Remaining', excluded:'Excluded', superseded:'Superseded', approved:'Approved · awaiting application' })[category]} <strong>{count}</strong></span>
             : <RemediationCategoryPill key={category} category={category} count={count} />)}</div></td>
           <td><button type="button" onClick={() => { opener.current = document.activeElement; setSelected(row.file) }}>View fixes</button></td>

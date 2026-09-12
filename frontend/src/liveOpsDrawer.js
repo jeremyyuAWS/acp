@@ -1415,7 +1415,9 @@ const REMEDIATION_EVENT_TEXT = {
   'remediate.verified': (d) => `${d.fixes ?? 'Applied'} fix${d.fixes === 1 ? '' : 'es'} verified by re-scan`,
   'remediate.verification_failed': (d) => `${d.fixes ?? 'Applied'} fix${d.fixes === 1 ? '' : 'es'} failed re-scan`,
   'remediate.delivered': () => 'Corrected copy delivered to the source provider',
-  'remediate.delivery_failed': () => 'Corrected copy retained in ACP; provider delivery failed',
+  'remediate.delivery_failed': (d) => d.delivery_status === 'saved_in_acp'
+    ? 'Corrected copy saved in ACP; source delivery pending'
+    : 'Corrected copy retained in ACP; provider delivery failed',
   'remediate.review_requested': (d) => `Manual review requested${d.criterion ? ` for WCAG ${d.criterion}` : ''}`,
   'remediate.document_completed': () => 'Document remediation completed',
 }
@@ -1463,7 +1465,7 @@ export function durableRunEvents(snapshot = {}) {
       const line = REMEDIATION_EVENT_TEXT[event.kind]
       if (!line || event.seq == null || !event.occurred_at) continue
       const failure = event.kind === 'remediate.verification_failed'
-        || event.kind === 'remediate.delivery_failed'
+        || (event.kind === 'remediate.delivery_failed' && event.detail?.delivery_status !== 'saved_in_acp')
       const warning = event.kind === 'remediate.review_requested'
       events.push({
         id: `scan:${run.scan_id}:${event.seq}`,

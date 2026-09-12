@@ -234,3 +234,69 @@ def test_assessment_vision_deadline_bounds_provider_timeout_and_stops_later_call
         assert ai._bounded_vision_generate(Provider(), 'describe', b'image', timeout=120)['reason'] == 'assessment_vision_budget_exhausted'
     assert timeouts == [10]
     assert ai._VISION_DEADLINE.get() is None
+
+
+def test_queued_request_runs_after_capacity_frees_without_review(monkeypatch):
+    provider = _BlockingProvider()
+    _runtime(monkeypatch, limit=1, wait=0.5)
+    first = threading.Thread(target=lambda: ai._bounded_vision_generate(provider, 'describe', b'image'))
+    first.start()
+    assert provider.release.wait(0.02) is False
+    results = []
+    second = threading.Thread(target=lambda: results.append(
+        ai._bounded_vision_generate(provider, 'describe', b'image')))
+    second.start()
+    time.sleep(0.02)
+    provider.release.set()
+    first.join(timeout=1)
+    second.join(timeout=1)
+    assert results[0]['ok']
+    assert ai.vision_runtime_health()['backpressured'] == 0
+    assert ai.vision_runtime_health()['admitted'] == 2
+
+
+def test_assessment_deadline_includes_cloud_admission_wait(monkeypatch):
+    _runtime(monkeypatch, wait=30)
+    clock = [100.0]
+    monkeypatch.setattr(ai.time, 'monotonic', lambda: clock[0])
+    waits, timeouts, releases = [], [], []
+    class Gate:
+        def acquire(self, timeout):
+            waits.append(timeout)
+            clock[0] += 7
+            return True
+        def release(self):
+            releases.append(True)
+    class Provider:
+        name = 'openai'
+        def generate(self, *args, **kwargs):
+            timeouts.append(kwargs['timeout'])
+            return {'ok': True, 'text': 'A useful cloud draft'}
+    monkeypatch.setattr(ai, '_CLOUD_VISION_GATE', Gate())
+    with ai.assessment_vision_budget(10):
+        assert ai._bounded_vision_generate(Provider(), 'describe', b'image', timeout=120)['ok']
+    assert waits == [10]
+    assert timeouts == [3]
+    assert releases == [True]
+
+
+def test_assessment_deadline_exhausted_during_admission_never_dispatches(monkeypatch):
+    _runtime(monkeypatch, wait=30)
+    clock = [100.0]
+    monkeypatch.setattr(ai.time, 'monotonic', lambda: clock[0])
+    releases = []
+    class Gate:
+        def acquire(self, timeout):
+            clock[0] += timeout
+            return True
+        def release(self):
+            releases.append(True)
+    class Provider:
+        name = 'anthropic'
+        def generate(self, *args, **kwargs):
+            raise AssertionError('expired enrichment must not dispatch')
+    monkeypatch.setattr(ai, '_CLOUD_VISION_GATE', Gate())
+    with ai.assessment_vision_budget(10):
+        result = ai._bounded_vision_generate(Provider(), 'describe', b'image', timeout=120)
+    assert result['reason'] == 'assessment_vision_budget_exhausted'
+    assert releases == [True]

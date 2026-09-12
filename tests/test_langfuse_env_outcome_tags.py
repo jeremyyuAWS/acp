@@ -17,6 +17,14 @@ import lf  # noqa: E402
 import handlers  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def isolated_ingestion_circuit(monkeypatch):
+    # These tests construct fresh SDK doubles. A previous test's process-local HTTP circuit
+    # must not suppress that construction; monkeypatch restores the prior process state.
+    monkeypatch.setattr(lf, "_ingestion_retry_mono", 0.0)
+    monkeypatch.setattr(lf, "_ingestion_consecutive_failures", 0)
+
+
 # ── item 1: environment on the client ─────────────────────────────────────────
 def test_env_is_sanitised_to_langfuse_safe_chars():
     # module-level _ENV is lowercase and only [a-z0-9_-] (a stray value can't make the client 400)

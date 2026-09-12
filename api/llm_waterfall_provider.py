@@ -303,7 +303,7 @@ def managed_text_generate(prompt: str) -> dict:
 
 
 def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
-                              tier_indices=None, operation_id=None):
+                              tier_indices=None, operation_id=None, image_prefix=False):
     """One bounded generation operation, also usable for explicit review stages.
 
     The caller supplies a trusted configured generator and immutable run context.
@@ -313,6 +313,8 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
     from ai_attempt_history import AttemptHistory, PURPOSES
     from llm_remediation_waterfall import BudgetAdapter
     from ai_generation_chain import normalize_chain, STEP_IDS, ELIGIBLE
+    if type(image_prefix) is not bool:
+        raise ValueError('explicit image prefix mode required')
     chain = getattr(ctx, 'policy', {}).get('generation_chain')
     if chain is not None:
         try:
@@ -326,7 +328,18 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
     expected_indices = tuple(range(1, len(chain['steps']) + 1)) if chain else (1, 2)
     if tier_indices is None:
         tier_indices = expected_indices
-    if purpose == 'draft' and chain and tuple(tier_indices) != expected_indices:
+    if image_prefix:
+        # A verified image request may use the first two accepted positions;
+        # the full immutable chain was checked above, including its unused third.
+        # Other draft paths keep their exact-chain requirement.
+        from document_wide_provider import VISION_MODELS
+        if (purpose != 'draft' or not chain or len(chain['steps']) != 3
+                or tuple(tier_indices) != (1, 2)
+                or any(generator.models[i].name not in VISION_MODELS.get(
+                    generator.specs[generator.models[i].name].provider, set())
+                    or generator.specs[generator.models[i].name].plain_text_only for i in (0, 1))):
+            return defer_managed('approved_image_prefix_unavailable')
+    if purpose == 'draft' and chain and tuple(tier_indices) != expected_indices and not image_prefix:
         return defer_managed('approved_generation_chain_mismatch')
     if purpose not in PURPOSES or not tier_indices or any(i not in (expected_indices if purpose == 'draft' else (1, 2)) for i in tier_indices) or len(set(tier_indices)) != len(tier_indices):
         raise ValueError('supported purpose and unique model tiers required')
@@ -336,7 +349,7 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
     if purpose == 'draft' and chain and len(chain['steps']) == 3:
         from ai_generation_adapter import current_generation_adapter
         adapter = current_generation_adapter()
-        if adapter is None or not getattr(ctx, 'scan_id', None) or not getattr(ctx, 'file', None):
+        if (adapter is None and not image_prefix) or not getattr(ctx, 'scan_id', None) or not getattr(ctx, 'file', None):
             return defer_managed('supported_generation_adapter_required')
     budget = BudgetAdapter(ctx.ledger, ctx.owner_id, ctx.run_id, generator.pricing_refs)
     input_hash = hashlib.sha256(prompt.encode('utf-8')).hexdigest()

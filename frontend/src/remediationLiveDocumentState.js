@@ -1,3 +1,4 @@
+import { scOf } from './fixSummary.js'
 import { releaseReadiness, releaseSourceState, hasSavedCorrectedCopy } from './releaseClarityModel.js'
 import { remediationCategory, aiAppliedUnverified } from './remediationCategories.js'
 
@@ -10,26 +11,34 @@ export function materialKey(scanId, snapshot, events = []) {
 
 export function liveDocumentCounts(documents, ledger, review = [], batchId) {
   if (!ledger?.available || !Array.isArray(ledger.items) || (batchId && ledger.batch_id !== batchId)) return null
-  const ids = new Set()
-  if (ledger.items.some(r => !r.finding_id || ids.has(r.finding_id) || !ids.add(r.finding_id))) return null
+  const identityCounts = ledger.items.reduce((counts, finding) => counts.set(finding.finding_id, (counts.get(finding.finding_id) || 0) + 1), new Map())
   const result = []
   for (const doc of documents) {
     const findings = ledger.items.filter(f => f.file === doc.file)
-    if (findings.length !== doc.totalFindings) return null
+    const identities = new Set()
+    const invalidIdentity = findings.some(finding => !finding.finding_id || identityCounts.get(finding.finding_id) > 1 || identities.has(finding.finding_id) || !identities.add(finding.finding_id))
+    const groupCounts = rows => rows.reduce((counts, row) => { const sc = scOf(row.sc || row.rule_id); counts[sc] = (counts[sc] || 0) + 1; return counts }, {})
+    const assessedGroups = groupCounts(doc.findings || [])
+    const recordedGroups = groupCounts(findings)
+    const sameGroups = Object.keys({...assessedGroups, ...recordedGroups}).every(sc => assessedGroups[sc] === recordedGroups[sc])
+    if (invalidIdentity || findings.length !== doc.totalFindings || !sameGroups) {
+      result.push({ ...doc, liveCounts: null, reconciliation: { expected: doc.totalFindings ?? null, recorded: findings.length, reason: invalidIdentity ? 'Finding identities are missing or duplicated.' : !sameGroups && findings.length === doc.totalFindings ? 'Recorded criteria differ from this assessment.' : 'Recorded finding population differs from this assessment.' } })
+      continue
+    }
     const counts = {}
     for (const finding of findings) {
       const item = review.find(r => r.id === finding.review_item_id && r.file === doc.file)
       let category
       if (finding.disposition === 'resolved_verified') category = 'verified'
-      else if (item?.applied === true || item?.applied === 1) category = aiAppliedUnverified({ ...item, applied:true }) ? 'ai_applied' : 'applied'
       else if (finding.disposition === 'remediation_failed') category = 'blocked'
       else if (finding.disposition === 'excluded_by_policy') category = 'excluded'
       else if (finding.disposition === 'superseded_by_reassessment') category = 'superseded'
       else if (finding.disposition === 'unchanged_no_fix') category = 'manual'
+      else if (item?.applied === true || item?.applied === 1) category = aiAppliedUnverified({ ...item, applied:true }) ? 'ai_applied' : 'applied'
       else if (finding.disposition === 'approved_pending_verification') category = 'approved'
       else if (item?.proposals?.length) category = 'approval'
       else {
-        const sameSC = doc.findings.filter(r => r.sc === finding.rule_id)
+        const sameSC = doc.findings.filter(r => r.sc === scOf(finding.rule_id))
         const categories = new Set(sameSC.map(remediationCategory))
         category = categories.size === 1 && ['manual', 'unsupported', 'blocked'].includes([...categories][0]) ? [...categories][0] : 'remaining'
       }

@@ -70,6 +70,17 @@ def _run_dir(root: Path, pid: int, *, age_s: float = 0.0) -> Path:
     return d
 
 
+def _reaped_pids(count: int) -> list[int]:
+    # Neighboring PID numbers can belong to live parallel sessions. Only
+    # processes we have waited for are known dead; never guess from an offset.
+    processes = [subprocess.Popen([sys.executable, "-c", ""]) for _ in range(count)]
+    for process in processes:
+        process.wait()
+    pids = [process.pid for process in processes]
+    assert all(not acp_conftest._acp_pid_alive(pid) for pid in pids)
+    return pids
+
+
 @pytest.fixture()
 def isolated_root(tmp_path, monkeypatch):
     """Point the claim logic at a throwaway root, and guarantee this session's own tempdir is
@@ -86,7 +97,7 @@ def isolated_root(tmp_path, monkeypatch):
         tempfile.tempdir = saved_tempdir
 
 
-def test_a_live_concurrent_session_is_never_pruned(isolated_root, live_pid, dead_pid):
+def test_a_live_concurrent_session_is_never_pruned(isolated_root, live_pid):
     """THE RULE, against a real running process.
 
     The root is stacked well past the retention cap with DEAD runs so that pruning definitely
@@ -94,7 +105,8 @@ def test_a_live_concurrent_session_is_never_pruned(isolated_root, live_pid, dead
     deleted at all", which proves nothing about liveness.
     """
     live = _run_dir(isolated_root, live_pid)
-    dead = [_run_dir(isolated_root, dead_pid + 1000 + i, age_s=60 * (i + 1)) for i in range(6)]
+    dead = [_run_dir(isolated_root, pid, age_s=60 * (i + 1))
+            for i, pid in enumerate(_reaped_pids(6))]
 
     acp_conftest._acp_claim_tmpdir()
 
@@ -159,7 +171,7 @@ def test_an_xdist_worker_joins_rather_than_claiming(isolated_root, monkeypatch):
     assert set(isolated_root.iterdir()) == before, "a worker must not create a second directory"
 
 
-def test_age_alone_never_condemns_a_live_run(isolated_root, live_pid, dead_pid):
+def test_age_alone_never_condemns_a_live_run(isolated_root, live_pid):
     """THE DEFECT THIS FILE FOUND. The guard used to read `alive AND younger than 24h`, so a
     live session whose directory aged past the backstop became a deletion candidate — the exact
     outcome the mechanism exists to prevent.
@@ -169,8 +181,8 @@ def test_age_alone_never_condemns_a_live_run(isolated_root, live_pid, dead_pid):
     already says so in its own docstring — a wrongly-kept directory costs disk, a wrongly-deleted
     one costs another session its run. Age now only ever condemns a run whose process is gone."""
     ancient_but_live = _run_dir(isolated_root, live_pid, age_s=48 * 3600)
-    for i in range(5):
-        _run_dir(isolated_root, dead_pid + 2000 + i, age_s=60 * (i + 1))
+    for i, pid in enumerate(_reaped_pids(5)):
+        _run_dir(isolated_root, pid, age_s=60 * (i + 1))
 
     acp_conftest._acp_claim_tmpdir()
 

@@ -391,3 +391,54 @@ def test_scan_id_mapping_survives_coalesce_suppression(two_replicas, monkeypatch
 def test_unknown_scan_id_returns_none(two_replicas):
     core, _ = two_replicas
     assert core.get_job_id_for_scan("s-never-seen") is None
+
+
+def test_redis_outage_reads_durable_terminal_state_instead_of_local_processing(monkeypatch):
+    import core
+    from unittest.mock import Mock
+    monkeypatch.setattr(core, '_get_redis', lambda: None)
+    monkeypatch.setattr(core, 'REDIS_URL', 'redis://unavailable.invalid')
+    monkeypatch.setattr(core, 'JOBS', {'durable': {'phase': 'remediating', 'done': False}})
+    store = Mock()
+    store.get_job.return_value = {'status': 'done', 'scan_id': 'scan-fixture',
+                                 'updated_at': '2026-09-01T00:00:00+00:00'}
+    monkeypatch.setattr(core, 'get_store', lambda: store)
+    state = core.get_job_state('durable')
+    assert state['done'] is True
+    assert state['phase'] == 'complete'
+    assert state['scan_id'] == 'scan-fixture'
+    assert state['state_source'] == 'durable_queue'
+
+
+def test_durable_running_job_does_not_become_falsely_terminal_during_cache_outage(monkeypatch):
+    import core
+    from unittest.mock import Mock
+    monkeypatch.setattr(core, '_get_redis', lambda: None)
+    monkeypatch.setattr(core, 'REDIS_URL', 'redis://unavailable.invalid')
+    monkeypatch.setattr(core, 'JOBS', {})
+    store = Mock()
+    store.get_job.return_value = {'status': 'running', 'payload': {'scan_id': 'scan-fixture'},
+                                 'updated_at': '2026-09-01T00:00:00+00:00'}
+    monkeypatch.setattr(core, 'get_store', lambda: store)
+    state = core.get_job_state('durable')
+    assert state['done'] is False
+    assert state['phase'] == 'running'
+
+
+def test_durable_active_status_clears_a_stale_terminal_error_mirror(monkeypatch):
+    import core
+    from unittest.mock import Mock
+    monkeypatch.setattr(core, '_get_redis', lambda: None)
+    monkeypatch.setattr(core, 'REDIS_URL', 'redis://unavailable.invalid')
+    monkeypatch.setattr(core, 'JOBS', {'durable': {'phase': 'error', 'done': True,
+                                                'error': 'old worker error', 'result': {'saved': True}}})
+    store = Mock()
+    monkeypatch.setattr(core, 'get_store', lambda: store)
+    for status in ('running', 'queued', 'done'):
+        store.get_job.return_value = {'status': status, 'scan_id': 'scan-fixture',
+                                     'updated_at': '2026-09-01T00:00:00+00:00'}
+        state = core.get_job_state('durable')
+        assert state['error'] is None
+        assert state['phase'] == ('complete' if status == 'done' else status)
+        assert state['done'] is (status == 'done')
+        assert state['result'] == {'saved': True}

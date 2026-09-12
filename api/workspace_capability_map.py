@@ -291,7 +291,7 @@ _map_many([
 _map_many([("GET", "/scans/{sid}/report.pdf")], {"release.view", "reports.export"})
 
 # ── Monitor ───────────────────────────────────────────────────────────────────
-_map_many([("GET", "/monitor/estate"), ("GET", "/schedule"),
+_map_many([("GET", "/schedule"),
            ("GET", "/schedule/history"), ("GET", "/schedule/notifications"),
            ("GET", "/analytics/compliance-trend")], {"monitor.view"})
 _map_many([("PUT", "/schedule"),
@@ -512,6 +512,7 @@ _map_many([("GET", "/scans/{sid}/remediation/accepted-plan/{run_id}")], {"remedi
 # Each entry says WHY. An exemption without one is indistinguishable from an oversight, and the
 # completeness test refuses a route that is in neither table.
 EXEMPT: dict[tuple[str, str], str] = {
+    ("GET", "/monitor/estate"): "counts-only production monitor; route independently validates dedicated X-Monitor-Key with hmac and fails closed when unset",
     # FastAPI framework routes are Starlette Routes, not APIRoutes. They are
     # already outside core's protected API enumeration and publicly served.
     # A raw route audit must account for them without changing that auth policy.

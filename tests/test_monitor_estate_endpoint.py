@@ -245,3 +245,23 @@ def test_sweep_hands_over_no_owner_or_scan_identity(prod_client):
     raw = client.get("/monitor/estate", headers={"X-Monitor-Key": KEY}).text
     assert "alice@movate.com" not in raw
     assert "sweep01" not in raw
+
+
+def test_keyed_monitor_bypasses_workspace_role_gate_but_not_its_own_auth(prod_client, monkeypatch):
+    """A monitor principal has no workspace role; its credential grants only these counts."""
+    import workspace_rollout
+    import workspace_roles
+    monkeypatch.setattr(workspace_rollout, "roles_resolved", lambda: True)
+    monkeypatch.setattr(workspace_rollout, "enforcement_active", lambda: True)
+    monkeypatch.setattr(workspace_roles, "access_for_email", lambda *args, **kwargs: {
+        "capabilities": [], "role": None,
+    })
+    client, _ = prod_client
+    assert client.get("/monitor/estate", headers={"X-Monitor-Key": KEY}).status_code == 200
+    assert client.get("/monitor/estate").status_code == 401
+    assert client.get("/monitor/estate", headers={"X-Monitor-Key": "wrong"}).status_code == 401
+    import core
+    monkeypatch.setattr(core, "MONITOR_KEY", None)
+    assert client.get("/monitor/estate", headers={"X-Monitor-Key": KEY}).status_code == 503
+    # The dedicated key is not a workspace credential for neighboring monitor reads.
+    assert client.get("/schedule", headers={"X-Monitor-Key": KEY}).status_code != 200

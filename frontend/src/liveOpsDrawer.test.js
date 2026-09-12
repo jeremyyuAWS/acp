@@ -107,6 +107,16 @@ describe('Durable remediation events join the Live Operations timeline', () => {
     expect(events.every((event) => event.durable)).toBe(true)
   })
 
+  it('distinguishes a saved ACP copy from a failed provider delivery', () => {
+    const events = durableRunEvents({ runs: [{ scan_id: 'scan-1', stage: 'remediate', recent_events: [
+      { seq: 1, occurred_at: iso(-2), kind: 'remediate.delivery_failed', detail: { delivery_status: 'saved_in_acp' } },
+      { seq: 2, occurred_at: iso(-1), kind: 'remediate.delivery_failed', detail: { delivery_status: 'failed' } },
+    ] }] })
+    expect(events.map(e => e.kind)).toEqual(['activity', 'error'])
+    expect(events[0].text).toBe('Corrected copy saved in ACP; source delivery pending')
+    expect(events[1].text).toContain('provider delivery failed')
+  })
+
   it('ignores unknown, incomplete, and non-remediation events', () => {
     expect(durableRunEvents({ runs: [
       { scan_id: 'scan-1', stage: 'assess', recent_events: [
