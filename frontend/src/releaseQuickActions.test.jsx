@@ -1,3 +1,4 @@
+import axe from 'axe-core'
 import { createElement as h, act } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createTestRoot, unmountAll } from './testRoots.js'
@@ -211,4 +212,10 @@ it('reconnects Drive and resumes the saved manual authorization without approvin
   expect(publish.closest('details')).toBeNull()
   expect(approve.closest('details').open).toBe(false)
   expect(publish.compareDocumentPosition(approve) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+ })
+
+ it('keeps an empty ready-file group accessible when all copies are blocked', async () => {
+  const v = await mount({ ready: [] })
+  const results = await axe.run(v.container, { runOnly: { type: 'rule', values: ['aria-prohibited-attr'] } })
+  expect(results.violations).toEqual([])
  })

@@ -116,7 +116,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
       <h4 id={`${reasonId}-files`}><span className="release-step-number">1</span> {allDelivered ? 'Published files' : 'Choose files'}</h4>
       {!allDelivered && releaseOptions && <details><summary>Publishing options</summary>{releaseOptions}</details>}
       <div className="release-quick-summary"><strong>{allDelivered ? `${deliveredCount} delivered` : `${selectedReady.length} ready to publish`}</strong><span>{files.length} files in this scope</span></div>
-      <div className="release-quick-file-list" aria-label="Files to publish">
+      <div className="release-quick-file-list" role="group" aria-label="Files to publish">
         {files.filter(file => readyNames.has(file.file) || allDelivered).map(file => <label key={file.file} className={`release-quick-file${fileStates[file.file]?.status === 'released' ? ' release-quick-file--delivered' : ''}`}>
           <input type="checkbox" aria-label={`Publish ${file.file}`} checked={readyNames.has(file.file) && !excluded.has(file.file)} disabled={readOnly || publishing || !readyNames.has(file.file)}
             onChange={event => setExcluded(previous => { const next = new Set(previous); event.target.checked ? next.delete(file.file) : next.add(file.file); return next })} />
