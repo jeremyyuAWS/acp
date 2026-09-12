@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import useConfirmedRemediationActivity from './useConfirmedRemediationActivity.js'
 import LiveCounter from './LiveCounter.jsx'
+import PlannedRemediationWaterfall from './PlannedRemediationWaterfall.jsx'
 import RemediationWaterfallCard from './RemediationWaterfallCard.jsx'
 import RemediationThroughput from './RemediationThroughput.jsx'
 import { counterRows, secondaryRows, freshness, headline, integrityAffects, partitionSums } from './remediationSnapshot.js'
@@ -227,8 +228,13 @@ function FindingReconciliation({ snapshot }) {
   </section>
 }
 
+function ActivityLine({ line = '' }) {
+  const match = /^(.*) · (source delivery is (?:unavailable|disabled))$/.exec(line)
+  return match ? <>{match[1]} <span className="remops-delivery-tag">{match[2]}</span></> : line
+}
+
 function Activity({ events = [], status = 'ready', terminal = false, compact = false }) {
-  return <section className="remops-activity">{!compact && <h3>Live activity</h3>}{events.length ? <ol aria-label="Recent remediation activity">{activityGroups(events.slice(0, 10)).map((group) => { const event = group.lead; return <li key={`${group.key}:${event.key}`} className={`remops-activity-${event.tone}`}><div className="remops-activity-event"><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span>{event.line}</span></div>{group.rows.length > 1 && <details><summary>{group.rows.length - 1} other updates for this document</summary><ul>{group.rows.filter(row => row !== event).map(row => <li key={row.key}>{row.line}</li>)}</ul></details>}</li> })}</ol> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
+  return <section className="remops-activity">{!compact && <h3>Live activity</h3>}{events.length ? <ol aria-label="Recent remediation activity">{activityGroups(events.slice(0, 10)).map((group) => { const event = group.lead; const retry = ['scan.retrying', 'scan.interrupted', 'remediate.delivery_retry_requested'].includes(event.kind); return <li key={`${group.key}:${event.key}`} className={`remops-activity-${event.tone}${retry ? ' remops-activity-retry' : ''}`}><div className="remops-activity-event"><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{retry ? '↻' : event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span><ActivityLine line={event.line} /></span></div>{group.rows.length > 1 && <details><summary>{group.rows.length - 1} other updates for this document</summary><ul>{group.rows.filter(row => row !== event).map(row => <li key={row.key}><ActivityLine line={row.line} /></li>)}</ul></details>}</li> })}</ol> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
 }
 
 // The stub this replaces summed four numbers into "Needs attention · N" and offered nothing to do
@@ -266,7 +272,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   const [announcement, setAnnouncement] = useState('')
   const line = headline(snapshot)
   useEffect(() => { setAnnouncement('') }, [line])
-  if (!snapshot || snapshot.state === 'draft') return null
+  if (!snapshot || snapshot.state === 'draft') return assessmentContext?.scanId ? <PlannedRemediationWaterfall /> : null
   const fresh = freshness({ snapshot, connected, receivedAt })
   const suspect = snapshot.integrity?.ok === false
   const documentCountsSuspect = integrityAffects(snapshot, 'documents')

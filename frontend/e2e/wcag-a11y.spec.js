@@ -231,15 +231,24 @@ test.describe('Release tab', () => {
   test.beforeEach(async ({ page }) => {
     await signIn(page)
     await clickTab(page, /Release/)
-    await expect(page.locator('[role="tabpanel"]')).toBeVisible()
-    await page.waitForFunction(() =>
-      document.querySelector('[role="tabpanel"]')?.textContent?.length > 50
-    , { timeout: 10_000 })
+    // Release contains Manage publication and Reports tabpanels beneath this
+    // workflow panel; their presence must not make workflow readiness ambiguous.
+    const panel = page.locator('#workflow-panel')
+    await expect(panel).toBeVisible()
+    await expect.poll(async () => (await panel.textContent())?.length || 0,
+      { timeout: 10_000 }).toBeGreaterThan(50)
   })
 
   test('no WCAG 2.1 A/AA violations', async ({ page }) => {
     const v = await runAxe(page)
     expect(v, fmt(v)).toHaveLength(0)
+    const reports = page.getByRole('tab', { name: 'Reports', exact: true })
+    if (await reports.count()) {
+      await reports.click()
+      await expect(page.getByRole('tabpanel', { name: 'Reports', exact: true })).toBeVisible()
+      const reportViolations = await runAxe(page)
+      expect(reportViolations, fmt(reportViolations)).toHaveLength(0)
+    }
   })
 })
 

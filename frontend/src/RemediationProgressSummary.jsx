@@ -1,4 +1,5 @@
-import LiveCounter from './LiveCounter.jsx'
+import BidirectionalKpiCounter from './BidirectionalKpiCounter.jsx'
+import FileCoverage, { KpiComparison } from './FileCoverage.jsx'
 import './RemediationProgressSummary.css'
 
 export const PROGRESS_STATES = [
@@ -8,19 +9,22 @@ export const PROGRESS_STATES = [
 
 // Callers supply recorded document states. Unknown documents remain explicit;
 // neither a corrected copy nor an AI approval proves verification or publication.
-export default function RemediationProgressSummary({ documents = [], selected, onSelect, reconciling = false, animate = false }) {
+export default function RemediationProgressSummary({ documents = [], selected, onSelect, reconciling = false, animate = false, coverage, onCoverageSelect, selectedCoverage, baselineDocumentCounts, startedAt }) {
   const known = new Set(PROGRESS_STATES.map(([key]) => key))
   const unknown = documents.filter(document => !known.has(document.progressState)).length
   const selectedLabel = PROGRESS_STATES.find(([key]) => key === selected)?.[1]
   const selectedCount = documents.filter(document => document.progressState === selected).length
   return <section className="remediation-progress-summary" aria-label="Document progress">
+    {startedAt && Number.isFinite(new Date(startedAt).getTime()) && <p className="muted">Before remediation → Live progress · Started {new Date(startedAt).toLocaleString()}</p>}
+    {coverage && <FileCoverage evidence={coverage} animate={animate} onSelect={onCoverageSelect} selected={selectedCoverage}/> }
     <div className="remediation-progress-summary-heading"><h3>Document progress</h3>
       {onSelect && <button type="button" aria-pressed={!selected} onClick={() => onSelect(null)}>Show all {documents.length} document{documents.length === 1 ? '' : 's'}</button>}
     </div>
     {onSelect && <p className="remediation-progress-filter-help">Select a status to filter the document list below.</p>}
     <div className="remediation-progress-summary-counts">{PROGRESS_STATES.map(([key, label]) => {
       const count = documents.filter(document => document.progressState === key).length
-      const content = <><strong>{animate && ['verified', 'published', 'ready'].includes(key) ? <LiveCounter value={count} /> : count}</strong><span>{label}</span></>
+      const fraction = documents.length ? count / documents.length : 0
+      const content = <><span className="kpi-tile-fill" aria-hidden="true" style={{width:`${fraction * 100}%`}}/><small>Now</small><strong>{animate ? <BidirectionalKpiCounter value={count} /> : count}</strong><span>{label}</span><KpiComparison value={count} baseline={baselineDocumentCounts?.[key]}/></>
       return onSelect ? <button type="button" key={key} className={`progress-${key}`} aria-label={`Show documents: ${label} (${count})`} aria-pressed={selected === key} onClick={() => onSelect(key)}>{content}<small>{selected === key ? 'Selected filter' : 'Filter document list'}</small></button>
         : <div key={key} className={`progress-${key}`}>{content}</div>
     })}</div>

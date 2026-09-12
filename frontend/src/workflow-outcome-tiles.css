@@ -1,0 +1,25 @@
+.workflow-outcome-tiles { margin:18px 0; }
+.workflow-outcome-tiles h4 { margin:0 0 6px;font-size:15px; }
+.workflow-outcome-tiles__scope,.workflow-outcome-tiles__note { color:var(--muted);font-size:12px;margin:6px 0 12px; }
+.workflow-outcome-tiles__grid { display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px; }
+.workflow-outcome-tiles__tile { position:relative;overflow:hidden;display:flex;flex-direction:column;gap:8px;text-align:left;padding:16px;border:1px solid var(--tile-accent);border-radius:11px;background:var(--tile-bg);color:inherit;min-height:150px; }
+.workflow-outcome-tiles__tile.tone-blue { --tile-accent:#2383bb;--tile-bg:#eff8ff; }
+.workflow-outcome-tiles__tile.tone-purple { --tile-accent:#8653ba;--tile-bg:#f6f0fc; }
+.workflow-outcome-tiles__tile.tone-pink { --tile-accent:#c44c75;--tile-bg:#fff2f6; }
+.workflow-outcome-tiles__tile.tone-green { --tile-accent:#38856a;--tile-bg:#eef9f2; }
+.workflow-outcome-tiles__tile.tone-gray { --tile-accent:#81808a;--tile-bg:#f5f5f8; }
+.workflow-outcome-tiles__label { font-size:13px;font-weight:600; }
+.workflow-outcome-tiles__tile strong { display:flex;align-items:baseline;gap:8px;font-size:30px;line-height:1.1;font-variant-numeric:tabular-nums; }
+.workflow-outcome-tiles__now { font-size:11px;font-weight:400;color:var(--muted); }
+.workflow-outcome-tiles__tile .livecounter-n { font-size:inherit; }
+.workflow-outcome-tiles__tile .livecounter-delta { font-size:13px;color:var(--tile-accent); }
+.workflow-outcome-tiles__before,.workflow-outcome-tiles__net { font-size:11.5px;color:var(--muted); }
+.workflow-outcome-tiles__tile > :not(.workflow-outcome-tiles__fill) { position:relative;z-index:1; }
+.workflow-outcome-tiles__fill { position:absolute;inset:0;width:100%;height:100%;opacity:.08;pointer-events:none;background:var(--tile-accent);transform-origin:left;transition:transform .45s ease; }
+@media(max-width:850px) { .workflow-outcome-tiles__grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:500px) { .workflow-outcome-tiles__grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(prefers-reduced-motion:reduce) { .workflow-outcome-tiles__fill { transition:none; } }
+.workflow-outcome-tiles__tile .kpi-counter { display:inline-flex;align-items:baseline;gap:6px; }
+.workflow-outcome-tiles__tile .kpi-update-delta { font-size:13px;color:var(--tile-accent);animation:workflow-kpi-delta 2s ease both; }
+@keyframes workflow-kpi-delta { 0% { opacity:0;transform:translateY(5px); } 15%,80% { opacity:1;transform:translateY(0); } 100% { opacity:0; } }
+@media(prefers-reduced-motion:reduce) { .workflow-outcome-tiles__tile .kpi-update-delta { animation:none; } }

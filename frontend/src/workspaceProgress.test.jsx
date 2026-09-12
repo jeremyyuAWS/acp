@@ -58,16 +58,17 @@ describe('WorkspaceProgress (component)', () => {
     expect(container.textContent).toContain('a.docx')
     expect(container.textContent).toContain('0 of 3 actions complete')
     expect(container.textContent).toContain('0%')
-    expect(container.textContent).toContain('About 2 min remaining')
+    expect(container.textContent).toContain('1 applying / awaiting verification')
     const bar = container.querySelector('[role=progressbar]')
     expect(bar).toBeTruthy()
     expect(bar.getAttribute('aria-valuenow')).toBe('0')
   })
 
-  it('reads Complete when the document is fully resolved', async () => {
+  it('keeps approval decisions in Processing until verification finishes', async () => {
     await render({ queue: QUEUE, decisions: { 1: { state: 'accepted' }, 2: { state: 'accepted' }, 3: { state: 'rejected' } }, selected: { file: 'a.docx' } })
-    expect(container.textContent).toContain('100%')
-    expect(container.textContent).toContain('Complete')
+    expect(container.textContent).not.toContain('100%')
+    expect(container.textContent).toContain('awaiting verification')
+    expect(container.textContent).not.toContain('Complete ✓')
   })
 
   it('falls back to a run-level label before anything is selected', async () => {

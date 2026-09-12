@@ -61,10 +61,10 @@ it('requires a publishing answer in the mandatory plan and resets it for a new s
 it('requires a choice in the compact publishing question and explains automatic suggestion application', async () => {
   const onAnswered = vi.fn()
   const v = await mount({ compact: true, requireChoice: true, onAnswered })
-  expect(v.container.textContent).toContain('Auto-publish?')
+  expect(v.container.textContent).toContain('Automatically apply fixes and publish corrected copies?')
   expect(v.input().checked).toBe(false)
   expect(v.review().checked).toBe(false)
-  expect(v.container.textContent).toContain('Automatic publishing applies available fixes and AI suggestions')
+  expect(v.container.textContent).toContain('No individual approvals or inspection required')
   expect(v.container.querySelector('[aria-label="About automatic release"]')).toBeNull()
   await act(async () => v.input().click())
   expect(onAnswered).toHaveBeenLastCalledWith(true)
@@ -180,4 +180,20 @@ it('preserves a publish-later answer during an explicit readiness refresh',async
  const v=await mount({read,requireChoice:true,onAnswered});await act(async()=>v.review().click())
  await act(async()=>[...v.container.querySelectorAll('button')].find(b=>b.textContent==='Refresh publishing readiness').click())
  expect(v.review().checked).toBe(true);expect(onAnswered).toHaveBeenLastCalledWith(true)
+})
+
+it('offers automatic download preparation for uploads and checks the chosen cloud destination', async () => {
+  const local = { ...planning, source: 'local', destination: {provider:'local',folder_id:'root',folder_name:'Download package'}, destination_label:'Download package' }
+  const read = vi.fn(async (_scan, _files, options) => ({planning:{...local,destination:options.destination || local.destination}}))
+  const v = await mount({read,compact:true,requireChoice:true})
+  expect(v.container.textContent).toContain('No individual approvals or inspection required')
+  expect(v.container.textContent).toContain('prepared automatically')
+  await act(async () => v.input().click())
+  expect(v.onChange).toHaveBeenLastCalledWith(expect.objectContaining({scope_files:['a'],destination:local.destination}))
+  const select=v.container.querySelector('select[aria-label="Publishing destination"]')
+  await act(async () => {select.value='drive';select.dispatchEvent(new Event('change',{bubbles:true}))})
+  expect(read).toHaveBeenLastCalledWith('scan',['a'],expect.objectContaining({destination:expect.objectContaining({provider:'drive',folder_id:'root'})}))
+  expect(v.input().checked).toBe(false)
+  await act(async () => v.input().click())
+  expect(v.onChange).toHaveBeenLastCalledWith(expect.objectContaining({destination:expect.objectContaining({provider:'drive'})}))
 })

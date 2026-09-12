@@ -1,3 +1,4 @@
+import AutomaticReleasePackage from './AutomaticReleasePackage.jsx'
 import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import DriveReleaseReconnect from './DriveReleaseReconnect.jsx'
@@ -38,6 +39,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const releaseFiles = documentsInSelection(files, triage)
   const [automaticAuthorization, setAutomaticAuthorization] = useState(null)
   const [outcomeFilter, setOutcomeFilter] = useState('all')
+  const [releaseTab, setReleaseTab] = useState('manage')
+  useEffect(() => setReleaseTab('manage'), [run?.id])
   useEffect(() => setOutcomeFilter('all'), [run?.id])
   const [allowRemainingIssues, setAllowRemainingIssues] = useState(false)
   const releaseScopeKey = JSON.stringify([run?.id, [...new Set(releaseFiles.map(file => file.file))].sort()])
@@ -117,15 +120,22 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     setAutomaticAuthorization(null)
     setAllowRemainingIssues(false)
     if (!run?.id || !releaseFiles.length || readOnly) return () => controller.abort()
-    getAutomaticRelease(run.id, releaseFiles.map(file => file.file), { signal: controller.signal }).then(result => {
-      if (!live) return
-      const saved = result?.authorization
-      setAutomaticAuthorization(saved)
-      if (partialChoice.current === releaseScopeKey) return
-      if (saved?.allow_remaining_issues === true && ['active', 'waiting', 'publishing', 'blocked', 'completed'].includes(saved.status)
-        && releaseFiles.every(file => saved.files?.includes(file.file))) setAllowRemainingIssues(true)
-    }).catch(() => { /* Manual choice remains available if saved authorization cannot be read. */ })
-    return () => { live = false; controller.abort() }
+    let timer
+    const refresh = async () => {
+      try {
+        const result = await getAutomaticRelease(run.id, releaseFiles.map(file => file.file), { signal: controller.signal })
+        if (!live) return
+        const saved = result?.authorization
+        setAutomaticAuthorization(saved)
+        if (partialChoice.current !== releaseScopeKey && saved?.allow_remaining_issues === true
+          && ['active', 'waiting', 'publishing', 'blocked', 'completed'].includes(saved.status)
+          && releaseFiles.every(file => saved.files?.includes(file.file))) setAllowRemainingIssues(true)
+        if (saved && (['active','waiting','publishing','blocked'].includes(saved.status)
+          || (saved.package && !['done','dead','cancelled'].includes(saved.package.status)))) timer = window.setTimeout(refresh, 5000)
+      } catch { /* Manual choice remains available if saved authorization cannot be read. */ }
+    }
+    refresh()
+    return () => { live = false; window.clearTimeout(timer); controller.abort() }
   }, [releaseScopeKey, readOnly])
   useEffect(() => {
     if (!run?.id) { setPackageJob(null); return }
@@ -159,18 +169,26 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   // human-review findings are approved. Fetch the pending HITL queue so the empty state can
   // say "N findings await review — approve them in Review first" instead of a dead-end.
   const [pendingReview, setPendingReview] = useState({ items: 0, files: 0, byFile: {} })
+  const [processingReview, setProcessingReview] = useState({})
   useEffect(() => {
-    let live = true
-    if (!run?.id) { setPendingReview({ items: 0, files: 0, byFile: {} }); return }
-    listHitlQueue(run.id, 'pending')
-      .then((q) => { if (live) {
-        const scoped = (q || []).filter((item) => releaseFiles.some((file) => file.file === item.file))
-        const byFile = scoped.reduce((counts, item) => ({ ...counts, [item.file]: (counts[item.file] || 0) + 1 }), {})
-        setPendingReview({ items: scoped.length, files: Object.keys(byFile).length, byFile })
-      } })
-      .catch(() => { if (live) setPendingReview({ items: 0, files: 0, byFile: {} }) })
-    return () => { live = false }
-  }, [run?.id, ready.length])
+    let live = true, timer
+    if (!run?.id) { setPendingReview({ items: 0, files: 0, byFile: {} }); setProcessingReview({}); return }
+    const refresh = async () => {
+      try {
+        const q = await listHitlQueue(run.id)
+        if (!live) return
+        const scoped = (q || []).filter(item => releaseFiles.some(file => file.file === item.file))
+        const pending = scoped.filter(item => !item.status || item.status === 'pending')
+        const byFile = pending.reduce((counts, item) => ({ ...counts, [item.file]: (counts[item.file] || 0) + 1 }), {})
+        const applying = scoped.filter(item => item.status === 'approved' && !item.applied && !item.apply_outcome)
+        setPendingReview({ items: pending.length, files: Object.keys(byFile).length, byFile })
+        setProcessingReview(applying.reduce((counts, item) => ({ ...counts, [item.file]: (counts[item.file] || 0) + 1 }), {}))
+        if (applying.length) timer = window.setTimeout(refresh, 5000)
+      } catch { /* Keep the last confirmed state until the next refresh. */ }
+    }
+    refresh()
+    return () => { live = false; window.clearTimeout(timer) }
+  }, [releaseScopeKey, JSON.stringify(releaseFiles.map(file => [file.file, file.remediated_at, file.corrected_sha256]))])
   // The REAL release policy, read from the platform settings, so the release summary describes where
   // a copy actually lands instead of a hard-coded guess. Best-effort — if it can't be read we fall
   // back to the always-true half (a durable Blob copy) rather than assert a Drive folder we're
@@ -183,15 +201,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       if (!live || !s) return
       setSettings(s)
       setReleaseTemplates(Array.isArray(s.release_templates) ? s.release_templates : [])
-      const preference = s.release_destination?.provider === run?.source ? s.release_destination : null
-      setReleaseDestination((current) => frozenDestination.current !== undefined ? frozenDestination.current : current?.provider === run?.source ? current : preference)
+      const preference = (run?.source === 'local' || s.release_destination?.provider === run?.source) ? s.release_destination || null : null
+      setReleaseDestination((current) => frozenDestination.current !== undefined ? frozenDestination.current : current && (run?.source === 'local' || current.provider === run?.source) ? current : preference)
     }).catch(() => {}).finally(() => { if (live) setSettingsPending(false) })
     return () => { live = false }
   }, [run?.id, run?.source, releaseOwner])
   const ms = mirrorState(settings)
   const driveMirrorEnabled = ms === MIRROR.ON
   const driveMirrorFolder = settings?.drive_mirror_folder?.trim() || 'Remediated'
-  const releaseProvider = run?.source
+  const releaseProvider = releaseDestination?.provider || automaticAuthorization?.destination?.provider || run?.source
   const sourceProduct = releaseProvider === 'sharepoint' ? 'SharePoint'
     : releaseProvider === 'drive' ? 'Google Drive' : run?.sourceName || 'connected source'
   const anyDrive = releaseProvider === 'drive' && ready.some((f) => f.drive_file_id)
@@ -278,10 +296,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }, [run?.id, ready.length])
   const srcOf = (f) => releaseSourceState(srcStatus.byFile[f.file])
   const previewBlockers = Object.fromEntries([...(releasePreview?.blockers || []), ...(packagePreview?.blockers || [])].map((item) => [item.file, item.reason]))
-  const stateOf = (file) => releaseReadiness(file, { done, results: releaseResults, sourceState: srcOf, pending: pendingReview.byFile, allowRemainingIssues })
+  const stateOf = (file) => releaseReadiness(file, { done, results: releaseResults, sourceState: srcOf, pending: pendingReview.byFile, processing: processingReview, allowRemainingIssues })
   const states = releaseFiles.map(stateOf)
   const progressDocuments = releaseFiles.map((file, index) => ({ file:file.file, progressState:releaseProgressState(states[index]) }))
-  const attentionCount = states.filter((state) => !['ready', 'released', 'delivering'].includes(state.status)).length
+  const attentionCount = states.filter((state) => !['ready', 'released', 'delivering', 'applying'].includes(state.status)).length
   const deliveringCount = states.filter((state) => state.status === 'delivering').length
   const staleReady = ready.filter((f) => !done[f.file] && srcOf(f) === 'stale')
   const publishableReady = ready.filter((f) => stateOf(f).status === 'ready')
@@ -338,13 +356,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     if (res?.release_id) {
       setReleaseId(res.release_id)
       if ('parent_folder_id' in res) {
-        const fixed = res.parent_folder_id ? { provider: releaseProvider, folder_id: res.parent_folder_id, folder_name: res.parent_folder_name || 'Saved destination' } : null
+        const fixed = res.parent_folder_id ? { provider: res.source || releaseProvider, folder_id: res.parent_folder_id, folder_name: res.parent_folder_name || 'Saved destination' } : null
         frozenDestination.current = fixed
         setReleaseDestination(fixed); setDestinationLocked(true)
       }
     }
     if (res?.parent_folder_id) setReleaseDestination({
-      provider: releaseProvider, folder_id: res.parent_folder_id,
+      provider: res.source || releaseProvider, folder_id: res.parent_folder_id,
       folder_name: res.parent_folder_name || 'Selected provider folder',
     })
     const roots = res?.release_folders || res?.roots || []
@@ -392,7 +410,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }
   const applyReleaseStatus = (status) => {
     if (status?.release_id) {
-      const fixed = status.parent_folder_id ? { provider: releaseProvider, folder_id: status.parent_folder_id, folder_name: status.parent_folder_name || 'Saved destination' } : null
+      const fixed = status.parent_folder_id ? { provider: status.source || releaseProvider, folder_id: status.parent_folder_id, folder_name: status.parent_folder_name || 'Saved destination' } : null
       frozenDestination.current = fixed
       setReleaseDestination(fixed)
       setDestinationLocked(true)
@@ -772,6 +790,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           a report could be read as covering an estate that two documents of it were fixed in. */}
       <ScopeBanner run={run} fileCount={files.length}
                    docScope={documentScopeSentence(documentSelection(files, triage))} />
+      <div role="tablist" aria-label="Release views" className="rem-workspace-tabs">
+        {[["manage", "Manage publication"], ["reports", "Reports"]].map(([key, label]) => <button key={key} type="button" role="tab" id={`release-tab-${key}`} aria-selected={releaseTab === key} aria-controls={`release-panel-${key}`} tabIndex={releaseTab === key ? 0 : -1} onClick={() => setReleaseTab(key)} onKeyDown={event => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 'manage' : event.key === 'End' ? 'reports' : releaseTab === 'manage' ? 'reports' : 'manage'; setReleaseTab(next); document.getElementById(`release-tab-${next}`)?.focus() } }}>{label}</button>)}
+      </div>
+      <div role="tabpanel" id="release-panel-manage" aria-labelledby="release-tab-manage" hidden={releaseTab !== 'manage'}>
       {driveReconnect}
       <section className="panel release-overview" aria-labelledby="release-title">
         <div className="release-overview__heading">
@@ -844,9 +866,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         readyReasons={[...new Set(states.filter(state => state.status !== 'ready').map(state => state.reason))]}
         destinationLabel={releaseDestination ? `${releaseDestination.folder_name} / Remediated / ${releaseFolder?.name || releaseFolderName || 'Timestamp + user email'}` : releaseProvider === 'drive' ? 'Google Drive / Remediated / Timestamp + user email' : releaseProvider === 'sharepoint' ? 'SharePoint source library / Remediated / Timestamp + user email' : 'ACP managed storage'}
         destinationContent={['drive', 'sharepoint'].includes(releaseProvider) ? <ReleaseCopyDestination provider={releaseProvider} destination={releaseDestination} folder={releaseFolder} folders={releaseFolders} folderName={releaseFolderName} /> : <p>ACP managed storage</p>}
-        destinationPicker={['drive', 'sharepoint'].includes(releaseProvider) ? <ReleaseDestinationPicker provider={releaseProvider} value={releaseDestination}
-          onChange={value => { setReleaseDestination(value); setReleasePreview(null) }}
-          onError={error => setReleaseError({ summary: 'Destination unavailable', details: error?.message })} /> : <p>Verified copies remain in ACP’s managed storage.</p>}
+        destinationPicker={<>
+          {run?.source === 'local' && <label>Publishing destination <select aria-label="Publishing destination" disabled={destinationLocked || publishing || readOnly} value={releaseProvider || 'local'} onChange={event => { const provider = event.target.value; setReleaseDestination(provider === 'local' ? null : {provider, folder_id: provider === 'drive' ? 'root' : '', folder_name: provider === 'drive' ? 'My Drive' : 'Choose a SharePoint folder'}); setReleasePreview(null) }}><option value="local">Download corrected copies</option><option value="drive">Google Drive</option><option value="sharepoint">SharePoint</option></select></label>}
+          {['drive', 'sharepoint'].includes(releaseProvider) ? <ReleaseDestinationPicker provider={releaseProvider} value={releaseDestination}
+            onChange={value => { setReleaseDestination(value); setReleasePreview(null) }}
+            onError={error => setReleaseError({ summary: 'Destination unavailable', details: error?.message })} /> : <p>Corrected copies remain available in ACP’s managed storage for download.</p>}
+        </>}
         onReady={names => publishAll(names, releaseFolderName, true)}
         onProgress={async result => {
           if (Object.values(result.progress || {}).some(value => value?.state === 'published')) {
@@ -863,21 +888,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           }
         }} />
 
-      <ReleaseReports scanId={run?.id} releaseId={releaseId} files={releaseFiles} results={releaseResults} publishedCount={publishedCount} readOnly={readOnly}>
-        {({ reportSummary, reportsByFile }) => <ReleaseCompletionDocuments files={releaseFiles} states={states} progressDocuments={progressDocuments} results={releaseResults} urls={pubUrls}
-          filter={outcomeFilter} onFilter={setOutcomeFilter} readOnly={readOnly} publishing={publishing}
-          onRetry={names => publishAll(names, releaseFolder?.name || releaseFolderName, true)} reportSummary={reportSummary} reportsByFile={reportsByFile}
-          receipt={(releaseId || publishedList.length > 0) && <section className="release-receipt" aria-label="Delivery receipt">
-          <h3>{failedCount ? 'Partial delivery receipt' : deliveringCount ? 'Delivery in progress' : 'Delivery receipt'}</h3>
-          <p><b>{publishedCount} delivered</b> · {failedCount} failed · {deliveringCount} in progress · {releaseFiles.length - publishedCount} in-scope files not delivered.</p>
-          <p className="muted">Recorded delivery within this document scope; changing the checkboxes does not change this receipt. Originals unchanged.</p>
-          {releaseId && <small>Release {releaseId}</small>}
-          {releaseFolders.filter((folder) => folder.url).map((folder) => <p key={folder.id}><a href={folder.url} target="_blank" rel="noopener noreferrer">Open {folder.name || 'delivery folder'} ↗</a></p>)}
-          <button className="ghost small" onClick={downloadReleaseManifest}>Download delivery receipt (manifest)</button>
-          {manifestError && <p role="alert">{manifestError}</p>}
-        </section>} />}
-      </ReleaseReports>
-
+      <AutomaticReleasePackage scanId={run?.id} authorization={automaticAuthorization} />
       {packageJob && <section className="release-notice release-package-job" role="status" aria-label="Prepared package status">
         <span><b>{packageJob.status === 'done' ? 'Download package ready' : packageJob.status === 'dead' ? 'Download package failed' : 'Download package in progress'}</b><br />
           {packageJob.status === 'done' ? 'Prepared safely and available after navigation or reload.' : packageJob.phase || 'The package continues in the background.'}</span>
@@ -1074,7 +1085,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           releaseProvider={releaseProvider} driveMirrorEnabled={driveMirrorEnabled}
           driveMirrorFolder={driveMirrorFolder} releaseFolder={releaseFolder}
           releaseResults={releaseResults} selectedFile={sel} setSelectedFile={setSel}
-          sourcePath={sourcePath} pending={pendingReview.byFile} blockers={previewBlockers} allowRemainingIssues={allowRemainingIssues}
+          sourcePath={sourcePath} pending={pendingReview.byFile} processing={processingReview} blockers={previewBlockers} allowRemainingIssues={allowRemainingIssues}
           destinationLabel={releaseDestination?.folder_name ? `${releaseDestination.folder_name} / Remediated / ${releaseFolder?.name || releaseFolderName || '<release name>'}` : undefined}
         />}
         {ready.length > 0 && (
@@ -1256,12 +1267,31 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       </section>
 
       </details>
+      </div>
+      <div role="tabpanel" id="release-panel-reports" aria-labelledby="release-tab-reports" hidden={releaseTab !== 'reports'}>
+      <section className="panel"><h3>Assessment reports</h3><button className="ghost" onClick={() => run?.id && openReport(run.id)}>Download scope-limited report (PDF)</button></section>
+      <ReleaseReports scanId={run?.id} releaseId={releaseId} files={releaseFiles} results={releaseResults} publishedCount={publishedCount} readOnly={readOnly}>
+        {({ reportSummary, reportsByFile }) => <ReleaseCompletionDocuments files={releaseFiles} states={states} progressDocuments={progressDocuments} results={releaseResults} urls={pubUrls}
+          filter={outcomeFilter} onFilter={setOutcomeFilter} readOnly={readOnly} publishing={publishing}
+          onRetry={names => publishAll(names, releaseFolder?.name || releaseFolderName, true)} reportSummary={reportSummary} reportsByFile={reportsByFile}
+          receipt={(releaseId || publishedList.length > 0) && <section className="release-receipt" aria-label="Delivery receipt">
+          <h3>{failedCount ? 'Partial delivery receipt' : deliveringCount ? 'Delivery in progress' : 'Delivery receipt'}</h3>
+          <p><b>{publishedCount} delivered</b> · {failedCount} failed · {deliveringCount} in progress · {releaseFiles.length - publishedCount} in-scope files not delivered.</p>
+          <p className="muted">Recorded delivery within this document scope; changing the checkboxes does not change this receipt. Originals unchanged.</p>
+          {releaseId && <small>Release {releaseId}</small>}
+          {releaseFolders.filter((folder) => folder.url).map((folder) => <p key={folder.id}><a href={folder.url} target="_blank" rel="noopener noreferrer">Open {folder.name || 'delivery folder'} ↗</a></p>)}
+          <button className="ghost small" onClick={downloadReleaseManifest}>Download delivery receipt (manifest)</button>
+          {manifestError && <p role="alert">{manifestError}</p>}
+        </section>} />}
+      </ReleaseReports>
+
       <section className="panel" aria-label="Reports and delivery history">
         <h3>Reports and delivery history</h3>
         {!(releaseId || publishedList.length > 0) && <ReleaseReports scanId={run?.id} publishedCount={publishedCount} readOnly={readOnly} />}
         <ReleaseHistory refreshKey={`${run?.id || ''}:${publishedCount}:${failedCount}`} />
       </section>
 
+      </div>
       {/* Confirmation before a release runs. States, in checkable terms, exactly what will happen —
           destination, that the original is untouched, the audit entry, and that this is not a
           conformance certificate. Escape or a backdrop click cancels. */}

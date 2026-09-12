@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import ReleaseDestinationPicker from './ReleaseDestinationPicker.jsx'
 
 const api = vi.hoisted(() => ({
+  createReleaseFolder: vi.fn(async () => ({id:'new-folder',name:'Accessibility'})),
   listFolders: vi.fn(async () => ({ folders: [{ id: 'finance', name: 'Finance' }] })),
   listSpFolders: vi.fn(async () => ({ folders: [] })),
   listSharePointSites: vi.fn(async () => ({ sites: [] })),
@@ -69,4 +70,19 @@ it('browses a SharePoint destination when personal OneDrive returns 404', async 
   await act(async () => view.querySelector('input[type="checkbox"]').click())
   await clickText('Use this folder')
   expect(onChange).toHaveBeenCalledWith({ provider: 'sharepoint', folder_id: 'team-drive/folder', folder_name: 'Outputs' })
+})
+
+it('creates a user named folder in the current breadcrumb and selects its stable id', async () => {
+  const onChange = vi.fn()
+  const view = await mount({onChange})
+  const clickText = async text => { await act(async () => [...view.querySelectorAll('button')].find(b => b.textContent === text).click()) }
+  await clickText('Choose folder')
+  await clickText('New folder')
+  const input = view.querySelector('input[aria-label="New folder name"]')
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set
+  await act(async () => {setValue.call(input,'Accessibility'); input.dispatchEvent(new Event('input',{bubbles:true}))})
+  await act(async () => view.querySelector('form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})))
+  expect(api.createReleaseFolder).toHaveBeenCalledWith('drive','root','Accessibility')
+  await clickText('Use this folder')
+  expect(onChange).toHaveBeenCalledWith({provider:'drive',folder_id:'new-folder',folder_name:'Accessibility'})
 })

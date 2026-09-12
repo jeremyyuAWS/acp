@@ -174,7 +174,7 @@ describe('Guided pane — auto-fix rows get an obvious, honestly-labelled decisi
   it('opens Publish without recording skipped inspection as acceptance', async () => {
     const decisions = {}, writes = [], destinations = []
     await renderInbox({ queue: [CONTRAST_AUTO], decisions,
-      onDecide: (f, d) => writes.push([f.id, d]), onPublish: () => destinations.push('publish') })
+      onDecide: (f, d) => writes.push([f.id, d]), legacyApprovalControls: true, onPublish: () => destinations.push('publish') })
     const publish = btnByText('Skip inspection and publish')
     expect(container.querySelector('.rinbox-wrap').firstElementChild.contains(publish)).toBe(true)
     expect([...container.querySelectorAll('button')].filter(button => button.textContent.includes('Skip inspection and publish'))).toHaveLength(1)
@@ -185,9 +185,9 @@ describe('Guided pane — auto-fix rows get an obvious, honestly-labelled decisi
     expect(btnByText('Mark inspected')).toBeTruthy()
   })
   it('offers Publish beside pending work but never from read-only history', async () => {
-    await renderInbox({ queue: [CONTRAST_APPLY], onPublish: () => {} })
+    await renderInbox({ queue: [CONTRAST_APPLY], legacyApprovalControls: true, onPublish: () => {} })
     expect(btnByText('Skip inspection and publish')).toBeTruthy()
-    await renderInbox({ queue: [CONTRAST_AUTO], readOnly: true, onPublish: () => {} })
+    await renderInbox({ queue: [CONTRAST_AUTO], readOnly: true, legacyApprovalControls: true, onPublish: () => {} })
     expect(btnByText('Skip inspection and publish')).toBeFalsy()
   })
 
@@ -210,4 +210,17 @@ describe('Guided pane — auto-fix rows get an obvious, honestly-labelled decisi
     await click(btnByText('This looks wrong'))
     expect(calls).toContainEqual([2, 'rejected'])
   })
+})
+
+it('unifies applying, publishing, and a real green automatic approval switch', async () => {
+  const changes=[]
+  await renderInbox({ queue:[CONTRAST_APPLY], autoApprove:true, onAutoApproveChange:enabled=>changes.push(enabled), onPublish:()=>{}, onDecide:()=>{} })
+  expect(btnByText('Skip inspection and publish')).toBeFalsy()
+  expect(btnByText('Publish saved copies')).toBeTruthy()
+  const control=container.querySelector('[role="switch"][aria-label="Auto-apply AI fixes"]')
+  expect(control.checked).toBe(true)
+  expect(control.closest('label').classList.contains('is-on')).toBe(true)
+  expect(control.closest('.run-approval-actions').contains(btnByText('Publish saved copies'))).toBe(true)
+  await click(control)
+  expect(changes).toEqual([false])
 })

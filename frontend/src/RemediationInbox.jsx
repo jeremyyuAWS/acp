@@ -669,7 +669,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 }
 
 export default function RemediationInbox({
-  queue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false, legacyApprovalControls = false, autoApprove = null,
+  queue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false, legacyApprovalControls = false, autoApprove = null, onAutoApproveChange, autoApproveSaving = false, autoApproveError = null,
   initialSort = 'priority', initialTab = 'review', initialGroup = 'document', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
@@ -862,8 +862,9 @@ export default function RemediationInbox({
   }
   const matchingFindings = selected ? matchingOf(selected) : []
   const queueComplete = queue.length > 0 && queue.every((f) => isResolved(f, decisions))
+  const reviewCompletion = counts['awaiting-validation'] > 0 ? <><b style={{color:'var(--ink)'}}>Review decisions saved. Changes are still processing.</b><p>{counts['awaiting-validation']} applying or awaiting verification · {counts.completed || 0} completed</p></> : <><b style={{color:'var(--ink)'}}>All review items are complete.</b><p>{prog.resolved} reviewed · {counts.completed || 0} completed</p></>
   const emptyReviewState = queue.length === 0 || queueComplete
-    ? <div><b style={{ color: 'var(--ink)' }}>All review items are complete.</b><br />{prog.resolved} resolved · {counts.completed || 0} completed</div>
+    ? <div>{reviewCompletion}</div>
     : <p style={{ marginTop: 8 }}>No items are available in {WORKFLOW_LABELS[tab] || 'Review'}. Choose another status from the inbox.</p>
 
   // Act on a finding, then auto-advance to the next unresolved one — the behaviour that makes the
@@ -984,7 +985,8 @@ export default function RemediationInbox({
   )
   return (
     <div className="rinbox-wrap">
-      {!bulkPreviewOpen && !readOnly && onPublish && <div style={{ padding: '14px 22px', borderBottom: '1px solid var(--line)' }}>
+      {/* Retired skip-inspection entry is retained only for legacy restoration. Q3 authorizes automatic publishing. */}
+      {legacyApprovalControls && !bulkPreviewOpen && !readOnly && onPublish && <div style={{ padding: '14px 22px', borderBottom: '1px solid var(--line)' }}>
         <button type="button" className="primary" disabled={savingId != null} onClick={onPublish}>Skip inspection and publish →</button>
         <p className="muted" style={{ margin: '8px 0 0' }}>Choose verified copies or publish saved copies with remaining issues on the next screen. This does not approve pending suggestions or mark anything inspected.</p>
       </div>}
@@ -1016,11 +1018,21 @@ export default function RemediationInbox({
           {preparingProposals && <p role="status">Preparing proposals — remediation is still processing. Readiness updates as work finishes.</p>}
           {!legacyApprovalControls && Object.keys(unreadyReasons).length > 0 && <details><summary>Why some fixes aren’t ready</summary><ul>{Object.entries(unreadyReasons).map(([reason, count]) => <li key={reason}>{count} · {reason === 'Version unavailable — review individually' ? 'Need fresh proposal versions' : reason === 'Missing proposal' ? 'Need a complete suggestion' : reason}</li>)}</ul>{onOpenPlan && <button type="button" className="linklike" disabled={readOnly} onClick={onOpenPlan}>Refresh suggestions from the remediation plan</button>}</details>}
         </div>
-        <button type="button" className={readyAcrossScan.length ? 'primary' : 'ghost'} disabled={savingId != null || (readyAcrossScan.length > 0 && (readOnly || !onDecide))}
-          onClick={() => { setBatchScopeIds(null); setBulkPreviewOpen(true); if (readyAcrossScan.length) { if (legacyApprovalControls) setConfirmRunRequest(n => n + 1); else setApplyRunRequest(n => n + 1) } }}>
-          {readyAcrossScan.length ? legacyApprovalControls ? `Approve all ready in this run (${readyAcrossScan.length})` : `Apply all ready fixes (${readyAcrossScan.length})` : 'View run readiness'}
-        </button>
-        {!legacyApprovalControls && <button type="button" className="linklike" disabled={readOnly || !onOpenPlan} title="Change automatic approval in the remediation plan for the next run" onClick={onOpenPlan}>Auto-apply AI fixes: {autoApprove === null ? 'checking' : autoApprove ? 'On' : 'Off'}</button>}
+        <div className="run-approval-actions" aria-label="Remediation actions">
+          <button type="button" className={readyAcrossScan.length ? 'primary' : 'ghost'} disabled={savingId != null || (readyAcrossScan.length > 0 && (readOnly || !onDecide))}
+            onClick={() => { setBatchScopeIds(null); setBulkPreviewOpen(true); if (readyAcrossScan.length) { if (legacyApprovalControls) setConfirmRunRequest(n => n + 1); else setApplyRunRequest(n => n + 1) } }}>
+            {readyAcrossScan.length ? legacyApprovalControls ? `Approve all ready in this run (${readyAcrossScan.length})` : `Apply ready fixes (${readyAcrossScan.length})` : 'View run readiness'}
+          </button>
+          {!legacyApprovalControls && onPublish && <button type="button" className="ghost" disabled={readOnly || savingId != null} title="Choose saved copies and a destination in Release. Pending suggestions are not approved." onClick={onPublish}>Publish saved copies →</button>}
+          {!legacyApprovalControls && <label className={`run-auto-approve-switch${autoApprove === true ? ' is-on' : ''}`}>
+            <input type="checkbox" role="switch" aria-label="Auto-apply AI fixes" checked={autoApprove === true}
+              disabled={readOnly || autoApprove === null || autoApproveSaving || !onAutoApproveChange}
+              onChange={event => onAutoApproveChange?.(event.target.checked)} />
+            <span className="run-auto-approve-switch__track" aria-hidden="true"><span /></span>
+            <span>Auto-apply AI fixes <b>{autoApproveSaving ? 'Saving…' : autoApprove === null ? 'Checking…' : autoApprove ? 'On' : 'Off'}</b></span>
+          </label>}
+          {autoApproveError && <p role="alert" className="run-auto-approve-error">{autoApproveError}</p>}
+        </div>
       </section>}
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       {!bulkPreviewOpen && <>
@@ -1130,7 +1142,7 @@ export default function RemediationInbox({
           {visible.length === 0 ? (
             <div className="muted" style={{ padding: 16, fontSize: 13 }}>
               {queue.length === 0 || queueComplete
-                ? <><b style={{ color: 'var(--ink)' }}>All review items are complete.</b><p style={{ margin: '6px 0 0' }}>{prog.resolved} resolved · {counts.completed || 0} completed</p></>
+                ? <>{reviewCompletion}</>
                 : search.trim()
                 ? <>No findings match “{displayText(search.trim())}”. <button className="linklike" onClick={() => setSearch('')}>Clear search</button></>
                 : priorityFilter !== 'all' || formatFilter !== 'all' || sourceFilter !== 'all'

@@ -8,7 +8,8 @@ it('names accounted findings and the missing outcome instead of claiming fix com
       buckets:{resolved_verified:4,awaiting_review:3}} }} />)
   expect(html).toContain('8 assessed findings')
   expect(html).toContain('1 assessed finding still lack a recorded outcome')
-  expect(html).toContain('88% with recorded outcomes')
+  expect(html).toContain('Finding progress')
+  expect(html).not.toContain('role="progressbar"')
   expect(html).not.toContain('88% complete')
 })
 
@@ -67,7 +68,7 @@ it('makes the screenshot outcome buckets sum to the same 23 assessed findings wi
   expect(html).toContain('23 assessed findings')
   expect(html).not.toContain('15 of 23')
   expect(html).toContain('9 resolved · verified + 6 awaiting review + 8 awaiting recorded outcome = 23 assessed findings')
-  expect(html).toContain('65% with recorded outcomes')
+  expect(html).toContain('Queued: 8')
   expect(html).not.toContain('100%')
   expect(snapshot.domain_reconciliation.buckets.awaiting_recorded_outcome).toBeUndefined()
 })
@@ -85,8 +86,9 @@ it('does not invent a balancing equation when recorded buckets disagree with the
 it('shows verified plus remaining equal to all 23 findings, including missing outcomes', () => {
   const html = renderToStaticMarkup(<Card snapshot={{stage:'remediate',state:'processing_complete',
     domain_reconciliation:{total:23,accounted:15,exact:false,buckets:{resolved_verified:9,awaiting_review:6}}}} />)
-  expect(html).toContain('9 verified fixed + 14 remaining = 23 assessed findings')
-  expect(html).toContain('Remaining · not verified')
+  expect(html).toContain('Verified fixes: 9')
+  expect(html).toContain('Needs attention: 6')
+  expect(html).toContain('Queued: 8')
 })
 
 it('replaces finding KPIs with the document KPI host without mixing their units', () => {

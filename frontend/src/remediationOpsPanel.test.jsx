@@ -704,3 +704,30 @@ it('separates the prominent activity feed from the third-tab waterfall without d
   expect(html).not.toContain('Recent remediation activity')
   expect(html).not.toContain('Saved corrected copy')
 })
+
+it('shows the planned waterfall in the selected assessment before a run exists', () => {
+  const html = render({ snapshot: null, streamlined: true, assessmentContext: {scanId:'scan-1'} })
+  expect(html).toContain('Planned remediation waterfall')
+  expect(html).toContain('Plan preview')
+  expect(html).toContain('AI models')
+  expect(html).toContain('local or cloud')
+  expect(html).not.toContain('verified changes')
+})
+
+it('shows a yellow retry only for a recorded retry, not for a failed verification', () => {
+  const base={snapshot:SNAP,streamlined:true,events:[{key:'retry',kind:'scan.retrying',tone:'attention',line:'Attempt scheduled to retry',documentKey:'A'}]}
+  expect(render(base)).toContain('remops-activity-retry')
+  expect(render({...base,events:[{key:'failed',kind:'remediate.verification_failed',tone:'error',line:'Did not pass re-scan',documentKey:'A'}]})).not.toContain('remops-activity-retry')
+})
+
+ it('separates source delivery availability from the grouped saved-copy message', () => {
+  const markup = renderToStaticMarkup(createElement(RemediationOpsPanel, {
+    snapshot: SNAP, streamlined: true, events: [
+      { key: 'verified', documentKey: 'one', tone: 'success', line: 'Three fixes verified' },
+      { key: 'saved', documentKey: 'one', tone: 'neutral', line: 'Corrected copy of demo.pdf saved in ACP · source delivery is unavailable' },
+    ],
+  }))
+  const doc = new DOMParser().parseFromString(markup, 'text/html')
+  expect(doc.querySelector('.remops-activity details li .remops-delivery-tag')?.textContent).toBe('source delivery is unavailable')
+  expect(doc.querySelector('.remops-activity details li')?.textContent).toContain('Corrected copy of demo.pdf saved in ACP')
+ })

@@ -181,7 +181,9 @@ def test_no_remediated_copy_means_nothing_is_written(store, monkeypatch):
     store.approve_proposal_values(item_id, [])
 
     blob = _Blob(None)                                               # never remediated
-    _run_handler(monkeypatch, store, blob, residual=set())
+    from worker import FatalJobError
+    with pytest.raises(FatalJobError, match='No corrected copy'):
+        _run_handler(monkeypatch, store, blob, residual=set())
 
     assert store.count_unapplied_approved_values(SID, FILE) == 1
     assert [d["action"] for d in store.list_decisions(scan_id=SID)].count("apply.no_remediated_copy") == 1
@@ -493,3 +495,23 @@ def test_batched_unapplied_counts_match_the_per_file_gate(store):
     # a scan with nothing approved-and-unapplied → empty dict (absent, not zero-filled)
     store.init_scan_run("s2", "drive", 0, "2026-07-10T00:00:00Z", "rubric", "hash")
     assert store.count_unapplied_approved_values_by_file("s2") == {}
+
+
+@pytest.mark.parametrize('cache_checksum', [None, 'inventory-content-key'])
+def test_approval_before_remediation_creates_first_corrected_copy_from_assessed_source(store, monkeypatch, cache_checksum):
+    import scanner
+    item_id = _seed(store)
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "UPDATE scan_runs SET source='local' WHERE id=%s", (SID,))
+        store._db.execute(cur, 'UPDATE file_records SET remediated_at=NULL,blob_url=NULL,drive_write_url=NULL WHERE scan_id=%s', (SID,))
+    store.update_hitl_item(item_id, 'approved', None, None)
+    store.approve_proposal_values(item_id, [])
+    cached = _deck('Picture 1','Chart 2')
+    monkeypatch.setattr(store, 'get_source_checksum', lambda *a: cache_checksum)
+    monkeypatch.setattr(scanner, 'read_cached_source', lambda *a, **kw: cached if kw.get('checksum') == cache_checksum else None)
+    blob = _Blob(None)
+    _run_handler(monkeypatch, store, blob, residual=set())
+    assert blob.uploads
+    assert 'AI draft for Picture 1' in _slide_xml(blob.data)
+    assert store.get_file_record(SID, FILE)['remediated_at']
+    assert store.count_unapplied_approved_values(SID, FILE) == 0

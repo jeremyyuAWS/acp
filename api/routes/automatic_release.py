@@ -1,6 +1,7 @@
 """Explicit automatic release opt-in; read-only inspection never authorizes work."""
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, StrictStr, StrictBool
+import json
 import core
 import automatic_release as service
 import automatic_release_store as persistence
@@ -21,10 +22,22 @@ class AuthorizationRequest(BaseModel):
 
 
 @router.get('/scans/{sid}/release/automatic')
-def status(sid: str, request: Request, response: Response, files: list[str] = Query(default=[])):
+def status(sid: str, request: Request, response: Response, files: list[str] = Query(default=[]), destination: str | None = None):
     owner, _ = owner_scan(sid, request)
     response.headers['Cache-Control'] = 'no-store'
-    return service.preview(core.store, sid, owner, files)
+    try:
+        selected = json.loads(destination) if destination else None
+    except ValueError as exc:
+        raise HTTPException(422, "Invalid release destination") from exc
+    if selected is not None and not isinstance(selected, dict):
+        raise HTTPException(422, 'Invalid release destination')
+    result = service.preview(core.store, sid, owner, files, selected)
+    plan = result['planning']
+    if plan.get('available') and plan.get('source') == 'local':
+        preflight = _preflight_release_destination(request, plan['destination'])
+        if not preflight['ready']:
+            plan.update(available=False, reason=preflight.get('message') or 'Connect the selected cloud provider with write access, or choose a download package.')
+    return result
 
 
 @router.post('/scans/{sid}/release/automatic')

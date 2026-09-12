@@ -637,3 +637,9 @@ def allows(method: str, path: str, held) -> bool:
     if (method.upper(), path) in ALL_OF_ROUTES:
         return needed <= frozenset(held)
     return bool(needed & frozenset(held))
+
+# Creating a delivery parent is part of explicitly authorized publishing.
+_map_many([("POST", "/release/folders")], {"release.publish"})
+
+_map_many([("GET", "/scans/{sid}/remediation/ai-approval/{run_id}"),
+           ("POST", "/scans/{sid}/remediation/ai-approval/{run_id}")], {"remediate.review"})

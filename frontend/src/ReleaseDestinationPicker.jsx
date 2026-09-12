@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import FolderPicker from './FolderPicker.jsx'
-import { listFolders, putMyReleaseDestination } from './api.js'
+import { listFolders, putMyReleaseDestination, createReleaseFolder } from './api.js'
 
 import { listReleaseMicrosoftFolders } from './releaseFolderBrowser.js'
 
@@ -49,6 +49,8 @@ export default function ReleaseDestinationPicker({ provider, value, onChange, on
         sourceName={copy.name}
         rootName={copy.root}
         lister={lister}
+        canUseFolder={folder => provider === 'drive' || (folder.id.includes('/') && !folder.id.startsWith('release-site:'))}
+        onCreateFolder={(parent,name) => createReleaseFolder(provider,parent,name)}
         initial={value ? [{ id: value.folder_id, name: value.folder_name }] : []}
         onClose={() => setOpen(false)}
         onConfirm={save}

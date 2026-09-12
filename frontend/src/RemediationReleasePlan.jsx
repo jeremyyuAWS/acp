@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { getAutomaticRelease } from './api.js'
 import { releasePlanKey } from './releasePlanIntent.js'
+import ReleaseDestinationPicker from './ReleaseDestinationPicker.jsx'
 import InfoTip from './InfoTip.jsx'
 import { readWithRetry } from './readWithRetry.js'
 import './remediation-auto-release.css'
 
 export default function RemediationReleasePlan({ scanId, files, intent, onChange, disabled = false, read = getAutomaticRelease, requireChoice = false, compact = false, onAnswered }) {
   const key = releasePlanKey(scanId, files)
+  const [destination, setDestination] = useState(null)
+  const [targetProvider, setTargetProvider] = useState(null)
+  useEffect(() => { setDestination(null); setTargetProvider(null) }, [key])
   const [preview, setPreview] = useState(null)
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
@@ -43,11 +47,11 @@ export default function RemediationReleasePlan({ scanId, files, intent, onChange
             reject(new Error('Publishing readiness took too long to respond.'))
           }, 20000)
         })
-        const result = await Promise.race([readWithRetry(() => read(scanId, files, { signal: controller.signal }), { signal: controller.signal }), deadline])
+        const result = await Promise.race([readWithRetry(() => read(scanId, files, { signal: controller.signal, destination }), { signal: controller.signal }), deadline])
         if (!live) return
         planning = { key, ...(result?.planning || { available: false, reason: 'Automatic publishing requires a connected destination.' }) }
         setPreview(planning); setError('')
-        const next = planning.available ? { key, scanId, files: [...planning.files], destination: { ...planning.destination }, source_revision: planning.source_revision, allow_remaining_issues: true, include_reports: true } : null
+        const next = planning.available ? { key, scanId, scope_files: [...files], files: [...planning.files], destination: { ...planning.destination }, source_revision: planning.source_revision, allow_remaining_issues: true, include_reports: true } : null
         const prior = currentIntent.current
         // A refreshed eligible subset or revision is a new draft, never expanded consent.
         if (background && prior?.key === key && JSON.stringify([prior.files, prior.destination, prior.source_revision]) !== JSON.stringify([next?.files, next?.destination, next?.source_revision])) {
@@ -65,23 +69,30 @@ export default function RemediationReleasePlan({ scanId, files, intent, onChange
     }
     refresh()
     return () => { live = false; window.clearTimeout(timer); cancelRead?.() }
-  }, [key, reload, read])
-  const ready = preview?.key === key && preview.available === true && !error
+  }, [key, reload, read, JSON.stringify(destination)])
+  const ready = preview?.key === key && preview.available === true && !error && (!targetProvider || preview.destination?.provider === targetProvider)
   const checked = ready && intent?.key === key
   const choose = review => {
     onAnswered?.(true)
     choice.current = { key, review }
     setReviewKey(review ? key : null)
-    onChange(review ? null : { key, scanId, files: [...preview.files], destination: { ...preview.destination }, source_revision: preview.source_revision, allow_remaining_issues: true, include_reports: true })
+    onChange(review ? null : { key, scanId, scope_files: [...files], files: [...preview.files], destination: { ...preview.destination }, source_revision: preview.source_revision, allow_remaining_issues: true, include_reports: true })
   }
   return <section className="rem-auto-release" aria-label="Release option for this plan">
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><strong>{compact ? 'Auto-publish?' : 'When should files be published?'}</strong>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><strong>Automatically apply fixes and publish corrected copies?</strong>
       {!compact && <InfoTip label="automatic release">Approve plan and start authorizes this run to publish saved copies after automatic processing, even when issues remain. Your selected rules and AI settings still apply. Your acceptance authorizes available fixes and AI suggestions within the selected criteria. Changes are verified. Human inspection is optional. The scan summary and per-file checklist distinguish verified fixes, applied but unverified changes, remaining issues, and checks that could not run. Publishing does not certify accessibility. Permission lasts up to 24 hours. Changing the scope creates a new draft plan; permission begins only when that plan is accepted. Use Live to stop future releases. Original files stay unchanged.</InfoTip>}
     </div>
-    <label className="rem-auto-release-option"><input type="radio" name={`release-mode-${scanId}`} checked={!!checked} disabled={disabled || !ready} onChange={() => choose(false)} /><strong>{compact ? 'Yes — apply fixes and AI suggestions, then publish automatically' : 'Fix and publish automatically'}</strong></label>
-    <label className="rem-auto-release-option"><input type="radio" name={`release-mode-${scanId}`} checked={reviewKey === key && choice.current.review} disabled={disabled} onChange={() => choose(true)} /><strong>{compact ? 'No — publish later from Release' : 'Publish later from Release'}</strong></label>
-    <p>Automatic publishing applies available fixes and AI suggestions within your selected criteria. Failed fixes and items needing human input remain in the follow-up checklist.</p>
-    <p><b>Destination:</b> {preview?.destination_label ? `${preview.destination_label} / Remediated / Timestamp + user email` : (preview?.blocked_files?.length && !preview.available ? 'Waiting for assessment and source checks' : preview || error ? 'Not available' : 'Checking destination…')}</p>
+    <label className="rem-auto-release-option"><input type="radio" name={`release-mode-${scanId}`} checked={!!checked} disabled={disabled || !ready} onChange={() => choose(false)} /><strong>Yes — apply all available fixes and AI suggestions, then publish automatically</strong></label>
+    <label className="rem-auto-release-option"><input type="radio" name={`release-mode-${scanId}`} checked={reviewKey === key && choice.current.review} disabled={disabled} onChange={() => choose(true)} /><strong>No — let me review and publish later</strong></label>
+    <p>No individual approvals or inspection required. Available changes are checked automatically. Anything that cannot be fixed is included in the follow-up report. Original files stay unchanged.</p>
+    <p><b>Destination:</b> {preview?.destination_label ? preview.destination?.provider === 'local' ? 'Download package · prepared automatically with corrected copies and follow-up reports' : `${preview.destination_label} / Remediated / Timestamp + user email` : (preview?.blocked_files?.length && !preview.available ? 'Waiting for assessment and source checks' : preview || error ? 'Not available' : 'Checking destination…')}</p>
+    {preview?.source === 'local' && !preview.destination_locked && <label>Publish to <select aria-label="Publishing destination" disabled={disabled} value={targetProvider || preview.destination?.provider || 'local'} onChange={event => {
+      const provider = event.target.value
+      setTargetProvider(provider); onChange(null); onAnswered?.(false); setReviewKey(null)
+      setDestination(provider === 'local' ? { provider, folder_id: 'root', folder_name: 'Download package' } : provider === 'drive' ? { provider, folder_id: 'root', folder_name: 'Google Drive root' } : null)
+    }}><option value="local">Download package</option><option value="drive">Google Drive</option><option value="sharepoint">SharePoint / OneDrive</option></select></label>}
+    {!preview?.destination_locked && ['drive', 'sharepoint'].includes(targetProvider || preview?.destination?.provider) && <ReleaseDestinationPicker provider={targetProvider || preview.destination.provider} value={destination || (preview.destination?.provider === (targetProvider || preview.destination.provider) ? preview.destination : null)} onChange={value => { setDestination(value); onChange(null); onAnswered?.(false) }} onError={failure => setError(failure?.message || 'The destination could not be saved.')} />}
+    {targetProvider === 'sharepoint' && preview?.destination?.provider !== 'sharepoint' && <p>Choose a Microsoft folder to publish uploaded files.</p>}
     {preview?.reason && <p>{preview.reason}</p>}
     {preview?.blocked_files?.length > 0 && <details><summary>Show publishing requirements</summary><ul aria-label="Files blocking automatic publishing">
       {preview.blocked_files.map(({file, reason}) => <li key={file}><b>{file}</b> — {reason}</li>)}

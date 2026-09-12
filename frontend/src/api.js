@@ -2616,6 +2616,7 @@ export const getAutomaticRelease = (scanId, files = [], options = {}) => {
   if (SIM) return sim({ available: false, reason: 'Automatic release requires a connected remediation run.', authorization: null }, 50)
   const query = new URLSearchParams()
   files.forEach(file => query.append('files', file))
+  if (options.destination) query.set('destination', JSON.stringify(options.destination))
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/automatic?${query}`, {
     headers: headers(), signal: options.signal,
   }).then(j)
@@ -2649,3 +2650,25 @@ export const resumeAutomaticRelease = (scanId, authorizationId) => fetch(
 export const getAcceptedRemediationPlan = (scanId, batchId) => SIM
   ? sim({ scan_id: scanId, run_id: batchId, policy: null, available: false })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/accepted-plan/${encodeURIComponent(batchId)}`, { headers: headers(), cache: 'no-store' }).then(j)
+
+export const createReleaseFolder = (provider, parent, name) => fetch(`${BASE}/release/folders`, {
+  method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+  body: JSON.stringify({ provider, parent, name }),
+}).then(j)
+
+const simulatedRunAiApproval = new Map()
+const simulatedApproval = (scanId, runId) => simulatedRunAiApproval.get(`${scanId}:${runId}`)
+  || { supported: true, enabled: false, revision: 0, run_id: runId, source_revision: `sim:${scanId}:${runId}` }
+export const getRunAiApproval = (scanId, runId) => SIM ? sim(simulatedApproval(scanId, runId)) : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/ai-approval/${encodeURIComponent(runId)}`, {
+  headers: headers(), cache: 'no-store',
+}).then(j)
+
+export const setRunAiApproval = (scanId, runId, setting) => SIM ? (() => {
+  const current = simulatedApproval(scanId, runId)
+  if (setting.expected_revision !== current.revision || setting.expected_source_revision !== current.source_revision) return Promise.reject(new Error('Automatic approval setting changed; refresh and try again'))
+  const updated = { ...current, enabled: setting.enabled === true, revision: current.revision + 1 }
+  simulatedRunAiApproval.set(`${scanId}:${runId}`, updated)
+  return sim(updated)
+})() : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/ai-approval/${encodeURIComponent(runId)}`, {
+  method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(setting),
+}).then(j)

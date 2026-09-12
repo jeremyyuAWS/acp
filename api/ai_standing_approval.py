@@ -36,10 +36,10 @@ def capabilities(store, owner):
         require_access(store, owner)
     except ValueError as exc:
         return {'supported': False, 'reason': str(exc)}
-    return {'supported': True, 'reason': 'New runs only. Complete, current AI proposals with a supported writer and tracked source can be approved and applied. Verification and manual blockers remain; publishing stays separate.'}
+    return {'supported': True, 'reason': 'Eligible current AI-enabled runs. Complete, current AI proposals with a supported writer and tracked source can be approved and applied. Verification and manual blockers remain; publishing stays separate.'}
 
 
-def authorization(store, owner, sid, run_id):
+def authorization(store, owner, sid, run_id, *, approved=False):
     require_access(store, owner)
     with store._db.cursor() as cur:
         store._db.execute(cur, '''SELECT p.policy_json,e.input_snapshot_id,e.is_current,e.cancel_requested_at
@@ -51,14 +51,18 @@ def authorization(store, owner, sid, run_id):
         row = store._db.fetchone(cur)
     policy = json.loads(row['policy_json']) if row else {}
     if (not row or not row['is_current'] or row['cancel_requested_at']
-            or policy.get(KEY) is not True or policy.get('ai') != 1):
+            or policy.get('ai') != 1):
         raise ValueError('No current standing AI approval authorization for this run')
     if row['input_snapshot_id'] != store.remediation_source_revision(sid):
         raise ValueError('Standing approval source revision changed')
+    from ai_run_approval_override import read
+    setting = read(store, owner, sid, run_id)
+    if not (setting['granted_ever'] if approved else setting['enabled']):
+        raise ValueError('No current standing AI approval authorization for this run')
     return row['input_snapshot_id']
 
 
-def _source(store, owner, sid, file):
+def _source(store, owner, sid, file, run_id=None):
     import core
     import handlers
     from release_artifacts import require_current_source
@@ -67,10 +71,40 @@ def _source(store, owner, sid, file):
         scan = store._db.fetchone(cur)
     record = store.get_file_record(sid, file) or {}
     source = (scan or {}).get('source')
-    if (not scan or source not in {'drive', 'sharepoint'} or not record.get('source_modified')
-            or not record.get('drive_file_id') or not record.get('remediated_at')
-            or not record.get('corrected_sha256')):
+    if not scan or source not in {'drive', 'sharepoint', 'local'} or not record.get('remediated_at') or not record.get('corrected_sha256'):
         raise ValueError('Tracked source and stored corrected copy are required for automatic approval')
+    if source == 'local':
+        import blob
+        import scanner
+        checksum = store.get_source_checksum(sid, file)
+        original = scanner.read_cached_source(sid, file, owner, checksum=checksum)
+        if original is None and checksum:
+            original = scanner.read_cached_source(sid, file, owner)
+        corrected = blob.download_remediated(owner, sid, file)
+        expected_hashes = set()
+        if run_id:
+            with store._db.cursor() as cur:
+                store._db.execute(cur, '''SELECT DISTINCT c.source_sha256 FROM remediation_contribution_proposals c
+                    JOIN ai_proposal_snapshots p ON p.snapshot_id=c.proposal_id
+                      AND p.owner_id=c.owner_id AND p.scan_id=c.scan_id AND p.run_id=c.run_id AND p.file=c.file
+                    JOIN stage_executions e ON e.execution_id=c.run_id AND e.scan_id=c.scan_id AND e.owner_email=c.owner_id
+                    WHERE c.owner_id=%s AND c.scan_id=%s AND c.run_id=%s AND c.file=%s
+                      AND c.assessment_revision=e.input_snapshot_id ''', (owner, sid, run_id, file))
+                expected_hashes = {row['source_sha256'] for row in store._db.fetchall(cur)}
+        matched = original is not None and hashlib.sha256(original).hexdigest() in expected_hashes
+        # Inventory hashes are captured at discovery, never learned from this read.
+        if original is not None and isinstance(checksum, str):
+            if len(checksum) == 64:
+                matched = matched or hashlib.sha256(original).hexdigest() == checksum.lower()
+            elif len(checksum) == 32:
+                matched = matched or hashlib.md5(original).hexdigest() == checksum.lower()
+        if (not matched or corrected is None
+                or hashlib.sha256(corrected).hexdigest() != record['corrected_sha256']):
+            raise ValueError('Exact assessed source and stored corrected copy are required for automatic approval')
+        require_current_source(source, record)
+        return record
+    if not record.get('source_modified') or not record.get('drive_file_id'):
+        raise ValueError('Tracked source is required for automatic approval')
     tokens = core.get_scan_tokens(sid)
     svc = handlers._drive_client(tokens.get('drive')) if source == 'drive' else None
     require_current_source(source, record, drive_service=svc, sp_token=tokens.get('sp'))
@@ -155,11 +189,14 @@ def eligible_item(store, owner, sid, run_id, item, *, approved=False):
 
 
 def approve_file(store, ctx):
-    if ctx is None or ctx.policy.get(KEY) is not True:
+    if ctx is None:
+        return
+    from ai_run_approval_override import read
+    if not read(store, ctx.owner_id, ctx.scan_id, ctx.run_id)['enabled']:
         return
     owner, sid, run_id, file = ctx.owner_id, ctx.scan_id, ctx.run_id, ctx.file
     revision = authorization(store, owner, sid, run_id)
-    record = _source(store, owner, sid, file)
+    record = _source(store, owner, sid, file, run_id)
     # Fetch only this file's run-bound rows, not the entire scan queue once per file.
     with store._db.cursor() as cur:
         store._db.execute(cur, '''SELECT DISTINCT q.* FROM hitl_queue q JOIN ai_proposal_snapshots p
@@ -240,7 +277,7 @@ def check_application(store, payload, *, working=None):
     if not intent:
         return
     owner, sid, file = intent['owner'], payload['scan_id'], payload['file']
-    revision = authorization(store, owner, sid, intent['run_id'])
+    revision = authorization(store, owner, sid, intent['run_id'], approved=True)
     if not intent['items']:
         raise ValueError('No exact automatic approvals to apply')
     applied = []
@@ -259,7 +296,7 @@ def check_application(store, payload, *, working=None):
     # Replays must not attempt another write against its now-replaced artifact.
     if all(applied):
         return True
-    record = _source(store, owner, sid, file)
+    record = _source(store, owner, sid, file, intent['run_id'])
     if revision != intent['source_revision'] or record['corrected_sha256'] != intent['artifact']:
         raise ValueError('Source or corrected artifact changed since automatic approval')
     if working is not None and hashlib.sha256(working).hexdigest() != intent['artifact']:
@@ -280,14 +317,14 @@ def check_file_approvals(store, sid, file):
         store._db.execute(cur, 'SELECT owner_email FROM scan_runs WHERE id=%s', (sid,))
         scan = store._db.fetchone(cur)
     owner = (scan or {}).get('owner_email')
-    _source(store, owner, sid, file)
     for row in automatic:
         with store._db.cursor() as cur:
             store._db.execute(cur, 'SELECT run_id FROM ai_proposal_snapshots WHERE snapshot_id=%s',
                               ((row.get('proposal_snapshot_ids') or [''])[0],))
             snapshot = store._db.fetchone(cur)
         run_id = (snapshot or {}).get('run_id')
-        revision = authorization(store, owner, sid, run_id)
+        revision = authorization(store, owner, sid, run_id, approved=True)
+        _source(store, owner, sid, file, run_id)
         eligible_item(store, owner, sid, run_id, row, approved=True)
         values = [str(p.get('approved_value') or '').strip() for p in row['proposals']]
         digest = hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True,

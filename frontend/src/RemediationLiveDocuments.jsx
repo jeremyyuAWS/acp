@@ -1,5 +1,5 @@
 import './document-findings-table.css'
-import RemediationCategoryPill from './RemediationCategoryPill.jsx'
+import RemediationCategoryPill, { categoryExplanation } from './RemediationCategoryPill.jsx'
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import AssessWorklist from './AssessWorklist.jsx'
@@ -12,7 +12,10 @@ import RemediationProgressSummary from './RemediationProgressSummary.jsx'
 import { liveDocumentCounts, materialKey, findingOutcomeTotals, recordedDocumentProgress } from './remediationLiveDocumentState.js'
 import './remediation-live-documents.css'
 import { getFindingDispositions, listHitlQueue, getReleaseStatus, getSourceStatus } from './api.js'
-import { changeCategory } from './remediationCategories.js'
+import { changeCategory, categoryLabel } from './remediationCategories.js'
+
+const OUTCOME_SHORT_LABELS = { automatic:'Auto', approval:'Approve', suggestion:'AI', manual:'Manual', unsupported:'No ACP', blocked:'Blocked', applied:'Pending', ai_applied:'AI applied', verified:'Verified', remaining:'Remaining', excluded:'Excluded', superseded:'Superseded', approved:'Approved · awaiting application' }
+const OUTCOME_EXPLANATIONS = { remaining:'Findings without a verified fix that still need follow-up.', excluded:'Findings deliberately excluded from remediation.', superseded:'Older finding records replaced by a later recorded outcome.', approved:'Approved changes awaiting application. Approval alone does not mean the finding is fixed.' }
 
 export default function RemediationLiveDocuments({ scanId, files, cap, assessment, fixes: suppliedFixes, fixTotal: suppliedTotal, refreshKey, snapshot, events = [], connected, progressDocuments, progressHostId = null, onShowDocuments }) {
   const search = useSearchFilter()
@@ -23,6 +26,7 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
     setProgressHost(host?.dataset.scanId === scanId && host?.dataset.batchId === snapshot?.batch_id ? host : null)
   }, [progressHostId, scanId, snapshot?.batch_id])
   const [progressFilter, setProgressFilter] = useState(null)
+  const [coverageFilter, setCoverageFilter] = useState(null)
   const [outcomeFilter, setOutcomeFilter] = useState(null)
   const [scanEvidence, setScanEvidence] = useState(null)
   const [liveEvidence, setLiveEvidence] = useState(null)
@@ -45,7 +49,7 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
   const material = materialKey(scanId, snapshot, events)
   const [confirmedRefresh, setConfirmedRefresh] = useState(0)
   useEffect(() => {
-    setLiveEvidence(null); setScanEvidence(null); setProgressFilter(null); setOutcomeFilter(null); signatures.current = null; setChanged([]); setAnnouncement(''); search.clear()
+    setLiveEvidence(null); setScanEvidence(null); setProgressFilter(null); setCoverageFilter(null); setOutcomeFilter(null); signatures.current = null; setChanged([]); setAnnouncement(''); search.clear()
   }, [scanId, snapshot?.batch_id])
   useEffect(() => {
     if (!liveMode || !scanId) return
@@ -55,14 +59,14 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
         if (!current) return
         const [ledger, review, changes, release, source] = results
         setLiveEvidence(previous => ({ ...previous,
-          ...(ledger.status === 'fulfilled' ? { ledger: ledger.value } : {}),
+          ...(ledger.status === 'fulfilled' && (ledger.value?.available !== false || !previous?.ledger) ? { ledger: ledger.value } : {}),
           ...(review.status === 'fulfilled' ? { review: Array.isArray(review.value) ? review.value : [] } : {}),
           ...(release.status === 'fulfilled' ? { release: release.value } : {}),
           ...(source.status === 'fulfilled' ? { source: source.value } : {}),
         }))
         if (changes.status === 'fulfilled') setScanEvidence(remediationDiffPage(changes.value))
         else setScanEvidence(previous => previous || { items: [], total: null, error: true })
-        setLiveError(results.slice(0, 3).some(result => result.status === 'rejected'))
+        setLiveError(ledger.status === 'fulfilled' && ledger.value?.available === false || results.slice(0, 3).some(result => result.status === 'rejected'))
         setConfirmedRefresh(n => n + 1)
       }).catch(() => { if (current) setLiveError(true) })
     }, 400)
@@ -108,7 +112,12 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
   })
   const progressFiles = new Set(effectiveProgress.filter(document => !progressFilter || document.progressState === progressFilter).map(document => document.file))
   const fallbackFiles = progressFilter ? files.filter(file => progressFiles.has(file.file)) : files
-  const searchScope = (currentDocuments || []).filter(row => (!outcomeFilter || row.liveCounts?.[outcomeFilter] > 0) && (!progressFilter || effectiveProgress.some(document => document.file === row.file && document.progressState === progressFilter)))
+  const displayedDocuments = currentDocuments || (liveMode ? documentList : null)
+  const coverageEvidence = snapshot?.file_processing
+  const affectedFiles = new Set((coverageEvidence?.files || []).filter(file => file.hasFindings).map(file => file.file))
+  const finishedFiles = new Set((coverageEvidence?.attempts || []).filter(attempt => attempt.attempted && !attempt.retryScheduled && ['completed', 'failed', 'cancelled', 'skipped'].includes(attempt.state)).map(attempt => attempt.file))
+  const searchScope = (displayedDocuments || []).filter(row => (!outcomeFilter || row.liveCounts?.[outcomeFilter] > 0) && (!progressFilter || effectiveProgress.some(document => document.file === row.file && document.progressState === progressFilter))
+    && (!coverageFilter || affectedFiles.has(row.file) && (coverageFilter === 'withFindings' || (coverageFilter === 'processed' ? finishedFiles.has(row.file) : !finishedFiles.has(row.file)))))
   const visibleDocuments = searchScope.filter(matchesFilters(search, facets, row => row.file))
   const signature = JSON.stringify(currentDocuments?.map(r => [r.file, r.liveCounts, r.reconciliation]) || [])
   useEffect(() => {
@@ -121,8 +130,10 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
     const timer = setTimeout(() => setChanged([]), 1500)
     return () => clearTimeout(timer)
   }, [signature])
-  const progressSummary = <RemediationProgressSummary key={snapshot?.batch_id || scanId} animate={!!liveEvidence && !!connected && !snapshot?.terminal} documents={effectiveProgress} selected={progressFilter}
-    onSelect={selection => { setProgressFilter(selection); onShowDocuments?.() }} reconciling={liveError} />
+  const progressSummary = <RemediationProgressSummary key={snapshot?.batch_id || scanId} animate={liveMode} documents={effectiveProgress} selected={progressFilter}
+    coverage={coverageEvidence || { available: false }} selectedCoverage={coverageFilter} baselineDocumentCounts={snapshot?.progress_baseline?.documents} startedAt={snapshot?.progress_baseline?.started_at}
+    onCoverageSelect={coverageEvidence?.available ? selection => { setCoverageFilter(previous => previous === selection ? null : selection); setProgressFilter(null); setOutcomeFilter(null); onShowDocuments?.() } : undefined}
+    onSelect={selection => { setProgressFilter(selection); setCoverageFilter(null); onShowDocuments?.() }} reconciling={liveError} />
   const selectedRow = documentList.find(row => row.file === selected)
   const nextRow = documentList[documentList.findIndex(row => row.file === selected) + 1]
   useEffect(() => { setSelected(null) }, [scanId])
@@ -134,20 +145,24 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
     {liveError && <p role="status">Live categories could not refresh. The last confirmed counts remain visible.</p>}
     {liveMode && !currentDocuments && <p className="muted">Current finding outcomes are reconciling. Assessment counts remain visible below.</p>}
     <p className="muted">{currentDocuments ? "Open a document to inspect its findings and saved changes." : "Assessment findings stay visible below. Applied-change records remain separate from finding counts."}</p>
-    {currentDocuments ? <section aria-label="Documents"><h3>Documents <small>· {currentDocuments.length}</small></h3>
-      {currentDocuments.some(row => row.reconciliation) && <p role="status">{currentDocuments.filter(row => row.reconciliation).length} documents have finding counts reconciling. Their outcomes are not included in live totals.</p>}
+    {displayedDocuments ? <section aria-label="Documents"><h3>Documents <small>· {displayedDocuments.length}</small></h3>
+      {displayedDocuments.some(row => row.reconciliation) && <p role="status">{displayedDocuments.filter(row => row.reconciliation).length} documents have finding counts reconciling. Their outcomes are not included in live totals.</p>}
       <p className="muted">Each reconciled finding appears once. Counts update after saved results arrive{connected === false ? ' · reconnecting to live updates' : ''}.</p>
-      <div className="live-document-categories" aria-label="Live finding outcomes">
-        <button type="button" aria-pressed={!outcomeFilter} onClick={() => setOutcomeFilter(null)}>All findings</button>
-        {Object.entries(outcomeTotals).map(([category, count]) => <button type="button" key={category} aria-pressed={outcomeFilter === category} onClick={() => setOutcomeFilter(category)}>
-          {['remaining','excluded','superseded','approved'].includes(category) ? <span>{({ remaining:'Remaining', excluded:'Excluded', superseded:'Superseded', approved:'Approved · awaiting application' })[category]} <strong>{count}</strong></span> : <RemediationCategoryPill category={category} count={count} />}
+      <div className="live-document-categories live-finding-filters" aria-label="Live finding outcomes">
+        <button type="button" className="live-finding-filter live-finding-filter--all" aria-pressed={!outcomeFilter} onClick={() => setOutcomeFilter(null)}>All findings</button>
+        {Object.entries(outcomeTotals).map(([category, count]) => <button type="button" key={category}
+          className={`live-finding-filter remediation-category-pill--${category}`}
+          aria-label={`${OUTCOME_SHORT_LABELS[category] || categoryLabel(category)}: ${count} findings`}
+          title={OUTCOME_EXPLANATIONS[category] || categoryExplanation(category)}
+          aria-pressed={outcomeFilter === category} onClick={() => setOutcomeFilter(category)}>
+          {OUTCOME_SHORT_LABELS[category] || categoryLabel(category)} <strong>{count}</strong>
         </button>)}
       </div>
-      <p className="muted">{visibleDocuments.length} of {currentDocuments.length} documents shown · outcome counts cover reconciled documents in this view.</p>
+      <p className="muted">{visibleDocuments.length} of {displayedDocuments.length} documents shown · outcome counts cover reconciled documents in this view.</p>
       <SearchFilterBar ctl={search} items={searchScope} facets={facets} noun="documents" />
       <div className="document-findings-scroll document-findings-scroll-all" role="region" aria-label="Document findings table" tabIndex={0}><table className="live-document-table document-findings-table"><thead><tr><th scope="col">Document</th><th scope="col" className="findings-criteria-heading">WCAG criteria <br />with issues</th><th scope="col" className="findings-total-heading">Total <br />findings</th><th scope="col">Remediation categories</th><th scope="col"><span className="vh">Details</span></th></tr></thead>
         <tbody>{visibleDocuments.map(row => <tr key={row.file} className={changed.includes(row.file) ? 'live-document-changed' : undefined}>
-          <th scope="row">{row.file}</th><td>{new Set(row.findings.map(f => f.sc)).size}</td><td>{row.totalFindings}</td><td>{row.reconciliation && <span role="status">Reconciling · {row.reconciliation.recorded} recorded / {row.reconciliation.expected ?? "unknown"} assessed. {row.reconciliation.reason}</span>}<div className="live-document-categories">{Object.entries(row.liveCounts || {}).map(([category, count]) =>
+          <th scope="row">{row.file}</th><td className="col-criteria">{row.findings ? new Set(row.findings.map(f => f.sc)).size : '—'}</td><td className="col-findings">{row.totalFindings ?? '—'}</td><td>{row.reconciliation && <span role="status">Reconciling · {row.reconciliation.recorded} recorded / {row.reconciliation.expected ?? "unknown"} assessed. {row.reconciliation.reason}</span>}<div className="live-document-categories">{!row.liveCounts && <span className="muted">Awaiting recorded outcomes</span>}{Object.entries(row.liveCounts || {}).map(([category, count]) =>
             ['remaining','excluded','superseded','approved'].includes(category) ? <span key={category}>{({ remaining:'Remaining', excluded:'Excluded', superseded:'Superseded', approved:'Approved · awaiting application' })[category]} <strong>{count}</strong></span>
             : <RemediationCategoryPill key={category} category={category} count={count} />)}</div></td>
           <td><button type="button" className="ghost small" onClick={() => { opener.current = document.activeElement; setSelected(row.file) }}>View fixes</button></td>

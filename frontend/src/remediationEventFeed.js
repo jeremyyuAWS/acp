@@ -78,7 +78,7 @@ export function remediationEventLine(event) {
 export function eventTone(kind, detail = {}) {
   if (kind === 'remediate.delivery_failed' && detail.delivery_status === 'saved_in_acp') return 'neutral'
   if (kind === 'remediate.verification_failed' || kind === 'remediate.delivery_failed') return 'error'
-  if (kind === 'remediate.review_requested' || kind === 'remediate.delivery_retry_refused'
+  if (kind === 'remediate.delivery_retry_requested' || kind === 'remediate.review_requested' || kind === 'remediate.delivery_retry_refused'
       || kind === 'remediate.cancel_requested' || kind === 'remediate.paused'
       || kind === 'scan.interrupted' || kind === 'scan.retrying') return 'attention'
   if (kind === 'remediate.verified' || kind === 'remediate.delivered' || kind === 'remediate.document_completed') return 'success'

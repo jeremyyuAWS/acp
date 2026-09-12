@@ -93,3 +93,15 @@
 .review-queue-delta.positive { color: #176329; background: #e8f5e9; }
 @keyframes queue-delta { 0%, 55% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-8px); } }
 @media (prefers-reduced-motion: reduce) { .review-queue-delta { animation: none; } }
+.run-approval-summary { flex-wrap:wrap; }
+.run-approval-actions { display:flex;align-items:center;gap:12px;flex-wrap:wrap;width:100%; }
+.run-auto-approve-switch { position:relative;display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px; }
+.run-auto-approve-switch input { position:absolute;left:0;width:42px;height:24px;opacity:0;margin:0;cursor:pointer; }
+.run-auto-approve-switch__track { width:42px;height:24px;border-radius:99px;background:#8b8790;display:flex;align-items:center;padding:3px;box-sizing:border-box;transition:background .2s; }
+.run-auto-approve-switch__track > span { height:18px;width:18px;border-radius:50%;background:white;box-shadow:0 1px 3px #0003;transition:transform .2s; }
+.run-auto-approve-switch.is-on .run-auto-approve-switch__track { background:#248451; }
+.run-auto-approve-switch.is-on .run-auto-approve-switch__track > span { transform:translateX(18px); }
+.run-auto-approve-switch input:focus-visible + .run-auto-approve-switch__track { outline:2px solid #674493;outline-offset:3px; }
+.run-auto-approve-switch:has(input:disabled) { opacity:.65;cursor:default; }
+.run-auto-approve-error { width:100%;margin:0;color:#a52929; }
+@media(prefers-reduced-motion:reduce) { .run-auto-approve-switch__track,.run-auto-approve-switch__track > span { transition:none; } }

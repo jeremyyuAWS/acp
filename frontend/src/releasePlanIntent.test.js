@@ -49,3 +49,20 @@ it('does not claim recovered consent if saved report or remaining-issue flags di
  const notice=await authorizeAcceptedRelease('scan',['a'],accepted,{...intent,allow_remaining_issues:true,include_reports:true},c)
  expect(notice).toContain('could not be confirmed')
 })
+
+it('authorizes an explicitly forecast eligible subset without expanding to blocked files', async () => {
+  const c = client()
+  const subset = { ...intent, key: releasePlanKey('scan', ['a', 'blocked']), scope_files: ['a', 'blocked'] }
+  await authorizeAcceptedRelease('scan', ['a', 'blocked'], accepted, subset, c)
+  expect(c.enable).toHaveBeenCalledWith('scan', expect.objectContaining({ files: ['a'] }))
+  c.enable.mockClear()
+  await authorizeAcceptedRelease('scan', ['a', 'blocked'], accepted, { ...subset, files: ['outside'] }, c)
+  expect(c.enable).not.toHaveBeenCalled()
+})
+
+it('reconciles the exact lost authorization while its download package is being prepared', async () => {
+  const c=client();c.enable.mockRejectedValue(new Error('lost'))
+  c.get.mockImplementation(async()=>({authorization:{request_id:c.enable.mock.calls[0][1].request_id,run_id:'accepted-run',source_revision:'source',status:'publishing'}}))
+  expect(await authorizeAcceptedRelease('scan',['a'],accepted,intent,c)).toContain('confirmed after refreshing')
+  expect(c.enable).toHaveBeenCalledOnce()
+})

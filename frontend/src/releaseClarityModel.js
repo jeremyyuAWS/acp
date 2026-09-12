@@ -15,12 +15,13 @@ export function deliveryIsCurrent(file, result, done = {}) {
   return !file.remediated_at || (Number.isFinite(corrected) && published >= corrected)
 }
 
-export function releaseReadiness(file, { done = {}, results = {}, sourceState = () => undefined, pending = {}, blockers = {}, allowRemainingIssues = false } = {}) {
+export function releaseReadiness(file, { done = {}, results = {}, sourceState = () => undefined, pending = {}, processing = {}, blockers = {}, allowRemainingIssues = false } = {}) {
   const result = results[file.file]
   if (deliveryIsCurrent(file, result, done)) return { status: 'released', label: 'Delivered', reason: 'Delivery recorded. Originals unchanged.' }
   if (['queued', 'running'].includes(result?.status)) return { status: 'delivering', label: 'Delivering', reason: 'Release continues in the background. Return here for the receipt.' }
   if (sourceState(file) === 'stale') return { status: 'changed', label: 'Needs attention', reason: 'Source changed. Rescan before releasing this copy.' }
   if (sourceState(file) === 'unavailable') return { status: 'unreachable', label: 'Needs attention', reason: 'Source unreachable. Restore access and check again.' }
+  if (processing[file.file]) return { status: 'applying', label: 'Processing', reason: `${processing[file.file]} approved fixes applying or awaiting verification. No further approval needed.` }
   if (allowRemainingIssues && !hasSavedCorrectedCopy(file)) return { status: 'attention', label: 'No saved copy', reason: 'No saved corrected copy is available to publish. This does not indicate an accessibility finding. Save a copy through Remediate first.' }
   if (allowRemainingIssues && hasSavedCorrectedCopy(file)) {
     if (blockers[file.file]) return { status: 'attention', label: 'Needs attention', reason: blockers[file.file] }

@@ -10,9 +10,28 @@
 .remediation-progress-summary-counts strong { display:block; font-size:26px; line-height:1.3; }
 .remediation-progress-summary-counts span { font-size:14px; }
 .remediation-progress-summary-counts [aria-pressed=true] { outline:2px solid var(--progress-color); outline-offset:2px; }
-.progress-processing { --progress-color:#197caa; --progress-bg:#edf8ff; }
-.progress-verified { --progress-color:#357e66; --progress-bg:#edf9f3; }
-.progress-attention { --progress-color:#b24869; --progress-bg:#fff0f4; }
+.progress-processing, .coverage-processing { --progress-color:#197caa; --progress-bg:#edf8ff; }
+.progress-verified, .coverage-verified { --progress-color:#357e66; --progress-bg:#edf9f3; }
+.progress-attention, .coverage-attention { --progress-color:#b24869; --progress-bg:#fff0f4; }
 .progress-ready { --progress-color:#77539d; --progress-bg:#f5effc; }
 .progress-published { --progress-color:#3c7735; --progress-bg:#eff9ed; }
 @media(max-width:700px) { .remediation-progress-summary-counts { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+.remediation-progress-summary-counts strong .livecounter, .remediation-progress-summary-counts strong .livecounter-n { font-size:inherit; }
+.remediation-progress-summary-counts strong .livecounter-delta { font-size:12px; color:var(--progress-color); }
+
+.file-coverage { margin-bottom:24px; padding-bottom:16px; border-bottom:1px solid #e8e2ed; }
+.file-coverage-counts { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.remediation-progress-summary-counts > * { min-height:145px; padding:16px; }
+.remediation-progress-summary-counts strong { font-size:32px; }
+.remediation-progress-summary-counts strong .kpi-counter, .remediation-progress-summary-counts strong .kpi-counter > span:first-child { font-size:inherit; }
+.kpi-counter { display:inline-flex; align-items:baseline; gap:8px; }
+.kpi-update-delta { font-size:13px!important; font-weight:700; color:var(--progress-color,#357e66); animation:kpi-delta-reveal 350ms ease-out; }
+.kpi-comparison { color:#665b70; }
+.kpi-comparison > span { display:block; margin-top:4px; font-size:12px; }
+@keyframes kpi-delta-reveal { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+@media(prefers-reduced-motion:reduce) { .kpi-update-delta { animation:none; } }
+@media(max-width:700px) { .file-coverage-counts { grid-template-columns:1fr; } }
+.remediation-progress-summary-counts > * { position:relative; overflow:hidden; isolation:isolate; }
+.remediation-progress-summary-counts .kpi-tile-fill { position:absolute; z-index:-1; inset:0 auto 0 0; background:var(--progress-color); opacity:.08; transition:width 400ms ease; pointer-events:none; }
+@media(prefers-reduced-motion:reduce) { .remediation-progress-summary-counts .kpi-tile-fill { transition:none; } }

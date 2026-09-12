@@ -822,10 +822,18 @@ async def remediate_scan(sid: str, request: Request):
          **({"remediation_impact_policy": impact_snapshot,
              "allowed_rules": {name: sorted(impact_allowed.get(name, ())) for name in selected_files}}
             if impact_snapshot else {})}, sort_keys=True)
+    import progress_evidence
+    try:
+        document_baseline = progress_evidence.capture_documents(core.store, res, selected_files,
+            owner=owner, snapshot_id=snapshot_id, request_fingerprint=request_fingerprint)
+    except Exception:
+        document_baseline = None
+        swallowed('routes.scans.remediate_scan: admission progress baseline unavailable', sid)
     for payload in payloads:
         # Provenance only; no decision content enters the queue payload.
         payload["decision_digest"] = decision_digest
         payload["automation_policy"] = policy_snapshot
+        payload['document_progress_baseline'] = document_baseline
         if impact_snapshot:
             payload["remediation_impact_policy"] = impact_snapshot
             payload["remediation_impact_allowed_rules"] = sorted(impact_allowed.get(payload["file"], ()))
@@ -1894,7 +1902,9 @@ def _remediation_snapshot(sid: str) -> dict:
     """
     import remediation_run
     facts = core.store.remediation_run_facts(sid)
-    return remediation_run.build_snapshot(facts)
+    import progress_evidence
+    return {**remediation_run.build_snapshot(facts),
+            **progress_evidence.read(core.store, facts.get('batch_id'))}
 
 
 @router.get("/scans/{sid}/remediation/snapshot")
@@ -3336,6 +3346,8 @@ def _canonical_lineage_export(scan_id: str, owner: str) -> dict:
     lineage.pop("generated_at", None)
     for stage in lineage.get("stages", []):
         stage.pop("generated_at", None)
+        import progress_evidence
+        stage.update(progress_evidence.read(core.store, stage.get('execution_id'), owner=owner))
     encoded = _json.dumps(lineage, sort_keys=True, separators=(",", ":"),
                           ensure_ascii=False, default=str).encode("utf-8")
     return {"lineage": lineage, "content_digest": {
@@ -3571,7 +3583,9 @@ def _release_destination(source: str, raw: object) -> dict | None:
     provider = str(raw.get("provider") or "").strip().lower()
     folder_id = str(raw.get("folder_id") or "").strip()
     folder_name = str(raw.get("folder_name") or "").strip()
-    if provider != source or provider not in {"drive", "sharepoint"}:
+    if source == "local" and provider == "local" and raw == {"provider": "local", "folder_id": "root", "folder_name": "Download package"}:
+        return dict(raw)
+    if (source != "local" and provider != source) or provider not in {"drive", "sharepoint"}:
         raise HTTPException(422, "the Release destination must match this scan's provider")
     if not folder_id or len(folder_id) > 500 or not folder_name or len(folder_name) > 255:
         raise HTTPException(422, "the Release destination needs a valid folder id and name")
@@ -3584,6 +3598,9 @@ def _preflight_release_destination(request: Request, destination: dict | None) -
     if destination is None:
         return {"ready": True, "mode": "provider_default",
                 "message": "ACP will create the protected Remediated folder at the provider root."}
+    if destination["provider"] == "local":
+        import blob
+        return {"ready": blob.enabled(), "mode": "download", "message": "A ZIP package will be prepared automatically."}
     provider, folder_id = destination["provider"], destination["folder_id"]
     if provider == "drive":
         try:
@@ -3681,7 +3698,16 @@ def publish_files(sid: str, request: Request, body: dict):
     import publish as _publish
     from release_artifacts import ReleaseArtifactError, artifact_tag, reuse_state, require_current_record, require_current_source, release_ready, release_review_evidence
     source = scan.get("run", {}).get("source") or "local"
-    destination = _release_destination(source, body.get("destination"))
+    source_origin = source
+    saved_release = core.store.release_for_scan(sid, owner) if source == 'local' else None
+    raw_destination = body.get('destination')
+    if source == 'local' and saved_release and saved_release.get('source') in {'drive', 'sharepoint'}:
+        raw_destination = raw_destination or dict(provider=saved_release['source'], folder_id=saved_release['parent_folder_id'], folder_name=saved_release.get('parent_folder_name') or 'Saved release location')
+    destination = _release_destination(source, raw_destination)
+    if source == "local" and destination:
+        if saved_release and saved_release.get('source') != destination['provider']:
+            raise HTTPException(409, 'This release already has a saved provider. Use its original destination.')
+        source = destination["provider"]
     if destination:
         destination_check = _preflight_release_destination(request, destination)
         if not destination_check["ready"]:
@@ -3702,7 +3728,7 @@ def publish_files(sid: str, request: Request, body: dict):
         release_tz = _release_timezone(owner)
         preferred_folder_name = _publish.release_folder_name(timezone_name=release_tz, owner_email=owner)
     execution_options = {"preferred_folder_name": preferred_folder_name}
-    if destination:
+    if destination and destination["provider"] != "local":
         execution_options.update(parent_folder_id=destination["folder_id"],
                                  parent_folder_name=destination["folder_name"])
     release = core.store.ensure_release_execution(
@@ -3816,7 +3842,7 @@ def publish_files(sid: str, request: Request, body: dict):
                 try:
                     actual_digest = _publish.remediated_content_digest(owner, sid, f)
                     require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
-                    require_current_source(source, record, sp_token=sp_token, drive_service=drive_svc)
+                    require_current_source(source_origin, record, sp_token=sp_token, drive_service=drive_svc)
                     require_current_record(core.store, sid, f, actual_digest, record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
                     if not actual_digest or reuse_state(saved, actual_digest) != "reuse":
                         raise ValueError("Corrected bytes changed; verify the new copy before Release.")
@@ -3909,7 +3935,7 @@ def publish_files(sid: str, request: Request, body: dict):
             if expected_artifacts.get(f) and expected_artifacts[f] != content_digest:
                 raise ReleaseArtifactError("The authorized corrected artifact changed; confirm again")
             record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
-            require_current_source(source, record, drive_service=drive_svc, sp_token=sp_token)
+            require_current_source(source_origin, record, drive_service=drive_svc, sp_token=sp_token)
             record = require_current_record(core.store, sid, f, content_digest, record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
             state = reuse_state(saved, content_digest)
             if state == "unresolved":
@@ -4206,6 +4232,10 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
     owner = _owner(request)
     status = core.store.release_for_scan(sid, owner)
     source = (scan.get("run") or {}).get("source") or "local"
+    source_origin = source
+    destination_config = _release_destination(source_origin, body.destination)
+    if source_origin == 'local':
+        source = (status or {}).get('source') or (destination_config or {}).get('provider') or source
     if status:
         folder_name = status["folder_name"]
         folder_state = "existing"
@@ -4219,7 +4249,6 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
             release_tz = _release_timezone(owner)
             folder_name = _publish.release_folder_name(timezone_name=release_tz, owner_email=owner)
         folder_state = "proposed"
-    destination_config = _release_destination(source, body.destination)
     destination_changed = False
     if status:
         # Publishing reuses the execution's original parent, even when the user's
@@ -4581,7 +4610,7 @@ def _remediated_bytes(owner: str, scan_id: str, filename: str) -> bytes | None:
 
 def _build_release_zip(sid: str, owner: str, scan: dict, selected: list[str], rows: dict,
                        *, package_name: str, preserve_hierarchy: bool,
-                       include_manifest: bool):
+                       include_manifest: bool, expected_artifacts: dict | None = None, report_assets: list | None = None):
     """Build a release ZIP into a spill-to-disk stream shared by sync and queued delivery."""
     import publish as _publish
     source = (scan.get("run") or {}).get("source") or "local"
@@ -4595,6 +4624,12 @@ def _build_release_zip(sid: str, owner: str, scan: dict, selected: list[str], ro
                 data = _remediated_bytes(owner, sid, name)
                 if data is None:
                     raise HTTPException(409, f"corrected copy is not available for packaging: {name}")
+                if expected_artifacts is not None:
+                    expected = expected_artifacts.get(name, '').removeprefix('sha256:')
+                    if hashlib.sha256(data).hexdigest() != expected:
+                        raise HTTPException(409, "The corrected copy changed before packaging")
+                    from release_artifacts import require_current_record
+                    require_current_record(core.store, sid, name, expected, row.get('remediated_at'), owner=owner, allow_remaining_issues=True)
                 source_path = (row.get("source_relative_path") or row.get("path")
                                or row.get("parent_folder") or name)
                 if source == "sharepoint":
@@ -4624,6 +4659,9 @@ def _build_release_zip(sid: str, owner: str, scan: dict, selected: list[str], ro
                 "package_name": package_name, "original_files_unchanged": True,
                 "documents": documents, "finding_reconciliation": finding_reconciliation,
                 "release": release_manifest}
+            for asset in report_assets or []:
+                from release_report_delivery import _asset_bytes
+                archive.writestr('Reports/' + asset['name'], _asset_bytes(asset))
             if include_manifest:
                 archive.writestr("release-manifest.json", _json.dumps(
                     manifest, sort_keys=True, indent=2, ensure_ascii=False,

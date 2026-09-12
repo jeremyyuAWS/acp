@@ -4,7 +4,7 @@ export default function ReleaseCompletionDocuments({ files, states, progressDocu
   const rows = files.map((file, index) => ({ file, state: states[index], result: results[file.file] }))
   const visible = rows.filter(({ file, state }) => filter === 'all' || (progressDocuments
     ? progressDocuments.some(document => document.file === file.file && document.progressState === filter)
-    : filter === 'attention' ? !['ready', 'released', 'delivering'].includes(state.status) : state.status === filter))
+    : filter === 'attention' ? !['ready', 'released', 'delivering', 'applying'].includes(state.status) : state.status === filter))
   return <section className="panel release-completion-documents" aria-label="Publication outcomes">
     <h3>Publication outcomes</h3>
     <p>Saved copies, verification, remaining work, and delivery receipts for this assessment.</p>
