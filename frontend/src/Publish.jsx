@@ -67,6 +67,16 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const frozenDestination = useRef(undefined)
   const currentRunId = useRef(run?.id)
   currentRunId.current = run?.id
+  const releaseOwner = me?.email || run?.owner_email || ''
+  const releaseContext = useRef(null)
+  const contextKey = JSON.stringify([run?.id, releaseOwner])
+  if (releaseContext.current?.key !== contextKey) releaseContext.current = { key: contextKey, live: true }
+  useEffect(() => {
+    const context = releaseContext.current
+    context.live = true
+    return () => { context.live = false; context.cancelWait?.() }
+  }, [contextKey])
+  const ownsRelease = context => context.live && releaseContext.current === context
   const [preserveHierarchy, setPreserveHierarchy] = useState(true)
   const [includeManifest, setIncludeManifest] = useState(true)
   const [includeVerificationReport, setIncludeVerificationReport] = useState(false)
@@ -99,7 +109,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     setReleaseFolder(null); setReleaseFolders([]); setReleasePreview(null); setPackagePreview(null)
     setSelectedFiles(new Set()); selectionInitialized.current = false
     setConfirm(null); setSel(null); setBuilderStep(1); setReleaseAnnouncement(''); setReleaseError(null)
-  }, [run?.id])
+  }, [run?.id, releaseOwner])
   useEffect(() => {
     let live = true
     const controller = new AbortController()
@@ -177,7 +187,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       setReleaseDestination((current) => frozenDestination.current !== undefined ? frozenDestination.current : current?.provider === run?.source ? current : preference)
     }).catch(() => {}).finally(() => { if (live) setSettingsPending(false) })
     return () => { live = false }
-  }, [run?.id, run?.source])
+  }, [run?.id, run?.source, releaseOwner])
   const ms = mirrorState(settings)
   const driveMirrorEnabled = ms === MIRROR.ON
   const driveMirrorFolder = settings?.drive_mirror_folder?.trim() || 'Remediated'
@@ -403,21 +413,34 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     })),
   })
   }
-  const followSharePointRelease = async (expectedFiles) => {
+  const followQueuedRelease = async (expectedFiles, context) => {
     const scanId = run.id
-    // The backend queues one durable job per SharePoint document. Follow the persisted release,
+    // All queued providers use durable jobs. Follow the persisted release,
     // not the originating request: navigation, a worker restart, or a replica change cannot erase
     // progress. The normal load effect below restores the same state after a page reload.
     for (let attempt = 0; attempt < 180; attempt += 1) {
-      if (currentRunId.current !== scanId) return null
-      const status = await getReleaseStatus(scanId)
-      if (currentRunId.current !== scanId) return null
+      if (!ownsRelease(context)) return null
+      let status
+      try { status = await getReleaseStatus(scanId) } catch (error) {
+        if (ownsRelease(context)) setReleaseError({
+          summary: 'Delivery is queued, but its progress could not be refreshed.',
+          details: error?.message || 'The saved delivery continues in the background.',
+          retryLabel: 'Refresh delivery status',
+          retry: () => ownsRelease(context) && followQueuedRelease(expectedFiles, context),
+        })
+        return null
+      }
+      if (!ownsRelease(context)) return null
       applyReleaseStatus(status)
+      setReleaseError(null)
       const rows = status?.documents || []
       if (expectedFiles.every(file => rows.some(row => row.file === file && ['published', 'failed'].includes(row.status)))) return status
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+      await new Promise(resolve => {
+        const timer = window.setTimeout(() => { context.cancelWait = null; resolve() }, 2000)
+        context.cancelWait = () => { window.clearTimeout(timer); context.cancelWait = null; resolve() }
+      })
     }
-    setReleaseAnnouncement('Release is still running safely in the background. You may leave this page and return later.')
+    if (ownsRelease(context)) setReleaseAnnouncement('Release is still running safely in the background. You may leave this page and return later.')
     return null
   }
   useEffect(() => {
@@ -447,7 +470,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     return () => { live = false; if (timer) window.clearTimeout(timer) }
     // Release state is durable; reload and resume polling when the selected scan changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run?.id])
+  }, [run?.id, releaseOwner])
   const partialReleaseOptions = (fileNames) => allowRemainingIssues ? {
     allowRemainingIssues: true,
     expectedArtifacts: Object.fromEntries(ready.filter(file => fileNames.includes(file.file)).map(file => [file.file, file.corrected_sha256])),
@@ -457,19 +480,23 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     : folderName ? publishAllFiles(run?.id, fileNames, folderName) : publishAllFiles(run?.id, fileNames)
   const publish = async (file) => {
     if (readOnly || done[file]) return
+    const context = releaseContext.current
     try {
       const res = allowRemainingIssues ? await publishSelectedFiles([file]) : releaseDestination
         ? await publishFile(run?.id, file, releaseDestination)
         : await publishFile(run?.id, file)
+      if (!ownsRelease(context)) return
       const successful = rememberRelease(res, [file])
-      if (releaseProvider === 'sharepoint' && res?.queued) {
-        const status = await followSharePointRelease([file])
+      if (res?.queued) {
+        const status = await followQueuedRelease([file], context)
+        if (!ownsRelease(context)) return
         const completed = (status?.documents || []).find((row) => row.file === file && row.status === 'published')
         if (completed) onPublish?.(file)
         return
       }
       if (successful.some((row) => row.file === file)) onPublish?.(file)
     } catch (error) {
+      if (!ownsRelease(context)) return
       setReleaseAnnouncement('Release failed. The original file is unchanged; retry when the connection is available.')
       setReleaseError({ summary: 'The corrected copy could not be released.', details: error?.message || 'The release service did not complete the request.', retry: () => publish(file) })
     }
@@ -514,7 +541,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }
   const publishAll = async (fileNames = null, preferredFolderName = '', exact = false) => {
     if (publishLock.current || publishing || readOnly || destinationPending || (settingsPending && !destinationLocked)) return
-    const operation = { scanId: run?.id }
+    const operation = { scanId: run?.id, context: releaseContext.current }
     publishLock.current = operation
     setPublishing(true)
     setReleaseError(null)
@@ -527,21 +554,21 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         ? await publishAllFiles(run?.id, pending, preferredFolderName, { destination: releaseDestination,
           ...partialReleaseOptions(pending), expectedArtifacts: Object.fromEntries(selectableReady.filter(f => pending.includes(f.file)).map(f => [f.file, f.corrected_sha256])) })
         : await publishSelectedFiles(pending, preferredFolderName)
-      if (currentRunId.current !== operation.scanId) return
+      if (!ownsRelease(operation.context)) return
       const successful = rememberRelease(res, pending)
-      if (releaseProvider === 'sharepoint' && res?.queued) {
-        const status = await followSharePointRelease(pending)
-        if (currentRunId.current !== operation.scanId) return
-        ;(status?.documents || []).filter((row) => row.status === 'published')
+      if (res?.queued) {
+        const status = await followQueuedRelease(pending, operation.context)
+        if (!ownsRelease(operation.context)) return
+        ;(status?.documents || []).filter((row) => pending.includes(row.file) && row.status === 'published')
           .forEach((row) => onPublish?.(row.file))
         return
       }
       successful.forEach((row) => onPublish?.(row.file))
     } catch (error) {
-      if (currentRunId.current !== operation.scanId) return
+      if (!ownsRelease(operation.context)) return
       if (!await recoverReleaseDestination(error, pending)) setReleaseError({ summary: 'The selected copies could not be released.', details: error?.detail?.message || error?.detail?.preflight?.message || error?.message || 'The release service did not complete the request.', retry: () => publishAll(fileNames, preferredFolderName, exact) })
     } finally {
-      if (publishLock.current === operation) {
+      if (ownsRelease(operation.context) && publishLock.current === operation) {
         publishLock.current = false
         setPublishing(false)
       }
@@ -589,12 +616,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const graduate = async () => {
     if (publishing || setStatus.status !== SET_STATUS.GRADUATABLE || !setStatus.graduatable.length) return
     setPublishing(true)
+    const context = releaseContext.current
     const targets = setStatus.graduatable
     try {
       const res = await publishSelectedFiles(targets)
+      if (!ownsRelease(context)) return
       const successful = rememberRelease(res, targets)
-      if (releaseProvider === 'sharepoint' && res?.queued) {
-        const status = await followSharePointRelease(targets)
+      if (res?.queued) {
+        const status = await followQueuedRelease(targets, context)
+        if (!ownsRelease(context)) return
         ;(status?.documents || []).filter((row) => row.status === 'published')
           .forEach((row) => onPublish?.(row.file))
         setPublishing(false)
@@ -602,7 +632,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       }
       successful.forEach((row) => onPublish?.(row.file))
     } catch { /* best-effort — local state still updates */ }
-    setPublishing(false)
+    if (ownsRelease(context)) setPublishing(false)
   }
   const publishedCount = Object.keys(done).length
   const pubStarted = Object.keys(done).length > 0   // zero the outcome cards until the user releases
