@@ -160,6 +160,53 @@ def test_approved_field_name_is_written_and_verified_by_a_real_re_scan(store, mo
     assert store.count_unapplied_approved_values(SID, FILE) == 0
 
 
+def test_approved_exact_pdf_language_written_and_rechecked(store, monkeypatch, tmp_path):
+    from test_pdf_structural_language import fixture as language_pdf, targets
+    from office_structure import checks_for, language_marked_spans
+    data = language_pdf()
+    target = targets(data)[0]
+    path = tmp_path / FILE
+    path.write_bytes(data)
+    assert any(check.get('wcag') == '3.1.2' and check.get('location') == target.locator
+               for check in checks_for(path, '.pdf'))
+    blob = _Blob(data)
+    item_id = _seed(store, sc='3.1.2', rule_name='Language of Parts',
+                    locators=[target.locator], wcag_rule='PDF_PART_LANGUAGE')
+    store.update_hitl_item(item_id, 'approved', None, None)
+    store.approve_proposal_values(item_id, ['fr-FR'])
+
+    _run_handler(monkeypatch, store, blob, residual='real')
+
+    assert targets(blob.data)[0].current_language == 'fr-FR'
+    assert blob.uploads == [(FILE, 'application/pdf')]
+    assert store.count_unapplied_approved_values(SID, FILE) == 0
+    path.write_bytes(blob.data)
+    assert 'fr' in language_marked_spans(path, '.pdf')
+    assert not any(check.get('wcag') == '3.1.2' for check in checks_for(path, '.pdf'))
+
+
+@pytest.mark.parametrize('locator_kind', ['stale', 'prose'])
+def test_pdf_language_stale_or_prose_locator_is_never_credited(store, monkeypatch, locator_kind):
+    from test_pdf_structural_language import fixture as language_pdf, targets
+    data = language_pdf()
+    locator = targets(data)[0].locator
+    if locator_kind == 'stale':
+        locator = locator[:-8] + '00000000'
+    else:
+        locator = 'Bonjour, nous sommes heureux'
+    blob = _Blob(data)
+    item_id = _seed(store, sc='3.1.2', rule_name='Language of Parts',
+                    locators=[locator], wcag_rule='PDF_PART_LANGUAGE')
+    store.update_hitl_item(item_id, 'approved', None, None)
+    store.approve_proposal_values(item_id, ['fr'])
+
+    _run_handler(monkeypatch, store, blob, residual='real')
+
+    assert blob.data == data and blob.uploads == []
+    assert store.count_unapplied_approved_values(SID, FILE) == 1
+    assert store.mark_file_compliant_if_reviewed(SID, FILE) is False
+
+
 def test_a_write_that_does_not_clear_the_criterion_credits_nothing(store, monkeypatch, tmp_path):
     """Credit follows the re-scan, not the write — same honesty rule as the Office lane."""
     src = tmp_path / FILE
