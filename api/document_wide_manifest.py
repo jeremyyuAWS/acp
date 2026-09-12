@@ -62,7 +62,7 @@ def _docx_targets(data):
 def _bounded_source(data, filename):
     if not isinstance(data, bytes) or len(data) > 20 * 1024 * 1024:
         raise ValueError('document_too_large')
-    if filename.lower().endswith('.docx'):
+    if filename.lower().endswith(('.docx', '.pptx', '.xlsx')):
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             if len(z.infolist()) > 4000 or sum(i.file_size for i in z.infolist()) > 80 * 1024 * 1024:
                 raise ValueError('document_too_large')
@@ -100,14 +100,18 @@ def build_manifest(store, scan_id, filename, data):
     dispositions = {r['finding_id']: r.get('disposition') for r in store.list_finding_dispositions(scan_id, ctx.run_id)}
     rows = [r for r in rows if dispositions.get(r['finding_id']) not in {'resolved_verified', 'excluded_by_policy', 'superseded_by_reassessment'}]
     _bounded_source(data, filename)
-    builder = build_docx_manifest if filename.lower().endswith('.docx') else build_pdf_manifest if filename.lower().endswith('.pdf') else None
+    from document_wide_office import build_office_manifest, targets as office_targets
+    builder = build_docx_manifest if filename.lower().endswith('.docx') else build_pdf_manifest if filename.lower().endswith('.pdf') else build_office_manifest if filename.lower().endswith(('.pptx', '.xlsx')) else None
     if builder is None:
         raise ValueError('document_format_unsupported')
-    packaged = builder(data, document_id=filename, assessment_revision=baseline['snapshot_id'],
-                       selected_criteria=tuple(sorted(selected)), limits=LIMITS)
+    try:
+        packaged = builder(data, document_id=filename, assessment_revision=baseline['snapshot_id'],
+                           selected_criteria=tuple(sorted(selected)), limits=LIMITS)
+    except zipfile.BadZipFile as exc:
+        raise ValueError('document_extraction_incomplete') from exc
     if any(i.kind in {'extraction_failed', 'extraction_truncated'} for i in packaged.extraction_issues):
         raise ValueError('document_extraction_incomplete')
-    targets = _docx_targets(data) if filename.lower().endswith('.docx') else {}
+    targets = _docx_targets(data) if filename.lower().endswith('.docx') else office_targets(data) if filename.lower().endswith(('.pptx', '.xlsx')) else {}
     findings, issues, matched = [], list(packaged.extraction_issues), set()
     for target in packaged.findings:
         loc = target.locator
@@ -208,7 +212,8 @@ def _image(data, locator):
 def package_images(data, manifest):
     if hashlib.sha256(data).hexdigest() != manifest.source_sha256:
         raise ValueError('document_source_changed')
-    targets = _docx_targets(data) if manifest.document_format.value == 'docx' else {}
+    from document_wide_office import targets as office_targets
+    targets = _docx_targets(data) if manifest.document_format.value == 'docx' else office_targets(data) if manifest.document_format.value in {'pptx', 'xlsx'} else {}
     images = {}
     rendered = {}
     native_regions = None

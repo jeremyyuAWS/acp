@@ -327,8 +327,7 @@ REMEDIATION: dict[str, dict[str, str]] = {
                              # no locator type that apply_pdf_approved routes. No write-back.
         "2.5.3": HUMAN,      # label in name — push button /MK /CA not in /TU or /T; no write-back built yet
         "3.1.1": AUTO,       # catalog /Lang
-        "3.1.2": HUMAN,      # language-of-parts — pdf not in _LANGUAGE_EXTS; apply_text_values
-                             # explicitly excludes PDF for language marks. No write-back.
+        "3.1.2": ASSISTED,   # reviewed /Lang on exact existing /ActualText tagged leaves only
         "3.1.5": HUMAN,      # reading level — no getter reads rule_id "3.1.5" in
                              # has_approved_values_to_write; no write-back.
         "4.1.2": AUTO,       # AcroForm accessible names — /TU copied from a meaningful /T by

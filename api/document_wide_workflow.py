@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-SUPPORTED = {'.docx': ('1.1.1',), '.pdf': ('1.1.1', '4.1.2')}
+SUPPORTED = {'.docx': ('1.1.1',), '.pptx': ('1.1.1',), '.xlsx': ('1.1.1',), '.pdf': ('1.1.1', '4.1.2', '3.1.2')}
 
 
 _NATIVE_REASONS = {

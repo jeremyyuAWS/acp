@@ -98,6 +98,9 @@ _LANE_CONSTS = ("_LINK_SCS_BY_EXT", "_SENSORY_EXTS", "_LANGUAGE_EXTS", "_STRUCTU
 # keying on link text alone approximates "Link Purpose (In Context)" in both directions, and no
 # automated check can confirm a screen reader announces the new text usefully.
 REMEDIATION_VERIFIED: dict[tuple[str, str], str] = {
+    ("1.4.5", "docx"): "tests/test_remediation_verified_office_image_replacement.py — approved transcript replaces an inline picture; production handler saves bytes and real OCR recheck clears the finding.",
+    ("1.4.5", "xlsx"): "tests/test_remediation_verified_office_image_replacement.py — approved transcript replaces a simple anchored picture with a text shape; real handler saves bytes and OCR rechecks.",
+    ("3.1.2", "pdf"): "tests/test_remediation_verified_pdf_writeback.py — reviewed language tag on exact existing ActualText leaf; real handler saves PDF and independent assessment verifies the language mark.",
     ("2.4.4", "docx"): (
         "tests/test_remediation_verified_docx_link.py — a real assessment reports 2.4.4, the "
         "proposer offers a value, a reviewer approves it, handlers._apply_approved_values writes "

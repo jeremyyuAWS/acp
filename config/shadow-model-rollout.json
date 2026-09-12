@@ -1930,42 +1930,6 @@
       "candidates": [
         {
           "candidate": "anthropic:claude-haiku-4-5",
-          "mean_usd_per_case": 0.0014355000000000027,
-          "mean_varr": 0.0,
-          "runs": 2,
-          "safe_runs": 0
-        },
-        {
-          "candidate": "anthropic:claude-opus-5",
-          "mean_usd_per_case": 0.01677583333333333,
-          "mean_varr": 1.0,
-          "runs": 2,
-          "safe_runs": 2
-        },
-        {
-          "candidate": "anthropic:claude-sonnet-5",
-          "mean_usd_per_case": 0.004516999999999985,
-          "mean_varr": 1.0,
-          "runs": 2,
-          "safe_runs": 2
-        }
-      ],
-      "cases": 2,
-      "category": "pptx:3.1.2",
-      "criterion": "3.1.2",
-      "current_lane": "assisted",
-      "eligible": 2,
-      "enable_candidate": "anthropic:claude-sonnet-5",
-      "format": "pptx",
-      "must_abstain": 0,
-      "runs": 2,
-      "verdict": "enable",
-      "why": "anthropic:claude-sonnet-5 (cheapest of 2 safe here, over anthropic:claude-opus-5) safe in all 2 run(s) over 2 cases (2 eligible); current lane is assisted"
-    },
-    {
-      "candidates": [
-        {
-          "candidate": "anthropic:claude-haiku-4-5",
           "mean_usd_per_case": 0.0012864166666666662,
           "mean_varr": 0.0,
           "runs": 2,
@@ -2253,16 +2217,18 @@
   ],
   "schema_version": 1,
   "summary_cases": {
-    "enable": 22,
+    "enable": 20,
     "insufficient-evidence": 18,
     "keep-human-only": 62,
     "no-change-rule-code": 41
   },
   "summary_categories": {
-    "enable": 7,
+    "enable": 6,
     "insufficient-evidence": 7,
     "keep-human-only": 29,
     "no-change-rule-code": 17
   },
-  "unmeasured_categories": []
+  "unmeasured_categories": [
+    "pdf:3.1.2"
+  ]
 }

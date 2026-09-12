@@ -213,7 +213,7 @@ def generate_document(request, *, images=None, pdf_bytes=None):
         ctx = native_profile_context(ctx)
     if len((ctx.policy.get('generation_chain') or {}).get('steps', [])) > 2:
         return deferred('document_wide_two_position_policy_required')
-    if request.manifest.document_format.value == 'docx':
+    if request.manifest.document_format.value in {'docx', 'pptx', 'xlsx'}:
         refs = {e.source_locator.key() for e in request.manifest.evidence if e.kind.value == 'image' and e.image_ref in (images or {})}
         if any(f.locator.key() not in refs for f in request.manifest.findings):
             return deferred('document_wide_insufficient_visual_evidence')

@@ -48,23 +48,23 @@ def _lanes() -> list:
 
 
 def test_the_split_between_engine_dependent_and_in_process_lanes():
-    """17 Office lanes need the .NET analyser to grade a re-scan trustworthy; 2 pdf lanes run
+    """19 Office lanes need the .NET analyser to grade a re-scan trustworthy; 3 pdf lanes run
     in-process (pikepdf) and are engine-independent on any host. If a lane is added, this fails
     until the split is restated — which is the point, since a new Office lane inherits the
     engine condition and a new pdf one does not.
 
-    `1.4.5 pptx` (added with the image-of-text replacement lane) is counted with the Office
+    `1.4.5 docx/xlsx/pptx` (added with the image-of-text replacement lane) is counted with the Office
     lanes because it is a .pptx write, but its CRITERION is graded by the OCR pass in
     `api/ocr.py`, not by the .NET analyser: it needs tesseract instead, and its proof
     skips without it. So the Office count is not a count of .NET-graded criteria, and this
-    is the one member that differs.
+    these three members differ.
     """
     lanes = _lanes()
     office = [l for l in lanes if not l.endswith(" pdf")]
     inproc = [l for l in lanes if l.endswith(" pdf")]
-    assert len(lanes) == 19, f"the lane set changed ({len(lanes)}); restate the engine split"
-    assert len(office) == 17, f"expected 17 Office lanes, got {len(office)}: {office}"
-    assert sorted(inproc) == ["1.1.1 pdf", "4.1.2 pdf"], inproc
+    assert len(lanes) == 22, f"the lane set changed ({len(lanes)}); restate the engine split"
+    assert len(office) == 19, f"expected 19 Office lanes, got {len(office)}: {office}"
+    assert sorted(inproc) == ["1.1.1 pdf", "3.1.2 pdf", "4.1.2 pdf"], inproc
     assert "1.4.5 pptx" in office, (
         "the OCR-graded Office lane vanished; the docstring's exception no longer applies")
 

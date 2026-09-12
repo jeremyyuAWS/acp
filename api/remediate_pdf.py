@@ -760,20 +760,25 @@ def apply_pdf_field_name(data: bytes, values: dict) -> tuple[bytes, list[dict], 
 
 
 def apply_pdf_approved(data: bytes, values: dict) -> tuple[bytes, list[dict], list[str]]:
-    """Single PDF write-back entry for the apply job: routes figure-alt (`pdf:fig:…` → /Alt)
-    and form-field-name (`pdf:field:…` → /TU) approvals by locator prefix, in sequence. The
+    """Single PDF write-back entry for the apply job: routes figure-alt (`pdf:fig:…` → /Alt),
+    form-field-name (`pdf:field:…` → /TU), and exact structural language (`pdf:lang:…` → /Lang)
+    approvals by locator prefix, in sequence. The
     unresolved list only carries locators neither writer recognised."""
     fig_vals = {k: v for k, v in (values or {}).items() if str(k).startswith("pdf:fig:")}
     fld_vals = {k: v for k, v in (values or {}).items() if str(k).startswith("pdf:field:")}
+    lang_vals = {k: v for k, v in (values or {}).items() if str(k).startswith("pdf:lang:")}
     unknown = [k for k in (values or {})
-               if not (str(k).startswith("pdf:fig:") or str(k).startswith("pdf:field:"))]
+               if not (str(k).startswith("pdf:fig:") or str(k).startswith("pdf:field:") or str(k).startswith("pdf:lang:"))]
     applied: list[dict] = []
     cur = data
     if fig_vals:
         cur, a, _ = apply_pdf_figure_alt(cur, fig_vals); applied += a
     if fld_vals:
         cur, a, _ = apply_pdf_field_name(cur, fld_vals); applied += a
-    unresolved = [k for k in list(fig_vals) + list(fld_vals)
+    if lang_vals:
+        from pdf_structural_language import apply_pdf_structure_language
+        cur, a, _ = apply_pdf_structure_language(cur, lang_vals); applied += a
+    unresolved = [k for k in list(fig_vals) + list(fld_vals) + list(lang_vals)
                   if not any(x.get("locator") == k for x in applied)] + unknown
     return cur, applied, unresolved
 

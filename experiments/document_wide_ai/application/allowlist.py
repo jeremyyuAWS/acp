@@ -16,6 +16,7 @@ from experiments.document_wide_ai.contracts.v1 import AllowedOperation, Document
 SET_PDF_FIELD_ACCESSIBLE_NAME = "set_pdf_field_accessible_name"
 SET_PDF_FIGURE_ALT_TEXT = "set_pdf_figure_alt_text"
 SET_OFFICE_IMAGE_ALT_TEXT = "set_office_image_alt_text"
+SET_PDF_STRUCTURE_LANGUAGE = "set_pdf_structure_language"
 
 MAX_VALUE_LEN = 500
 
@@ -30,6 +31,10 @@ class OperationSpec:
 
 
 SUPPORTED_OPERATIONS: tuple[OperationSpec, ...] = (
+    OperationSpec(SET_PDF_STRUCTURE_LANGUAGE, DocumentFormat.PDF, "pdf:lang:", "3.1.2",
+                  "Set language on an existing text-bearing PDF structure element; semantic accuracy requires review."),
+    OperationSpec(SET_OFFICE_IMAGE_ALT_TEXT, DocumentFormat.PPTX, None, "1.1.1", "Set an existing PowerPoint picture description."),
+    OperationSpec(SET_OFFICE_IMAGE_ALT_TEXT, DocumentFormat.XLSX, None, "1.1.1", "Set an existing Excel drawing picture description."),
     OperationSpec(SET_PDF_FIGURE_ALT_TEXT, DocumentFormat.PDF, "pdf:fig:", "1.1.1",
                   "Set existing tagged PDF Figure alt text using the isolated production writer."),
     OperationSpec(
@@ -73,6 +78,10 @@ def value_ok(op: str, value: object) -> tuple[bool, str | None]:
         return False, "value must be a non-empty string"
     if len(value) > MAX_VALUE_LEN:
         return False, f"value exceeds {MAX_VALUE_LEN} chars"
+    if op == SET_PDF_STRUCTURE_LANGUAGE:
+        from pdf_structural_language import valid_language
+        if not valid_language(value):
+            return False, "value must be a supported language tag"
     if op in (SET_OFFICE_IMAGE_ALT_TEXT, SET_PDF_FIGURE_ALT_TEXT):
         from experiments.document_wide_ai.application.production_adapters import office_is_junk_descr
 
