@@ -288,7 +288,9 @@ def ready(store, row, file):
         raise FileRemediationFinishedWithoutCopy('Remediation finished without a saved corrected copy. The original is unchanged; remaining issues are listed for follow-up.')
     if (not partial and not record.get('compliant')) or not record.get('remediated_at') or not re.fullmatch('[0-9a-f]{64}', record.get('corrected_sha256') or ''):
         raise ValueError('Waiting for a saved corrected artifact.' if partial else 'Waiting for a verified corrected artifact.')
-    if not partial and store.count_unapplied_approved_values(row['scan_id'], file):
+    # Remaining-issue permission covers unresolved findings, not approved content
+    # promised for this document. Job completion alone cannot prove that write.
+    if store.count_unapplied_approved_values(row['scan_id'], file):
         raise ValueError('Approved changes still need application and verification.')
     for item in store.list_hitl_queue(scan_id=row['scan_id'], owner=row['owner_email'], include_superseded=True):
         if partial or item.get('file') != file or item.get('superseded'):
@@ -405,6 +407,62 @@ def dispatch(store, row, file, digest):
              expected_artifacts={file: digest}, expected_destination=row['intent']['destination'] if row['intent']['release_parent_id'] else None))
 
 
+def recover_approved_writes(store, row, file):
+    """One bounded recovery of already-approved content, under automatic run authority.
+
+    No new approvals are created. An old Done job is not proof its values reached
+    the copy. The deterministic queue identity survives concurrent ticks and
+    prevents a failed or unwritable obligation becoming an infinite retry loop.
+    """
+    from hashlib import sha256
+    from store import job_priority
+    with store.transaction():
+        row = persistence.get(store, row['id'], row['owner_email'], lock=True)
+        require_authority(store, row, file)
+        if run_files(store, row['run_id']).get(file) != 'done' or not store.count_unapplied_approved_values(row['scan_id'], file):
+            return False
+        with store._db.cursor() as cur:
+            store._db.execute(cur, "SELECT id,status,payload FROM jobs WHERE scan_id=%s "
+                "AND type='apply_approved_values' ORDER BY created_at DESC,id DESC", (row['scan_id'],))
+            previous = []
+            for job in store._db.fetchall(cur):
+                data = json.loads(job['payload']) if isinstance(job['payload'], str) else job['payload']
+                if data.get('file') == file:
+                    previous.append(dict(job, decoded_payload=data))
+            if any(job['status'] in {'queued', 'running', 'processing', 'retry'} for job in previous):
+                return True
+        job_id = 'approved-recovery-' + sha256(f"{row['id']}\0{file}".encode()).hexdigest()[:32]
+        if any(job['id'] == job_id for job in previous):
+            raise ValueError('Approved-change recovery finished without applying every value. The previous copy is retained; review the recorded write failure before retrying.')
+        items = [item for item in store._approved_unapplied_rows(row['scan_id'], file)
+                 if store._row_approved_values(item) or
+                    (not store._row_owes_no_document_content(item) and str(item.get('approved_value') or '').strip())]
+        if not items or any(not store._row_approved_values(item) or
+                item.get('approved_source_revision') != row['intent']['source_revision'] for item in items):
+            raise ValueError('Approved changes lack current-source or writable-location evidence. Restore that evidence before publishing this copy.')
+        current = {item['id']: item for item in store.list_hitl_queue(
+            scan_id=row['scan_id'], owner=row['owner_email'], include_superseded=True)}
+        if any(item['id'] not in current or current[item['id']].get('superseded') for item in items):
+            raise ValueError('Approved changes belong to superseded proposals. Review the current source before publishing.')
+        payload = {'owner': row['owner_email'], 'scan_id': row['scan_id'], 'file': file,
+                   'automatic_release_recovery_id': row['id']}
+        if any(str(item.get('last_decision_request_id') or '').startswith('standing:') for item in items):
+            original = next((job['decoded_payload'] for job in previous
+                             if job['decoded_payload'].get('standing_approval')), None)
+            if not original:
+                raise ValueError('The exact saved automatic-approval write request is unavailable. Restore its evidence before publishing.')
+            from ai_standing_approval import check_application
+            check_application(store, original)
+            payload = dict(original, automatic_release_recovery_id=row['id'])
+        now = store._now()
+        with store._db.cursor() as cur:
+            store._db.execute(cur, "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
+                "run_after,scan_id,created_at,updated_at) VALUES(%s,'apply_approved_values',%s,'queued',%s,0,2,%s,%s,%s,%s) "
+                "ON CONFLICT(id) DO NOTHING", (job_id, json.dumps(payload), job_priority('apply_approved_values'),
+                                                now, row['scan_id'], now, now))
+        return True
+
+
 def advance(store, payload, job):
     from routes.scans import publish_files
     from worker import check_cancel
@@ -458,6 +516,10 @@ def advance(store, payload, job):
                         dict(state='publishing', message='Delivery not yet confirmed. Waiting for a recorded receipt; a copy may already exist.'))
                 # Once admitted, freeze the artifact and reconcile its receipt.
                 # A changed artifact or lost provider result never buys a new delivery.
+                continue
+            if recover_approved_writes(store, row, file):
+                persistence.update_file(store, row['id'], row['owner_email'], file,
+                    dict(state='waiting', message='Applying previously approved changes before preparing the published copy.'))
                 continue
             record = ready(store, row, file)
             digest = record['corrected_sha256']

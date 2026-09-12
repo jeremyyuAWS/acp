@@ -5368,6 +5368,18 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
 
     payload: {scan_id, file}
     """
+    # Approval coordination shares the established approved-fix worker lane;
+    # this phase authorizes exact pending proposals and queues normal file writes.
+    if payload.get('phase') == 'approve_current_run_ai':
+        allowed = {'phase', 'scan_id', 'owner', 'run_id', 'source_revision'}
+        if (set(payload) - allowed or any(not isinstance(payload.get(key), str) or not payload[key]
+                                         for key in allowed - {'phase'})):
+            raise FatalJobError('Invalid current-run AI approval coordination payload')
+        if job.get('scan_id') and job['scan_id'] != payload['scan_id']:
+            raise FatalJobError('AI approval coordination scan mismatch')
+        return _approve_run_ai(payload, job)
+    if payload.get('phase'):
+        raise FatalJobError('Unknown approved-fix job phase')
     scan_id = payload.get("scan_id") or job.get("scan_id")
     filename = payload.get("file")
     if not (scan_id and filename):
@@ -5760,7 +5772,6 @@ def _release_continue(payload: dict, job: dict) -> None:
     advance(core.store, payload, job)
 
 
-@handler("approve_run_ai")
 def _approve_run_ai(payload: dict, job: dict) -> None:
     from ai_run_approval_override import process_pending
     try:

@@ -70,7 +70,7 @@ def save(store, owner, sid, run_id, enabled, expected_revision, expected_source_
         store.log_decision(owner, 'ai.run_approval_override', scan_id=sid,
                            detail=json.dumps(updated, sort_keys=True))
         if enabled:
-            store.enqueue_job('approve_run_ai', {'scan_id': sid, 'owner': owner, 'run_id': run_id,
+            store.enqueue_job('apply_approved_values', {'phase': 'approve_current_run_ai', 'scan_id': sid, 'owner': owner, 'run_id': run_id,
                                                 'source_revision': current['source_revision']}, scan_id=sid)
     return updated
 

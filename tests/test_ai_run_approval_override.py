@@ -18,7 +18,8 @@ def test_switch_on_approves_existing_exact_run_proposal_then_off_preserves_appro
         process_pending(store,dict(owner=OWNER,scan_id=SID,run_id=ctx.run_id,source_revision=before['source_revision']))
         assert store.get_hitl_item(item)['status']=='approved'
         save(store,OWNER,SID,ctx.run_id,False,1,before['source_revision'])
-        check_application(store,json.loads(apply_jobs(store)[0]['payload']),working=BYTES)
+        writes=[job for job in apply_jobs(store) if not json.loads(job['payload']).get('phase')]
+        check_application(store,json.loads(writes[0]['payload']),working=BYTES)
         second=store.enqueue_proposals(SID,FILE,'1.1.1',[proposal(store,rule='1.1.1',locator='ppt/slides/slide1.xml#rId1')])
         approve_file(store,ctx)
         assert store.get_hitl_item(second)['status']=='pending'
@@ -63,3 +64,29 @@ def test_unsupported_ai_run_switch_is_readonly(isolated_store,monkeypatch):
         assert state['supported'] is False and state['enabled'] is False
         with pytest.raises(ValueError,match='did not authorize'):
             save(store,OWNER,SID,ctx.run_id,True,0,state['source_revision'])
+
+
+def test_approval_coordination_uses_existing_remediate_worker_lane(isolated_store,monkeypatch):
+    import core,handlers
+    from worker import HANDLERS,FatalJobError
+    store=isolated_store;job=seed(store,monkeypatch,enabled=False)
+    with run_context(store,job['payload'],job) as ctx:
+        state=read(store,OWNER,SID,ctx.run_id)
+        save(store,OWNER,SID,ctx.run_id,True,0,state['source_revision'])
+        pending=store.enqueue_proposals(SID,FILE,'2.4.6',[proposal(store)])
+        coordination=[row for row in apply_jobs(store) if json.loads(row['payload']).get('phase')][0]
+        assert coordination['type']=='apply_approved_values'
+        assert 'approve_run_ai' not in HANDLERS
+        monkeypatch.setenv('ACP_WORKER_ROLE','remediate')
+        types=core._worker_job_types(0,2)
+        assert coordination['type'] in types
+        # Clear the admission job so this claim specifically proves coordination placement.
+        with store._db.cursor() as cur:
+            store._db.execute(cur,"UPDATE jobs SET status='done' WHERE id=%s",(job['id'],))
+        claimed=store.claim_job('approval-worker',job_types=types)
+        assert claimed['id']==coordination['id']
+        handlers._apply_approved_values(claimed['payload'],claimed)
+        assert store.get_hitl_item(pending)['status']=='approved'
+        bad={**claimed['payload'],'file':'unapproved.docx'}
+        with pytest.raises(FatalJobError,match='Invalid current-run'):
+            handlers._apply_approved_values(bad,claimed)

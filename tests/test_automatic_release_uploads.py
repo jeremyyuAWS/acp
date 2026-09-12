@@ -3,6 +3,7 @@ import json
 import pytest
 import automatic_release as flow
 from test_automatic_release_service import prepared, SID, OWNER, FILE, DIGEST
+from test_automatic_release_routes import real_publish
 
 
 def upload(prepared):
@@ -42,7 +43,6 @@ def test_upload_admission_queues_real_cloud_delivery_to_chosen_provider(prepared
     from types import SimpleNamespace
     from routes import scans
     import core
-    from test_automatic_release_routes import real_publish
     upload(prepared)
     destination = dict(provider='sharepoint', folder_id='target-library/folder', folder_name='Team')
     row = flow.authorize(prepared.store, SID, OWNER, prepared.run, [FILE], destination, 'cloud', allow_remaining_issues=True)
@@ -59,7 +59,6 @@ def test_local_completion_prepares_one_frozen_package_and_reports(prepared, monk
     import blob
     from types import SimpleNamespace
     from routes import scans
-    from test_automatic_release_routes import real_publish
     from test_automatic_release_service import tick
     upload(prepared)
     monkeypatch.setattr(blob, 'enabled', lambda: True)
@@ -83,3 +82,85 @@ def test_local_completion_prepares_one_frozen_package_and_reports(prepared, monk
         assert prepared.store._db.fetchone(cur)['n'] == 1
         prepared.store._db.execute(cur, "UPDATE jobs SET status='done' WHERE id=%s", (job_id,))
     assert flow.public(row, prepared.store)['status'] == 'completed'
+
+
+def test_remaining_issues_permission_does_not_publish_approved_but_unwritten_changes(prepared):
+    upload(prepared)
+    plan = flow.planning_preview(prepared.store, SID, OWNER, [FILE])
+    row = flow.authorize(prepared.store, SID, OWNER, prepared.run, [FILE],
+        plan['destination'], 'unwritten-approved', allow_remaining_issues=True)
+    item = prepared.store.enqueue_proposals(SID, FILE, '1.1.1', [
+        {'locator': 'ppt/slides/slide1.xml#Picture 1', 'proposed_value': 'Approved description', 'source': 'fixture'}])
+    prepared.store.update_hitl_item(item, 'approved')
+    prepared.store.approve_proposal_values(item, [])
+    # Reproduce a historical apply job that returned done before actually writing
+    # the approved content. A different, older corrected copy still exists.
+    job = prepared.store.enqueue_job('apply_approved_values',
+        {'owner': OWNER, 'scan_id': SID, 'file': FILE}, scan_id=SID)
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, "UPDATE jobs SET status='done' WHERE id=%s", (job,))
+    assert prepared.store.count_unapplied_approved_values(SID, FILE) == 1
+    with pytest.raises(ValueError, match='Approved changes still need'):
+        flow.ready(prepared.store, row, FILE)
+    prepared.store.mark_row_applied(item)
+    assert flow.ready(prepared.store, row, FILE)['corrected_sha256'] == DIGEST
+
+
+def test_automatic_run_recovers_exact_approved_writes_once_and_stops_on_unwritten_failure(prepared):
+    upload(prepared)
+    plan = flow.planning_preview(prepared.store, SID, OWNER, [FILE])
+    row = flow.authorize(prepared.store, SID, OWNER, prepared.run, [FILE],
+        plan['destination'], 'recover-approved', allow_remaining_issues=True)
+    item = prepared.store.enqueue_proposals(SID, FILE, '1.1.1', [
+        {'locator': 'ppt/slides/slide1.xml#Picture 1', 'proposed_value': 'Exact saved approval', 'source': 'fixture'}])
+    prepared.store.update_hitl_item(item, 'approved')
+    prepared.store.approve_proposal_values(item, [])
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, 'UPDATE hitl_queue SET approved_source_revision=%s WHERE id=%s',
+            (row['intent']['source_revision'], item))
+    assert flow.recover_approved_writes(prepared.store, row, FILE)
+    assert flow.recover_approved_writes(prepared.store, row, FILE)
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, "SELECT id,payload FROM jobs WHERE type='apply_approved_values' AND scan_id=%s", (SID,))
+        jobs = prepared.store._db.fetchall(cur)
+        assert len(jobs) == 1
+        assert json.loads(jobs[0]['payload'])['automatic_release_recovery_id'] == row['id']
+        prepared.store._db.execute(cur, "UPDATE jobs SET status='done' WHERE id=%s", (jobs[0]['id'],))
+    with pytest.raises(ValueError, match='recovery finished without applying'):
+        flow.recover_approved_writes(prepared.store, row, FILE)
+    prepared.store.mark_row_applied(item)
+    assert flow.recover_approved_writes(prepared.store, row, FILE) is False
+
+
+def test_recovery_rejects_stale_or_unlocated_approved_values(prepared):
+    upload(prepared)
+    plan = flow.planning_preview(prepared.store, SID, OWNER, [FILE])
+    row = flow.authorize(prepared.store, SID, OWNER, prepared.run, [FILE],
+        plan['destination'], 'stale-approved', allow_remaining_issues=True)
+    item = prepared.store.enqueue_proposals(SID, FILE, '1.1.1', [
+        {'locator': 'ppt/slides/slide1.xml#Picture 1', 'proposed_value': 'Approval', 'source': 'fixture'}])
+    prepared.store.update_hitl_item(item, 'approved')
+    prepared.store.approve_proposal_values(item, [])
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, "UPDATE hitl_queue SET approved_source_revision='different-source' WHERE id=%s", (item,))
+    with pytest.raises(ValueError, match='current-source'):
+        flow.recover_approved_writes(prepared.store, row, FILE)
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, "SELECT COUNT(*) AS n FROM jobs WHERE type='apply_approved_values' AND scan_id=%s", (SID,))
+        assert prepared.store._db.fetchone(cur)['n'] == 0
+
+
+def test_partial_publish_accepts_saved_applied_changes_even_when_not_verified(prepared):
+    upload(prepared)
+    plan = flow.planning_preview(prepared.store, SID, OWNER, [FILE])
+    row = flow.authorize(prepared.store, SID, OWNER, prepared.run, [FILE],
+        plan['destination'], 'saved-unverified', allow_remaining_issues=True)
+    item = prepared.store.enqueue_proposals(SID, FILE, '1.1.1', [
+        {'locator': 'ppt/slides/slide1.xml#Picture 1', 'proposed_value': 'Written approval', 'source': 'fixture'}])
+    prepared.store.update_hitl_item(item, 'approved')
+    prepared.store.approve_proposal_values(item, [])
+    prepared.store.mark_row_applied(item)
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, 'UPDATE file_records SET compliant=0 WHERE scan_id=%s', (SID,))
+    assert flow.recover_approved_writes(prepared.store, row, FILE) is False
+    assert flow.ready(prepared.store, row, FILE)['corrected_sha256'] == DIGEST

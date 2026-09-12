@@ -2656,10 +2656,19 @@ export const createReleaseFolder = (provider, parent, name) => fetch(`${BASE}/re
   body: JSON.stringify({ provider, parent, name }),
 }).then(j)
 
-export const getRunAiApproval = (scanId, runId) => fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/ai-approval/${encodeURIComponent(runId)}`, {
+const simulatedRunAiApproval = new Map()
+const simulatedApproval = (scanId, runId) => simulatedRunAiApproval.get(`${scanId}:${runId}`)
+  || { supported: true, enabled: false, revision: 0, run_id: runId, source_revision: `sim:${scanId}:${runId}` }
+export const getRunAiApproval = (scanId, runId) => SIM ? sim(simulatedApproval(scanId, runId)) : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/ai-approval/${encodeURIComponent(runId)}`, {
   headers: headers(), cache: 'no-store',
 }).then(j)
 
-export const setRunAiApproval = (scanId, runId, setting) => fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/ai-approval/${encodeURIComponent(runId)}`, {
+export const setRunAiApproval = (scanId, runId, setting) => SIM ? (() => {
+  const current = simulatedApproval(scanId, runId)
+  if (setting.expected_revision !== current.revision || setting.expected_source_revision !== current.source_revision) return Promise.reject(new Error('Automatic approval setting changed; refresh and try again'))
+  const updated = { ...current, enabled: setting.enabled === true, revision: current.revision + 1 }
+  simulatedRunAiApproval.set(`${scanId}:${runId}`, updated)
+  return sim(updated)
+})() : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/ai-approval/${encodeURIComponent(runId)}`, {
   method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(setting),
 }).then(j)
