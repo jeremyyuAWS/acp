@@ -36,11 +36,11 @@ const PRESSURE = {
   stalled: { label: 'Queue stalled', color: 'var(--pressure-stalled)' },
 }
 
-// `bezier` rather than the stepped router this replaced: one continuous curve per line, with no
+// The default Bezier edge rather than the stepped router this replaced: one continuous curve per line, with no
 // corners to round off, which is as smooth as this graph gets. `curvature` pushes the control
 // points further out so the three lines fanning out of the shared queue separate before they turn
 // — at the default they overlap for the first stretch and read as a single line.
-const EDGE_ROUTING = { type: 'bezier', pathOptions: { curvature: 0.42 } }
+const EDGE_ROUTING = { type: 'default', pathOptions: { curvature: 0.42 } }
 
 // Worker cards grow with their live gauge and compute/storage line. At the narrow fitView scale
 // that content can wrap to roughly 150px tall, so a 145px pitch lets adjacent borders touch (and

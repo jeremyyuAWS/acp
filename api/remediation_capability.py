@@ -292,10 +292,10 @@ REMEDIATION: dict[str, dict[str, str]] = {
     # Figure alt (1.1.1) is the only ASSISTED lane with a real apply_pdf_figure_alt applier.
     "pdf": {
         "1.1.1": ASSISTED,   # tagged-figure alt — vision proposal; apply_pdf_figure_alt writes it back
-        "1.3.1": HUMAN,      # tag structure — _propose_structure_map has explain_only=True;
-                             # no locator type that apply_pdf_approved routes. No write-back.
-        "1.3.2": HUMAN,      # reading order — _propose_reading_order has explain_only=True;
-                             # no locator type that apply_pdf_approved routes. No write-back.
+        "1.3.1": HUMAN,      # Human-authorized existing-table Scope/Headers plans are writable;
+                             # untagged structure and inferred complex associations remain re-authoring.
+        "1.3.2": HUMAN,      # Explicit complete sibling permutations are writable on valid existing
+                             # tags; guessing a meaningful reading order remains human judgment.
         "1.3.3": HUMAN,      # sensory rewrite — pdf not in _SENSORY_EXTS; apply_text_values
                              # explicitly excludes PDF for sensory rewrites. No write-back.
         "1.3.5": HUMAN,      # input purpose — heuristic vocabulary match on AcroForm field names;
@@ -323,8 +323,8 @@ REMEDIATION: dict[str, dict[str, str]] = {
                              # is easy; writing it is not (the text-showing operators re-flow),
                              # and there is no PDF link write-back, so an approval could never
                              # be honoured. Assessed and routed to a human, never proposed.
-        "2.4.6": HUMAN,      # tagged PDF — _propose_pdf_headings has explain_only=True;
-                             # no locator type that apply_pdf_approved routes. No write-back.
+        "2.4.6": HUMAN,      # Exact existing tagged text has a writable, heuristic heading-role
+                             # proposal; meaning and untagged heading reconstruction remain human work.
         "2.5.3": HUMAN,      # label in name — push button /MK /CA not in /TU or /T; no write-back built yet
         "3.1.1": AUTO,       # catalog /Lang
         "3.1.2": ASSISTED,   # reviewed /Lang on exact existing /ActualText tagged leaves only

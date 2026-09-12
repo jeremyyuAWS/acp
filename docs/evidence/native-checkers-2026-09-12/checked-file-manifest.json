@@ -1,0 +1,33 @@
+{
+  "scope": "Exact isolated synthetic controls actually checked on September 12 2026",
+  "files": [
+    {
+      "file": "pdf-bad-untagged-control.pdf",
+      "sha256": "a600b410e255cf01a696f57a2578af162fce7dfd4cf8e0cb9b807ac3bdfb157b"
+    },
+    {
+      "file": "pdf-good-control.pdf",
+      "sha256": "c62f16e9ec174c1baff18148f2f0735bb296a2290d2a3972c55e7db33051b3ee"
+    },
+    {
+      "file": "pdf-tagged-corrected.pdf",
+      "sha256": "cf534ea3da79345f362bbedbb52718baf4ad5a2bd7cbb92c3bb4ac0eb89cfcb1"
+    },
+    {
+      "file": "pdf-tagged-original.pdf",
+      "sha256": "e2aab44853ee1a21dbc29b9549d4a364f18c4da0934364e2bfbc96ac4ecdb631"
+    },
+    {
+      "file": "word-approved-alt-corrected.docx",
+      "sha256": "2be8c705283cded2262190431309474a94ba765185f615f7107646469b45228e"
+    },
+    {
+      "file": "word-missing-alt.docx",
+      "sha256": "b49a26898050b532fd55aa6b8380a0a5c3ed9500d9f2c35df681a5bd2158b099"
+    },
+    {
+      "file": "word-original.docx",
+      "sha256": "deb84f8f6ded63efa49046aec4c7ff69efb00a1cea5ef26789a81ce437761e6e"
+    }
+  ]
+}

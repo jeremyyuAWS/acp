@@ -106,3 +106,7 @@
 .run-auto-approve-error { width:100%;margin:0;color:#a52929; }
 @media(prefers-reduced-motion:reduce) { .run-auto-approve-switch__track,.run-auto-approve-switch__track > span { transition:none; } }
 .automatic-review-queued { margin:8px 0; padding:9px 12px; border-radius:8px; background:var(--info-bg); color:var(--info-fg); font-family:var(--font-ui); font-size:13px; line-height:1.5; }
+/* Success feedback floats above the existing Review layout; it never shifts queue rows. */
+.run-auto-approve-toast { position:fixed; right:14px; top:14px; z-index:10000; width:min(360px,calc(100vw - 28px)); padding:14px; border:1px solid var(--success-fg); border-left:4px solid var(--success-fg-strong); border-radius:9px; background:var(--success-bg); color:var(--success-fg-strong); box-shadow:0 10px 26px #20182425; font-family:var(--font-ui); font-size:13px; text-align:left; }
+.run-auto-approve-toast > button { float:right; margin-left:8px; color:inherit; }
+.run-auto-approve-toast p { margin:7px 0 0; }

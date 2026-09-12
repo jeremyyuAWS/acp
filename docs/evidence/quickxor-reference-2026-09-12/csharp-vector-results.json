@@ -1,0 +1,50 @@
+{
+  "reference": "Microsoft official C# QuickXorHash sample, compiled and executed independently with .NET 10.0.302",
+  "source_url": "https://learn.microsoft.com/en-us/onedrive/developer/code-snippets/quickxorhash?view=odsp-graph-online",
+  "source_markdown_url": "https://raw.githubusercontent.com/OneDrive/onedrive-api-docs/live/docs/code-snippets/quickxorhash.md",
+  "source_markdown_sha256": "ab13a90595328de06c845b8621775513ab0e5bcd375e67f9f2e1ffdfa4effd03",
+  "checked_at": "2026-09-12",
+  "vectors": [
+    {
+      "input": "a",
+      "quickxor_base64": "YQAAAAAAAAAAAAAAAQAAAAAAAAA="
+    },
+    {
+      "input": "abc",
+      "quickxor_base64": "YRDDGAAAAAAAAAAAAwAAAAAAAAA="
+    },
+    {
+      "input": "all256",
+      "quickxor_base64": "QkGEfSisZcA7k+FCh71r2dbCayY="
+    },
+    {
+      "input": "byte255",
+      "quickxor_base64": "/wAAAAAAAAAAAAAAAQAAAAAAAAA="
+    },
+    {
+      "input": "bytes160",
+      "quickxor_base64": "/+EGLlnQi0dVs5OErXWhEnz5wg4="
+    },
+    {
+      "input": "bytes161",
+      "quickxor_base64": "X+EGLlnQi0dVs5OErHWhEnz5wg4="
+    },
+    {
+      "input": "empty",
+      "quickxor_base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    },
+    {
+      "input": "hello",
+      "quickxor_base64": "SCgDG9jwBhBc4Q1ybAMZQgAAAAA="
+    },
+    {
+      "input": "repeat65537",
+      "quickxor_base64": "QkGEfSisZcA7k+FChrxq2dbCayY="
+    },
+    {
+      "input": "zero20",
+      "quickxor_base64": "AAAAAAAAAAAAAAAAFAAAAAAAAAA="
+    }
+  ],
+  "security": "Provider noncryptographic integrity checksum; does not replace ownership, version, primary SHA256 and corrected-artifact checks"
+}

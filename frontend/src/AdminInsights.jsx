@@ -182,7 +182,7 @@ export function AdminInsights({ me }) {
   const errorDocs = data?.error_docs ?? 0
   const assessed  = totalDocs - errorDocs
 
-  const twoCol = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 }
+  const twoCol = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))', gap: 12 }
 
   return (
     <div style={{ maxWidth: 980, margin: '0 auto', padding: '24px 16px' }}>

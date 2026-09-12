@@ -26,5 +26,5 @@
 .sp-picker__chip button { font-size: 13px; line-height: 1; flex-shrink: 0; }
 .sp-picker__note { font-size: 12.5px; line-height: 1.4; padding: 9px 12px; background: #F1EFF3; border: 1px solid var(--line); border-radius: 8px; margin: 12px 0 14px; }
 .sp-picker__count { font-size: 12px; }
-.sp-picker__actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; font-size: 12px; }
+.sp-picker__actions { display: flex; flex-wrap:wrap; gap: 8px; margin-top: 12px; align-items: center; font-size: 12px; }
 .sp-picker button:focus-visible, .sp-picker a:focus-visible, .sp-picker input:focus-visible { outline: 2px solid var(--plum); outline-offset: 3px; }

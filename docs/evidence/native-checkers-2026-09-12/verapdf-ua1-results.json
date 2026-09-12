@@ -1,0 +1,673 @@
+{"report":{"buildInformation":{"releaseDetails":[{
+  "id" : "core",
+  "version" : "1.30.2",
+  "buildDate" : 1780508580000
+},{
+  "id" : "validation-model",
+  "version" : "1.30.2",
+  "buildDate" : 1780508760000
+},{
+  "id" : "apps",
+  "version" : "1.30.2",
+  "buildDate" : 1780509300000
+}]},"jobs":[{"itemDetails":{
+  "name" : "/tmp/acp-native-checker-controls/pdf-good-control.pdf",
+  "size" : 8378
+},"validationResult":[ {
+  "details" : {
+    "passedRules" : 106,
+    "failedRules" : 0,
+    "passedChecks" : 274,
+    "failedChecks" : 0,
+    "ruleSummaries" : [ ]
+  },
+  "jobEndStatus" : "normal",
+  "profileName" : "PDF/UA-1 validation profile",
+  "statement" : "PDF file is compliant with Validation Profile requirements.",
+  "compliant" : true
+} ],"processingTime":{
+  "start" : 1789246687004,
+  "finish" : 1789246687152,
+  "duration" : "00:00:00.148",
+  "difference" : 148
+}},{"itemDetails":{
+  "name" : "/tmp/acp-native-checker-controls/pdf-bad-untagged-control.pdf",
+  "size" : 7699
+},"validationResult":[ {
+  "details" : {
+    "passedRules" : 101,
+    "failedRules" : 5,
+    "passedChecks" : 214,
+    "failedChecks" : 6,
+    "tags" : [ "artifact", "metadata", "syntax", "structure" ],
+    "ruleSummaries" : [ {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.1",
+      "testNumber" : 8,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "metadata" ],
+      "description" : "The Catalog dictionary of a conforming file shall contain the Metadata key whose value is a metadata stream as defined in ISO 32000-1:2008, 14.3.2. The metadata stream dictionary shall contain entry Type with value /Metadata and entry Subtype with value /XML",
+      "object" : "PDDocument",
+      "test" : "containsMetadata == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]",
+        "errorMessage" : "The document catalog dictionary doesn't contain metadata key or metadata stream dictionary does not contain either entry Type with value /Metadata or entry Subtype with value /XML",
+        "errorArguments" : [ ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.1",
+      "testNumber" : 3,
+      "status" : "failed",
+      "failedChecks" : 2,
+      "tags" : [ "artifact" ],
+      "description" : "Content shall be marked as Artifact or tagged as real content",
+      "object" : "SESimpleContentItem",
+      "test" : "isTaggedContent == true || parentsTags.contains('Artifact') == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](6 0 obj PDPage)/contentStream[0](5 0 obj PDSemanticContentStream)/content[0]/contentItem[0]",
+        "errorMessage" : "Content is neither marked as Artifact nor tagged as real content",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](6 0 obj PDPage)/contentStream[0](5 0 obj PDSemanticContentStream)/content[0]/contentItem[1]",
+        "errorMessage" : "Content is neither marked as Artifact nor tagged as real content",
+        "errorArguments" : [ ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "6.2",
+      "testNumber" : 1,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "syntax" ],
+      "description" : "The document catalog dictionary shall include a MarkInfo dictionary containing an entry, Marked, whose value shall be true",
+      "object" : "CosDocument",
+      "test" : "Marked == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root",
+        "errorMessage" : "MarkInfo dictionary is not present in the document catalog, or Marked entry is set to false or is not present in the MarkInfo dictionary (MarkInfo = null, Marked = null)",
+        "errorArguments" : [ null, null ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.1",
+      "testNumber" : 10,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "syntax" ],
+      "description" : "The document catalog dictionary shall include a ViewerPreferences dictionary containing a DisplayDocTitle key, whose value shall be true",
+      "object" : "CosDocument",
+      "test" : "DisplayDocTitle == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root",
+        "errorMessage" : "ViewerPreferences dictionary is not present in the document Catalog, or DisplayDocTitle key is set to false or is not present in the ViewerPreferences dictionary (ViewerPreferences = null, DisplayDocTitle = null)",
+        "errorArguments" : [ null, null ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.1",
+      "testNumber" : 11,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "structure" ],
+      "description" : "The logical structure of the conforming file shall be described by a structure hierarchy rooted in the StructTreeRoot entry of the document catalog dictionary, as described in ISO 32000-1:2008, 14.7",
+      "object" : "PDDocument",
+      "test" : "containsStructTreeRoot == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]",
+        "errorMessage" : "StructTreeRoot entry is not present in the document catalog",
+        "errorArguments" : [ ]
+      } ]
+    } ]
+  },
+  "jobEndStatus" : "normal",
+  "profileName" : "PDF/UA-1 validation profile",
+  "statement" : "PDF file is not compliant with Validation Profile requirements.",
+  "compliant" : false
+} ],"processingTime":{
+  "start" : 1789246687161,
+  "finish" : 1789246687179,
+  "duration" : "00:00:00.018",
+  "difference" : 18
+}},{"itemDetails":{
+  "name" : "/tmp/acp-native-checker-controls/pdf-tagged-original.pdf",
+  "size" : 3332
+},"validationResult":[ {
+  "details" : {
+    "passedRules" : 95,
+    "failedRules" : 11,
+    "passedChecks" : 317,
+    "failedChecks" : 21,
+    "tags" : [ "annotation", "metadata", "alt-text", "syntax", "page", "text", "lang", "structure", "table", "font" ],
+    "ruleSummaries" : [ {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.21.4.1",
+      "testNumber" : 1,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "font" ],
+      "description" : "The font programs for all fonts used for rendering within a conforming file shall be embedded within that file, as defined in ISO 32000-1:2008, 9.9",
+      "object" : "PDFont",
+      "test" : "Subtype == \"Type3\" || Subtype == \"Type0\" || renderingMode == 3 || containsFontFile == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/operators[4]/font[0](Helvetica)",
+        "errorMessage" : "The font program is not embedded",
+        "errorArguments" : [ ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.18.5",
+      "testNumber" : 2,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "annotation", "alt-text", "structure" ],
+      "description" : "Links shall contain an alternate description via their Contents key as described in ISO 32000-1:2008, 14.9.3",
+      "object" : "PDLinkAnnot",
+      "test" : "(Contents != null && Contents != '') || isOutsideCropBox == true || (F & 2) == 2",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/annots[0](12 0 obj PDLinkAnnot)",
+        "errorMessage" : "A link annotation does not include an alternate description in the Contents key",
+        "errorArguments" : [ ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.2",
+      "testNumber" : 21,
+      "status" : "failed",
+      "failedChecks" : 6,
+      "tags" : [ "lang", "structure" ],
+      "description" : "Natural language for text in ActualText attribute shall be determined",
+      "object" : "PDStructElem",
+      "test" : "ActualText == null || containsLang == true || parentLang != null || gContainsCatalogLang == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/StructTreeRoot[0](4 0 obj PDStructTreeRoot)/K[0](10 0 obj SEDocument Document)/K[0](19 0 obj SEP P)",
+        "errorMessage" : "Natural language for text in ActualText attribute cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/StructTreeRoot[0](4 0 obj PDStructTreeRoot)/K[0](10 0 obj SEDocument Document)/K[1](20 0 obj SEP P)",
+        "errorMessage" : "Natural language for text in ActualText attribute cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/StructTreeRoot[0](4 0 obj PDStructTreeRoot)/K[0](10 0 obj SEDocument Document)/K[2](21 0 obj SETable Table)/K[0](26 0 obj SETR TR)/K[0](22 0 obj SETH TH)",
+        "errorMessage" : "Natural language for text in ActualText attribute cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/StructTreeRoot[0](4 0 obj PDStructTreeRoot)/K[0](10 0 obj SEDocument Document)/K[2](21 0 obj SETable Table)/K[0](26 0 obj SETR TR)/K[1](23 0 obj SETH TH)",
+        "errorMessage" : "Natural language for text in ActualText attribute cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/StructTreeRoot[0](4 0 obj PDStructTreeRoot)/K[0](10 0 obj SEDocument Document)/K[2](21 0 obj SETable Table)/K[1](27 0 obj SETR TR)/K[0](24 0 obj SETD TD)",
+        "errorMessage" : "Natural language for text in ActualText attribute cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/StructTreeRoot[0](4 0 obj PDStructTreeRoot)/K[0](10 0 obj SEDocument Document)/K[2](21 0 obj SETable Table)/K[1](27 0 obj SETR TR)/K[1](25 0 obj SETD TD)",
+        "errorMessage" : "Natural language for text in ActualText attribute cannot be determined",
+        "errorArguments" : [ ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.5",
+      "testNumber" : 1,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "structure", "table" ],
+      "description" : "If the table's structure is not determinable via Headers and IDs, then structure elements of type TH shall have a Scope attribute",
+      "object" : "SETD",
+      "test" : "hasConnectedHeader != false || unknownHeaders != ''",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/StructTreeRoot[0](4 0 obj PDStructTreeRoot)/K[0](10 0 obj SEDocument Document)/K[2](21 0 obj SETable Table)/K[1](27 0 obj SETR TR)/K[0](24 0 obj SETD TD)",
+        "errorMessage" : "TD does not contain Headers attribute, and Headers for this table cell cannot be determined algorithmically",
+        "errorArguments" : [ ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.18.3",
+      "testNumber" : 1,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "page" ],
+      "description" : "Every page on which there is an annotation shall contain in its page dictionary the key Tabs, and its value shall be S",
+      "object" : "PDPage",
+      "test" : "containsAnnotations == false || Tabs == 'S'",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)",
+        "errorMessage" : "A page with annotation(s) contains Tabs key with value null instead of S",
+        "errorArguments" : [ null ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.1",
+      "testNumber" : 8,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "metadata" ],
+      "description" : "The Catalog dictionary of a conforming file shall contain the Metadata key whose value is a metadata stream as defined in ISO 32000-1:2008, 14.3.2. The metadata stream dictionary shall contain entry Type with value /Metadata and entry Subtype with value /XML",
+      "object" : "PDDocument",
+      "test" : "containsMetadata == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]",
+        "errorMessage" : "The document catalog dictionary doesn't contain metadata key or metadata stream dictionary does not contain either entry Type with value /Metadata or entry Subtype with value /XML",
+        "errorArguments" : [ ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.1",
+      "testNumber" : 10,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "syntax" ],
+      "description" : "The document catalog dictionary shall include a ViewerPreferences dictionary containing a DisplayDocTitle key, whose value shall be true",
+      "object" : "CosDocument",
+      "test" : "DisplayDocTitle == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root",
+        "errorMessage" : "ViewerPreferences dictionary is not present in the document Catalog, or DisplayDocTitle key is set to false or is not present in the ViewerPreferences dictionary (ViewerPreferences = null, DisplayDocTitle = null)",
+        "errorArguments" : [ null, null ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.2",
+      "testNumber" : 34,
+      "status" : "failed",
+      "failedChecks" : 6,
+      "tags" : [ "text", "lang" ],
+      "description" : "Natural language for text in page content shall be determined",
+      "object" : "SETextItem",
+      "test" : "gContainsCatalogLang == true || Lang != null",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/content[0]{mcid:0}/contentItem[0]{mcid:0}",
+        "errorMessage" : "Natural language for text in page content cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/content[1]{mcid:1}/contentItem[0]{mcid:1}",
+        "errorMessage" : "Natural language for text in page content cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/content[2]{mcid:2}/contentItem[0]{mcid:2}",
+        "errorMessage" : "Natural language for text in page content cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/content[3]{mcid:3}/contentItem[0]{mcid:3}",
+        "errorMessage" : "Natural language for text in page content cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/content[4]{mcid:4}/contentItem[0]{mcid:4}",
+        "errorMessage" : "Natural language for text in page content cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/content[5]{mcid:5}/contentItem[0]{mcid:5}",
+        "errorMessage" : "Natural language for text in page content cannot be determined",
+        "errorArguments" : [ ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "6.2",
+      "testNumber" : 1,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "syntax" ],
+      "description" : "The document catalog dictionary shall include a MarkInfo dictionary containing an entry, Marked, whose value shall be true",
+      "object" : "CosDocument",
+      "test" : "Marked == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root",
+        "errorMessage" : "MarkInfo dictionary is not present in the document catalog, or Marked entry is set to false or is not present in the MarkInfo dictionary (MarkInfo = null, Marked = null)",
+        "errorArguments" : [ null, null ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.18.1",
+      "testNumber" : 2,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "annotation", "alt-text" ],
+      "description" : "An annotation (except Widget annotations or hidden annotations, or those having rectangle outside the crop-box) shall have either Contents key or an Alt entry in the enclosing structure element",
+      "object" : "PDAnnot",
+      "test" : "Subtype == 'Widget' || isOutsideCropBox == true || (F & 2) == 2 || (Contents != null && Contents != '') || (Alt != null && Alt != '')",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/annots[0](12 0 obj PDLinkAnnot)",
+        "errorMessage" : "Link annotation whose hidden flag is not set and whose rectangle is not outside the crop-box has neither Contents key nor an Alt entry in the enclosing structure element",
+        "errorArguments" : [ "Link" ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.18.5",
+      "testNumber" : 1,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "annotation" ],
+      "description" : "Links shall be tagged according to ISO 32000-1:2008, 14.8.4.4.2, Link Element",
+      "object" : "PDLinkAnnot",
+      "test" : "structParentStandardType == 'Link' || isOutsideCropBox == true || (F & 2) == 2",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/annots[0](12 0 obj PDLinkAnnot)",
+        "errorMessage" : "A Link annotation is an Artifact or is nested within null tag (standard type = null) instead of Link",
+        "errorArguments" : [ null, null ]
+      } ]
+    } ]
+  },
+  "jobEndStatus" : "normal",
+  "profileName" : "PDF/UA-1 validation profile",
+  "statement" : "PDF file is not compliant with Validation Profile requirements.",
+  "compliant" : false
+} ],"processingTime":{
+  "start" : 1789246687190,
+  "finish" : 1789246687262,
+  "duration" : "00:00:00.072",
+  "difference" : 72
+}},{"itemDetails":{
+  "name" : "/tmp/acp-native-checker-controls/pdf-tagged-corrected.pdf",
+  "size" : 3317
+},"validationResult":[ {
+  "details" : {
+    "passedRules" : 96,
+    "failedRules" : 10,
+    "passedChecks" : 320,
+    "failedChecks" : 20,
+    "tags" : [ "annotation", "metadata", "alt-text", "syntax", "page", "text", "lang", "structure", "font" ],
+    "ruleSummaries" : [ {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.21.4.1",
+      "testNumber" : 1,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "font" ],
+      "description" : "The font programs for all fonts used for rendering within a conforming file shall be embedded within that file, as defined in ISO 32000-1:2008, 9.9",
+      "object" : "PDFont",
+      "test" : "Subtype == \"Type3\" || Subtype == \"Type0\" || renderingMode == 3 || containsFontFile == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/operators[4]/font[0](Helvetica)",
+        "errorMessage" : "The font program is not embedded",
+        "errorArguments" : [ ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.18.5",
+      "testNumber" : 2,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "annotation", "alt-text", "structure" ],
+      "description" : "Links shall contain an alternate description via their Contents key as described in ISO 32000-1:2008, 14.9.3",
+      "object" : "PDLinkAnnot",
+      "test" : "(Contents != null && Contents != '') || isOutsideCropBox == true || (F & 2) == 2",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/annots[0](12 0 obj PDLinkAnnot)",
+        "errorMessage" : "A link annotation does not include an alternate description in the Contents key",
+        "errorArguments" : [ ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.2",
+      "testNumber" : 34,
+      "status" : "failed",
+      "failedChecks" : 6,
+      "tags" : [ "text", "lang" ],
+      "description" : "Natural language for text in page content shall be determined",
+      "object" : "SETextItem",
+      "test" : "gContainsCatalogLang == true || Lang != null",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/content[0]{mcid:0}/contentItem[0]{mcid:0}",
+        "errorMessage" : "Natural language for text in page content cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/content[1]{mcid:1}/contentItem[0]{mcid:1}",
+        "errorMessage" : "Natural language for text in page content cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/content[2]{mcid:2}/contentItem[0]{mcid:2}",
+        "errorMessage" : "Natural language for text in page content cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/content[3]{mcid:3}/contentItem[0]{mcid:3}",
+        "errorMessage" : "Natural language for text in page content cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/content[4]{mcid:4}/contentItem[0]{mcid:4}",
+        "errorMessage" : "Natural language for text in page content cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/contentStream[0](13 0 obj PDSemanticContentStream)/content[5]{mcid:5}/contentItem[0]{mcid:5}",
+        "errorMessage" : "Natural language for text in page content cannot be determined",
+        "errorArguments" : [ ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "6.2",
+      "testNumber" : 1,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "syntax" ],
+      "description" : "The document catalog dictionary shall include a MarkInfo dictionary containing an entry, Marked, whose value shall be true",
+      "object" : "CosDocument",
+      "test" : "Marked == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root",
+        "errorMessage" : "MarkInfo dictionary is not present in the document catalog, or Marked entry is set to false or is not present in the MarkInfo dictionary (MarkInfo = null, Marked = null)",
+        "errorArguments" : [ null, null ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.18.1",
+      "testNumber" : 2,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "annotation", "alt-text" ],
+      "description" : "An annotation (except Widget annotations or hidden annotations, or those having rectangle outside the crop-box) shall have either Contents key or an Alt entry in the enclosing structure element",
+      "object" : "PDAnnot",
+      "test" : "Subtype == 'Widget' || isOutsideCropBox == true || (F & 2) == 2 || (Contents != null && Contents != '') || (Alt != null && Alt != '')",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/annots[0](12 0 obj PDLinkAnnot)",
+        "errorMessage" : "Link annotation whose hidden flag is not set and whose rectangle is not outside the crop-box has neither Contents key nor an Alt entry in the enclosing structure element",
+        "errorArguments" : [ "Link" ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.1",
+      "testNumber" : 10,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "syntax" ],
+      "description" : "The document catalog dictionary shall include a ViewerPreferences dictionary containing a DisplayDocTitle key, whose value shall be true",
+      "object" : "CosDocument",
+      "test" : "DisplayDocTitle == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root",
+        "errorMessage" : "ViewerPreferences dictionary is not present in the document Catalog, or DisplayDocTitle key is set to false or is not present in the ViewerPreferences dictionary (ViewerPreferences = null, DisplayDocTitle = null)",
+        "errorArguments" : [ null, null ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.1",
+      "testNumber" : 8,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "metadata" ],
+      "description" : "The Catalog dictionary of a conforming file shall contain the Metadata key whose value is a metadata stream as defined in ISO 32000-1:2008, 14.3.2. The metadata stream dictionary shall contain entry Type with value /Metadata and entry Subtype with value /XML",
+      "object" : "PDDocument",
+      "test" : "containsMetadata == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]",
+        "errorMessage" : "The document catalog dictionary doesn't contain metadata key or metadata stream dictionary does not contain either entry Type with value /Metadata or entry Subtype with value /XML",
+        "errorArguments" : [ ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.18.3",
+      "testNumber" : 1,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "page" ],
+      "description" : "Every page on which there is an annotation shall contain in its page dictionary the key Tabs, and its value shall be S",
+      "object" : "PDPage",
+      "test" : "containsAnnotations == false || Tabs == 'S'",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)",
+        "errorMessage" : "A page with annotation(s) contains Tabs key with value null instead of S",
+        "errorArguments" : [ null ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.18.5",
+      "testNumber" : 1,
+      "status" : "failed",
+      "failedChecks" : 1,
+      "tags" : [ "annotation" ],
+      "description" : "Links shall be tagged according to ISO 32000-1:2008, 14.8.4.4.2, Link Element",
+      "object" : "PDLinkAnnot",
+      "test" : "structParentStandardType == 'Link' || isOutsideCropBox == true || (F & 2) == 2",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/pages[0](5 0 obj PDPage)/annots[0](12 0 obj PDLinkAnnot)",
+        "errorMessage" : "A Link annotation is an Artifact or is nested within null tag (standard type = null) instead of Link",
+        "errorArguments" : [ null, null ]
+      } ]
+    }, {
+      "ruleStatus" : "FAILED",
+      "specification" : "ISO 14289-1:2014",
+      "clause" : "7.2",
+      "testNumber" : 21,
+      "status" : "failed",
+      "failedChecks" : 6,
+      "tags" : [ "lang", "structure" ],
+      "description" : "Natural language for text in ActualText attribute shall be determined",
+      "object" : "PDStructElem",
+      "test" : "ActualText == null || containsLang == true || parentLang != null || gContainsCatalogLang == true",
+      "checks" : [ {
+        "status" : "failed",
+        "context" : "root/document[0]/StructTreeRoot[0](4 0 obj PDStructTreeRoot)/K[0](10 0 obj SEDocument Document)/K[0](19 0 obj SEHn H1)",
+        "errorMessage" : "Natural language for text in ActualText attribute cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/StructTreeRoot[0](4 0 obj PDStructTreeRoot)/K[0](10 0 obj SEDocument Document)/K[1](20 0 obj SEP P)",
+        "errorMessage" : "Natural language for text in ActualText attribute cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/StructTreeRoot[0](4 0 obj PDStructTreeRoot)/K[0](10 0 obj SEDocument Document)/K[2](21 0 obj SETable Table)/K[0](26 0 obj SETR TR)/K[0](22 0 obj SETH TH)",
+        "errorMessage" : "Natural language for text in ActualText attribute cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/StructTreeRoot[0](4 0 obj PDStructTreeRoot)/K[0](10 0 obj SEDocument Document)/K[2](21 0 obj SETable Table)/K[0](26 0 obj SETR TR)/K[1](23 0 obj SETH TH)",
+        "errorMessage" : "Natural language for text in ActualText attribute cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/StructTreeRoot[0](4 0 obj PDStructTreeRoot)/K[0](10 0 obj SEDocument Document)/K[2](21 0 obj SETable Table)/K[1](27 0 obj SETR TR)/K[0](24 0 obj SETD TD)",
+        "errorMessage" : "Natural language for text in ActualText attribute cannot be determined",
+        "errorArguments" : [ ]
+      }, {
+        "status" : "failed",
+        "context" : "root/document[0]/StructTreeRoot[0](4 0 obj PDStructTreeRoot)/K[0](10 0 obj SEDocument Document)/K[2](21 0 obj SETable Table)/K[1](27 0 obj SETR TR)/K[1](25 0 obj SETD TD)",
+        "errorMessage" : "Natural language for text in ActualText attribute cannot be determined",
+        "errorArguments" : [ ]
+      } ]
+    } ]
+  },
+  "jobEndStatus" : "normal",
+  "profileName" : "PDF/UA-1 validation profile",
+  "statement" : "PDF file is not compliant with Validation Profile requirements.",
+  "compliant" : false
+} ],"processingTime":{
+  "start" : 1789246687265,
+  "finish" : 1789246687279,
+  "duration" : "00:00:00.014",
+  "difference" : 14
+}}],"batchSummary":{
+  "duration" : {
+    "start" : 1789246686970,
+    "finish" : 1789246687281,
+    "duration" : "00:00:00.311",
+    "difference" : 311
+  },
+  "totalJobs" : 4,
+  "outOfMemory" : 0,
+  "veraExceptions" : 0,
+  "failedEncryptedJobs" : 0,
+  "failedParsingJobs" : 0,
+  "validationSummary" : {
+    "nonCompliantPdfaCount" : 3,
+    "compliantPdfaCount" : 1,
+    "failedJobCount" : 0,
+    "totalJobCount" : 4,
+    "successfulJobCount" : 4
+  },
+  "multiJob" : true,
+  "featuresSummary" : {
+    "failedJobCount" : 0,
+    "totalJobCount" : 0,
+    "successfulJobCount" : 0
+  },
+  "repairSummary" : {
+    "failedJobCount" : 0,
+    "totalJobCount" : 0,
+    "successfulJobCount" : 0
+  }
+}}}

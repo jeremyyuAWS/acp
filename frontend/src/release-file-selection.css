@@ -22,8 +22,8 @@
 .release-selection__drawer { overflow-y: auto; padding: 16px; border-left: 1px solid var(--line); background: var(--panel, #fff); }
 .release-selection__drawer-heading { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
 .release-selection__drawer h3 { margin: 0; overflow-wrap: anywhere; font-size: 15px; }
-.release-selection__drawer dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 12px; font-size: 12px; }
-.release-selection__drawer dt { color: var(--muted); }
+.release-selection__drawer dl { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 8px 12px; font-size: 12px; }
+.release-selection__drawer dt { color: var(--muted); overflow-wrap:anywhere; }
 .release-selection__drawer dd { margin: 0; overflow-wrap: anywhere; }
 .release-selection__drawer details { margin-top: 16px; }
 .release-selection__error { margin-top: 14px; color: var(--error-fg-strong); }

@@ -3,7 +3,8 @@ import { CAPABILITY_FALLBACK } from './capability.js'
 import { SCOPE_UNIVERSE } from './scopePresets.js'
 import { TRACKED_17 } from './ruleDetails.js'
 
-import { noteAuthChange } from './apiIdentity.js'
+import { authEpoch, noteAuthChange } from './apiIdentity.js'
+import { refreshSPToken } from './spAuth.js'
 const BASE = import.meta.env.VITE_API ?? 'http://localhost:8077'
 
 // Per-user tokens (real mode only). In SIM mode nothing touches a real Drive / OneDrive.
@@ -2619,6 +2620,19 @@ export const getAutomaticRelease = (scanId, files = [], options = {}) => {
   if (options.destination) query.set('destination', JSON.stringify(options.destination))
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/automatic?${query}`, {
     headers: headers(), signal: options.signal,
+  }).then(j)
+}
+// Metadata-only recovery for older default-drive scans. Never replay this POST:
+// the server re-derives its frozen Discover scope and validates live source identity.
+export const repairAutomaticReleaseSourceIdentity = async (scanId, options = {}) => {
+  if (SIM) throw new Error('Source identity repair requires a connected Microsoft source.')
+  const identity = authEpoch()
+  options.signal?.throwIfAborted()
+  const token = await refreshSPToken({ interactive: false })
+  options.signal?.throwIfAborted()
+  if (authEpoch() !== identity) throw new Error('The signed-in account changed.')
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/automatic/repair-source-identity`, {
+    method: 'POST', headers: { ...headers(), 'X-SP-Token': token }, signal: options.signal,
   }).then(j)
 }
 export const enableAutomaticRelease = (scanId, intent) => fetch(

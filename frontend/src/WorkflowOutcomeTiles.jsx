@@ -56,8 +56,9 @@ export default function WorkflowOutcomeTiles({ stage, domain, baseline = null, e
           {delta != null && <span className="workflow-outcome-tiles__net">{delta > 0 ? '+' : delta < 0 ? '−' : ''}{Math.abs(delta).toLocaleString()} since starting</span>}
           <span className="workflow-outcome-tiles__fill" aria-hidden="true" style={{ transform: `scaleX(${model.total > 0 && tile.value != null ? tile.value / model.total : 0})` }} />
         </>
-        const props = { className: `workflow-outcome-tiles__tile tone-${tile.tone} ${tile.key === 'verified' ? 'finding-outcome-kpis__verified' : ''}`, key: `${executionId}:${tile.key}` }
-        return onFilter ? <button {...props} type="button" aria-haspopup={queueMode ? 'dialog' : undefined} onClick={() => onFilter(tile.key)}>{content}</button> : <div {...props}>{content}</div>
+        const props = { className: `workflow-outcome-tiles__tile tone-${tile.tone} ${tile.key === 'verified' ? 'finding-outcome-kpis__verified' : ''}` }
+        const key = `${executionId}:${tile.key}`
+        return onFilter ? <button key={key} {...props} type="button" aria-haspopup={queueMode ? 'dialog' : undefined} onClick={() => onFilter(tile.key)}>{content}</button> : <div key={key} {...props}>{content}</div>
       })}
     </div>
     <p className="workflow-outcome-tiles__note">{!model.balanced ? 'Updating: outcome totals are being reconciled.' : stage === 'remediate'

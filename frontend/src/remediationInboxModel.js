@@ -1,3 +1,4 @@
+import { isPdfStructuralRow } from './pdfStructuralProposal.js'
 // The pure model behind the master/detail Remediation inbox.
 //
 // Remediation is queue work: select an item, understand it, act, move to the next. This module
@@ -66,6 +67,7 @@ export const LANE_ORDER = ['review', 'apply', 'manual', 'handoff', 'recheck', 'b
 const NON_MODEL_SOURCE = /\b(deterministic|ocr|chart data|link target|floating text|heuristic|speech recognition|no model)\b/i
 const MODEL_SOURCE = /\b(ai|model|ollama|claude|anthropic|openai|gemini|bedrock|hugging\s*face|qwen|llama|vision)\b/i
 export function isAiAssistedDraft(f) {
+  if (isPdfStructuralRow(f)) return false
   if (!f?.hasProposal) return false
   const sources = [f.proposalSource, ...(Array.isArray(f.proposals) ? f.proposals.map((p) => p?.source) : [])]
     .map((source) => String(source || '').trim()).filter(Boolean)
@@ -110,7 +112,8 @@ export function laneOf(f) {
   // A deterministic fix ACP already wrote: the reviewer confirms it (the green lane).
   if (f?.autoApplied || f?.applied || f?.rec?.action === 'auto') return LANES.review
   // ACP drafted a value for a person to approve (the blue lane).
-  if (f?.hasProposal || (f?.after != null && f?.after !== '')) return LANES.apply
+  if (f?.hasProposal || (f?.after != null && f?.after !== '')) return isPdfStructuralRow(f)
+    ? {...LANES.apply, short:'PDF tag change', didLine:'ACP proposed a source-anchored PDF tag change'} : LANES.apply
   // Nothing ACP can safely write: a person re-authors it in the source app (the amber lane).
   return LANES.manual
 }
@@ -172,9 +175,9 @@ export function rowModel(f, decisions = {}) {
     file: f?.file || '',
     location: locationLabel(f),
     sc: normSc(f?.rule_id ?? f?.ruleId ?? f?.wcag) || null, // the WCAG SC number, as a compact row pill
-    did: optionalInspectionOf(f) ? 'Saved automatic change' : lane.didLine,
+    did: isPdfStructuralRow(f) ? 'ACP proposed a source-anchored PDF tag change' : optionalInspectionOf(f) ? 'Saved automatic change' : lane.didLine,
     action: optionalInspectionOf(f) ? 'Browse saved changes' : lane.action,
-    laneShort: optionalInspectionOf(f) ? 'Inspection optional' : lane.short,   // the quiet remediation-state word (demoted from a loud coloured pill)
+    laneShort: isPdfStructuralRow(f) ? 'PDF tag change' : optionalInspectionOf(f) ? 'Inspection optional' : lane.short,   // the quiet remediation-state word (demoted from a loud coloured pill)
     severity: f?.severity || null,
     confidence: f?.confidence ?? null,
     effort: effortLabel(f),

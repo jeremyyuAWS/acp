@@ -7,7 +7,9 @@ from urllib.parse import quote
 
 
 def _asset_bytes(asset):
-    return base64.b64decode(asset['content'], validate=True) if asset.get('encoding') == 'base64' else asset['content'].encode('utf-8')
+    if asset.get('encoding') == 'base64':
+        return base64.b64decode(asset['content'], validate=True)
+    return asset['content'] if isinstance(asset['content'], bytes) else asset['content'].encode('utf-8')
 
 
 def _get(store, bundle_id, owner):
@@ -59,7 +61,7 @@ def _enqueue(store, row):
     return store.enqueue_job('publish_release_reports', dict(bundle_id=row['id'], owner=row['owner_email']), scan_id=row['scan_id'])
 
 
-REPORT_FORMAT = 'pdf-v4-located-change-evidence'
+REPORT_FORMAT = 'pdf-v5-word-native-revision-companion'
 
 
 def _fingerprint(release_id, release):
@@ -92,7 +94,7 @@ def queue_release_reports(store, scan_id, owner, release_id):
         names = {a['name']: a['name'].rsplit('.', 1)[0] + '-' + identity[:10] + '.' + a['name'].rsplit('.', 1)[1] for a in assets}
         frozen = []
         for asset in assets:
-            binary = asset['content_type'] == 'application/pdf'
+            binary = asset['content_type'] in ('application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
             content = base64.b64encode(asset['content']).decode('ascii') if binary else asset['content'].decode('utf-8') if isinstance(asset['content'], bytes) else asset['content']
             if asset['content_type'].startswith('text/html'):
                 for old, new in names.items():
@@ -127,7 +129,7 @@ def retry_release_reports(store, sid, owner):
     latest = get_latest_release_reports(store, sid, owner)
     if not latest['bundle_id']:
         raise KeyError('Report not found')
-    if latest['status'] == 'completed' and (any(report['content_type'] != 'application/pdf' for report in latest['reports']) or not any(report['name'].startswith('changes-') for report in latest['reports'])):
+    if latest['status'] == 'completed' and (any(report['content_type'].startswith('text/html') for report in latest['reports']) or not any(report['name'].startswith('changes-') for report in latest['reports'])):
         result = queue_if_release_settled(store, sid, owner, _get(store, latest['bundle_id'], owner)['release_id'])
         if not result:
             raise ValueError('Wait for publication to finish before generating PDF reports')

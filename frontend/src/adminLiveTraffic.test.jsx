@@ -565,7 +565,7 @@ describe('The lines carry direction, activity and a way in', () => {
   it('draws one continuous curve per line rather than a stepped route', () => {
     // The stepped router this replaced put right-angle corners around every node; a bezier has
     // no corners to round, which is what "as smooth as possible" means for this graph.
-    expect(source).toContain("const EDGE_ROUTING = { type: 'bezier', pathOptions: { curvature: 0.42 } }")
+    expect(source).toContain("const EDGE_ROUTING = { type: 'default', pathOptions: { curvature: 0.42 } }")
     expect(source).toContain('defaultEdgeOptions={EDGE_ROUTING}')
     expect(source).not.toContain("type: 'smoothstep'")
   })

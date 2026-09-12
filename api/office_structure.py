@@ -2126,6 +2126,13 @@ def pdf_label_in_name_checks(path: Path) -> list[dict]:
         return []
 
 
+@criteria('1.3.1')
+def pdf_table_header_checks(path: Path) -> list[dict]:
+    """Existing tagged table header Scope/Headers only; partial clean stays REVIEW."""
+    from formats.pdf.detectors.table_headers import detect
+    return detect(path)
+
+
 @criteria('1.1.1')
 def pdf_non_text_content_checks(path: Path) -> list[dict]:
     """1.1.1 findings per tagged /Figure with no /Alt. Implementation: formats/pdf/detectors/
@@ -2247,7 +2254,7 @@ def checks_for(path: Path, ext: str) -> list[dict]:
                 + office_non_text_content_checks(path, ext))
     if ext == ".pdf":
         from pdf_structural_language import language_parts_checks
-        return (language_parts_checks(path) + pdf_contrast_checks(path) + pdf_bypass_blocks_check(path) + pdf_form_field_checks(path)
+        return (pdf_table_header_checks(path) + language_parts_checks(path) + pdf_contrast_checks(path) + pdf_bypass_blocks_check(path) + pdf_form_field_checks(path)
                 + pdf_headings_labels_check(path) + pdf_link_purpose_check(path)
                 + pdf_text_spacing_checks(path) + pdf_use_of_color_checks(path)
                 + pdf_nontext_contrast_checks(path) + pdf_text_over_image_checks(path)

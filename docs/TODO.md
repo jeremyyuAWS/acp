@@ -68,13 +68,14 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 | MDK HITL | 44 | Human-judgment criteria — routed to the HITL queue |
 | Partner baseline | 6 | Covered by the .NET partner engine (`spike/dotnet/AcpScan.Cli`) |
 
-**Capability registry — 34 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
+**Capability registry — 35 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
 
 | Criterion | Format | Coverage | Confidence | Not covered |
 |---|---|---|---|---|
 | `1.1.1` | docx | **partial** | high | charts, SmartArt, grouped shapes and embedded OLE objects are non-text content this walk does not reach, and w |
 | `1.2.1` | av | **partial** | high | the video-only half of 1.2.1 (a silent moving image that carries information) is not covered — establishing th |
 | `1.2.2` | av | **partial** | high | presence only: this reads whether a caption track is in the container and whether a caption or transcript file |
+| `1.3.1` | pdf | **partial** | high | semantic correctness and other document relationships require review |
 | `1.3.5` | docx | **heuristic** | low | the vocabulary match is approximate |
 | `1.3.5` | pdf | **heuristic** | low | the vocabulary match is approximate and some organisational forms will produce false positives |
 | `1.4.1` | docx | **partial** | high | colour used as the sole carrier of meaning anywhere else — shaded table rows, coloured glyphs, chart series ke |

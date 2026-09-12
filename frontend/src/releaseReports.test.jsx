@@ -90,3 +90,23 @@ it('deliberately retires the duplicate per-file receipt list', async () => {
  expect(source).not.toMatch(/<RetiredDeliveryReceiptFiles\b/)
  expect(source).not.toMatch(/publishedEntries\.map\(\(entry\)/)
 })
+it('matches native tracked-change companions and evidence to their exact delivered version without a PDF regeneration loop',async()=>{
+ const files=[{file:'policy.docx'}],results={'policy.docx':{status:'published',artifact_digest:'sha256:corrected'}}
+ const reports=[{name:'policy.tracked-changes.docx',report_kind:'tracked_changes',content_type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',file:'policy.docx',artifact_digest:'sha256:corrected',download_url:'/download/0'},
+ {name:'policy.changes.json',report_kind:'tracked_changes_evidence',content_type:'application/json',file:'policy.docx',artifact_digest:'sha256:corrected',download_url:'/download/1'}]
+ const read=vi.fn().mockResolvedValue({status:'completed',scan_id:'scan',release_id:'release',bundle_id:'bundle',reports}),download=vi.fn().mockResolvedValue()
+ const c=await mount({files,results,releaseId:'release',read,download,children:({reportSummary,reportsByFile})=>createElement('div',null,reportSummary,createElement('section',{'data-file':'policy.docx'},reportsByFile['policy.docx']))})
+ const row=c.querySelector('[data-file]');expect(row.textContent).toContain('Tracked changes (Word companion)');expect(row.textContent).toContain('Change evidence (JSON)')
+ expect(c.textContent).not.toContain('Generate PDF reports');expect(c.textContent).not.toContain('version could not be matched')
+ await act(async()=>[...row.querySelectorAll('button')].find(b=>b.textContent==='Download Word companion').click())
+ expect(download).toHaveBeenCalledWith('scan','bundle',0,'policy.tracked-changes.docx')
+ await act(async()=>[...row.querySelectorAll('button')].find(b=>b.textContent==='Download change evidence').click())
+ expect(download).toHaveBeenCalledWith('scan','bundle',1,'policy.changes.json')
+})
+it('retains mismatched native assets in the report header and only regenerates printable legacy HTML',async()=>{
+ const reports=[{name:'policy.tracked.docx',report_kind:'tracked_changes',content_type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',file:'policy.docx',artifact_digest:'sha256:old'},{name:'summary.html',report_kind:'scan_summary',content_type:'text/html'}]
+ const read=vi.fn().mockResolvedValue({status:'completed',scan_id:'scan',release_id:'release',reports}),child=vi.fn(({reportSummary})=>reportSummary)
+ const c=await mount({read,files:[{file:'policy.docx'}],results:{'policy.docx':{status:'published',artifact_digest:'sha256:new'}},releaseId:'release',children:child})
+ expect(child.mock.lastCall[0].reportsByFile).toEqual({});expect(c.textContent).toContain('Document version could not be matched')
+ expect([...c.querySelectorAll('button')].some(b=>b.textContent==='Generate PDF reports')).toBe(true)
+})

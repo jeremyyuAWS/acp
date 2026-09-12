@@ -3809,6 +3809,58 @@ class Store:
                  "retention_label,sensitivity_label,sharing_scope,item_kind,checked_out_by,"
                  "sp_version,modified_by,sp_metadata")
 
+    def source_identity_repair_snapshot(self, scan_id: str, owner: str) -> dict:
+        """Frozen provenance and assessed source facts; no credentials or mutations."""
+        scan = self.get_scan(scan_id, owner=owner)
+        if not scan:
+            raise ValueError("owner_scope")
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT id,status,payload FROM jobs WHERE scan_id=%s AND type='scan_discover' ORDER BY created_at DESC,id DESC LIMIT 1", (scan_id,))
+            job = self._db.fetchone(cur)
+            payload = (job or {}).get("payload") or {}
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except ValueError:
+                    payload = {}
+            execution_id = payload.get("stage_execution_id") if isinstance(payload, dict) else None
+            self._db.execute(cur, "SELECT execution_id,state,is_current FROM stage_executions WHERE execution_id=%s AND scan_id=%s AND owner_email=%s AND stage='discover'", (execution_id,scan_id,owner))
+            discover_stage = self._db.fetchone(cur)
+            self._db.execute(cur, "SELECT file,drive_file_id,source_modified,checksum,remediated_at,status,score FROM file_records WHERE scan_id=%s ORDER BY file", (scan_id,))
+            records = self._db.fetchall(cur)
+            self._db.execute(cur, "SELECT execution_id FROM stage_executions WHERE scan_id=%s AND stage='remediate' LIMIT 1", (scan_id,))
+            remediation = bool(self._db.fetchone(cur))
+        return {"run": scan.get("run") or {}, "job": job, "discover_stage": discover_stage, "inventory": self.list_inventory(scan_id), "records": records, "remediation": remediation}
+
+    def backfill_verified_default_drive(self, scan_id: str, owner: str, expected: dict, drive_id: str) -> int:
+        """Atomic metadata-only repair: original assessment and source revision stay frozen."""
+        if not isinstance(drive_id, str) or not drive_id or len(drive_id) > 512:
+            raise ValueError("ambiguous_metadata")
+        with self.transaction():
+            with self._db.cursor() as cur:
+                # Same lock and order as synchronous/fan-out remediation admission.
+                if self._db.supports_skip_locked:
+                    self._db.execute(cur, "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                                     (f"stage:{scan_id}:remediate",))
+                self._db.execute(cur, "UPDATE scan_runs SET owner_email=owner_email WHERE id=%s AND owner_email=%s", (scan_id,owner))
+                if cur.rowcount != 1:
+                    raise ValueError("owner_scope")
+            current = self.source_identity_repair_snapshot(scan_id, owner)
+            if current != expected:
+                raise ValueError("source_context_changed")
+            if current["remediation"] or any(r.get("remediated_at") for r in current["records"]):
+                raise ValueError("remediation_already_admitted")
+            count = 0
+            with self._db.cursor() as cur:
+                for row in current["inventory"]:
+                    if row.get("drive_id"):
+                        continue
+                    self._db.execute(cur, "UPDATE scan_inventory SET drive_id=%s WHERE scan_id=%s AND file=%s AND (drive_id IS NULL OR drive_id='')", (drive_id,scan_id,row["file"]))
+                    if cur.rowcount != 1:
+                        raise ValueError("source_context_changed")
+                    count += 1
+        return count
+
     def list_inventory(self, scan_id: str) -> list[dict]:
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -11119,6 +11171,31 @@ class Store:
                 out.update(self._row_approved_values(row))
         return out
 
+    def approved_pdf_structure_values(self, scan_id: str, file: str, rule_id: str) -> dict[str, str]:
+        """Exact approved tag plans, scoped by criterion, operation and locator."""
+        if not file.lower().endswith('.pdf'):
+            return {}
+        allowed = {'2.4.6': {'heading'}, '1.3.1': {'header-scope', 'table-headers'},
+                   '1.3.2': {'reading-order'}}.get(rule_id, set())
+        out, conflicts = {}, set()
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get('rule_id') or '').strip() != rule_id:
+                continue
+            for locator, value in self._row_approved_values(row).items():
+                if not re.fullmatch(r'pdf:struct:\d+(?:\.\d+)*:[0-9a-f]{64}', locator):
+                    continue
+                try:
+                    plan = json.loads(value)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(plan, dict) or plan.get('op') not in allowed:
+                    continue
+                if locator in out and out[locator] != value:
+                    conflicts.add(locator)
+                elif locator not in conflicts:
+                    out[locator] = value
+        return {k: v for k, v in out.items() if k not in conflicts}
+
     def has_approved_values_to_write(self, scan_id: str, file: str) -> bool:
         """True when `file` holds approved content some applier can write into the document.
 
@@ -11139,7 +11216,9 @@ class Store:
                     or self.approved_sensory_values(scan_id, file)
                     or self.approved_language_values(scan_id, file)
                     or self.approved_structure_label_values(scan_id, file)
-                    or self.approved_images_of_text_values(scan_id, file))
+                    or self.approved_images_of_text_values(scan_id, file)
+                    or any(self.approved_pdf_structure_values(scan_id, file, sc)
+                           for sc in ('1.3.1', '1.3.2', '2.4.6')))
 
     def approve_proposal_values(self, item_id: str, values: list[str | None], *,
                                 draft_fallback: bool = True) -> int:

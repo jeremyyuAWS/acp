@@ -1948,7 +1948,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .srccard-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 .srccard-badge { display: inline-flex; align-items: center; gap: 5px; color: var(--success-fg); font-weight: 500; }
 .srccard-err { font-size: 12px; color: var(--error-fg-strong); margin-top: 6px; }
-.srccard-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.srccard-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-shrink: 0; }
 .srccard-connect { display: inline-flex; align-items: center; gap: 7px; padding: 9px 18px;
   font-size: 13px; font-weight: 500; border-radius: 10px; white-space: nowrap; cursor: pointer; }
 
@@ -3499,3 +3499,5 @@ html[data-wcag="on"] .wcag-toggle--on {
   .workflow-stage-stack__affordance { grid-column: 3; grid-row: 1; }
   .workflow-stage-stack__body { padding-left: 14px; }
 }
+
+@media(max-width:700px) { .srccard { flex-wrap:wrap; } .srccard-body { flex-basis:calc(100% - 64px); } .srccard-actions { flex-basis:100%; min-width:0; } }

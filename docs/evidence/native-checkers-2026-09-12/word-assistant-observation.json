@@ -1,0 +1,42 @@
+{
+  "checked_at": "2026-09-12",
+  "checker": "Microsoft Word Accessibility Assistant",
+  "application_version": "16.111.3",
+  "method": "Observed actual Review > Check Accessibility pane through native UI; no programmatic pass substitution",
+  "scope": "Isolated synthetic DOCX controls only; not a SharePoint customer file",
+  "results": [
+    {
+      "file": "word-missing-alt.docx",
+      "sha256": "b49a26898050b532fd55aa6b8380a0a5c3ed9500d9f2c35df681a5bd2158b099",
+      "assistant_summary": "Keep going!",
+      "missing_alt_text": 1,
+      "hard_to_read_contrast": 0,
+      "missing_table_header": 0,
+      "merged_or_split_cells": 0,
+      "no_headings": 0,
+      "restricted_access": 0
+    },
+    {
+      "file": "word-approved-alt-corrected.docx",
+      "sha256": "2be8c705283cded2262190431309474a94ba765185f615f7107646469b45228e",
+      "assistant_summary": "Looks good! No issues found.",
+      "missing_alt_text": 0,
+      "hard_to_read_contrast": 0,
+      "missing_table_header": 0,
+      "merged_or_split_cells": 0,
+      "no_headings": 0,
+      "restricted_access": 0
+    },
+    {
+      "file": "word-original.docx",
+      "sha256": "deb84f8f6ded63efa49046aec4c7ff69efb00a1cea5ef26789a81ce437761e6e",
+      "assistant_summary": "Looks good! No issues found.",
+      "missing_alt_text": 0,
+      "hard_to_read_contrast": 0,
+      "missing_table_header": 0,
+      "merged_or_split_cells": 0,
+      "no_headings": 0,
+      "restricted_access": 0
+    }
+  ]
+}

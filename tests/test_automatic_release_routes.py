@@ -76,6 +76,20 @@ def test_automatic_release_capabilities_do_not_grant_review_authority():
     assert ROUTE_CAPABILITIES[('GET','/scans/{sid}/release/automatic')] == {'release.view'}
     for path in ('/scans/{sid}/release/automatic','/scans/{sid}/release/automatic/{authorization_id}/stop'):
         assert ROUTE_CAPABILITIES[('POST',path)] == {'release.publish'}
+    assert ROUTE_CAPABILITIES[('POST','/scans/{sid}/release/automatic/repair-source-identity')] == {
+        'discover.run', 'assess.run', 'remediate.run', 'release.publish'}
+
+
+def test_planning_exposes_read_only_repair_candidacy(prepared, monkeypatch):
+    import routes.automatic_release as route
+    import source_identity_repair
+    flag = {'available': True, 'files': [FILE], 'reason': 'missing_default_drive_identity'}
+    monkeypatch.setattr(route.service, 'preview', lambda *a: {'planning': {'available': False, 'source': 'sharepoint'}})
+    seen = []
+    monkeypatch.setattr(source_identity_repair, 'probe', lambda store, sid, owner: seen.append((sid, owner)) or flag)
+    result = status(SID, request(), Response(), [FILE])
+    assert result['planning']['source_identity_repair'] == flag
+    assert seen == [(SID, OWNER)]
 
 
 def test_plan_preview_before_start_is_read_only(prepared, monkeypatch):
