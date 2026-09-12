@@ -809,6 +809,16 @@ export default function RemediationInbox({
     reviewHeadingRef.current?.focus()
   }, [selectedId, narrowPane, bulkPreviewOpen])
   const groups = useMemo(() => groupByDocument(visible), [visible])
+  const firstDocumentGroup = groups.find(g => g.items.length > 1)?.file
+  const documentCollapsed = file => collapsed[file] ?? (file !== firstDocumentGroup)
+  const previousSelection = useRef(selectedId)
+  useEffect(() => {
+    const previous = previousSelection.current
+    previousSelection.current = selectedId
+    if (previous && selectedId && previous !== selectedId && selected?.file)
+      setCollapsed(c => ({ ...c, [selected.file]: false }))
+  }, [selectedId, selected?.file])
+  useEffect(() => { setCollapsed({}); previousSelection.current = null }, [scanId])
   const clusters = useMemo(() => clusterRows(visible, decisions), [visible, decisions])
 
   // The finding a cluster row SHOWS. Normally its representative (the first undecided member), but
@@ -1145,14 +1155,14 @@ export default function RemediationInbox({
                         selected={g.items[0].id === selectedId} onSelect={selectRow} showFile />
             ) : (
               <div key={g.file}>
-                <button type="button" className="rinbox-document-toggle" aria-expanded={!collapsed[g.file]} onClick={() => setCollapsed((c) => ({ ...c, [g.file]: !c[g.file] }))}
+                <button type="button" className="rinbox-document-toggle" aria-expanded={!documentCollapsed(g.file)} onClick={() => setCollapsed((c) => ({ ...c, [g.file]: !documentCollapsed(g.file) }))}
                         style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, padding: '6px 12px', cursor: 'pointer',
                                  border: 'none', borderBottom: '1px solid var(--line,#e2dce4)', background: 'var(--surface-2,#f6f5f8)', fontSize: 12, fontWeight: 700 }}>
-                  <span aria-hidden="true">{collapsed[g.file] ? '▸' : '▾'}</span>
+                  <span aria-hidden="true">{documentCollapsed(g.file) ? '▸' : '▾'}</span>
                   <span style={{ flex: '1 1 auto', minWidth: 0, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>📄 {g.file}</span>
                   <span className="muted" style={{ fontWeight: 400 }}>{g.items.length}</span>
                 </button>
-                {!collapsed[g.file] && g.items.map((f) => (
+                {!documentCollapsed(g.file) && g.items.map((f) => (
                   <QueueRow key={f.id} f={f} decisions={decisions} selected={f.id === selectedId} onSelect={selectRow} showFile={false} />
                 ))}
               </div>
