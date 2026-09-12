@@ -92,6 +92,8 @@ def test_file_score_passes_deterministic_id(monkeypatch):
 
     monkeypatch.setattr(lf, "_ENABLED", True)
     monkeypatch.setattr(lf, "_client", FakeClient())
+    # This fresh client double tests score IDs, independently of prior HTTP outages.
+    monkeypatch.setattr(lf, "_ingestion_retry_mono", 0.0)
     lf.file_score("scan1", "a.docx", 85.0)
     lf.file_score("scan1", "a.docx", 85.0)
     assert len(calls) == 2
