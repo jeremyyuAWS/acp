@@ -1,5 +1,5 @@
 import './document-findings-table.css'
-import RemediationCategoryPill, { RemediationCategoryLegend } from './RemediationCategoryPill.jsx'
+import RemediationCategoryPill, { categoryExplanation } from './RemediationCategoryPill.jsx'
 import { useState } from 'react'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import { REMEDIATION_CATEGORIES, remediationCategory } from './remediationCategories.js'
@@ -237,16 +237,14 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
       {/* A19 severity filter + A24 auto-fixable toggle. Shown only when there is finding work in
           scope to narrow — a run with nothing to fix has nothing for either control to do. Every
           chip keeps its count whether selected or not, so a narrowed view still says what it hid. */}
-      <RemediationCategoryLegend />
       {(scopedFindings > 0 || scopedChanges.length > 0) && (
         <div className="worklist-refine" style={{ display: 'flex', alignItems: 'center', gap: 16,
                                                   flexWrap: 'wrap', marginTop: 10 }}>
           <div role="group" aria-label="Filter documents by remediation category" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            <button type="button" aria-pressed={!categoryChosen} onClick={() => setCategoryChosen(null)}>All remediation categories</button>
             {REMEDIATION_CATEGORIES.map(([key, label]) => {
               const count = stateScoped.reduce((n, row) => n + (row.findings || []).filter(finding => remediationCategory(finding) === key).length, 0)
               const changes = scopedChanges.filter(change => change.category === key).length
-              return <button key={key} className="remediation-category-filter" type="button" disabled={!count && !changes} aria-pressed={categoryChosen === key} onClick={() => setCategoryChosen(key)}><RemediationCategoryPill category={key} count={count} />{changes > 0 && ` · ${changes} change records`}</button>
+              return <button key={key} className="remediation-category-filter" type="button" disabled={!count && !changes} aria-pressed={categoryChosen === key} title={categoryExplanation(key)} aria-description={categoryExplanation(key)} onClick={() => setCategoryChosen(current => current === key ? null : key)}><RemediationCategoryPill category={key} count={count} />{changes > 0 && ` · ${changes} change records`}</button>
             })}
           </div>
           <span className="muted worklist-auto-counts">Auto-fix available: {autoFindings} of {scopedFindings} findings · {docsWithAuto} of {plural(stateScoped.length, 'document', 'documents')}</span>

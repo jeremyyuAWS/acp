@@ -61,7 +61,7 @@ it('ignores a late response after a different document is opened', async () => {
 
 it('offers remediation-state filtering while keeping change records separate from findings', async () => {
   const { container } = await mount({ fixes: [{ ...fix, verified: true }] })
-  const button = [...container.querySelectorAll('button')].find(node => node.querySelector('[title="Fixed and verified"]'))
+  const button = [...container.querySelectorAll('button')].find(node => node.querySelector('[aria-label="Fixed and verified: 0 findings"]'))
   expect(button.textContent).toContain('Verified 0 · 1 change records')
   await act(async () => button.click())
   expect(container.querySelectorAll('tbody tr')).toHaveLength(1)
@@ -79,9 +79,8 @@ it('uses an Assess-style file page with remediation pills and returns focus to V
   expect(document.activeElement).toBe(page.querySelector('h2'))
   expect(page.querySelector('.remediation-file-summary')).not.toBeNull()
   expect(page.querySelector('.remediation-sc-card .remediation-category-pill')).not.toBeNull()
-  expect(page.querySelectorAll('details')).toHaveLength(1)
-  expect(page.querySelector('details').open).toBe(false)
-  expect(page.querySelector('details summary').textContent).toBe('Category legend')
+  expect(page.querySelectorAll('details')).toHaveLength(0)
+  expect(page.textContent).not.toContain('Category legend')
   expect(container.querySelector('[role=dialog]')).toBeNull()
   await act(async () => [...page.querySelectorAll('button')].find(n => n.textContent === '← All documents').click())
   expect(document.activeElement).toBe(open)

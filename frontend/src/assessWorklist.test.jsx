@@ -19,7 +19,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { createTestRoot, unmountAll } from './testRoots.js'
@@ -155,7 +155,7 @@ describe('the severity partition sums to the row it sits in', () => {
     expect(category.textContent).toContain('AI 1')
     expect(category.querySelector('details')).toBeNull()
     expect(category.querySelector('[aria-label="Fully automated: 2 findings"]')).not.toBeNull()
-    expect(c.querySelector('[aria-label="Remediation category legend"]').textContent).toContain('Fully automated')
+    expect(c.querySelector('[aria-label="Remediation category legend"]')).toBeNull()
     expect(cell(row, 'findings')).toBe('3')
     expect(c.querySelector('th').parentElement.textContent).not.toContain('Severity')
   })
@@ -338,7 +338,7 @@ describe('A19 severity filter and A24 auto-fixable toggle — narrow, never hide
     expect(c.querySelector('.col-auto')).toBeNull()
     expect(c.querySelector('.col-person')).toBeNull()
     expect(order(c)).toContain('board.pdf')
-    expect(c.querySelector('.remediation-category-legend').closest('details').open).toBe(false)
+    expect(c.querySelector('.remediation-category-legend')).toBeNull()
   })
 
   it('offers an empty remediation category but does not let it be chosen', async () => {
@@ -565,4 +565,29 @@ it('labels the screenshot category total as 23 findings and keeps change records
   ] })
   expect(c.textContent).toContain('23 assessed findings across the document categories')
   expect(c.textContent).toContain('Change records are separate and are not added to findings')
+})
+
+it('explains category totals on hover and clears a selected pill without an All button', async () => {
+ const c = await mount({files:ESTATE})
+ expect(c.textContent).not.toContain('All remediation categories')
+ const filters = [...c.querySelectorAll('.remediation-category-filter')]
+ expect(filters).toHaveLength(9)
+ for (const button of filters) {
+  expect(button.title.length).toBeGreaterThan(75)
+  expect(button.getAttribute('aria-description')).toBe(button.title)
+ }
+ const auto = filters.find(b => b.textContent.startsWith('Auto'))
+ const before = rowsOf(c).length
+ await act(async () => auto.click())
+ expect(auto.getAttribute('aria-pressed')).toBe('true')
+ await act(async () => auto.click())
+ expect(auto.getAttribute('aria-pressed')).toBe('false')
+ expect(rowsOf(c)).toHaveLength(before)
+})
+
+it('deliberately retires the legend mount while retaining its component for restoration', () => {
+ expect(readFileSync('src/RemediationCategoryPill.jsx','utf8')).toContain('export function RemediationCategoryLegend')
+ for (const name of readdirSync('src').filter(name => name.endsWith('.jsx') && !name.includes('.test.'))) {
+  expect(readFileSync(`src/${name}`, 'utf8'), name).not.toContain('<RemediationCategoryLegend')
+ }
 })

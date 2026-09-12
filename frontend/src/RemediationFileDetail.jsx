@@ -2,7 +2,7 @@ import './remediation-evidence.css'
 import { useEffect, useRef } from 'react'
 import { criterionOf } from './wcagFinding.js'
 import { REMEDIATION_CATEGORIES, remediationCategory, changeCategory } from './remediationCategories.js'
-import RemediationCategoryPill, { RemediationCategoryLegend } from './RemediationCategoryPill.jsx'
+import RemediationCategoryPill from './RemediationCategoryPill.jsx'
 import { scOf } from './fixSummary.js'
 import './remediation-file-detail.css'
 const text = value => value == null ? 'Not recorded' : typeof value === 'string' ? value : JSON.stringify(value, null, 2)
@@ -25,7 +25,6 @@ export default function RemediationFileDetail({ row, changes, loading, unavailab
       <div><small>Needs a person</small><strong>{row.humanReviewRequired}</strong></div>
       <div><small>Coverage for this file</small><span>{row.criteriaEvaluated.length} of {row.selectedChecks} criteria evaluated</span></div>
     </div>
-    <RemediationCategoryLegend />
     <h3>Findings and fixes by WCAG success criterion</h3>
     <p className="muted">{row.totalFindings} assessment findings · {changes.length} recorded changes. Change records are separate from findings; applying a change does not establish that the document is accessible.</p>
     {loading && <p role="status">Loading file evidence…</p>}
