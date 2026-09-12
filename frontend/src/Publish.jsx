@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react'
-import RemediationLiveDocuments from './RemediationLiveDocuments.jsx'
 import ScopeBanner from './ScopeBanner.jsx'
 import DriveReleaseReconnect from './DriveReleaseReconnect.jsx'
 import ReleaseQuickActions from './ReleaseQuickActions.jsx'
@@ -864,9 +863,6 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           }
         }} />
 
-      <details className="panel"><summary>Assessment findings and saved changes (optional)</summary>
-      <RemediationLiveDocuments key={run?.id} scanId={run?.id} files={releaseFiles} cap={cap} assessment={assessment} refreshKey={publishedCount} progressDocuments={progressDocuments} />
-      </details>
       <ReleaseCompletionDocuments files={releaseFiles} states={states} progressDocuments={progressDocuments} results={releaseResults} urls={pubUrls}
         filter={outcomeFilter} onFilter={setOutcomeFilter} readOnly={readOnly} publishing={publishing}
         onRetry={names => publishAll(names, releaseFolder?.name || releaseFolderName, true)} />
