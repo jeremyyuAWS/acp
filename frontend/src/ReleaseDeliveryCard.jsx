@@ -10,7 +10,7 @@ export default function ReleaseDeliveryCard({ ready = [], scopeCount = 0, publis
   return <section className="panel release-delivery-card" aria-labelledby={headingId}>
     <div className="release-delivery-card__heading">
       <div><h3 id={headingId}>Publish corrected copies</h3>
-        <p>Saved copies and their audit checklist continue to your release destination.</p></div>
+        <p>Continue from saved fixes to delivery without leaving remediation.</p></div>
       {onOpenDetails && <button className="ghost" type="button" onClick={onOpenDetails}>Release details</button>}
     </div>
     <div className="release-delivery-card__counts" aria-label="Delivery progress">
