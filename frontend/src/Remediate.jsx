@@ -417,7 +417,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                                    // The run's live state and its ONE stream, owned by
                                    // useRemediationRun at App level so both survive this
                                    // component being unmounted on every tab change.
-                                   runStream = null }) {
+                                   runStream = null, delivery = null }) {
   const [queue, setQueue] = useState([])
   // The master/detail RemediationInbox owns its own view state (search, tabs, sort, selection),
   // so the old accordion/prefs plumbing (single-open openId, the search/severity/criterion/group
@@ -1899,6 +1899,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           loading={acceptedPlan?.loading === true}
           authorization={acceptedAuthorization} />
       </details>}
+      {delivery}
       <section id="accepted-run-details" hidden={!runDetailsOpen} aria-label="Run details">
         <RemediationAutoRelease statusOnly onStatus={setAutomaticReleaseState} scanId={runId} files={impactScope} readOnly={readOnly} />
         {runDetailsOpen && <details><summary>Additional run information</summary>

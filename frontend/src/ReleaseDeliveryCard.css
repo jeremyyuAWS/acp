@@ -1,0 +1,9 @@
+.release-delivery-card { padding:16px; margin:12px 0 16px; }
+.release-delivery-card__heading { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:flex-start; gap:12px; }
+.release-delivery-card h3 { margin:0; font-size:15px; font-weight:650; }
+.release-delivery-card p { font-size:14px; margin:8px 0; }
+.release-delivery-card__counts { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; font-size:13px; }
+.release-delivery-card__counts span { background:var(--surface-alt, #f5f2f7); border:1px solid #e8e2ed; border-radius:999px; padding:4px 10px; }
+.release-delivery-card__counts strong { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric:tabular-nums; }
+.release-delivery-card__option { display:flex; align-items:center; gap:8px; font-size:14px; }
+.release-delivery-card__destination { overflow-wrap:anywhere; }
