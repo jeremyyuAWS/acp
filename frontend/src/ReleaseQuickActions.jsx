@@ -114,10 +114,10 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     </div>}
     <section className="release-quick-step" aria-labelledby={`${reasonId}-files`}>
       <h4 id={`${reasonId}-files`}><span className="release-step-number">1</span> {allDelivered ? 'Published files' : 'Choose files'}</h4>
-      {!allDelivered && releaseOptions}
+      {!allDelivered && releaseOptions && <details><summary>Publishing options</summary>{releaseOptions}</details>}
       <div className="release-quick-summary"><strong>{allDelivered ? `${deliveredCount} delivered` : `${selectedReady.length} ready to publish`}</strong><span>{files.length} files in this scope</span></div>
       <div className="release-quick-file-list" aria-label="Files to publish">
-        {files.map(file => <label key={file.file} className={`release-quick-file${fileStates[file.file]?.status === 'released' ? ' release-quick-file--delivered' : ''}`}>
+        {files.filter(file => readyNames.has(file.file) || allDelivered).map(file => <label key={file.file} className={`release-quick-file${fileStates[file.file]?.status === 'released' ? ' release-quick-file--delivered' : ''}`}>
           <input type="checkbox" aria-label={`Publish ${file.file}`} checked={readyNames.has(file.file) && !excluded.has(file.file)} disabled={readOnly || publishing || !readyNames.has(file.file)}
             onChange={event => setExcluded(previous => { const next = new Set(previous); event.target.checked ? next.delete(file.file) : next.add(file.file); return next })} />
           <span>{file.file}</span><small>{readyNames.has(file.file) ? 'Ready to publish' : fileStates[file.file]?.label || 'Not available for a new publish'}</small>
@@ -125,6 +125,14 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
         </label>)}
         {!files.length && <p>No files are selected in this scope.</p>}
       </div>
+      {!allDelivered && files.some(file => !readyNames.has(file.file)) && <details className="release-unavailable-files">
+        <summary>{files.filter(file => !readyNames.has(file.file)).length} other files · publishing requirements</summary>
+        <p>These files are outside the current selection. Their publishing requirements are separate from accessibility findings.</p>
+        {files.filter(file => !readyNames.has(file.file)).map(file => <div className={`release-quick-file${fileStates[file.file]?.status === 'released' ? ' release-quick-file--delivered' : ''}`} key={file.file}>
+          <span>{file.file}</span><small>{fileStates[file.file]?.label || 'Not available for a new publish'}</small>
+          <span className="release-quick-file-reason">{fileStates[file.file]?.reason || 'No publishable copy is available yet.'}</span>
+        </div>)}
+      </details>}
     </section>
     <section className="release-quick-step" aria-labelledby={`${reasonId}-destination`}>
       <h4 id={`${reasonId}-destination`}><span className="release-step-number">2</span> {allDelivered ? 'Published folder' : 'Confirm destination'}</h4>
@@ -135,8 +143,19 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     <section className="release-quick-step" aria-labelledby={`${reasonId}-publish`}>
       <h4 id={`${reasonId}-publish`}><span className="release-step-number">3</span> {allDelivered ? 'Publication complete' : 'Publish copies'}</h4>
       <p>Saved copies are published with a scan summary and a per-file checklist of remaining work. Publishing does not certify accessibility.</p>
-      {!allDelivered && <section className="release-quick-proposals" aria-label="Approve changes without individual inspection">
-      <strong>Approve changes here — inspection is optional</strong>
+      <div className="release-quick-buttons">
+      <div className="release-quick-action">
+        <button disabled={allDelivered || Boolean(readyReason)} aria-describedby={!allDelivered && readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(selectedReady.map(f => f.file))}>
+          {allDelivered ? 'All files published ✓' : publishing ? 'Publishing copies…' : allowRemainingIssues ? `Publish saved copies (${selectedReady.length})` : `Publish ready files (${selectedReady.length})`}
+        </button>
+        {announcement && <p role="status">{announcement}</p>}
+        {!allDelivered && readyReason && <div id={`${reasonId}-ready`}><p>{readyReason}</p>
+          {!readOnly && !ready.length && readyReasons.slice(0, 3).map(reason => <p key={reason}>{reason}</p>)}
+        </div>}
+      </div>
+      </div>
+      {!allDelivered && <details className="release-quick-proposals"><summary>Apply additional AI suggestions and publish (optional)</summary>
+      <strong>Approve additional suggestions in one action</strong>
       <p>Approve the eligible proposals for this scope in one action. ACP applies them and publishes qualifying copies. You do not need to open the HITL panel. This covers the full scope above, not only the checked saved copies.</p>
       <div className="release-quick-action">
         <button disabled={Boolean(approveReason)} aria-describedby={approveReason ? `${reasonId}-approve` : undefined} onClick={approve}>
@@ -154,18 +173,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
         {(data.blockers || []).map(reason => <p key={reason}>{reason}</p>)}
       </div>)}
     </details>}
-    </section>}
-      <div className="release-quick-buttons">
-      <div className="release-quick-action">
-        <button disabled={allDelivered || Boolean(readyReason)} aria-describedby={!allDelivered && readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(selectedReady.map(f => f.file))}>
-          {allDelivered ? 'All files published ✓' : publishing ? 'Publishing copies…' : allowRemainingIssues ? `Publish saved copies (${selectedReady.length})` : `Publish ready files (${selectedReady.length})`}
-        </button>
-        {announcement && <p role="status">{announcement}</p>}
-        {!allDelivered && readyReason && <div id={`${reasonId}-ready`}><p>{readyReason}</p>
-          {!readOnly && !ready.length && readyReasons.slice(0, 3).map(reason => <p key={reason}>{reason}</p>)}
-        </div>}
-      </div>
-      </div>
+    </details>}
     </section>
     {active && <div role="status" aria-label="Authorized Release progress">
       <b>{count('published')} delivered · {count('applying') + count('ready') + count('publishing')} in progress · {count('blocked') + count('failed') + count('needs_confirmation')} need attention</b>

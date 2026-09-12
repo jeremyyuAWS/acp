@@ -35,7 +35,7 @@ it('authorizes the exact server plan once with optional inspection', async () =>
   expect(v.container.textContent).toContain('Manual repair required')
   let resolve; api.authorizeReleaseContinuation.mockImplementation(() => new Promise(r => { resolve = r }))
   const button = v.button('Approve eligible changes')
-  expect(button.closest('details')).toBeNull()
+  expect(button.closest('details')?.open).toBe(false)
   expect(button.closest('.release-quick-step').querySelector('h4').textContent).toContain('3 Publish copies')
   await click(button); await click(button)
   expect(api.authorizeReleaseContinuation).toHaveBeenCalledTimes(1)
@@ -110,13 +110,14 @@ it('shows failed eligibility as unknown with a retry instead of a known zero', a
 })
 
 
-it('keeps publishing and approval visible without opening any disclosure, with linked reasons', async () => {
+it('keeps publishing primary and optional approval collapsed, with linked reasons', async () => {
   const v = await mount({ ready: [], readyReasons: ['Verification incomplete. Resolve findings in Remediate.'] }, { ...plan, intent: { files: {} } })
   expect(v.container.querySelector('h3').textContent).toBe('Publish your documents')
   for (const label of ['Publish ready files (0)', 'Approve eligible changes']) {
     const button = v.button(label)
     expect(button.disabled).toBe(true)
-    expect(button.closest('details')).toBeNull()
+    if (label.startsWith('Publish')) expect(button.closest('details')).toBeNull()
+    else expect(button.closest('details')?.open).toBe(false)
     expect(v.container.querySelector(`[id="${button.getAttribute('aria-describedby')}"]`).textContent).toBeTruthy()
     await click(button)
   }
@@ -147,7 +148,7 @@ it('shows three ordered steps and publishes only checked ready copies', async ()
   await click(v.container.querySelector('[aria-label="Publish changes.pdf"]'))
   await click(v.button('Publish ready files (1)'))
   expect(v.props.onReady).toHaveBeenCalledWith(['ready.pdf'])
-  expect(v.container.querySelector('[aria-label="Publish manual.pdf"]').disabled).toBe(true)
+  expect(v.container.querySelector('[aria-label="Publish manual.pdf"]')).toBeNull()
   await click(v.container.querySelector('[aria-label="Publish ready.pdf"]'))
   expect(v.button('Publish ready files (0)').disabled).toBe(true)
   expect(v.container.textContent).toContain('Select at least one ready file above')
@@ -198,3 +199,16 @@ it('reconnects Drive and resumes the saved manual authorization without approvin
  expect(api.resumeReleaseContinuation).toHaveBeenCalledWith('saved-run','fixed-intent')
  expect(api.authorizeReleaseContinuation).not.toHaveBeenCalled()
 })
+
+ it('shows ready copies first and keeps requirements and extra approvals collapsed', async () => {
+  const v = await mount({ fileStates: { 'manual.pdf': { label: 'No saved copy', reason: 'No saved corrected copy is available.' } } })
+  expect([...v.container.querySelectorAll('[aria-label="Files to publish"] input')].map(input => input.getAttribute('aria-label'))).toEqual(['Publish ready.pdf'])
+  const requirements = v.container.querySelector('.release-unavailable-files')
+  expect(requirements.open).toBe(false)
+  expect(requirements.textContent).toContain('No saved corrected copy is available.')
+  const publish = v.button('Publish ready files')
+  const approve = v.button('Approve eligible changes')
+  expect(publish.closest('details')).toBeNull()
+  expect(approve.closest('details').open).toBe(false)
+  expect(publish.compareDocumentPosition(approve) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+ })

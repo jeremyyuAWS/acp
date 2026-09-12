@@ -50,3 +50,10 @@ it('partial release preserves source and artifact gates while allowing unresolve
   expect(releaseReadiness(file, { allowRemainingIssues: true, sourceState: () => 'stale' }).status).toBe('changed')
   expect(releaseReadiness(file, { allowRemainingIssues: true, blockers: { 'partial.docx': 'Write incomplete' } }).status).toBe('attention')
 })
+
+it('distinguishes a missing publishable copy from accessibility findings', () => {
+  const state = releaseReadiness({ file: 'clean.docx', compliant: true }, { allowRemainingIssues: true })
+  expect(state.label).toBe('No saved copy')
+  expect(state.reason).toContain('does not indicate an accessibility finding')
+  expect(canSelectRelease(state)).toBe(false)
+})
