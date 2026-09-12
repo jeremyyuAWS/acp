@@ -987,18 +987,18 @@ export default function RemediationInbox({
           {WORKFLOW_TABS.map(status => <option key={status} value={status}>{WORKFLOW_LABELS[status]} {counts[status] || 0}</option>)}
         </select>
       </div>
-      <section className="run-approval-summary" aria-label="Whole-run approval">
+      {(!bulkPreviewOpen || readyAcrossScan.length > 0) && <section className="run-approval-summary" aria-label="Whole-run approval">
         <div><strong>Review and verify changes</strong>
           {/* Keep approval readiness separate from verification and completed counts. */}
           <p>{runCounts.ready} ready review items · {runCounts.individual} need proposal information or individual review · {runCounts.inspection} applied changes available to inspect · {runCounts.manual} manual review items</p>
-          <p>Inspection is optional. Confirm all ready proposals together; writing and verification follow approval.</p>
+          <p>{runCounts.ready ? 'Approve the ready fixes together. ACP will save the changes and check the results.' : preparingProposals ? 'Please wait for remediation to finish preparing suggestions.' : 'No fixes are ready to approve. View readiness for the next step.'}</p>
           {preparingProposals && <p role="status">Preparing proposals — remediation is still processing. Readiness updates as work finishes.</p>}
         </div>
         <button type="button" className={readyAcrossScan.length ? 'primary' : 'ghost'} disabled={savingId != null || (readyAcrossScan.length > 0 && (readOnly || !onDecide))}
           onClick={() => { setBatchScopeIds(null); setBulkPreviewOpen(true); if (readyAcrossScan.length) setConfirmRunRequest(n => n + 1) }}>
           {readyAcrossScan.length ? `Approve all ready in this run (${readyAcrossScan.length})` : 'View run readiness'}
         </button>
-      </section>
+      </section>}
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       {!bulkPreviewOpen && <>
         <p className="remediation-category-help">{{

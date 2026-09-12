@@ -82,6 +82,10 @@ it('explains dynamic missing proposal information and opens focused individual r
   const v = await mount(RemediationInbox, { queue: [...unversioned, missing], decisions: {}, initialTab: 'needs-review', scanId: 'scan', onDecide })
   await click(v.button('Bulk approve ready proposals'))
   const empty = v.container.querySelector('.batch-review-empty')
+  expect(v.container.querySelector('.run-approval-summary')).toBeNull()
+  expect(empty.querySelector('.batch-review-why').open).toBe(false)
+  expect(v.container.querySelector('.batch-review').textContent).not.toContain('Approve the ready proposals together, or inspect them')
+  expect(empty.textContent).toContain('ACP does not have approval-ready fixes')
   // Every reason is named and the counts sum to the scope, so "0 ready" is fully explained
   // rather than partly explained. Two of the eight reasons used to be named in prose and
   // the rest hidden in a collapsed disclosure.
