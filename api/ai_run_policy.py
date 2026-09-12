@@ -51,6 +51,21 @@ def normalize_document_input_mode(snapshot, *, positive_budget):
     return value
 
 
+
+NATIVE_PDF_QUALITY_PROFILE = 'native-pdf-quality.v1'
+
+
+def normalize_document_model_profile(snapshot, *, positive_budget):
+    """A frozen opt-in; absence never widens an existing run's provider permission."""
+    value = snapshot['document_wide_model_profile']
+    if type(value) is not str or value != NATIVE_PDF_QUALITY_PROFILE:
+        raise BudgetError('Unsupported document-wide model profile')
+    if (snapshot.get('document_wide_ai') is not True or snapshot.get('ai') != 1
+            or snapshot.get('document_wide_input_mode') != 'native_pdf'
+            or snapshot.get('ai_zone') != 'any' or not positive_budget):
+        raise BudgetError('The PDF quality profile requires full-PDF Cloud AI and a positive spending limit')
+    return value
+
 def normalize_run_policy(snapshot):
     """None means legacy/unmanaged; an explicit zero is managed and denies AI."""
     if snapshot is None:
@@ -58,6 +73,8 @@ def normalize_run_policy(snapshot):
     if not isinstance(snapshot, dict):
         raise BudgetError("invalid remediation policy snapshot")
     if "ai_budget_usd" not in snapshot:
+        if "document_wide_model_profile" in snapshot:
+            raise BudgetError("The PDF quality profile requires a managed run spending limit")
         if "document_wide_input_mode" in snapshot:
             raise BudgetError("Document input selection requires a managed run spending limit")
         if snapshot.get("document_wide_ai"):
@@ -89,6 +106,8 @@ def normalize_run_policy(snapshot):
         result['document_wide_ai'] = value
     if 'document_wide_input_mode' in snapshot:
         result['document_wide_input_mode'] = normalize_document_input_mode(snapshot, positive_budget=cap > 0)
+    if 'document_wide_model_profile' in snapshot:
+        result['document_wide_model_profile'] = normalize_document_model_profile(snapshot, positive_budget=cap > 0)
     if 'auto_approve_ai' in snapshot:
         from ai_standing_approval import normalize
         result['auto_approve_ai'] = normalize(snapshot['auto_approve_ai'])
