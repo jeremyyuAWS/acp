@@ -5,12 +5,15 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 import Stack from './WorkflowStageStack.jsx'
 import { RemediationActivityPanel } from './RemediationOpsPanel.jsx'
 afterEach(unmountAll)
-it('keeps one activity feed after the workflow remediation card and delivery closed by default', () => {
+it('keeps one activity feed first in Live and workspace tabs ahead of its run header', () => {
   const app=readFileSync('src/App.jsx','utf8')
   const source=readFileSync('src/Remediate.jsx','utf8')
-  expect(app).toContain("stageAfter={{remediate: view === 'remediate' && isVisible(access, 'remediate')")
-  expect(app.match(/<RemediationActivityPanel/g)).toHaveLength(1)
-  expect(source).not.toContain('<RemediationActivityPanel')
+  expect(app).not.toContain('<RemediationActivityPanel')
+  expect(source.match(/<RemediationActivityPanel/g)).toHaveLength(1)
+  expect(source.indexOf('<RemediationWorkspaceTabs')).toBeLessThan(source.indexOf('<RemediationRunHeader'))
+  const live = source.slice(source.indexOf('live={<>'))
+  expect(live.indexOf('<RemediationActivityPanel')).toBeLessThan(live.indexOf('<RemediationRunHeader'))
+  expect(live.indexOf('<RemediationActivityPanel')).toBeLessThan(live.indexOf('<RemediationLiveDocuments'))
   expect(source).toContain('<details className="panel" aria-label="Publish corrected copies">')
   expect(source).toContain('<RemediationOpsPanel streamlined hideActivity')
 })
@@ -25,7 +28,7 @@ it('animates the current document row again when a new saved lead event arrives'
   expect(container.textContent).toContain('Fix independently verified')
 })
 
-it('renders activity immediately after Remediate even when the stage is collapsed and before Release', async () => {
+it('retains the generic workflow after-stage slot for future restoration', async () => {
   const {container,root}=createTestRoot()
   const lineage={scan_id:'scan',workflow_revision:1,stages:[
     {stage:'remediate',execution_id:'r',workflow_revision:1,state:'succeeded'},

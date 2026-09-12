@@ -46,7 +46,7 @@ import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
-import RemediationOpsPanel from './RemediationOpsPanel.jsx'
+import RemediationOpsPanel, { RemediationActivityPanel } from './RemediationOpsPanel.jsx'
 import RemediationWorkspaceTabs from './RemediationWorkspaceTabs.jsx'
 import RemediationImpactCard from './RemediationImpactCard.jsx'
 import { remediationImpactScope } from './remediationImpactScope.js'
@@ -1663,6 +1663,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           directly under the hero. Each card carries its own badge (§4) and a
           "Why am I reviewing this?" panel (real confidence + reason + suggested value). ── */}
       <section className="panel rem-review-panel" id="rem-review">
+        <p className="muted rem-review-scope">{documentScopeSentence(documentSelection(files, triage))}</p>
         <div className="rem-sec-hd">
           {/* Redesign R4: one dominant statement (findings × documents) replaces the repeated `N`
               badges. The numeric pill is gone — the count lives in the sentence, said once. */}
@@ -1874,44 +1875,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   return (
     <>
-      {/* App owns the live Assessment card above the workflow tabs. This compact label only
-          qualifies the older Remediation snapshot below; it does not compete with that card. */}
-      {showPriorResultsNotice && (
-        <div className="rem-prior-results" role="status">
-          <strong>Previous remediation results · read only</strong>
-          <span>The results below are from{assessedAt ? ` ${assessedAt}` : ' the previous assessment'} and will refresh after the active assessment completes.</span>
-        </div>
-      )}
-
-      {/* The automation-first run header (PRD §5.1/§5.2): what ACP already did, what is left for a
-          person, and the ONE action this state of the run calls for. Counts come from the same
-          derivations the panels under Run details use, and a lane with no data passes nothing rather
-          than a zero, so "none" and "not known" never read the same. */}
-      <RemediationRunHeader
-        assessedAt={assessedAt}
-        docScope={documentScopeSentence(documentSelection(files, triage))}
-        counts={{ automaticOnly: false, autoFixed: fixTotal ?? undefined, autoFixedLoaded: fixSource.length, documents: fixDocumentTotal ?? undefined,
-          needsApproval: reviewCounts.ready, individualReview: reviewCounts.individual, inspection: reviewCounts.inspection,
-                  manual: reviewCounts.manual, revalidating: revalidatingCount, blocked: blockedCount }}
-        primary={primary}
-        readOnly={readOnly}
-        runDetailsOpen={runDetailsOpen}
-        onOpenRunDetails={() => { setRunDetailsOpen((v) => !v); setWorkspaceRequest({ mode: 'live' }) }} />
-      {planAccepted && <details className="panel" aria-label="Saved automation settings">
-        <summary>Saved automation plan · repairs and verification continue automatically</summary>
-        <AcceptedRemediationPlanSummary
-          policy={acceptedPlan?.scanId === runId && acceptedPlan?.batchId === acceptedBatchId ? acceptedPlan.policy : null}
-          loading={acceptedPlan?.loading === true}
-          authorization={acceptedAuthorization} />
-      </details>}
-      {delivery && <details className="panel" aria-label="Publish corrected copies"><summary>Publish corrected copies</summary>{delivery}</details>}
-      <section id="accepted-run-details" hidden={!runDetailsOpen} aria-label="Run details">
-        <RemediationAutoRelease statusOnly onStatus={setAutomaticReleaseState} scanId={runId} files={impactScope} readOnly={readOnly} />
-        {runDetailsOpen && <details><summary>Additional run information</summary>
-          <RemediationRunDetails sections={runDetailSections} open />
-          <RemediationReleaseAccess files={impactScope} readOnly={readOnly} onNavigate={onNavigate} />
-        </details>}
-      </section>
       <RemediationWorkspaceTabs
         assessmentReady={!readOnly && !assessRunning && files.length > 0 && !!assessedAt}
         assessmentIdentity={runId && assessedAt ? `${runId}:${assessedAt}` : runId}
@@ -1942,6 +1905,48 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         snapshot={runStream?.snapshot || null}
         review={reviewWorkspace}
         live={<>
+          {runStream?.snapshot?.scan_id === runId && <RemediationActivityPanel
+            snapshot={runStream.snapshot} events={runStream.events || []} connected={!!runStream.connected}
+            receivedAt={runStream.receivedAt || null} activityStatus={runStream.activityStatus || 'loading'}
+            updateMode={runStream.connected ? 'live' : 'polling'} />}
+          {/* App owns the live Assessment card above the workflow tabs. This compact label only
+              qualifies the older Remediation snapshot below; it does not compete with that card. */}
+          {showPriorResultsNotice && (
+            <div className="rem-prior-results" role="status">
+              <strong>Previous remediation results · read only</strong>
+              <span>The results below are from{assessedAt ? ` ${assessedAt}` : ' the previous assessment'} and will refresh after the active assessment completes.</span>
+            </div>
+          )}
+
+          {/* The automation-first run header (PRD §5.1/§5.2): what ACP already did, what is left for a
+              person, and the ONE action this state of the run calls for. Counts come from the same
+              derivations the panels under Run details use, and a lane with no data passes nothing rather
+              than a zero, so "none" and "not known" never read the same. */}
+          <RemediationRunHeader
+            assessedAt={assessedAt}
+            docScope={documentScopeSentence(documentSelection(files, triage))}
+            counts={{ automaticOnly: false, autoFixed: fixTotal ?? undefined, autoFixedLoaded: fixSource.length, documents: fixDocumentTotal ?? undefined,
+              needsApproval: reviewCounts.ready, individualReview: reviewCounts.individual, inspection: reviewCounts.inspection,
+                      manual: reviewCounts.manual, revalidating: revalidatingCount, blocked: blockedCount }}
+            primary={primary}
+            readOnly={readOnly}
+            runDetailsOpen={runDetailsOpen}
+            onOpenRunDetails={() => { setRunDetailsOpen((v) => !v); setWorkspaceRequest({ mode: 'live' }) }} />
+          {planAccepted && <details className="panel" aria-label="Saved automation settings">
+            <summary>Saved automation plan · repairs and verification continue automatically</summary>
+            <AcceptedRemediationPlanSummary
+              policy={acceptedPlan?.scanId === runId && acceptedPlan?.batchId === acceptedBatchId ? acceptedPlan.policy : null}
+              loading={acceptedPlan?.loading === true}
+              authorization={acceptedAuthorization} />
+          </details>}
+          {delivery && <details className="panel" aria-label="Publish corrected copies"><summary>Publish corrected copies</summary>{delivery}</details>}
+          <section id="accepted-run-details" hidden={!runDetailsOpen} aria-label="Run details">
+            <RemediationAutoRelease statusOnly onStatus={setAutomaticReleaseState} scanId={runId} files={impactScope} readOnly={readOnly} />
+            {runDetailsOpen && <details><summary>Additional run information</summary>
+              <RemediationRunDetails sections={runDetailSections} open />
+              <RemediationReleaseAccess files={impactScope} readOnly={readOnly} onNavigate={onNavigate} />
+            </details>}
+          </section>
           {releasePlanNotice && <div role="status">{releasePlanNotice}</div>}
           {remMsg && <div role="status">{remMsg}</div>}
           <RemediationLiveDocuments progressHostId={progressHostId} onShowDocuments={() => setWorkspaceRequest({ mode: 'live' })} snapshot={scopedSnapshot} events={runStream?.events || []} connected={!!runStream?.connected} key={runId} scanId={runId} files={impactScope} cap={cap} assessment={assessment}
