@@ -2205,6 +2205,13 @@ def _sp_classify_item(item: dict, *, drive_id: str | None, skip_folders: set[str
     _search_drive's own est_files entries; exactly one of scannable/inventory_row is set,
     matching a supported extension or not.
     """
+    # /me/drive is a request alias, not an absence of provider identity. Graph
+    # returns the actual driveId on each item even when this walk has no explicit
+    # library target. Preserve that identity for freshness checks and delivery.
+    parent_drive = (item.get("parentReference") or {}).get("driveId")
+    if drive_id and parent_drive and drive_id != parent_drive:
+        raise ValueError("SharePoint item drive differs from its selected source library")
+    drive_id = drive_id or parent_drive
     name = item.get("name", "")
     # parentReference.path looks like "/drive/root:/Remediated/sub". Matched as PATH SEGMENTS,
     # not substrings: a library called "Remediated Policies" is a different folder and must
@@ -2286,6 +2293,8 @@ def _sp_classify_item(item: dict, *, drive_id: str | None, skip_folders: set[str
     else:
         inventory_row = _sp_inventory_row(item, site_id=site_id, library_name=library_name,
                                           site_name=site_name, meta=meta)
+        if drive_id:
+            inventory_row["drive_id"] = drive_id
     return {"est_row": est_row, "scannable": scannable, "inventory_row": inventory_row}
 
 

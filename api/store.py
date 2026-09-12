@@ -3809,6 +3809,49 @@ class Store:
                  "retention_label,sensitivity_label,sharing_scope,item_kind,checked_out_by,"
                  "sp_version,modified_by,sp_metadata")
 
+    def source_identity_repair_snapshot(self, scan_id: str, owner: str) -> dict:
+        """Frozen provenance and assessed source facts; no credentials or mutations."""
+        scan = self.get_scan(scan_id, owner=owner)
+        if not scan:
+            raise ValueError("owner_scope")
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT id,status,payload FROM jobs WHERE scan_id=%s AND type='scan_discover' ORDER BY created_at DESC,id DESC LIMIT 1", (scan_id,))
+            job = self._db.fetchone(cur)
+            self._db.execute(cur, "SELECT file,drive_file_id,source_modified,checksum,remediated_at,status,score FROM file_records WHERE scan_id=%s ORDER BY file", (scan_id,))
+            records = self._db.fetchall(cur)
+            self._db.execute(cur, "SELECT execution_id FROM stage_executions WHERE scan_id=%s AND stage='remediate' LIMIT 1", (scan_id,))
+            remediation = bool(self._db.fetchone(cur))
+        return {"run": scan.get("run") or {}, "job": job, "inventory": self.list_inventory(scan_id), "records": records, "remediation": remediation}
+
+    def backfill_verified_default_drive(self, scan_id: str, owner: str, expected: dict, drive_id: str) -> int:
+        """Atomic metadata-only repair: original assessment and source revision stay frozen."""
+        if not isinstance(drive_id, str) or not drive_id or len(drive_id) > 512:
+            raise ValueError("ambiguous_metadata")
+        with self.transaction():
+            with self._db.cursor() as cur:
+                # Same lock and order as synchronous/fan-out remediation admission.
+                if self._db.supports_skip_locked:
+                    self._db.execute(cur, "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                                     (f"stage:{scan_id}:remediate",))
+                self._db.execute(cur, "UPDATE scan_runs SET owner_email=owner_email WHERE id=%s AND owner_email=%s", (scan_id,owner))
+                if cur.rowcount != 1:
+                    raise ValueError("owner_scope")
+            current = self.source_identity_repair_snapshot(scan_id, owner)
+            if current != expected:
+                raise ValueError("source_context_changed")
+            if current["remediation"] or any(r.get("remediated_at") for r in current["records"]):
+                raise ValueError("remediation_already_admitted")
+            count = 0
+            with self._db.cursor() as cur:
+                for row in current["inventory"]:
+                    if row.get("drive_id"):
+                        continue
+                    self._db.execute(cur, "UPDATE scan_inventory SET drive_id=%s WHERE scan_id=%s AND file=%s AND (drive_id IS NULL OR drive_id='')", (drive_id,scan_id,row["file"]))
+                    if cur.rowcount != 1:
+                        raise ValueError("source_context_changed")
+                    count += 1
+        return count
+
     def list_inventory(self, scan_id: str) -> list[dict]:
         with self._db.cursor() as cur:
             self._db.execute(cur,

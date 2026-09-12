@@ -7,6 +7,8 @@
 - Plain-language PDF structural proposal summaries with unchanged approved plan and source lineage.
 - Responsive styling checks on actual representative app screens and progress/drawer/release controls, using isolated worktree browser fixtures.
 - Review action row reduced to the auto-apply AI switch. Successful server-confirmed enablement displays a green approval notice. Manual work and invalid/stale proposals remain exceptions.
+- Default Microsoft drive discovery now persists the actual parent drive identity. Older eligible scans expose metadata-only recovery: fresh Microsoft permission, exact source IDs/names/timestamps and recorded checksums are verified before an atomic NULL-only drive backfill. No reassessment, file mutation or publishing approval occurs. Recovery rechecks the same selection and never retries an uncertain POST.
+- Native Word companions accept canonical Microsoft QuickXor source checksums, verified against cached original bytes. This noncryptographic provider check complements ownership/version guards and exact corrected-artifact SHA-256; it is not a cryptographic signature.
 - Repeatable six-case PDF model evaluation harness sharing the production prompt, with upfront cost reservation and strict response validation. Production prompt explicitly requires exact locator objects and unfenced JSON.
 
 ## Validation evidence and limits
@@ -17,7 +19,7 @@
 
 ## Remaining external or broader work
 
-- Customer SharePoint batch audit needs an identified scan or published file/folder. No customer original/corrected-byte comparison has been claimed from synthetic controls.
+- The reported 147-file customer scan was identified: all 147 had completed assessment and source item IDs/timestamps, while drive IDs were absent. Frozen Discovery confirms a default-drive selection. No source content or corrected bytes were inspected. Runtime recovery still requires the active user's fresh Microsoft connection; no live repair or publication is claimed before that executes. This scan has not yet admitted remediation, so its real corrected-byte/batch delivery audit remains pending.
 - Acrobat native checker validation requires an available Acrobat installation/session.
 - Untagged/scanned PDF reconstruction and ambiguous complex table or reading-order reconstruction remain unsupported automatic repairs. Existing assessment, explicit supported plans and remaining-work reporting remain available.
 - The complete paid model comparison remains pending resolution of the pilot accounting uncertainty.

@@ -33,6 +33,9 @@ def status(sid: str, request: Request, response: Response, files: list[str] = Qu
         raise HTTPException(422, 'Invalid release destination')
     result = service.preview(core.store, sid, owner, files, selected)
     plan = result['planning']
+    if not plan.get('available') and plan.get('source') == 'sharepoint':
+        from source_identity_repair import probe
+        plan['source_identity_repair'] = probe(core.store, sid, owner)
     if plan.get('available') and plan.get('source') == 'local':
         preflight = _preflight_release_destination(request, plan['destination'])
         if not preflight['ready']:
@@ -82,3 +85,19 @@ def resume(sid: str, authorization_id: str, request: Request, response: Response
         return service.public(service.resume(core.store, authorization_id, owner, sid), core.store)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+@router.post('/scans/{sid}/release/automatic/repair-source-identity')
+def repair_source_identity(sid: str, request: Request, response: Response):
+    """Refresh omitted routing facts, never approval or release authorization."""
+    import source_identity_repair
+    owner, _ = owner_scan(sid, request)
+    response.headers['Cache-Control'] = 'no-store'
+    credentials(sid, request)
+    try:
+        return source_identity_repair.repair(core.store, sid, owner,
+                                            (core.get_scan_tokens(sid) or {}).get('sp'))
+    except source_identity_repair.RepairBlocked as exc:
+        reason = str(exc)
+        raise HTTPException(401 if reason == 'microsoft_connection_required' else 409,
+                            detail={'code':'source_identity_repair_blocked','reason':reason}) from None

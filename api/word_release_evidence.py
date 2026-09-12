@@ -22,9 +22,9 @@ def build_word_evidence(store, scan_id, owner, name, outcome):
     try:
         import blob
         record = store.get_file_record(scan_id, name) or {}
-        checksum = str(record.get('checksum') or '').lower()
-        algorithm = {32: 'md5', 40: 'sha1', 64: 'sha256'}.get(len(checksum))
-        if not algorithm or not re.fullmatch(r'[0-9a-f]+', checksum):
+        from source_checksum import checksum_algorithm, matches_source_checksum
+        checksum = record.get('checksum')
+        if not checksum_algorithm(checksum):
             return unavailable('the assessed original has no verifiable source checksum')
         corrected = blob.download_report_evidence(owner, scan_id, name, max_bytes=MAX_BYTES)
         if not corrected or len(corrected) > MAX_BYTES:
@@ -35,7 +35,7 @@ def build_word_evidence(store, scan_id, owner, name, outcome):
             checksum=record.get('checksum'), max_bytes=MAX_BYTES)
         if not source or len(source) > MAX_BYTES:
             return unavailable('the cached original is missing or exceeds the evidence size limit')
-        if hashlib.new(algorithm, source).hexdigest() != checksum:
+        if not matches_source_checksum(source, checksum):
             return unavailable('the cached original differs from its recorded source checksum')
         from office_tracked_changes import build_tracked_companion
         companion, report = build_tracked_companion(source, corrected)

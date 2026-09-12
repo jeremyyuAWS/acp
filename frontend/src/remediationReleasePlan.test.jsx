@@ -197,3 +197,107 @@ it('offers automatic download preparation for uploads and checks the chosen clou
   await act(async () => v.input().click())
   expect(v.onChange).toHaveBeenLastCalledWith(expect.objectContaining({destination:expect.objectContaining({provider:'drive'})}))
 })
+
+it('recovers automatically after an initial readiness deadline without answering or approving', async () => {
+ vi.useFakeTimers()
+ const read=vi.fn().mockImplementationOnce(()=>new Promise(()=>{})).mockResolvedValue({planning})
+ const onAnswered=vi.fn(),v=await mount({read,requireChoice:true,onAnswered})
+ await act(async()=>vi.advanceTimersByTimeAsync(20000))
+ expect(v.input().disabled).toBe(true)
+ await act(async()=>vi.advanceTimersByTimeAsync(5000))
+ expect(read).toHaveBeenCalledTimes(2)
+ expect(v.input().disabled).toBe(false);expect(v.input().checked).toBe(false)
+ expect(v.onChange.mock.calls.every(([value])=>value===null)).toBe(true)
+ expect(onAnswered).not.toHaveBeenCalledWith(true)
+})
+it.each([401,403,404])('does not poll an initial access or scope denial (%s)', async status => {
+ vi.useFakeTimers();const read=vi.fn().mockRejectedValue(Object.assign(new Error('Denied'),{status}))
+ const v=await mount({read,requireChoice:true})
+ await act(async()=>vi.advanceTimersByTimeAsync(300000))
+ expect(read).toHaveBeenCalledTimes(1);expect(v.input().disabled).toBe(true)
+})
+const repairablePlanning = {available:false,files:[],blocked_files:[{file:'a',reason:'Source identity missing'}],source_identity_repair:{available:true,files:['a'],reason:'missing_default_drive_identity'}}
+it('repairs an explicitly repairable source once then rechecks the exact scope without consent', async () => {
+ const repair=vi.fn().mockResolvedValue({status:'repaired',repaired_files:1})
+ const read=vi.fn().mockResolvedValueOnce({planning:repairablePlanning}).mockResolvedValue({planning})
+ const onAnswered=vi.fn(),v=await mount({read,repair,requireChoice:true,onAnswered})
+ expect(repair).toHaveBeenCalledTimes(1)
+ expect(repair).toHaveBeenCalledWith('scan',{signal:expect.any(AbortSignal)})
+ expect(read.mock.calls.map(call=>call[1])).toEqual([['a'],['a']])
+ expect(v.input().disabled).toBe(false);expect(v.input().checked).toBe(false)
+ expect(v.onChange.mock.calls.every(([value])=>value===null)).toBe(true)
+ expect(onAnswered).not.toHaveBeenCalledWith(true)
+})
+it('never replays an uncertain repair on periodic or explicit readiness refresh', async () => {
+ vi.useFakeTimers();const repair=vi.fn().mockRejectedValue(new TypeError('Network lost'))
+ const read=vi.fn().mockResolvedValue({planning:repairablePlanning})
+ const v=await mount({read,repair,requireChoice:true})
+ await act(async()=>vi.advanceTimersByTimeAsync(15000))
+ expect(read.mock.calls.length).toBeGreaterThan(1);expect(repair).toHaveBeenCalledTimes(1)
+ await act(async()=>[...v.container.querySelectorAll('button')].find(b=>b.textContent==='Refresh publishing readiness').click())
+ expect(repair).toHaveBeenCalledTimes(1);expect(v.input().disabled).toBe(true)
+})
+it.each([
+ {available:false,files:['a'],reason:'missing_default_drive_identity'},
+ {available:true,files:['other'],reason:'missing_default_drive_identity'},
+ {available:true,files:['a'],reason:'different_source'},
+])('does not repair without an exact eligible source flag (%j)', async recovery => {
+ const repair=vi.fn(),v=await mount({repair,requireChoice:true,read:async()=>({planning:{...repairablePlanning,source_identity_repair:recovery}})})
+ expect(repair).not.toHaveBeenCalled();expect(v.input().disabled).toBe(true)
+})
+it('does not run metadata repair in read-only or running plan controls', async () => {
+ const repair=vi.fn();await mount({repair,disabled:true,requireChoice:true,read:async()=>({planning:repairablePlanning})})
+ expect(repair).not.toHaveBeenCalled()
+})
+it('allows source recovery its own deadline while each readiness read retains twenty seconds', async () => {
+ vi.useFakeTimers();let finish
+ const repair=vi.fn(()=>new Promise(resolve=>{finish=resolve}))
+ const read=vi.fn().mockResolvedValueOnce({planning:repairablePlanning}).mockResolvedValue({planning})
+ const v=await mount({read,repair,requireChoice:true})
+ await act(async()=>vi.advanceTimersByTimeAsync(45000))
+ expect(repair.mock.calls[0][1].signal.aborted).toBe(false)
+ expect(read).toHaveBeenCalledTimes(1)
+ await act(async()=>finish({status:'repaired'}))
+ expect(read).toHaveBeenCalledTimes(2);expect(v.input().disabled).toBe(false)
+ expect(v.input().checked).toBe(false)
+})
+it('bounds a stalled source recovery to ninety seconds and never replays it', async () => {
+ vi.useFakeTimers();const repair=vi.fn(()=>new Promise(()=>{}))
+ const read=vi.fn().mockResolvedValue({planning:repairablePlanning})
+ const v=await mount({read,repair,requireChoice:true})
+ await act(async()=>vi.advanceTimersByTimeAsync(90000))
+ expect(repair.mock.calls[0][1].signal.aborted).toBe(true)
+ expect(v.container.textContent).toContain('Source checks are taking longer than expected')
+ await act(async()=>vi.advanceTimersByTimeAsync(10000))
+ expect(repair).toHaveBeenCalledTimes(1);expect(v.input().disabled).toBe(true)
+})
+it.each([
+ ['source_changed','The source files changed or no longer match this assessment'],
+ ['microsoft_connection_required','Reconnect SharePoint'],
+])('shows a precise guarded source-repair failure (%s)', async (reason, copy) => {
+ const repair=vi.fn().mockRejectedValue(Object.assign(new Error('Blocked'),{status:reason==='source_changed'?409:401,detail:{code:'source_identity_repair_blocked',reason}}))
+ const v=await mount({repair,requireChoice:true,read:async()=>({planning:repairablePlanning})})
+ expect(v.container.querySelector('[role="alert"]').textContent).toContain(copy)
+ expect(v.input().disabled).toBe(true);expect(v.input().checked).toBe(false)
+ expect(v.onChange.mock.calls.every(([value])=>value===null)).toBe(true)
+})
+it('shows source recovery status for the selected files and clears it after completion or a scope change', async () => {
+ let finish;const repair=vi.fn(()=>new Promise(resolve=>{finish=resolve}))
+ const files=Array.from({length:147},(_,i)=>`file-${i}.docx`)
+ const read=vi.fn().mockResolvedValueOnce({planning:{...repairablePlanning,source_identity_repair:{...repairablePlanning.source_identity_repair,files}}}).mockResolvedValue({planning:{...planning,files}})
+ const v=await mount({files,read,repair,requireChoice:true})
+ expect(v.container.querySelector('[role="status"][aria-live="polite"]').textContent).toBe('Checking source details for 147 files… Your assessment is saved; no rescan is needed.')
+ await act(async()=>finish({status:'repaired'}))
+ expect(v.container.textContent).not.toContain('Checking source details for')
+ const delayed=vi.fn(()=>new Promise(()=>{}))
+ await v.render({files:['a'],repair:delayed,read:async()=>({planning:repairablePlanning})})
+ expect(v.container.textContent).toContain('Checking source details for 1 file')
+ await v.render({files:['b'],read:async()=>({planning:{...planning,files:['b']}})})
+ expect(v.container.textContent).not.toContain('Checking source details for')
+})
+it('explains a provider metadata timeout as an interruption without asking for a rescan', async () => {
+ const repair=vi.fn().mockRejectedValue(Object.assign(new Error('Blocked'),{status:409,detail:{code:'source_identity_repair_blocked',reason:'provider_metadata_timeout'}}))
+ const v=await mount({repair,requireChoice:true,read:async()=>({planning:repairablePlanning})})
+ expect(v.container.querySelector('[role="alert"]').textContent).toContain('source checks were interrupted')
+ expect(v.container.querySelector('[role="alert"]').textContent).not.toContain('Assess')
+})

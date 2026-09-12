@@ -69,6 +69,21 @@ def test_binary_asset_frozen_round_trip():
     assert _asset_bytes({'content': base64.b64encode(original).decode(), 'encoding': 'base64'}) == original
 
 
+@pytest.mark.parametrize('changed', [False, True])
+def test_sharepoint_quickxor_original_binding(copies, changed):
+    import base64
+    from source_checksum import quickxor_digest
+    store, source, corrected, outcome, calls = copies
+    checksum = base64.b64encode(quickxor_digest(source + (b'changed' if changed else b''))).decode()
+    store.get_file_record = lambda *args: {'checksum': checksum}
+    html, assets = build_word_evidence(store, 'scan', 'owner', 'report.docx', outcome)
+    assert bool(assets) is (not changed)
+    if changed:
+        assert 'differs' in html
+    else:
+        assert calls[-1][3]['checksum'] == checksum
+
+
 def test_real_report_bundle_keeps_native_companion(isolated_store, monkeypatch):
     import blob
     from release_report_delivery import queue_release_reports, get_release_report_asset, retry_release_reports
