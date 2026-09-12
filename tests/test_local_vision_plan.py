@@ -7,6 +7,9 @@ import llm_waterfall_provider as waterfall
 
 
 def setup(monkeypatch, local=True):
+    # Each consent fixture starts with a healthy endpoint. A circuit opened by
+    # another test must not suppress this test's mocked HTTP call.
+    monkeypatch.setattr(ai, '_VISION_CIRCUITS', {})
     ctx=SimpleNamespace(local_drafting=local, enabled=False, deferred=[],scan_id='scan',file='file.docx')
     monkeypatch.setattr(waterfall,'managed_context',lambda:ctx)
     monkeypatch.setattr(waterfall,'defer_managed',lambda *a,**k:None)

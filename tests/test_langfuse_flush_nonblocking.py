@@ -2,6 +2,19 @@ import threading
 import time
 
 import lf
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_ingestion_health(monkeypatch):
+    # Queue-flush doubles model their own failures and never make HTTP ingestion requests.
+    # Reset only their independent process-local ingestion health, not production gating.
+    for name in ("_ingestion_failures", "_ingestion_successes", "_ingestion_consecutive_failures",
+                 "_ingestion_skipped"):
+        monkeypatch.setattr(lf, name, 0)
+    monkeypatch.setattr(lf, "_ingestion_retry_mono", 0.0)
+    monkeypatch.setattr(lf, "_ingestion_last_error", None)
+    monkeypatch.setattr(lf, "_ingestion_last_error_at", None)
 
 
 def _wait_until(predicate, *, timeout=1):
