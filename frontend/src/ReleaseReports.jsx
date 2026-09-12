@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { getReleaseReports, retryReleaseReports, downloadReleaseReport } from './api.js'
 
-export default function ReleaseReports({ scanId, publishedCount = 0, readOnly = false, read = getReleaseReports, retry = retryReleaseReports, download = downloadReleaseReport }) {
+export default function ReleaseReports({ scanId, publishedCount = 0, readOnly = false, read = getReleaseReports, retry = retryReleaseReports, download = downloadReleaseReport, files = [], results = {}, releaseId, children }) {
   const [state, setState] = useState(null)
   const [error, setError] = useState('')
   const [refresh, setRefresh] = useState(0)
@@ -29,17 +29,32 @@ export default function ReleaseReports({ scanId, publishedCount = 0, readOnly = 
     setBusy(true); setError('')
     try { await retry(scanId); if (currentScan.current === scanId) setRefresh(n => n + 1) } catch { if (currentScan.current === scanId) setError('Report delivery could not be restarted.') } finally { if (currentScan.current === scanId) setBusy(false) }
   }
-  return <section aria-label="Release reports" style={{ marginTop: 16, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+  const reportsByFile = {}
+  const headerReports = []
+  const sameRelease = state?.scan_id === scanId && !!releaseId && state?.release_id === releaseId
+  for (const [index, report] of (state?.reports || []).entries()) {
+    const result = results[report.file]
+    const matches = sameRelease && ['changes', 'checklist'].includes(report.report_kind) && files.some(file => file.file === report.file)
+      && result?.status === 'published' && !!report.artifact_digest && report.artifact_digest === result.artifact_digest
+    if (matches && children) (reportsByFile[report.file] ||= []).push({ report, index })
+    else headerReports.push({ report, index, unassigned: !!report.file || ['changes', 'checklist'].includes(report.report_kind) })
+  }
+  const reportLink = ({ report, index, unassigned }) => <li key={`${report.name}-${index}`}>
+    {/^(https?):\/\//i.test(report.url || '') ? <a href={report.url} target="_blank" rel="noopener noreferrer">{report.name}</a> : <span>{report.name}</span>}
+    {state?.bundle_id && report.download_url && <button type="button" className="linklike" style={{ marginLeft: 10 }} onClick={async () => { try { await download(scanId, state.bundle_id, index, report.name) } catch { if (currentScan.current === scanId) setError('The report could not be downloaded.') } }}>Download</button>}
+    {children && unassigned && <small>Document version could not be matched to the current delivery receipt.</small>}
+  </li>
+  const reportSummary = <section aria-label="Release reports" style={{ marginTop: 16, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
     <strong>Scan summary and per-file checklists</strong>
+    {children && state?.release_id && state.release_id !== releaseId && <p className="muted">Reports describe release {state.release_id}; document actions below describe the current release.</p>}
     <p>Verified fixes, applied but unverified changes, remaining issues, and incomplete checks are recorded separately. Remaining work is a follow-up checklist; publication does not certify accessibility.</p>
     <p role="status">{!state ? (error ? '' : 'Checking reports…') : state.status === 'completed' ? (state.reports?.length && state.reports.every(report => /^https?:\/\//i.test(report.url || '')) ? 'Reports saved alongside the published files.' : 'Reports are ready to download.') : state.status === 'failed' ? 'Files may be published, but report delivery needs attention.' : ['queued', 'publishing'].includes(state.status) ? 'Preparing and saving reports alongside the published files…' : 'Reports are generated after files are published with reporting enabled.'}</p>
-    {!!state?.reports?.length && <ul>{state.reports.map((report, index) => <li key={`${report.name}-${index}`}>
-      {/^https?:\/\//i.test(report.url || '') ? <a href={report.url} target="_blank" rel="noopener noreferrer">{report.name}</a> : <span>{report.name}</span>}
-      {state.bundle_id && report.download_url && <button type="button" className="linklike" style={{ marginLeft: 10 }} onClick={async () => { try { await download(scanId, state.bundle_id, index, report.name) } catch { if (currentScan.current === scanId) setError('The report could not be downloaded.') } }}>Download</button>}
-    </li>)}</ul>}
+    {!!headerReports.length && <ul>{headerReports.map(reportLink)}</ul>}
     {state?.status === 'not_started' && <button type="button" className="linklike" onClick={() => setRefresh(n => n + 1)}>Refresh reports</button>}
     {state?.status === 'completed' && state.reports?.some(report => report.content_type !== 'application/pdf') && <button type="button" disabled={busy || readOnly} onClick={retryDelivery}>Generate PDF reports</button>}
     {state?.status === 'failed' && <button type="button" className="ghost small" disabled={busy || readOnly} onClick={retryDelivery}>Retry report delivery</button>}
     {error && <p role="alert">{error} <button type="button" className="linklike" onClick={() => setRefresh(n => n + 1)}>Refresh reports</button></p>}
   </section>
+  if (typeof children === 'function') return children({ reportSummary, reportsByFile: Object.fromEntries(Object.entries(reportsByFile).map(([file, entries]) => [file, <ul key={file} className="release-file-reports" aria-label={`Reports for ${file}`}>{entries.map(reportLink)}</ul>])) })
+  return reportSummary
 }
