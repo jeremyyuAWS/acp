@@ -37,7 +37,7 @@ export default function ReleaseReports({ scanId, publishedCount = 0, readOnly = 
     const matches = sameRelease && ['changes', 'checklist'].includes(report.report_kind) && files.some(file => file.file === report.file)
       && result?.status === 'published' && !!report.artifact_digest && report.artifact_digest === result.artifact_digest
     if (matches && children) (reportsByFile[report.file] ||= []).push({ report, index })
-    else headerReports.push({ report, index, unassigned: !!report.file || ['changes', 'checklist'].includes(report.report_kind) })
+    else headerReports.push({ report, index, unassigned: report.report_kind !== 'scan_summary' })
   }
   const reportLink = ({ report, index, unassigned }) => <li key={`${report.name}-${index}`}>
     {/^(https?):\/\//i.test(report.url || '') ? <a href={report.url} target="_blank" rel="noopener noreferrer">{report.name}</a> : <span>{report.name}</span>}
