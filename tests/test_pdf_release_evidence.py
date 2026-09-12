@@ -73,6 +73,55 @@ def test_unknown_location_is_orientation_not_fabricated_target(monkeypatch):
     assert evidence.page_numbers([{'location': 'Page: 3'}, {'page_number': 2}, {'page': False}]) == [2, 3]
 
 
+def test_writer_locators_in_durable_notes_locate_pages_without_guessing_ids():
+    assert evidence.page_numbers([{'note': 'approved by a reviewer · pdf:fig:3:0'},
+        {'locator': 'pdf:field:2:12'}, {'pages': [4, False, '5']},
+        {'locator': 'pdf:field:?:98'}, {'locator': 'xref:66'}]) == [2, 3, 4]
+    assert evidence.evidence_location({'note': 'reviewer · pdf:fig:3:0'}) == 'pdf:fig:3:0'
+    assert '#pdf-evidence-page-3' in evidence.evidence_links({'note': 'pdf:fig:3:0'})
+
+
+def field_pdf():
+    stream = io.BytesIO()
+    doc = canvas.Canvas(stream)
+    doc.drawString(72, 720, 'Patient name')
+    doc.acroForm.textfield(name='patient', x=72, y=680, width=160, height=24)
+    doc.showPage()
+    doc.save()
+    return stream.getvalue()
+
+
+def test_exact_field_crop_reads_real_accessible_name_and_geometry():
+    import pikepdf
+    source = field_pdf()
+    with pikepdf.open(io.BytesIO(source)) as document:
+        document.Root.AcroForm.Fields[0]['/TU'] = 'Patient name'
+        output = io.BytesIO()
+        document.save(output)
+    candidate = output.getvalue()
+    crops = evidence.field_crops(source, candidate, [{'locator': 'pdf:field:1:0'}])
+    assert len(crops) == 1
+    assert crops[0][2:] == (None, 'Patient name')
+    from PIL import Image
+    image = Image.open(io.BytesIO(crops[0][1][0]))
+    assert image.width < 300 and image.height < 100
+    with pikepdf.open(io.BytesIO(candidate)) as document:
+        document.Root.AcroForm.Fields[0]['/Rect'] = pikepdf.Array([72, 600, 232, 624])
+        output = io.BytesIO()
+        document.save(output)
+    assert evidence.field_crops(source, output.getvalue(), [{'locator': 'pdf:field:1:0'}]) == []
+
+
+def test_standalone_pdf_keeps_valid_internal_navigation_only():
+    from release_reports import _page
+    from release_report_pdf import render_report_pdf
+    output = render_report_pdf(_page('Navigation', '<p><a href="#pdf-evidence-page-2">Page 2 evidence</a> <a href="#missing">Missing target</a></p><h2 id="pdf-evidence-page-2">Page 2</h2>'))
+    reader = PdfReader(io.BytesIO(output))
+    annotations = [a.get_object() for page in reader.pages for a in page.get('/Annots', [])]
+    assert any(a.get('/Dest') == 'pdf-evidence-page-2' for a in annotations)
+    assert not any(a.get('/Dest') == 'missing' for a in annotations)
+
+
 def test_oversize_or_missing_page_rejected(monkeypatch):
     monkeypatch.setattr(evidence, 'MAX_BYTES', 10)
     with pytest.raises(ValueError, match='size limit'):
@@ -103,13 +152,17 @@ def test_real_store_change_report_wires_exact_release_evidence(isolated_store, m
     source, candidate = pdf(), pdf(title='Accessible title')
     store.init_scan_run('scan', 'sharepoint', 1, '2026-09-11T10:00:00Z', 'rubric', 'hash', owner='owner', status='completed')
     release = store.ensure_release_execution('scan', 'owner', 'sharepoint', 1)
-    store.record_release_document(release['id'], 'owner', {'file': 'file.pdf', 'status': 'published', 'artifact_digest': 'sha256:' + sha256(candidate).hexdigest(), 'corrected_checksum': 'provider-specific-not-sha256'})
-    store.record_remediation_diffs('scan', 'file.pdf', [{'rule_id': 'SC_2_4_2', 'before': '', 'after': 'Accessible title'}])
+    store.record_release_document(release['id'], 'owner', {'file': 'file.pdf', 'status': 'published', 'published_url': 'https://example.com/corrected.pdf', 'artifact_digest': 'sha256:' + sha256(candidate).hexdigest(), 'corrected_checksum': 'provider-specific-not-sha256'})
+    store.record_remediation_diffs('scan', 'file.pdf', [{'rule_id': 'SC_2_4_2', 'before': '', 'after': 'Accessible title', 'note': 'reviewer · pdf:fig:1:0'}])
     monkeypatch.setattr(blob, 'download_report_evidence', lambda *args, **kw: source if kw.get('original') else candidate)
     assets = build_release_report_sources(store, 'scan', 'owner', release['id'])
     changes = next(a['content'].decode() for a in assets if a['name'].startswith('changes-'))
     checklist = next(a['content'].decode() for a in assets if a['name'].startswith('checklist-'))
     assert 'Released corrected copy' in changes and 'Visual appearance unchanged' in changes
+    assert 'Released file receipt' in changes and 'https://example.com/corrected.pdf' in changes
+    assert 'pdf:fig:1:0' in changes and 'href="#pdf-evidence-page-1"' in changes
+    assert 'shortened by evidence storage limits' in changes
+    assert '1 verified-process change records' in changes
     assert 'Released corrected copy' not in checklist
 
 

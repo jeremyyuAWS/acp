@@ -36,6 +36,7 @@ a { color: #573352; }
 .pdf-evidence-images figure { width: 48%; margin: 0; }
 .pdf-evidence-images img { width: 100%; height: 95mm; object-fit: contain; border: 1px solid #d9cfdf; }
 .pdf-evidence-images figcaption { font-weight: bold; margin-bottom: 6px; }
+.pdf-evidence-crops img { height: 32mm; }
 '''
 
 
@@ -77,7 +78,8 @@ def render_report_pdf(source):
     # Relative HTML report links do not resolve inside standalone PDFs.
     for anchor in document.xpath('//a'):
         href = anchor.get('href', '')
-        if not href.startswith('https://'):
+        internal = href.startswith('#') and bool(document.xpath('//*[@id=$target]', target=href[1:]))
+        if not href.startswith('https://') and not internal:
             anchor.text = 'Checklist included in this report'
             anchor.drop_tag()
     def fetch(url, *args, **kwargs):
