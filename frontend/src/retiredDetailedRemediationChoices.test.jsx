@@ -1,0 +1,92 @@
+// Retained detailed UI contracts; the live wizard deliberately never mounts this renderer.
+import { act, createElement } from 'react'
+import { readFileSync } from 'node:fs'
+import { afterEach, expect, it, vi } from 'vitest'
+import { RetiredDetailedRemediationPlanChoices as Choices } from './RemediationPlanChoices.jsx'
+import { createTestRoot, unmountAll } from './testRoots.js'
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+afterEach(unmountAll)
+it('shows the document review choice and an honest disabled budget when AI is enabled', async () => {
+  const { root, container } = createTestRoot()
+  const changed = vi.fn()
+  const render = async ai => act(async () => root.render(createElement(Choices, { policy: { rule_based: 0, ai }, onChange: changed })))
+  await render(1)
+  expect([...container.querySelectorAll('legend')].map(n => n.textContent)).toEqual(['1. Which changes may ACP apply?', '2. Which tools may ACP use?', 'How should AI review your findings?'])
+  expect(container.querySelectorAll('input[type=radio]')).toHaveLength(7)
+  expect(container.querySelector('input[type=number]').disabled).toBe(true)
+  expect(container.textContent).toContain('Spending limits are not available on this server')
+  expect(container.textContent).not.toContain('Your remediation plan')
+  expect(container.querySelector('.rmd')).toBeNull()
+  expect(container.textContent).not.toContain('Who does what, in each mode')
+  expect(container.textContent).not.toContain('AI providers & budget')
+  await act(async () => container.querySelectorAll('input[type=radio]')[1].click())
+  expect(changed).toHaveBeenLastCalledWith('rule_based', 2)
+  await act(async () => container.querySelectorAll('input[type=radio]')[2].click())
+  expect(changed).toHaveBeenLastCalledWith('ai', 0)
+  await render(0)
+  expect(container.querySelector('input[type=number]')).toBeNull()
+})
+it('deliberately hides retired advanced controls and preserves their code', () => {
+  const css = readFileSync('src/simple-remediation-questions.css', 'utf8')
+  expect(css).toContain('.remediation-impact__settings > .remediation-impact__advanced,')
+  expect(css).toContain('.remediation-impact__settings > .remediation-impact__providers { display: none; }')
+  const component = readFileSync('src/RemediationPlanChoices.jsx', 'utf8')
+  expect(component).toContain('export function RetiredRemediationPlanChoices')
+  expect(component).not.toContain('<RetiredRemediationPlanChoices')
+})
+
+it('enables the budget only when the server supports enforcement and preserves zero', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(createElement(Choices, { policy: {rule_based: 2, ai: 1, ai_budget_usd: '0.00'}, budgetSupported: true, onChange: vi.fn() })))
+  expect(container.querySelector('input[type=number]').disabled).toBe(false)
+  expect(container.querySelector('input[type=number]').value).toBe('0.00')
+  expect(container.textContent).toContain('Rule-based fixes continue')
+  expect(container.textContent).toContain('Infrastructure costs are separate')
+})
+
+it('lets users choose the waterfall without approving AI edits or starting a run', async () => {
+  const { root, container } = createTestRoot()
+  const changed = vi.fn()
+  const render = async policy => act(async () => root.render(createElement(Choices, {
+    policy, budgetSupported: true, onChange: changed,
+  })))
+  await render({ rule_based: 2, ai: 0, ai_budget_usd: '25.00' })
+  expect(container.textContent).toContain('Use rules without generating AI suggestions')
+  await act(async () => container.querySelectorAll('input[type=radio]')[4].click())
+  expect(changed).toHaveBeenCalledExactlyOnceWith('ai_mode', 'any')
+  await render({ rule_based: 2, ai: 1, ai_budget_usd: '25.00' })
+  expect(container.querySelector('.remediation-waterfall-plan')).toBeNull()
+  expect(container.textContent).toContain('within your spending limit')
+  expect(container.querySelector('.remediation-auto-approval input').checked).toBe(true)
+  expect(container.textContent).not.toContain('Plan you are approving')
+  expect(container.querySelector('input[type=number]').value).toBe('25.00')
+  await render({ rule_based: 0, ai: 1, ai_budget_usd: '0.00' })
+  expect(container.textContent).toContain('Approve proposed changes before they are applied')
+  expect(container.textContent).toContain('$0 permits no paid AI requests')
+})
+
+it('removes the duplicate summary while retaining its code and optional AI review', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(createElement(Choices, { policy: { rule_based: 2, ai: 1 }, budgetSupported: true, reviewSupported: true, onChange: vi.fn() })))
+  expect(container.textContent).not.toContain('Plan you are approving')
+  expect([...container.querySelectorAll('summary')].some(node => node.textContent.includes('Optional AI review'))).toBe(true)
+  const source = readFileSync('src/RemediationPlanChoices.jsx', 'utf8')
+  expect(source).toContain('export function RetiredRemediationPlanSummary')
+  expect(source).not.toContain('<RetiredRemediationPlanSummary')
+  expect(source).toContain('No cloud model or cloud fallback is allowed')
+})
+
+it('offers local-only Ollama without cloud budget, chain or review settings', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(createElement(Choices, { policy: { rule_based: 2, ai: 1, ai_zone: 'local', ai_budget_usd: '0.00' }, budgetSupported: true, reviewSupported: true, onChange: vi.fn() })))
+  expect(container.querySelectorAll('input[type=radio]')[3].checked).toBe(true)
+  expect(container.querySelector('input[type=number]')).toBeNull()
+  expect(container.textContent).toContain('Ollama drafts wait for your review')
+  expect(container.textContent).not.toContain('Optional AI review and approval threshold')
+  expect(container.textContent).not.toContain('Where your content may go')
+  expect(container.querySelector('.remediation-auto-approval input').checked).toBe(true)
+  const help = container.querySelector('[aria-label="About review before applying AI suggestions"]')
+  expect(container.querySelector('[role=tooltip]')).toBeNull()
+  await act(async () => help.focus())
+  expect(container.querySelector('[role=tooltip]').textContent).toContain('Which suggestions can proceed?')
+})

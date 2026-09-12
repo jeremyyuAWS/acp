@@ -59,12 +59,15 @@ describe('the assessment running screen focuses on the document in flight', () =
     const html = render({ ...SNAP, documents: {
       completed: 1, displayed: 1, truncated: false, items: [
         { file: 'Clinical/Procedure.pdf', score: 81,
-          criteria: ['SC_2_4_2', 'SC_1_1_1', '1.4.5 Images of Text'] },
+          criteria: ['SC_2_4_2', 'SC_1_1_1', '1.4.5 Images of Text', '1.4.3 Contrast (Minimum)', '3.1.2 Language of Parts'] },
       ],
     } })
     expect(html).toContain('title="SC_2_4_2">2.4.2</b>')
     expect(html).toContain('title="SC_1_1_1">1.1.1</b>')
-    expect(html).toContain('>1.4.5 Images of Text</b>')
+    expect(html).toContain('title="1.4.5 Images of Text">1.4.5</b>')
+    expect(html).toContain('title="1.4.3 Contrast (Minimum)">1.4.3</b>')
+    expect(html).toContain('title="3.1.2 Language of Parts">3.1.2</b>')
+    expect(html).not.toContain('>1.4.5 Images of Text</b>')
     expect(html).not.toContain('>SC_2_4_2</b>')
   })
 

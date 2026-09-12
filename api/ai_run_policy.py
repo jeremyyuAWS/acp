@@ -73,6 +73,8 @@ def normalize_run_policy(snapshot):
     if not isinstance(snapshot, dict):
         raise BudgetError("invalid remediation policy snapshot")
     if "ai_budget_usd" not in snapshot:
+        if 'cloud_input_strategy' in snapshot:
+            raise BudgetError('Automatic cloud input requires a frozen run spending limit')
         if "document_wide_model_profile" in snapshot:
             raise BudgetError("The PDF quality profile requires a managed run spending limit")
         if "document_wide_input_mode" in snapshot:
@@ -95,6 +97,12 @@ def normalize_run_policy(snapshot):
     if type(ai) is not int or not 0 <= ai <= 3:
         raise BudgetError("AI policy level must be between zero and three")
     result = {"ai": ai, "ai_budget_usd": amount, "cap_units": cap, "currency": "USD"}
+    if 'cloud_input_strategy' in snapshot:
+        if (snapshot['cloud_input_strategy'] != 'automatic' or ai != 1
+                or snapshot.get('ai_zone') != 'any' or snapshot.get('document_wide_ai') is not True
+                or any(key in snapshot for key in ('document_wide_input_mode', 'document_wide_model_profile'))):
+            raise BudgetError('Invalid automatic cloud input snapshot')
+        result['cloud_input_strategy'] = 'automatic'
     if 'ai_zone' in snapshot:
         result['ai_zone'] = _zone(snapshot['ai_zone'])
     if 'document_wide_ai' in snapshot:

@@ -18,7 +18,9 @@ _NATIVE_REASONS = {
 }
 
 
-def _reason(value, input_mode=None):
+def _reason(value, input_mode=None, *, automatic=False):
+    if automatic and (value in _NATIVE_REASONS or value == 'request_rejected_before_dispatch'):
+        return 'Automatic document analysis could not complete with the current file and authorized model limits. Remaining findings stay in review; see run details.'
     if input_mode == 'native_pdf' and value == 'request_rejected_before_dispatch':
         return 'The full PDF could not be sent within the current model settings and limits. Try Document context or review your cloud model settings.'
     return _NATIVE_REASONS.get(value, value)
@@ -53,7 +55,21 @@ def _saved(store, context, request_id):
     return None
 
 
-def process_file(store, context):
+def _saved_input(store, context, digest):
+    """Freeze the server decision per owner/run/artifact, including uncertain paid attempts."""
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "SELECT detail FROM decision_log WHERE scan_id=%s AND file=%s AND action=%s ORDER BY ts DESC",
+                          (context.scan_id, context.file, 'document_wide.input_selected'))
+        rows = store._db.fetchall(cur)
+    for row in rows:
+        value = json.loads(row['detail'])
+        if (value.get('owner_id') == context.owner_id and value.get('run_id') == context.run_id
+                and value.get('source_sha256') == digest and value.get('strategy') == 'automatic'):
+            return value
+    return None
+
+
+def process_file(store, context, *, _artifact=None):
     """Generate only from the durable corrected artifact. Never apply or grant credit here."""
     if not enabled(context, context.file):
         return
@@ -69,11 +85,18 @@ def process_file(store, context):
     sid, filename = context.scan_id, context.file
     revision = store.remediation_source_revision(sid)
     record = store.get_file_record(sid, filename) or {}
-    data = blob.download_remediated(context.owner_id, sid, filename)
+    data = _artifact if _artifact is not None else blob.download_remediated(context.owner_id, sid, filename)
     digest = hashlib.sha256(data).hexdigest() if data else None
     if not digest or digest != record.get('corrected_sha256'):
         _record(store, context, 'deferred', {'reason': 'No current stored corrected artifact is available.'})
         return
+    if context.policy.get('cloud_input_strategy') == 'automatic' and not context.policy.get('_automatic_input_selected'):
+        from automatic_cloud_input import selected_document_context
+        frozen = _saved_input(store, context, digest)
+        with selected_document_context(context, data, frozen_decision=frozen) as (selected, decision):
+            if frozen is None:
+                _record(store, context, 'input_selected', {**decision, 'source_sha256': digest})
+            return process_file(store, selected, _artifact=data)
     try:
         manifest = build_manifest(store, sid, filename, data)
     except ValueError as exc:
@@ -86,7 +109,7 @@ def process_file(store, context):
         }
         if str(exc) not in reasons and str(exc) not in _NATIVE_REASONS:
             raise
-        _record(store, context, 'deferred', {'reason': reasons.get(str(exc), _reason(str(exc)))})
+        _record(store, context, 'deferred', {'reason': reasons.get(str(exc), _reason(str(exc), automatic=context.policy.get('cloud_input_strategy') == 'automatic'))})
         return
     input_mode = ('native_pdf' if filename.lower().endswith('.pdf')
                   and context.policy.get('document_wide_input_mode') == 'native_pdf'
@@ -96,6 +119,8 @@ def process_file(store, context):
     request_key = context.run_id + manifest.to_json()
     if input_mode == 'native_pdf':
         request_key += ':native-pdf.v1'
+    if context.policy.get('cloud_input_strategy') == 'automatic':
+        request_key += ':automatic-input.v1:' + str(context.policy.get('document_wide_model_profile', 'configured'))
     request_id = hashlib.sha256(request_key.encode()).hexdigest()
     if not manifest.findings:
         _record(store, context, 'deferred', {'reason': 'No remaining findings have a supported document-wide target.',
@@ -109,13 +134,13 @@ def process_file(store, context):
                 payload = {'pdf_bytes': package_native_pdf(data, manifest)}
             except ValueError as exc:
                 _record(store, context, 'deferred', {'request_id': request_id,
-                    'input_mode': input_mode, 'reason': _reason(str(exc))})
+                    'input_mode': input_mode, 'reason': _reason(str(exc), automatic=context.policy.get('cloud_input_strategy') == 'automatic')})
                 return
         else:
             payload = {'images': package_images(data, manifest)}
         response = generate_document(build_request(manifest, request_id=request_id), **payload)
         if not response.get('envelope'):
-            _record(store, context, 'deferred', {'request_id': request_id, 'reason': _reason(response.get('reason', 'No valid AI response was returned.'), input_mode)})
+            _record(store, context, 'deferred', {'request_id': request_id, 'reason': _reason(response.get('reason', 'No valid AI response was returned.'), input_mode, automatic=context.policy.get('cloud_input_strategy') == 'automatic')})
             return
         validation = validate_edit_response(manifest, response['envelope'])
         by_id = {f.finding_id: f for f in manifest.findings}
@@ -133,6 +158,7 @@ def process_file(store, context):
                 'finding_ids': list(edit.finding_ids), 'baseline_finding_ids': list(edit.finding_ids), 'document_wide_request_id': request_id,
                 'source_sha256': digest, 'assessment_revision': manifest.assessment_revision,
                 'document_wide_input_mode': input_mode,
+                **({'cloud_input_strategy': 'automatic'} if context.policy.get('cloud_input_strategy') == 'automatic' else {}),
             })
         result = {'request_id': request_id, 'input_mode': input_mode,
                   'source_sha256': digest, 'proposals': proposals,
