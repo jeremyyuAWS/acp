@@ -118,14 +118,14 @@ beforeEach(() => {
 afterEach(async () => { await unmountAll(); vi.clearAllMocks() })
 
 describe('the toast retires when the operator carries on', () => {
-  it('goes when an access level is changed', async () => {
+  it('replaces the previous role notice when platform administration changes', async () => {
     await mount()
     await raiseToast()
 
-    await act(async () => { setValue(sel('Access level for ana@x.com'), 'admin') })
+    await act(async () => { setValue(sel('Workspace role for ana@x.com'), '') })
     await act(async () => {})
 
-    expect(document.querySelector('.people-toast')).toBeNull()
+    expect(document.querySelector('.people-toast').textContent).toContain('ana@x.com')
   })
 
   it('goes when someone is suspended', async () => {

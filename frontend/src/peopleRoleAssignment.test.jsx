@@ -311,13 +311,15 @@ describe('when the assignment itself fails', () => {
 })
 
 describe('when the caller may not manage roles', () => {
-  it('hides the role column rather than showing an empty one', async () => {
+  it('retains one platform selector when the workspace catalog is unavailable', async () => {
     // GET /admin/roles 403s for them. An empty select reads as a broken control; absent reads as
     // "not yours", which is what it is.
     const api = await import('./api.js')
     api.getWorkspaceRoles.mockRejectedValueOnce(new Error('403'))
     const c = await mount()
-    expect(roleSelect(c)).toBeNull()
+    expect(roleSelect(c)).not.toBeNull()
+    expect([...roleSelect(c).options].map(o=>o.textContent)).toEqual(['User','Platform Admin'])
+    expect(c.querySelectorAll('.people-row select')).toHaveLength(1)
     expect(c.querySelector('[role="status"]').textContent).toBe('')
   })
 })

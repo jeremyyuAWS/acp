@@ -77,12 +77,12 @@ function tracksFor(selector) {
 }
 
 describe('the row has exactly as many grid tracks as it has cells', () => {
-  it('five cells and five tracks when workspace roles exist', async () => {
+  it('four cells and four tracks with one workspace role column', async () => {
     const c = await mount()
     const row = c.querySelector('.people-row')
-    expect(row.classList.contains('has-role-column')).toBe(true)
-    expect(row.children.length).toBe(5)
-    expect(tracksFor('.people-row.has-role-column')).toHaveLength(5)
+    expect(row.classList.contains('people-unified-role')).toBe(true)
+    expect(row.children.length).toBe(4)
+    expect(tracksFor('.people-row')).toHaveLength(4)
   })
 
   it('four cells and four tracks when no roles are defined', async () => {

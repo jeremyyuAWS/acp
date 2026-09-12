@@ -1026,9 +1026,9 @@ export const bootstrapWorkspaceRoles = (apply = false) => (SIM
       method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ apply: apply === true }),
     }).then(j))
-export const assignWorkspaceRole = (email, roleId) => (SIM
-  ? sim({ person: { email, workspace_role_id: roleId } })
-  : fetch(`${BASE}/admin/people/${encodeURIComponent(email)}/role`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ role_id: roleId }) }).then(j))
+export const assignWorkspaceRole = (email, roleId, platformRole) => (SIM
+  ? sim({ person: { email, workspace_role_id: roleId, ...(platformRole === undefined ? {} : { role: platformRole }) } })
+  : fetch(`${BASE}/admin/people/${encodeURIComponent(email)}/role`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ role_id: roleId, ...(platformRole === undefined ? {} : { platform_role: platformRole }) }) }).then(j))
 // What changes if this person is given this role — PRD §9's confirmation. Computed by the server
 // from the same resolver the gate uses, NOT diffed in the browser from two capability lists: a
 // confirmation that disagrees with what actually happens is worse than none, because it is read

@@ -166,12 +166,13 @@ describe('the two selects are styled like the rest of the app', () => {
     for (const s of selects) expect(s.className).toContain('people-select')
   })
 
-  it('an unassigned role reads as muted, an assigned one does not', async () => {
+  it('a platform admin keeps assigned appearance even without a workspace assignment', async () => {
     const container = await mount()
     const unassigned = container.querySelector(
       'select[aria-label="Workspace role for jeremy.yu@movateazurelabsv2.onmicrosoft.com"]')
     const assigned = container.querySelector('select[aria-label="Workspace role for jane@hosp.org"]')
-    expect(unassigned.className).toContain('is-unassigned')
+    expect(unassigned.className).not.toContain('is-unassigned')
+    expect(unassigned.selectedOptions[0].textContent).toContain('Platform Admin + No role')
     expect(assigned.className).not.toContain('is-unassigned')
   })
 

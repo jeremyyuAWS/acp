@@ -200,7 +200,11 @@ def _people_payload(can_manage: bool = True) -> dict:
     function now, because two implementations of "who has access" is how they came to differ.
     """
     import invites
-    return {"people": core.people_with_access(),
+    admins = set(core.store.get_admins()) | set(core.ADMIN_EMAILS)
+    people = [{**person, 'platform_role_admin': person.get('role') == 'admin' or person['email'] in admins,
+               'platform_role_locked': person['email'] in core.ADMIN_EMAILS}
+              for person in core.people_with_access()]
+    return {"people": people,
             "invite_enabled": invites.invite_configured(), "domains": core.ALLOWED_DOMAINS,
             "can_manage": can_manage}
 
