@@ -35,7 +35,7 @@ def _enqueue(store, row):
     return store.enqueue_job('publish_release_reports', dict(bundle_id=row['id'], owner=row['owner_email']), scan_id=row['scan_id'])
 
 
-REPORT_FORMAT = 'pdf-v3-release-page-evidence'
+REPORT_FORMAT = 'pdf-v4-located-change-evidence'
 
 
 def _fingerprint(release_id, release):

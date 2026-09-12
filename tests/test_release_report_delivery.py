@@ -173,7 +173,7 @@ def test_completed_legacy_bundle_can_generate_new_pdf_without_rescanning(setup, 
 def test_page_evidence_format_invalidates_previous_bundle(setup, monkeypatch):
     store, release = setup
     current = delivery.REPORT_FORMAT
-    monkeypatch.setattr(delivery, 'REPORT_FORMAT', 'pdf-v2-action-checklist')
+    monkeypatch.setattr(delivery, 'REPORT_FORMAT', 'pdf-v3-release-page-evidence')
     old = delivery.queue_release_reports(store, SID, OWNER, release['id'])
     monkeypatch.setattr(delivery, 'REPORT_FORMAT', current)
     new = delivery.queue_release_reports(store, SID, OWNER, release['id'])

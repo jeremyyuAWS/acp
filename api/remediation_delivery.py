@@ -79,6 +79,7 @@ def deliver_to_drive(svc, *, folder_id: str, filename: str, data: bytes,
     import io
     from googleapiclient.http import MediaIoBaseUpload
     import provenance
+    from publish import _verify_drive_publication
 
     media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mimetype or mimetype_for(filename),
                               resumable=False)
@@ -95,6 +96,8 @@ def deliver_to_drive(svc, *, folder_id: str, filename: str, data: bytes,
         result = svc.files().create(body={"name": filename, "parents": [folder_id],
                                           "properties": props},
                                     media_body=media, fields="id,webViewLink").execute()
+    # Match normal Release: an upload acknowledgement is not proof of content.
+    _verify_drive_publication(svc, result, data)
     return result.get("webViewLink") or None
 
 
@@ -109,8 +112,13 @@ def deliver_to_graph(token: str, *, drive_id: str | None, folder: str, filename:
     attempt addressed, which is what makes the retry a retry.
     """
     import scanner
+    from publish import _sp_content_matches
     item = scanner._sp_upload(token, drive_id, folder, filename, data,
                               content_type=mimetype or mimetype_for(filename))
+    if not item or not item.get('id'):
+        raise IOError('Microsoft Graph did not return a delivered document identifier')
+    if not _sp_content_matches(token, drive_id, item['id'], hashlib.sha256(data).hexdigest()):
+        raise IOError('Microsoft Graph content verification failed')
     return (item or {}).get("webUrl") or None
 
 

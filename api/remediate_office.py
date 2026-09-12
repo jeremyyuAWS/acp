@@ -1024,8 +1024,14 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None, in_scope=
         if trPr is None:
             trPr = first.makeelement(f"{{{W}}}trPr", {})
             first.insert(0, trPr)                      # trPr must be the first child of tr
-        if trPr.find(f"{{{W}}}tblHeader") is None:
-            trPr.insert(0, trPr.makeelement(f"{{{W}}}tblHeader", {}))
+        header = trPr.find(f"{{{W}}}tblHeader")
+        # OOXML on/off properties may be present but explicitly disabled. Merely
+        # finding the element must not leave a known-disabled header in the saved file.
+        if header is None or (header.get(val_attr) or "").lower() in {"0", "false", "off"}:
+            if header is None:
+                trPr.insert(0, trPr.makeelement(f"{{{W}}}tblHeader", {}))
+            else:
+                header.attrib.pop(val_attr, None)
             tbl_fixed += 1
             _rec(diffs, "1.3.1", "first row was ordinary data cells (<w:tr>)",
                  "first row marked as a repeating header row (<w:tblHeader/>)",
