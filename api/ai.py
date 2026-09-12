@@ -137,11 +137,11 @@ def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs
     """Bound local GPU and remote API requests independently; keep authorization unchanged."""
     from llm_waterfall_provider import managed_context, defer_managed
     _run = managed_context()
-    from providers import OllamaVisionProvider
+    from providers import OllamaVisionProvider, is_remote_vision_api
     if _run is not None and not (isinstance(provider, OllamaVisionProvider) and (getattr(_run, 'enabled', False) or (getattr(_run, 'local_drafting', False) and provider.zone == 'local'))):
         defer_managed('legacy_ai_path_not_budgeted', kind='_bounded_vision_generate')
         return {'ok': False, 'text': None, 'reason': 'vision_pricing_not_verified', 'model': 'not-dispatched'}
-    cloud_api = getattr(provider, 'name', '') in {'openai', 'anthropic', 'azure_openai', 'gemini', 'bedrock'}
+    cloud_api = is_remote_vision_api(provider)
     admitted = _CLOUD_VISION_GATE.acquire(timeout=VISION_QUEUE_TIMEOUT) if cloud_api else _enter_vision_capacity()
     if not admitted:
         return {
