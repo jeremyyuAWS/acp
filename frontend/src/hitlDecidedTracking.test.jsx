@@ -99,10 +99,10 @@ it('never offers an item that already carries a decision for bulk approval', asy
   // run-wide "approve all ready" may act on, and a second PUT on an approved row is not a no-op.
   await act(async () => root.render(createElement(Inbox, {
     queue: ui([...SERVER_ROWS, row(13, { status: 'skipped' })]),
-    decisions: {}, scanId: 'scan-1', initialTab: 'needs-review', onDecide: () => {},
+    decisions: {}, scanId: 'scan-1', initialTab: 'needs-review', onDecide: () => {}, legacyApprovalControls: true,
   })))
-  const button = [...container.querySelectorAll('button, select[aria-label="Filter by status"] option')].find((b) => b.textContent.includes('Apply ready fixes'))
-  expect(button.textContent).toBe('Apply ready fixes (12)')
+  const button = [...container.querySelectorAll('button, select[aria-label="Filter by status"] option')].find((b) => b.textContent.includes('Approve all ready in this run'))
+  expect(button.textContent).toBe('Approve all ready in this run (12)')
 })
 
 it('reconciles review items against the findings they cover', () => {

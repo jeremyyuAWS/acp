@@ -1,0 +1,76 @@
+{
+  "benchmark_version": "pdf-quality.v1",
+  "synthetic_only": true,
+  "status": "blocked",
+  "spend_cap_usd": "2.00",
+  "reserved_maximum_usd": "1.290240",
+  "provider": "anthropic",
+  "models": [
+    "claude-haiku-4-5-20251001",
+    "claude-sonnet-5"
+  ],
+  "attempts": [
+    {
+      "case": "clear_two_pages",
+      "arm": "balanced_extracted",
+      "model": "claude-haiku-4-5-20251001",
+      "source_sha256": "bda5b42a148b973bf045ab581c2a529a3a0fc66d76555a6c608bc7687c9d3649",
+      "reserved_usd": "0.043008",
+      "status": "scored",
+      "cost_usd": "0.003079",
+      "latency_seconds": 3.345,
+      "prompt_tokens": 1249,
+      "completion_tokens": 366,
+      "valid_contract": false,
+      "correct_actionable_proposals": 0,
+      "correct_unresolved": 0,
+      "semantic_errors": 0,
+      "unsupported_requests": 0,
+      "useful_applied_fixes": 0,
+      "saved_integrity": null,
+      "saved_sha256": null
+    },
+    {
+      "case": "clear_two_pages",
+      "arm": "stronger_extracted",
+      "model": "claude-sonnet-5",
+      "source_sha256": "bda5b42a148b973bf045ab581c2a529a3a0fc66d76555a6c608bc7687c9d3649",
+      "reserved_usd": "0.086016",
+      "status": "uncertain_spend",
+      "cost_usd": null,
+      "latency_seconds": 6.265,
+      "error_type": "ValueError"
+    }
+  ],
+  "governance_snapshot": {
+    "observed_at": "2026-09-12T20:58:37.152312+00:00",
+    "primary": "anthropic",
+    "permitted": [
+      "anthropic"
+    ],
+    "provider": {
+      "enabled": true,
+      "model": "claude-haiku-4-5-20251001",
+      "endpoint": "https://api.anthropic.com/v1",
+      "key_secret_ref": "ANTHROPIC_API_KEY"
+    }
+  },
+  "limitations": [
+    "Six synthetic form PDFs do not establish broad document quality.",
+    "Correctness uses frozen expected visible labels; unresolved labels are counted separately.",
+    "No customer data, automatic provider fallback or retries.",
+    "Catalog balanced and quality tiers are compared; this does not assert the current production run uses either model.",
+    "Evaluation context/output ceilings32768/2048 are narrower than production limits."
+  ],
+  "observed_failures": [
+    {
+      "arm": "balanced_extracted",
+      "failure": "Code-fenced JSON with string locators; production strict contract requires unfenced JSON and full manifest locator objects."
+    },
+    {
+      "arm": "stronger_extracted",
+      "failure": "Strict generator rejected post-transport response; unknown accounting retained. Exact provider failure cause was not retained and is not inferred."
+    }
+  ],
+  "protocol_limitation": "Initial two-call pilot used the same manifest/schema but ordered the prompt differently from production. It cannot establish production model quality; future runner reuses shared production prompt builder."
+}

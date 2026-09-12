@@ -329,6 +329,10 @@ def build_release_report_sources(store, scan_id, owner, release_id):
         saved_unverified = [d for d in saved_changes(store, scan_id, name) if selected(d)]
         from pdf_release_evidence import build_visual_evidence
         visual_evidence = build_visual_evidence(store, scan_id, owner, name, outcome, changes + saved_unverified)
+        from word_release_evidence import build_word_evidence
+        word_evidence, word_assets = build_word_evidence(store, scan_id, owner, name, outcome)
+        assets.extend(word_assets)
+        detail += word_evidence
         evidence_targets = set(re.findall(r'id="(pdf-evidence-page-\d+)"', visual_evidence))
         detail += f'<p><strong>Recorded edit outcomes:</strong> {len(changes)} verified-process change records · {len(saved_unverified)} applied AI change records pending verification. These are change counts, not finding counts.</p>'
         detail += '<h2>Recorded changes by success criterion</h2><p>Change records are separate from findings. Verified finding totals in the checklist require matching ledger evidence.</p>'
@@ -396,9 +400,13 @@ def build_release_report_sources(store, scan_id, owner, release_id):
 
 
 def build_release_reports(store, scan_id, owner, release_id):
-    """PDF is the delivery format; retain legacy source generation for audit tests."""
+    """Render printable reports and retain native Word comparison evidence."""
     from release_report_pdf import render_report_pdf
-    return [{**asset, **dict(name=asset['name'].removesuffix('.html') + '.pdf',
-                 content=render_report_pdf(asset['content']), content_type='application/pdf')}
-            for asset in build_release_report_sources(store, scan_id, owner, release_id)
-            if asset['content_type'].startswith('text/html')]
+    assets = []
+    for asset in build_release_report_sources(store, scan_id, owner, release_id):
+        if asset['content_type'].startswith('text/html'):
+            assets.append({**asset, 'name': asset['name'].removesuffix('.html') + '.pdf',
+                           'content': render_report_pdf(asset['content']), 'content_type': 'application/pdf'})
+        elif asset.get('report_kind') in {'tracked_changes', 'tracked_changes_evidence'}:
+            assets.append(asset)
+    return assets

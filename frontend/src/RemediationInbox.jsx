@@ -1,3 +1,4 @@
+import { isPdfStructuralRow, pdfStructuralSummary, proposalsFor } from './pdfStructuralProposal.js'
 import { automaticReviewQueue } from './automaticReviewQueue.js'
 import { useMemo, useState, useEffect, useRef } from 'react'
 import {
@@ -77,6 +78,7 @@ const EXCERPT_LIMIT = 280
 const excerptOf = value => value.length > EXCERPT_LIMIT ? `${value.slice(0, EXCERPT_LIMIT).trimEnd()}…` : value
 
 function problemOf(f, issue) {
+  if (isPdfStructuralRow(f)) return 'ACP found an existing PDF tag that can be repaired without replacing document text.'
   if (f.problemStatement) return excerptOf(displayText(f.problemStatement))
   const before = displayText(f.before || f.observed || '')
   const after = displayText(f.after || '')
@@ -324,6 +326,7 @@ function ManualSteps({ f }) {
 // remediation task rather than an engineering evidence record. Criterion- and lane-aware so a contrast
 // fix reads like a contrast decision, not a generic "review the change".
 function taskLineOf(f, lane) {
+  if (isPdfStructuralRow(f)) return 'ACP can write this change into the saved PDF after approval. Apply ready fixes together; individual inspection is optional. The corrected copy will be assessed before publication.'
   if (f.autoApplied) return 'This change is already applied. Inspect it if you want, or flag a problem.'
   const contrast = isContrastFinding(f)
   switch (lane.key) {
@@ -378,14 +381,16 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
   const eyebrow = inspectionOnly ? 'Saved changes · optional inspection' : isHandoff ? 'Needs manual handling' : lane.key === 'manual' ? 'Manual remediation' : 'Review'
   // A drafted AI value the reviewer can adjust before applying. `draft` falls back to the finding's
   // proposed value until the reviewer types; `edited` flips the primary action to "Save edited fix".
-  const canEdit = !resolved && !isManual && !isAutoFix && f.after != null && f.after !== ''
+  const structuralRow = isPdfStructuralRow(f)
+  const structuralReady = !structuralRow || proposalsFor(f).every(pdfStructuralSummary)
+  const canEdit = !structuralRow && !resolved && !isManual && !isAutoFix && f.after != null && f.after !== ''
   const draftValue = draft ?? (f.after ?? '')
   const edited = canEdit && draftValue !== (f.after ?? '')
   // The plain-language "What ACP changed" sentence — real values only (null when nothing to describe).
-  const changed = !isManual ? changeSentence(f) : null
+  const changed = !isManual && !structuralRow ? changeSentence(f) : null
   const hasProposedValue = f.after != null && f.after !== ''
   const currentValue = displayText(f.before || f.observed || 'Not recorded')
-  const proposedValue = displayText(draftValue || f.after || '')
+  const proposedValue = structuralRow ? proposalsFor(f).map(p => pdfStructuralSummary(p) || 'Structural proposal unavailable — refresh suggestions').join('; ') : displayText(draftValue || f.after || '')
   const copyValue = async (kind, value) => {
     if (!navigator.clipboard?.writeText) return
     await navigator.clipboard.writeText(value)
@@ -493,7 +498,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             </>
           ) : (
             <>
-              <button className="primary" disabled={saving}
+              <button className="primary" disabled={saving || !structuralReady}
                       onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>
                 {saving ? 'Saving…' : legacyApprovalControls ? 'Yes, apply fix' : 'Apply this fix'}
               </button>
@@ -569,6 +574,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             {proposedValue.length > EXCERPT_LIMIT && <details className="remediation-full-text" key={`proposed-${f.id}`}>
               <summary>Show full proposed value</summary><p>{proposedValue}</p>
             </details>}
+            {structuralRow && <details className="remediation-full-text"><summary>Technical plan</summary>{proposalsFor(f).map((p, i) => <pre key={i} className="machine-value">{p.proposed_value}</pre>)}</details>}
             {changed && (changed.length > EXCERPT_LIMIT ? <details className="remediation-full-text" key={`change-${f.id}`}>
               <summary>Change description</summary><p>{displayText(changed)}</p>
             </details> : <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: '10px 0 0' }}>{displayText(changed)}</p>)}
@@ -672,7 +678,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 }
 
 export default function RemediationInbox({
-  queue: suppliedQueue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false, legacyApprovalControls = false, autoApprove = null, automaticApprovalPolicy, onAutoApproveChange, autoApproveSaving = false, autoApproveError = null,
+  queue: suppliedQueue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false, legacyApprovalControls = false, autoApprove = null, automaticApprovalPolicy, onAutoApproveChange, autoApproveSaving = false, autoApproveError = null, autoApproveNotice = null, onDismissAutoApproveNotice,
   initialSort = 'priority', initialTab = 'review', initialGroup = 'document', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
@@ -1021,16 +1027,16 @@ export default function RemediationInbox({
         <div><strong>Review and verify changes</strong>
           {/* Keep approval readiness separate from verification and completed counts. */}
           {legacyApprovalControls ? <p>{runCounts.ready} ready review items · {runCounts.individual} need proposal information or individual review · {runCounts.inspection} applied changes available to inspect · {runCounts.manual} manual review items</p> : <p>{runCounts.ready} ready to apply · {runCounts.individual} still need a valid proposal or individual review · {runCounts.manual} need manual work</p>}
-          <p>{runCounts.ready ? 'Approve the ready fixes together. ACP will save the changes and check the results.' : preparingProposals ? 'Please wait for remediation to finish preparing suggestions.' : 'No fixes are ready to approve. View readiness for the next step.'}</p>
+          <p>{runCounts.ready ? 'Approve the ready fixes together. ACP will save the changes and check the results.' : preparingProposals ? 'Please wait for remediation to finish preparing suggestions.' : 'No fixes are ready to apply. Ready AI fixes will apply automatically when auto-apply is on.'}</p>
           {preparingProposals && <p role="status">Preparing proposals — remediation is still processing. Readiness updates as work finishes.</p>}
           {!legacyApprovalControls && Object.keys(unreadyReasons).length > 0 && <details><summary>Why some fixes aren’t ready</summary><ul>{Object.entries(unreadyReasons).map(([reason, count]) => <li key={reason}>{count} · {reason === 'Version unavailable — review individually' ? 'Need fresh proposal versions' : reason === 'Missing proposal' ? 'Need a complete suggestion' : reason}</li>)}</ul>{onOpenPlan && <button type="button" className="linklike" disabled={readOnly} onClick={onOpenPlan}>Refresh suggestions from the remediation plan</button>}</details>}
         </div>
         <div className="run-approval-actions" aria-label="Remediation actions">
-          <button type="button" className={readyAcrossScan.length ? 'primary' : 'ghost'} disabled={savingId != null || (readyAcrossScan.length > 0 && (readOnly || !onDecide))}
+          {legacyApprovalControls && <button type="button" className={readyAcrossScan.length ? 'primary' : 'ghost'} disabled={savingId != null || (readyAcrossScan.length > 0 && (readOnly || !onDecide))}
             onClick={() => { setBatchScopeIds(null); setBulkPreviewOpen(true); if (readyAcrossScan.length) { if (legacyApprovalControls) setConfirmRunRequest(n => n + 1); else setApplyRunRequest(n => n + 1) } }}>
             {readyAcrossScan.length ? legacyApprovalControls ? `Approve all ready in this run (${readyAcrossScan.length})` : `Apply ready fixes (${readyAcrossScan.length})` : 'View run readiness'}
-          </button>
-          {!legacyApprovalControls && onPublish && <button type="button" className="ghost" disabled={readOnly || savingId != null} title="Choose saved copies and a destination in Release. Pending suggestions are not approved." onClick={onPublish}>Publish saved copies →</button>}
+          </button>}
+          {/* Publication and readiness actions are intentionally absent from Review. */}
           {!legacyApprovalControls && <label className={`run-auto-approve-switch${autoApprove === true ? ' is-on' : ''}`}>
             <input type="checkbox" role="switch" aria-label="Auto-apply AI fixes" checked={autoApprove === true}
               disabled={readOnly || autoApprove === null || autoApproveSaving || !onAutoApproveChange}
@@ -1039,6 +1045,7 @@ export default function RemediationInbox({
             <span>Auto-apply AI fixes <b>{autoApproveSaving ? 'Saving…' : autoApprove === null ? 'Checking…' : autoApprove ? 'On' : 'Off'}</b></span>
           </label>}
           {autoApproveError && <p role="alert" className="run-auto-approve-error">{autoApproveError}</p>}
+          {autoApproveNotice && <div className="run-auto-approve-toast" role="status" aria-live="polite" aria-atomic="true"><button type="button" className="ghost small" aria-label="Dismiss automatic approval notification" onClick={onDismissAutoApproveNotice}>×</button><b>AI reviews will be automatically approved.</b><p>Ready AI fixes will be applied automatically. Items needing manual work stay in the review queue.</p></div>}
         </div>
       </section>}
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}

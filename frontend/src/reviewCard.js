@@ -1,3 +1,4 @@
+import { isPdfStructuralRow } from './pdfStructuralProposal.js'
 // Evidence Card model (PRD v2) — turns a raw HITL queue item into the rich, PR-style
 // review card the Intelligent Review Workspace renders. Pure + dependency-light so it
 // unit-tests without a React harness; EvidenceCard.jsx renders whatever this returns.
@@ -758,6 +759,7 @@ const _SC_NOUN = {
   '3.1.2': 'passage', '1.3.3': 'instruction', '4.1.2': 'form field', '2.4.2': 'document',
 }
 export function reviewIntent(item, sc = null) {
+  if (isPdfStructuralRow(item)) return 'ACP proposed a source-anchored PDF tag change. Approve it to save the change; verification is a separate check.'
   const t = reviewType(item)
   const noun = _SC_NOUN[String(sc || '')] || 'item'
   if (t === 'confirm') return 'ACP applied and verified this fix — confirm it before certification.'
@@ -769,6 +771,7 @@ export function reviewIntent(item, sc = null) {
 // The single primary button's label, by workflow — so the one action reads plainly ("Approve AI
 // fix" / "Confirm fix" / "Approve description") instead of exposing internal apply semantics.
 export function primaryActionLabel(item) {
+  if (isPdfStructuralRow(item)) return 'Approve PDF tag change'
   return { proposal: 'Approve AI fix', confirm: 'Confirm fix', author: 'Approve description' }[reviewType(item)]
     || 'Approve'
 }

@@ -1,3 +1,4 @@
+import { isPdfStructuralRow, pdfStructuralSummary } from './pdfStructuralProposal.js'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { aiProvenance, getCopilotGuidance, getFileGeometry, getFileRemediationDiffs, getScanAiCalls, getSourceLink, suggestFix, validateAlt } from './api.js'
 import Thumbnail from './Thumbnail.jsx'
@@ -593,7 +594,9 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   const decorativeRow = proposalList.length > 0
     && proposalList.every((p) => p.kind === 'decorative')
   // `companionRow` is deliberately NOT excluded here: editing is the whole point of one.
-  const editable = !explainOnly && !decorativeRow
+  const structuralRow = isPdfStructuralRow(item)
+  const structuralReady = !structuralRow || proposalList.every(pdfStructuralSummary)
+  const editable = !explainOnly && !decorativeRow && !structuralRow
     && card.track.track !== 'auto' && (isValueFix(card.sc) || !!card.proposal || companionRow)
   // The primary button reads by workflow (primaryAction, above) — "Approve AI fix" / "Confirm
   // fix" / "Approve description". The honest "writes into the document vs records sign-off"
@@ -1017,6 +1020,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                   self-gating and needs no condition here. */}
               <HouseStyleChip houseStyle={houseStyle} />
             </>
+          ) : structuralRow ? (
+            <section className="evcard-rec-static" aria-label="Proposed PDF tag changes"><b>Proposed PDF tag changes</b><p>ACP writes these source-anchored changes into the saved copy after approval. Document text is preserved; verification remains separate.</p>{proposalList.map((p, i) => <div key={i}><p>{pdfStructuralSummary(p) || 'Structural proposal unavailable — refresh suggestions'}</p><details><summary>Technical plan</summary><pre className="machine-value">{p.proposed_value}</pre></details></div>)}</section>
           ) : editable ? (
             <label className="evcard-rec">
               <span className="evcard-rec-head">
@@ -1451,7 +1456,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
           })()}
 
           <div className="evcard-actions">
-            <button className="qbtn approve" disabled={busy} onClick={() => decide('approved')}>✓ {primaryAction}</button>
+            <button className="qbtn approve" disabled={busy || !structuralReady} onClick={() => decide('approved')}>✓ {primaryAction}</button>
             <button className="qbtn self" disabled={busy}
                     title="Take ownership — fix it yourself, then re-scan to confirm"
                     onClick={() => decide('skipped')}>✋ I’ll fix it</button>

@@ -146,14 +146,17 @@ def test_duplicate_registration_is_rejected():
             confidence=assessment.Confidence.HIGH)
 
 
-def test_unsupported_result_states_the_missing_capability():
+def test_unsupported_result_states_the_missing_capability(tmp_path):
     """A rule that cannot run must say which capability was absent, not just decline.
 
     "We did not check" is only an acceptable answer when it carries the reason — that is the
     distinction `test_rule_formats` draws between "we did not check" and "does not apply".
     """
+    import pikepdf
+    untagged = tmp_path / "untagged.pdf"
+    pdf = pikepdf.Pdf.new(); pdf.add_blank_page(); pdf.save(untagged)
     missing = capabilities.missing({capabilities.Capability.TAG_TREE},
-                                   capabilities.BASELINE["pdf"])
+                                   capabilities.capabilities_for("pdf", untagged))
     assert missing == [capabilities.Capability.TAG_TREE]
     result = assessment.unsupported(f"needs {capabilities.describe(missing)}")
     assert result.status == "NOT_EVALUATED"

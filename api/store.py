@@ -11119,6 +11119,31 @@ class Store:
                 out.update(self._row_approved_values(row))
         return out
 
+    def approved_pdf_structure_values(self, scan_id: str, file: str, rule_id: str) -> dict[str, str]:
+        """Exact approved tag plans, scoped by criterion, operation and locator."""
+        if not file.lower().endswith('.pdf'):
+            return {}
+        allowed = {'2.4.6': {'heading'}, '1.3.1': {'header-scope', 'table-headers'},
+                   '1.3.2': {'reading-order'}}.get(rule_id, set())
+        out, conflicts = {}, set()
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get('rule_id') or '').strip() != rule_id:
+                continue
+            for locator, value in self._row_approved_values(row).items():
+                if not re.fullmatch(r'pdf:struct:\d+(?:\.\d+)*:[0-9a-f]{64}', locator):
+                    continue
+                try:
+                    plan = json.loads(value)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(plan, dict) or plan.get('op') not in allowed:
+                    continue
+                if locator in out and out[locator] != value:
+                    conflicts.add(locator)
+                elif locator not in conflicts:
+                    out[locator] = value
+        return {k: v for k, v in out.items() if k not in conflicts}
+
     def has_approved_values_to_write(self, scan_id: str, file: str) -> bool:
         """True when `file` holds approved content some applier can write into the document.
 
@@ -11139,7 +11164,9 @@ class Store:
                     or self.approved_sensory_values(scan_id, file)
                     or self.approved_language_values(scan_id, file)
                     or self.approved_structure_label_values(scan_id, file)
-                    or self.approved_images_of_text_values(scan_id, file))
+                    or self.approved_images_of_text_values(scan_id, file)
+                    or any(self.approved_pdf_structure_values(scan_id, file, sc)
+                           for sc in ('1.3.1', '1.3.2', '2.4.6')))
 
     def approve_proposal_values(self, item_id: str, values: list[str | None], *,
                                 draft_fallback: bool = True) -> int:

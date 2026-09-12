@@ -27,15 +27,18 @@ try {
  await page.goto('http://127.0.0.1:5190/release-fixture'); await page.getByRole('heading',{name:'Release',exact:true}).waitFor()
  for(const width of [1280,390,320]){
   await page.setViewportSize({width,height:900})
-  await expect(page.getByRole('button',{name:'Open Release · 1 verified copy',exact:true})).toBeVisible()
-  await page.getByRole('button',{name:'Publish ready files (1)',exact:true}).waitFor({timeout:5000}).catch(async error=>{console.log(await page.locator('body').innerText()); console.log(errors); throw error})
+  await expect(page.getByRole('button',{name:'Continue to Release',exact:true})).toBeVisible()
+  await page.getByRole('button',{name:'Publish batch (1)',exact:true}).waitFor({timeout:5000}).catch(async error=>{console.log(await page.locator('body').innerText()); console.log(errors); throw error})
+  await page.getByText('Apply additional AI suggestions and publish (optional)',{exact:true}).click()
   await page.getByRole('button',{name:'Approve eligible changes and publish when ready',exact:true}).waitFor()
+  await page.getByText('Apply additional AI suggestions and publish (optional)',{exact:true}).click()
   if(await page.locator('.release-advanced').getAttribute('open') !== null) throw Error('Advanced details should start collapsed')
   const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth)
   if(overflow)throw Error(`Horizontal overflow at ${width}`)
-  await page.getByRole('button',{name:'Publish ready files (1)',exact:true}).scrollIntoViewIfNeeded()
+  await page.getByRole('button',{name:'Publish batch (1)',exact:true}).scrollIntoViewIfNeeded()
   await page.screenshot({path:`/tmp/release-quick-${width}.png`,fullPage:true})
  }
+ await page.getByText('Apply additional AI suggestions and publish (optional)',{exact:true}).click()
  await page.getByRole('button',{name:'Approve eligible changes and publish when ready',exact:true}).click()
  const calls = await page.evaluate(()=>globalThis.__releaseCalls)
  const approvals = calls.filter(([name])=>name==='authorizeReleaseContinuation')
@@ -44,14 +47,17 @@ try {
  await page.goto('http://127.0.0.1:5190/release-fixture?zero');
  for(const width of [1280,390,320]){
   await page.setViewportSize({width,height:900})
-  const ready = page.getByRole('button',{name:'Publish ready files (0)',exact:true})
+  const ready = page.getByRole('button',{name:'Publish batch (0)',exact:true})
   const approve = page.getByRole('button',{name:'Approve eligible changes and publish when ready',exact:true})
-  await ready.waitFor(); await approve.waitFor()
+  await ready.waitFor();
+  await page.getByText('Apply additional AI suggestions and publish (optional)',{exact:true}).click()
+  await approve.waitFor()
   if(!await ready.isDisabled() || !await approve.isDisabled())throw Error('Zero-ready actions must remain disabled')
   await page.getByText('No complete, versioned proposals are ready for this action.',{exact:false}).waitFor()
-  if(await page.locator('.release-quick').evaluate(el=>Boolean(el.closest('details'))))throw Error('Primary actions hidden in disclosure')
+  if(await ready.evaluate(el=>Boolean(el.closest('details'))))throw Error('Primary batch action hidden in disclosure')
   if(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth))throw Error(`Zero-ready overflow at ${width}`)
   await page.screenshot({path:`/tmp/release-visible-zero-${width}.png`,fullPage:true})
+  await page.getByText('Apply additional AI suggestions and publish (optional)',{exact:true}).click()
  }
  if(errors.length)throw Error(errors.join('\n'))
  console.log('Isolated current-worktree fixture passed at 1280, 390 and 320px, reduced motion; no horizontal overflow or page errors. Screenshots: /tmp/release-quick-{width}.png')

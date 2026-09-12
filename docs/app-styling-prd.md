@@ -1,6 +1,6 @@
 # ACP app-wide styling PRD
 
-Status: design specification. Shared typography and control alignment is authorized and in progress; completion of every legacy panel is not implied.
+Status: shared typography and control alignment implemented; responsive browser audit completed for the primary workflow controls, file tables, KPI tiles, queue drawers and publication flow. See [audit evidence](app-styling-audit.md) for tested coverage and boundaries; completion of every legacy panel is not implied.
 
 ## Objective
 Make Sources, Discover, Assess, Remediate, and Release feel like one product. Users should recognize the same fonts, controls, file tables, status meanings, and action hierarchy throughout the workflow.

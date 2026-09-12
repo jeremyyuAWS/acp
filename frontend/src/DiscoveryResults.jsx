@@ -1,3 +1,4 @@
+import './discovery-breakdown-responsive.css'
 import { useState } from 'react'
 import DiscoveryPopulationChart from './DiscoveryPopulationChart.jsx'
 import { supportedDiscoveryRow } from './DiscoveryLifecycleResults.jsx'
@@ -328,14 +329,14 @@ export default function DiscoveryResults({
       <DiscoveryPopulationChart inventory={inventory} />
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap', marginTop: 8 }}>
         {types && (
-          <div className="panel" style={{ flex: '1 1 380px' }}>
+          <div className="panel discovery-breakdown-panel" style={{ flex: '1 1 380px' }}>
             <h2>BY FILE TYPE</h2>
             <p className="muted" style={{fontSize:12}}>Base: {types.total.toLocaleString()} {estateTypes ? 'source files' : 'files represented here'}{estateTypes && Number.isSafeInteger(inventory?.by_status?.excluded) ? ` · includes ${inventory.by_status.excluded.toLocaleString()} excluded` : ''}. Full bar = 100% of this base.</p>
             <BreakdownBars
               buckets={types.buckets} denominator={types.total} columns="110px minmax(30px, 1fr) 100px" idPrefix="type-files"
               colorOf={(b) => (b.assessable ? BAR_COLOR.assessable : BAR_COLOR.other)}
               membersOf={(b) => typeMembers.get(b.key)} />
-            <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 56px', gap: 12,
+            <div className="discovery-breakdown-total" style={{ display: 'grid', gridTemplateColumns: '110px 1fr 56px', gap: 12,
                           marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line)',
                           fontSize: 13, fontWeight: 600 }} role="status">
               <span>{types.balanced ? 'Chart total' : '⚠ Chart total'}</span>
@@ -356,7 +357,7 @@ export default function DiscoveryResults({
             use, not the department/tag classification the panel above the KPI row already speaks
             to honestly. See contentTypeBreakdown.js. */}
         {contentTypes && (
-          <div className="panel" style={{ flex: '1 1 380px' }}>
+          <div className="panel discovery-breakdown-panel" style={{ flex: '1 1 380px' }}>
             <h2>BY CONTENT TYPE <span className="muted" style={{ fontWeight: 400 }}>· from SharePoint</span></h2>
             <p className="muted" style={{fontSize:12}}>Base: {contentTypes.total.toLocaleString()} files represented here. Full bar = 100% of this base.</p>
             <BreakdownBars
@@ -372,7 +373,7 @@ export default function DiscoveryResults({
         )}
 
         {ageDist && (
-          <div className="panel" style={{ flex: '1 1 340px' }}>
+          <div className="panel discovery-breakdown-panel" style={{ flex: '1 1 340px' }}>
             <h2>BY AGE <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>· last modified</span></h2>
             <p className="muted" style={{fontSize:12}}>Base: {ageDist.total.toLocaleString()} inventoried files{Number.isSafeInteger(inventory?.by_status?.excluded) && inventory.discovered === ageDist.total + inventory.by_status.excluded ? ` · excludes ${inventory.by_status.excluded.toLocaleString()}` : ''}. Full bar = 100% of this base. Missing dates stay in a separate bucket.</p>
             <BreakdownBars
@@ -389,7 +390,7 @@ export default function DiscoveryResults({
         )}
 
         {sizeDist && (
-          <div className="panel" style={{ flex: '1 1 340px' }}>
+          <div className="panel discovery-breakdown-panel" style={{ flex: '1 1 340px' }}>
             <h2>BY SIZE</h2>
             <p className="muted" style={{fontSize:12}}>Base: {sizeDist.total.toLocaleString()} inventoried files{Number.isSafeInteger(inventory?.by_status?.excluded) && inventory.discovered === sizeDist.total + inventory.by_status.excluded ? ` · excludes ${inventory.by_status.excluded.toLocaleString()}` : ''}. Full bar = 100% of this base. Missing sizes stay in a separate bucket.</p>
             <BreakdownBars
@@ -406,7 +407,7 @@ export default function DiscoveryResults({
         )}
 
         {folderDist && (
-          <div className="panel" style={{ flex: '1 1 380px' }}>
+          <div className="panel discovery-breakdown-panel" style={{ flex: '1 1 380px' }}>
             <h2>BY FOLDER</h2>
             <p className="muted" style={{fontSize:12}}>Base: {folderDist.total.toLocaleString()} inventoried files in supported document formats. Full bar = 100% of this base; other formats are excluded from this chart.</p>
             {folderDist.buckets.map((b) => (
@@ -434,7 +435,7 @@ export default function DiscoveryResults({
         )}
 
         {unread && (
-          <div className="panel" style={{ flex: '1 1 340px' }}>
+          <div className="panel discovery-breakdown-panel" style={{ flex: '1 1 340px' }}>
             <h2>COULD NOT BE READ · metadata</h2>
             {unread.total === 0 ? (
               <p className="muted" style={{ fontSize: 12.5, margin: 0, lineHeight: 1.5 }}>

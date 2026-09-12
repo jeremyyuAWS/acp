@@ -30,3 +30,5 @@
 .workflow-outcome-tiles__tile strong { font-size:28px; line-height:1.05; font-weight:800; letter-spacing:-.01em; margin:5px 0; }
 .workflow-outcome-tiles__before,.workflow-outcome-tiles__net { font-size:11.5px; }
 .workflow-outcome-tiles__fill { opacity:.025; }
+@media(max-width:420px) { .workflow-outcome-tiles__grid { grid-template-columns:1fr; } }
+.workflow-outcome-tiles__tile strong, .workflow-outcome-tiles__tile .kpi-counter { flex-wrap:wrap; }

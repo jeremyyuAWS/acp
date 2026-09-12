@@ -1,0 +1,7 @@
+/* Flex children must be allowed to shrink below the longest chart label. */
+.discovery-breakdown-panel { min-width:0; max-width:100%; }
+.discovery-breakdown-panel .critrow > span,
+.discovery-breakdown-total > span { min-width:0; overflow-wrap:anywhere; }
+@media(max-width:420px) {
+  .discovery-breakdown-panel .critrow { grid-template-columns:minmax(0,1fr) minmax(20px,.5fr) minmax(0,1fr)!important; }
+}

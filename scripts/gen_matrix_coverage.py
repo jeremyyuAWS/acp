@@ -214,6 +214,33 @@ def load_review_formats() -> dict[str, set[str]]:
 
 
 # ── 2. applier presence ───────────────────────────────────────────────────────────────
+def finite_sc_upper_bound(node, constants):
+    """Derive only a provably finite possible SC surface, never runtime credit.
+
+    A runtime filtered subset intersected with a named finite SC tuple cannot
+    escape that tuple. An unknown operand in a union has no such bound and is
+    deliberately rejected. Wrappers preserve membership (sorted changes order).
+    """
+    if isinstance(node, ast.Name):
+        return set(constants[node.id]) if node.id in constants else None
+    if isinstance(node, (ast.Set, ast.List, ast.Tuple)):
+        if all(isinstance(e, ast.Constant) and isinstance(e.value, str)
+               and _SC_RE.fullmatch(e.value) for e in node.elts):
+            return {e.value for e in node.elts}
+        return None
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id in {"set", "tuple", "list", "frozenset", "sorted"}
+            and len(node.args) == 1 and not node.keywords):
+        return finite_sc_upper_bound(node.args[0], constants)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd):
+        left = finite_sc_upper_bound(node.left, constants)
+        right = finite_sc_upper_bound(node.right, constants)
+        if left is not None and right is not None:
+            return left & right
+        return left if left is not None else right
+    return None
+
+
 def load_appliers(*, keyword: str = "scs_to_clear") -> dict[str, set[str]]:
     """{format: {SCs whose approved value is actually written back into the file}}.
 
@@ -334,14 +361,16 @@ def load_appliers(*, keyword: str = "scs_to_clear") -> dict[str, set[str]]:
                 if f in outer and f in out:
                     out[f] |= fmt_scs
             continue
-        if isinstance(scs_node, ast.Name) and scs_node.id in sc_consts:
-            scs = set(sc_consts[scs_node.id])          # a named SC tuple, resolved above
-        elif isinstance(scs_node, (ast.Set, ast.List, ast.Tuple)):
+        # Preserve the existing literal contract: nonconstant audit markers
+        # (e.g. the described-image suffix) are not matrix success criteria.
+        if isinstance(scs_node, (ast.Set, ast.List, ast.Tuple)):
             scs = {e.value for e in scs_node.elts if isinstance(e, ast.Constant)}
         else:
+            scs = finite_sc_upper_bound(scs_node, sc_consts)
+        if scs is None:
             raise SystemExit(f"gen_matrix_coverage: _apply_one_value_kind called without a "
-                             f"literal {keyword}, a named SC tuple, or a per-format SC map — "
-                             f"update this generator.")
+                             f"literal {keyword}, a named SC tuple, a finitely bounded intersection, "
+                             f"or a per-format SC map — update this generator.")
         calls += 1
         # Narrow to this call's own gate when it has one, else the function-wide gate.
         exts = outer
@@ -390,6 +419,19 @@ def _guards(call: ast.Call, fn: ast.FunctionDef, const_name: str) -> bool:
     structural question: does the assignment feeding this call's `values=` mention the
     constant? That is enough to tell a narrowed lane from a function-wide one.
     """
+    def positive_membership(test):
+        if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And):
+            return any(positive_membership(value) for value in test.values)
+        return (isinstance(test, ast.Compare) and len(test.ops) == 1
+                and isinstance(test.ops[0], ast.In)
+                and isinstance(test.left, ast.Name) and test.left.id == "ext"
+                and isinstance(test.comparators[0], ast.Name)
+                and test.comparators[0].id == const_name)
+    for conditional in ast.walk(fn):
+        if (isinstance(conditional, ast.If) and positive_membership(conditional.test)
+                and any(candidate is call for statement in conditional.body
+                        for candidate in ast.walk(statement))):
+            return True
     kw = {k.arg: k.value for k in call.keywords}
     values = kw.get("values")
     target = getattr(values, "id", None)

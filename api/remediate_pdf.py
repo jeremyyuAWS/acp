@@ -507,6 +507,16 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
                      "/Tabs = /S", f"{n_tabs} page(s) now tab in structure (reading) order")
         except Exception:
             skipped.append("focus order: could not set /Tabs · 2.4.3")
+        # Exact existing tags can be repaired without rebuilding page content. The
+        # untagged/scanned maps below remain explain-only re-authoring instructions.
+        if proposals is not None:
+            try:
+                from pdf_structure_repairs import propose_tagged_repairs
+                tagged = propose_tagged_repairs(pdf, _extract_pdf_headings(str(path)))
+                proposals.extend(p for p in tagged if _sc_ok(in_scope,
+                    "2.4.6" if p.get("kind") == "pdf-tag-heading" else "1.3.1"))
+            except Exception:
+                swallowed("remediate_pdf.remediate_pdf: proposing exact tag repairs failed", scan_id)
         pdf.save(str(mid_path))
     finally:
         pdf.close()
@@ -761,14 +771,15 @@ def apply_pdf_field_name(data: bytes, values: dict) -> tuple[bytes, list[dict], 
 
 def apply_pdf_approved(data: bytes, values: dict) -> tuple[bytes, list[dict], list[str]]:
     """Single PDF write-back entry for the apply job: routes figure-alt (`pdf:fig:…` → /Alt),
-    form-field-name (`pdf:field:…` → /TU), and exact structural language (`pdf:lang:…` → /Lang)
-    approvals by locator prefix, in sequence. The
+    form-field-name (`pdf:field:…` → /TU), exact structural language (`pdf:lang:…` → /Lang), and source-anchored tag plans
+    (`pdf:struct:…`) approvals by locator prefix, in sequence. The
     unresolved list only carries locators neither writer recognised."""
     fig_vals = {k: v for k, v in (values or {}).items() if str(k).startswith("pdf:fig:")}
     fld_vals = {k: v for k, v in (values or {}).items() if str(k).startswith("pdf:field:")}
     lang_vals = {k: v for k, v in (values or {}).items() if str(k).startswith("pdf:lang:")}
+    struct_vals = {k: v for k, v in (values or {}).items() if str(k).startswith("pdf:struct:")}
     unknown = [k for k in (values or {})
-               if not (str(k).startswith("pdf:fig:") or str(k).startswith("pdf:field:") or str(k).startswith("pdf:lang:"))]
+               if not (str(k).startswith("pdf:fig:") or str(k).startswith("pdf:field:") or str(k).startswith("pdf:lang:") or str(k).startswith("pdf:struct:"))]
     applied: list[dict] = []
     cur = data
     if fig_vals:
@@ -778,7 +789,10 @@ def apply_pdf_approved(data: bytes, values: dict) -> tuple[bytes, list[dict], li
     if lang_vals:
         from pdf_structural_language import apply_pdf_structure_language
         cur, a, _ = apply_pdf_structure_language(cur, lang_vals); applied += a
-    unresolved = [k for k in list(fig_vals) + list(fld_vals) + list(lang_vals)
+    if struct_vals:
+        from pdf_structure_repairs import apply_pdf_structure_repairs
+        cur, a, _ = apply_pdf_structure_repairs(cur, struct_vals); applied += a
+    unresolved = [k for k in list(fig_vals) + list(fld_vals) + list(lang_vals) + list(struct_vals)
                   if not any(x.get("locator") == k for x in applied)] + unknown
     return cur, applied, unresolved
 

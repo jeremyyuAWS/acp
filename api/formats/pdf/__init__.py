@@ -11,7 +11,7 @@ from capabilities import Capability
 from rule_registry import register
 
 from formats.pdf.detectors import (focus_order, input_purpose, label_in_name, link_purpose,
-                                   name_role_value, nontext_contrast, text_spacing, use_of_color)
+                                   name_role_value, nontext_contrast, table_headers, text_spacing, use_of_color)
 
 # ── 4.1.2 Name, Role, Value ───────────────────────────────────────────────────────────
 # PARTIAL, not FULL: sound over AcroForm fields, silent on tagged-structure components.
@@ -173,4 +173,13 @@ register(
             "text, checkbox, radio, choice, signature fields: accessible name is flagged "
             "when it looks like a developer identifier (snake_case/camelCase) — those names "
             "will never match what a speech-input user says (heuristic, MODERATE severity)"),
+)
+
+# Existing tag/MCID/ParentTree table relationships only. Clean is REVIEW because
+# headings, lists, layout and semantic correctness are not fully evaluated.
+register(
+    rule="1.3.1", fmt="pdf", detector=table_headers.detect,
+    requires={Capability.TAG_TREE}, coverage=Coverage.PARTIAL,
+    confidence=Confidence.HIGH,
+    reason="existing tagged table Scope/Headers presence only; semantic correctness and other document relationships require review",
 )

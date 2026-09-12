@@ -1581,6 +1581,10 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
                                    [p for p in _pdf_proposals if p.get("kind") == "pdf-figure-alt"])
                 _enqueue_proposals(scan_id, filename, "4.1.2", "Name, Role, Value",
                                    [p for p in _pdf_proposals if p.get("kind") == "pdf-field-name"])
+                _enqueue_proposals(scan_id, filename, "2.4.6", "Headings and Labels",
+                                   [p for p in _pdf_proposals if p.get("kind") == "pdf-tag-heading"])
+                _enqueue_proposals(scan_id, filename, "1.3.1", "Info and Relationships",
+                                   [p for p in _pdf_proposals if p.get("kind") == "pdf-table-header-scope"])
             else:  # docx / pptx / xlsx
                 from remediate_office import remediate_office
                 _applied_fixes: list = []
@@ -5080,6 +5084,8 @@ from apply_office_image_of_text import (
     is_media_index_locator as _is_media_index_locator,
 )
 _IMAGE_OF_TEXT_SCS = ("1.4.5",)
+_PDF_STRUCTURE_SCS = ("1.3.1", "2.4.6")
+_PDF_STRUCTURE_EXTS = ("pdf",)
 
 # Every format an approved value can actually be WRITTEN into — the format scope
 # _apply_approved_values gates on, derived from the per-lane constants rather than restated, so
@@ -5093,7 +5099,7 @@ def _apply_one_value_kind(
         values: dict[str, str], scs_to_clear: set[str],
         write_fn, diff_rule_id: str, credit_rule_ids: tuple[str, ...],
         noun: str, job: dict, pending_credits: list, extra_work: bool = False,
-        residual_state: dict | None = None) -> tuple[bytes, bool]:
+        residual_state: dict | None = None, diff_rule_ids: dict | None = None) -> tuple[bytes, bool]:
     """Shared write → verify → credit sequence for one kind of approved value (alt text or
     link text) applied on top of `working`. Returns (new_working, uploaded_this_kind).
 
@@ -5329,7 +5335,7 @@ def _apply_one_value_kind(
     def commit_credit():
         existing = core.store.get_remediation_diffs(scan_id, filename) or []
         core.store.record_remediation_diffs(scan_id, filename, list(existing) + [
-            {"rule_id": diff_rule_id, "before": a["before"], "after": a["after"],
+            {"rule_id": (diff_rule_ids or {}).get(a['locator'], diff_rule_id), "before": a["before"], "after": a["after"],
              "note": f"approved by a reviewer · {a['locator']}"} for a in applied])
 
         for item_id in review_item_ids:
@@ -5443,9 +5449,11 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     image_of_text_values = (core.store.approved_images_of_text_values(
                                 scan_id, filename, _IMAGE_OF_TEXT_SCS)
                             if ext in _IMAGE_OF_TEXT_EXTS else {})
+    pdf_structure_groups = ({sc: core.store.approved_pdf_structure_values(scan_id, filename, sc)
+        for sc in _PDF_STRUCTURE_SCS} if ext in _PDF_STRUCTURE_EXTS else {})
     if not (alt_values or deco_locators or link_values or field_values
             or sensory_values or language_values or structure_label_values
-            or image_of_text_values):
+            or image_of_text_values or any(pdf_structure_groups.values())):
         return                                   # nothing approved awaiting a write
 
     import blob as _blob
@@ -5638,9 +5646,31 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             noun="image-of-text replacement", job=job,
             residual_state=residual_state, pending_credits=pending_credits)
 
+    pdf_structure_uploaded = False
+    if ext in _PDF_STRUCTURE_EXTS and any(pdf_structure_groups.values()):
+        # All plans share one exact tree anchor. Apply them together so one approved
+        # edit cannot silently invalidate the next plan's identity.
+        from pdf_structure_repairs import apply_pdf_structure_repairs
+        structure_values = {loc: value for group in pdf_structure_groups.values() for loc, value in group.items()}
+        rules = {loc: sc for sc, group in pdf_structure_groups.items() for loc in group}
+        criteria = tuple(sc for sc, group in pdf_structure_groups.items() if group)
+        # An explicitly approved, source-bound tag edit can be retained even when
+        # broad structural semantics still need human review. The writer verifies
+        # its exact target and preservation; this does not earn resolved credit.
+        structure_state = {**residual_state, 'retain_unverified': True}
+        working, pdf_structure_uploaded = _apply_one_value_kind(
+            scan_id=scan_id, filename=filename, working=working, values=structure_values,
+            scs_to_clear=set(criteria) & set(_PDF_STRUCTURE_SCS), write_fn=apply_pdf_structure_repairs,
+            diff_rule_id=criteria[0], diff_rule_ids=rules,
+            credit_rule_ids=tuple(sorted(set(criteria) & set(_PDF_STRUCTURE_SCS))),
+            noun='PDF tag structure', job=job, residual_state=structure_state,
+            pending_credits=pending_credits)
+        if pdf_structure_uploaded:
+            residual_state['verification'] = structure_state['verification']
+
     if not (alt_uploaded or link_uploaded or field_uploaded
             or sensory_uploaded or language_uploaded or structure_label_uploaded
-            or image_of_text_uploaded):
+            or image_of_text_uploaded or pdf_structure_uploaded):
         return
 
     if payload.get("release_intent_id"):

@@ -73,15 +73,13 @@ class Capability(str, Enum):
 # delivers is how a rule ends up claiming coverage it doesn't have, which is the exact class
 # of drift this whole layer exists to stop. `capabilities_for()` narrows or widens per file.
 #
-# TAG_TREE is absent from `pdf` on purpose. pikepdf can read /StructTreeRoot, but nothing in
-# this codebase walks it to establish role/name/value — the 2.4.3 and 4.1.2 PDF detectors both
-# stop at AcroForm widget dictionaries. Listing TAG_TREE here would make those rules look fully
-# supported. It gets added when a detector actually walks the tree, and the rules requiring it
-# become assessable on the same day, without touching them.
+# PDF advertises TAG_TREE now that a first-party bounded tagged-table detector
+# walks real tag/MCID/ParentTree associations. This is parser capability, not full
+# semantic coverage; the actual-file adapter removes it for untagged documents.
 BASELINE: dict[str, frozenset[Capability]] = {
     "pdf": frozenset({
         Capability.TEXT, Capability.LINKS, Capability.FORMS, Capability.ANNOTATIONS,
-        Capability.METADATA, Capability.COLOR, Capability.FONTS,
+        Capability.METADATA, Capability.COLOR, Capability.FONTS, Capability.TAG_TREE,
     }),
     # FORMS added when docx 4.1.2 was migrated to the registry. Word documents do carry
     # interactive fields — content controls (w:sdt with a checkbox/date/dropDown/comboBox/
@@ -178,6 +176,9 @@ def _pdf_adapter(path: Path, base: frozenset[Capability]) -> frozenset[Capabilit
             # detector light up its rules without touching this adapter.
             caps.add(Capability.TAG_TREE)
             caps.add(Capability.STRUCTURE)
+        else:
+            caps.discard(Capability.TAG_TREE)
+            caps.discard(Capability.STRUCTURE)
 
     if _looks_scanned(path):
         # A scanned page is a picture of a document: the substrate genuinely changes. Saying so
