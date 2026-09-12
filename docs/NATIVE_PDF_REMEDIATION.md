@@ -15,6 +15,7 @@ AI output is a structured proposal, never a replacement binary. Existing approva
 - Input must match the current artifact SHA-256, be readable and unencrypted, and fit 20 MiB / 100 pages.
 - Current manifest limits remain 60,000 text characters, 20 supported findings and eight visual evidence targets. Model limits can be stricter.
 - The accepted native-PDF profile and its two verified model specifications are authoritative for new advanced-preview runs. Extracted PDFs, Word files and other AI workflows keep their existing configured model chain.
+- Both providers must have credentials and current administrator permission. The saved profile authorizes their order; it cannot override a provider being disabled, including during a run. Deployments retaining Anthropic as the global primary can explicitly permit OpenAI with `ACP_TEXT_FALLBACK_PROVIDERS=openai`.
 - The existing durable spending reservation covers the configured input/output ceiling. Native request admission also checks extracted text, prompt, page allowance and output before transport.
 - Measured usage is retained. Missing/unknown accounting or uncertain transport does not become a free retry.
 
