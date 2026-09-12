@@ -128,7 +128,7 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
     return () => clearTimeout(timer)
   }, [signature])
   const progressSummary = <RemediationProgressSummary key={snapshot?.batch_id || scanId} animate={liveMode} documents={effectiveProgress} selected={progressFilter}
-    coverage={coverageEvidence || { available: false }} selectedCoverage={coverageFilter} baselineDocumentCounts={snapshot?.progress_baseline?.documents}
+    coverage={coverageEvidence || { available: false }} selectedCoverage={coverageFilter} baselineDocumentCounts={snapshot?.progress_baseline?.documents} startedAt={snapshot?.progress_baseline?.started_at}
     onCoverageSelect={coverageEvidence?.available ? selection => { setCoverageFilter(previous => previous === selection ? null : selection); setProgressFilter(null); setOutcomeFilter(null); onShowDocuments?.() } : undefined}
     onSelect={selection => { setProgressFilter(selection); setCoverageFilter(null); onShowDocuments?.() }} reconciling={liveError} />
   const selectedRow = documentList.find(row => row.file === selected)

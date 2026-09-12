@@ -14,7 +14,8 @@
 .workflow-outcome-tiles__tile .livecounter-n { font-size:inherit; }
 .workflow-outcome-tiles__tile .livecounter-delta { font-size:13px;color:var(--tile-accent); }
 .workflow-outcome-tiles__before,.workflow-outcome-tiles__net { font-size:11.5px;color:var(--muted); }
-.workflow-outcome-tiles__fill { position:absolute;bottom:0;left:0;width:100%;height:5px;background:var(--tile-accent);transform-origin:left;transition:transform .45s ease; }
+.workflow-outcome-tiles__tile > :not(.workflow-outcome-tiles__fill) { position:relative;z-index:1; }
+.workflow-outcome-tiles__fill { position:absolute;inset:0;width:100%;height:100%;opacity:.08;pointer-events:none;background:var(--tile-accent);transform-origin:left;transition:transform .45s ease; }
 @media(max-width:850px) { .workflow-outcome-tiles__grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 @media(max-width:500px) { .workflow-outcome-tiles__grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(prefers-reduced-motion:reduce) { .workflow-outcome-tiles__fill { transition:none; } }
