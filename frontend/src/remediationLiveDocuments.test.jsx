@@ -97,7 +97,7 @@ it('moves only confirmed finding categories and keeps totals', async () => {
   const {root,container}=await mount({snapshot,connected:true})
   await act(async()=>vi.advanceTimersByTime(400))
   expect(container.querySelectorAll('.live-document-table tbody tr')).toHaveLength(2)
-  expect(container.querySelector('.live-document-table').parentElement.className).toBe('document-findings-scroll')
+  expect(container.querySelector('.live-document-table').parentElement.classList.contains('document-findings-scroll-all')).toBe(true)
   expect(container.querySelectorAll('.live-document-table .findings-criteria-heading br')).toHaveLength(1)
   expect(container.querySelectorAll('.live-document-table .findings-total-heading br')).toHaveLength(1)
   expect(container.querySelector('.live-document-categories').textContent).toContain('Remaining 2')

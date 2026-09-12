@@ -16,7 +16,8 @@ const EXCLUSION_HELP = {
 
 const countFindings = f => Number.isSafeInteger(f._raw?.finding_count) && f._raw.finding_count >= 0 ? f._raw.finding_count : 1
 const PAGE_SIZE = 10
-export default function BatchReviewSelection({ visible = [], decisions = {}, drafts = {}, scopeKey, scopeLabel = 'Current approval scope', onDecide, onResult, onBusy, onReviewExcluded, onShowAllReady, readyOutsideScope = 0, confirmRequest = 0, onConfirmRequestHandled, preparingProposals = false, onOpenPlan, disabled = false, open = true }) {
+export default function BatchReviewSelection({ visible = [], decisions = {}, drafts = {}, scopeKey, scopeLabel = 'Current approval scope', onDecide, onResult, onBusy, onReviewExcluded, onShowAllReady, readyOutsideScope = 0, confirmRequest = 0, onConfirmRequestHandled, applyRequest = 0, onApplyRequestHandled, preparingProposals = false, onOpenPlan, disabled = false, open = true }) {
+  const handledApply = useRef(0)
   const [entries, setEntries] = useState([])
   const [page, setPage] = useState(0)
   const [confirming, setConfirming] = useState(false)
@@ -86,10 +87,21 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
     setConfirming(false)
     setEntries(old => old.some(e => e.finding.id === f.id) ? old.filter(e => e.finding.id !== f.id) : [...old, snapshotFinding(f)])
   }
-  async function approve() {
-    if (lock.current || disabled || !entries.length || problems.some(Boolean) || !onDecide) return
+  useEffect(() => {
+    if (!applyRequest) { handledApply.current = 0; return }
+    if (handledApply.current === applyRequest) return
+    handledApply.current = applyRequest
+    onApplyRequestHandled?.()
+    if (!open || disabled) return
+    const batch = eligible.map(f => entries.find(e => e.finding.id === f.id) || snapshotFinding(f))
+    setEntries(batch)
+    void approve(batch)
+  }, [applyRequest])
+  async function approve(requestedEntries) {
+    const batch = Array.isArray(requestedEntries) ? requestedEntries : entries
+    if (lock.current || disabled || !batch.length || batch.some(e => selectionProblem(e, visible, decisions, drafts)) || !onDecide) return
     lock.current = true; setBusy(true); onBusy?.(true)
-    const batch = entries.slice(), initialScope = scopeKey, outcomes = []
+    const initialScope = scopeKey, outcomes = []
     setAttempt({ scopeKey, number: ++attemptNumber.current, items: batch.length, findings: batch.reduce((n, e) => n + countFindings(e.finding), 0),
       proposals: batch.reduce((n, e) => n + proposalValues(e.finding).length, 0),
       files: new Set(batch.map(e => e.finding.file)).size })

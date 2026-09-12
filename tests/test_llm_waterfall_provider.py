@@ -110,7 +110,7 @@ def managed(tmp_path, monkeypatch, specs):
     ledger = spending.BudgetLedger(_SQLiteAdapter(str(tmp_path / 'budget.db')))
     ledger.init_schema()
     ledger.create_budget('owner', 'run', 100_000)
-    ctx = SimpleNamespace(ledger=ledger, owner_id='owner', run_id='run', enabled=True, deferred=[])
+    ctx = SimpleNamespace(ledger=ledger, owner_id='owner', run_id='run', enabled=True, deferred=[], policy={})
     monkeypatch.setattr(bounded, 'managed_context', lambda: ctx)
     monkeypatch.setenv('ACP_BOUNDED_TEXT_MODELS_JSON', json.dumps([asdict(s) for s in specs]))
     import providers

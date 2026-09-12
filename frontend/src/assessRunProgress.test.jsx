@@ -125,7 +125,8 @@ describe('the assessment running screen focuses on the document in flight', () =
 
   it('keeps current processing in the disclosure and shows one rolling heartbeat strip above status', () => {
     const html = render(SNAP, { ratePerMin: 12, points: [1, 3, 5, 8] })
-    expect(html).toMatch(/<details open="" class="assess-live-details"/)
+    expect(html).toMatch(/<details class="assess-live-details"/)
+    expect(html).not.toMatch(/<details open="" class="assess-live-details"/)
     expect(html).toContain('Live processing details')
     expect(html).toContain('Processing now')
     expect(html).not.toContain('Assessment throughput')

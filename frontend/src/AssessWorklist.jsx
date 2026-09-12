@@ -1,6 +1,7 @@
 import './document-findings-table.css'
 import RemediationCategoryPill, { RemediationCategoryLegend } from './RemediationCategoryPill.jsx'
 import { useState } from 'react'
+import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import { REMEDIATION_CATEGORIES, remediationCategory } from './remediationCategories.js'
 import { documentRows, SEVERITIES, SEVERITY_LABEL } from './assessMetrics.js'
 
@@ -120,7 +121,9 @@ export function RetiredSeverity({ row }) {
  *                    component offers selection ONLY over the deterministic fixes; it never
  *                    lets a bulk action silently sweep up an AI draft awaiting approval.
  */
-export default function AssessWorklist({ files, cap, assessment, criteria, level = 'AA', onOpenFile, onBulkFix, renderProgress, initialFilter = null, openLabel, changeRows = [] }) {
+export default function AssessWorklist({ files, cap, assessment, criteria, level = 'AA', onOpenFile, onBulkFix, renderProgress, initialFilter = null, openLabel, changeRows = [], scrollAll = true }) {
+  const search = useSearchFilter()
+  const facets = [{ key: 'type', label: 'file type', get: row => row.file.split('.').pop().toUpperCase() }]
   const rows = documentRows(files, { cap, assessment, criteria, level })
   // null means "no filter chosen yet", not "all". Resolved below against the rows that actually
   // exist, so the default follows the data as it loads rather than freezing whatever was true on
@@ -156,10 +159,12 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
 
   let visible = stateScoped
   if (categoryChosen) visible = visible.filter(row => row.findings?.some(finding => remediationCategory(finding) === categoryChosen) || changeRows.some(change => change.file === row.file && change.category === categoryChosen))
+  const searchScope = visible
+  visible = visible.filter(matchesFilters(search, facets, row => row.file))
   const filtered = visible.length < rows.length
   // The page actually on screen. `hidden` rows are still counted in the totals below — this only
   // ever cuts how many ROWS render, never a number.
-  const truncated = !expanded && visible.length > PAGE_SIZE
+  const truncated = !scrollAll && !expanded && visible.length > PAGE_SIZE
   const shown = truncated ? visible.slice(0, PAGE_SIZE) : visible
   const hiddenRows = truncated ? visible.slice(PAGE_SIZE) : []
 
@@ -273,7 +278,8 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
         </div>
       )}
 
-      <div className="document-findings-scroll" role="region" aria-label="Document findings table" tabIndex={0}>
+      <SearchFilterBar ctl={search} items={searchScope} facets={facets} noun="documents" />
+      <div className={`document-findings-scroll${scrollAll ? ' document-findings-scroll-all' : ''}`} role="region" aria-label="Document findings table" tabIndex={0}>
       <table className="document-findings-table" style={{ marginTop: 10 }}>
         <thead>
           <tr>

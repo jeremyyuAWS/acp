@@ -42,7 +42,7 @@ const click = async (el) => act(async () => el.tagName === 'OPTION' ? (el.parent
 async function mount(props) {
   const { root, container } = createTestRoot()
   const render = async (next) => act(async () => root.render(createElement(RemediationInbox,
-    { initialTab: 'needs-review', queue: RUN, decisions: {}, scanId: 'fixture', initialGroup: 'document', initialSort: 'document',
+    { legacyApprovalControls: true, initialTab: 'needs-review', queue: RUN, decisions: {}, scanId: 'fixture', initialGroup: 'document', initialSort: 'document',
       onDecide: vi.fn().mockResolvedValue(undefined), ...props, ...next })))
   await render()
   const tabs = () => [...container.querySelectorAll('select[aria-label="Filter by status"] option:not([value=all])')]

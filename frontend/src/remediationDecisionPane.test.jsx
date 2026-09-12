@@ -117,7 +117,7 @@ describe('Guided pane — preserves the #412/#415 behaviours', () => {
     expect(ta).toBeTruthy()
     const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
     await act(async () => { setValue.call(ta, '#595959'); ta.dispatchEvent(new Event('input', { bubbles: true })) })
-    await click(btnByText('Yes, apply fix'))
+    await click(btnByText('Apply this fix'))
     expect(calls[0].state).toBe('accepted')
     expect(calls[0].value).toBe('#595959')
   })
@@ -129,11 +129,11 @@ describe('Guided pane — preserves the #412/#415 behaviours', () => {
     expect(actions).toBeTruthy()
     const more = [...actions.querySelectorAll('details')].find(d => d.querySelector('summary')?.textContent === 'More options')
     expect(more.open).toBe(false)
-    expect(btnByText('Yes, apply fix').closest('details')).toBeNull()
-    expect(btnByText('No, needs manual work').closest('details')).toBeNull()
+    expect(btnByText('Apply this fix').closest('details')).toBeNull()
+    expect(btnByText('Needs manual work').closest('details')).toBeNull()
     expect(btnByText('Edit proposed fix').closest('details')).toBe(more)
     await click(more.querySelector('summary'))
-    for (const label of ['Yes, apply fix', 'Edit proposed fix', 'No, needs manual work', 'Defer']) {
+    for (const label of ['Apply this fix', 'Edit proposed fix', 'Needs manual work', 'Defer']) {
       expect([...actions.querySelectorAll('button')].some((button) => button.textContent.includes(label))).toBe(true)
     }
     await click(btnByText('Edit proposed fix'))

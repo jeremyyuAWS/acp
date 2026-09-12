@@ -28,7 +28,7 @@ it('counts 299 eligible approvals and 47 manual items across 177 documents, excl
 })
 it('the approval category counts all eligible proposals while manual work is open', async () => {
   const { root, container } = createTestRoot()
-  await act(async () => root.render(createElement(Inbox, { queue: rows, decisions: {}, scanId: 'fixture', initialTab: 'manual' })))
+  await act(async () => root.render(createElement(Inbox, { legacyApprovalControls: true, queue: rows, decisions: {}, scanId: 'fixture', initialTab: 'manual' })))
   const tab = [...container.querySelectorAll('select[aria-label="Filter by status"] option:not([value=all])')].find(el => el.textContent.includes('Approve AI suggestions'))
   // 299 approvals + 2000 applied changes awaiting confirmation, which is what the tab lists. The
   // badge used to read 299 over 2299 rows — the separation this file exists to protect, made on the

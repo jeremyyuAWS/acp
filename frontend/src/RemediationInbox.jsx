@@ -345,7 +345,7 @@ function taskLineOf(f, lane) {
   }
 }
 
-function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFindings = [], onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
+function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFindings = [], matchingReadyCount = 0, legacyApprovalControls = false, onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
   const [matchingPreviewOpen, setMatchingPreviewOpen] = useState(false)
   const [copiedValue, setCopiedValue] = useState('')
   const draftRef = useRef(null)
@@ -400,7 +400,8 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             (so approvals re-validate and rejections hand off) as if the reviewer acted on them one by
             one. Offered only for actionable (non-manual, unresolved) findings that actually have
             matches. */}
-        {!resolved && !isManual && matchingCount > 0 && (
+        {/* Retired matching approval panel retained for restoration; live approval is run-wide. */}
+        {legacyApprovalControls && !resolved && !isManual && matchingCount > 0 && (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
                         padding: '10px 22px', borderBottom: '1px solid var(--line,#e2dce4)',
                         background: 'var(--surface-2,#f6f5f8)', fontSize: 12.5 }}>
@@ -440,6 +441,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             </div>
           </div>
         )}
+        {!legacyApprovalControls && !resolved && matchingCount > 0 && <details style={{ padding: '8px 22px' }}><summary>{matchingCount + 1} similar findings · {matchingReadyCount} ready to apply</summary><MatchingReviewPreview findings={matchingFindings} /></details>}
         <div style={{ padding: '12px 22px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {resolved ? (
             // Verification appears only AFTER a fix is saved (spec §10): the decision is recorded and a
@@ -480,7 +482,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
                see PR body), so it is labelled as a flag, not a "reject & revert". */
             <>
               <button className="primary" disabled={saving} onClick={() => onDecide?.(f, { state: 'accepted' })}>
-                {saving ? 'Saving…' : f.autoApplied ? 'Mark inspected →' : 'Yes, apply fix'}
+                {saving ? 'Saving…' : f.autoApplied ? 'Mark inspected →' : legacyApprovalControls ? 'Yes, apply fix' : 'Apply this fix'}
               </button>
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
               {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
@@ -490,12 +492,12 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             <>
               <button className="primary" disabled={saving}
                       onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>
-                {saving ? 'Saving…' : 'Yes, apply fix'}
+                {saving ? 'Saving…' : legacyApprovalControls ? 'Yes, apply fix' : 'Apply this fix'}
               </button>
               {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
                   person (the handoff lane), so the label names that outcome rather than leaving the
                   reviewer to guess what "Reject" does. */}
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>No, needs manual work</button>
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>{legacyApprovalControls ? 'No, needs manual work' : 'Needs manual work'}</button>
               <details><summary>More options</summary>
               {canEdit && <button className="ghost" disabled={saving} onClick={() => draftRef.current?.focus()}>Edit proposed fix</button>}
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
@@ -667,7 +669,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 }
 
 export default function RemediationInbox({
-  queue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false,
+  queue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false, legacyApprovalControls = false, autoApprove = null,
   initialSort = 'priority', initialTab = 'review', initialGroup = 'document', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
@@ -705,6 +707,7 @@ export default function RemediationInbox({
   const toggleCluster = (key) => setExpandedClusters((e) => ({ ...e, [key]: !e[key] }))
   const [bulkPreviewOpen, setBulkPreviewOpen] = useState(false)
   const [confirmRunRequest, setConfirmRunRequest] = useState(0)
+  const [applyRunRequest, setApplyRunRequest] = useState(0)
   const [batchScopeIds, setBatchScopeIds] = useState(null)
   const batchPanelRef = useRef(null)
   useEffect(() => { if (bulkPreviewOpen) batchPanelRef.current?.focus() }, [bulkPreviewOpen, batchScopeIds])
@@ -745,6 +748,11 @@ export default function RemediationInbox({
   // "approve all ready" the reviewer opened from a tab that does not show it.
   const readyAcrossScan = queue.filter(f => matchesWorkflow(f, 'needs-review', decisions)
     && !exclusionReason(f, decisions, drafts))
+  const unreadyReasons = queue.filter(f => matchesWorkflow(f, 'needs-review', decisions)).reduce((out, f) => {
+    const reason = exclusionReason(f, decisions, drafts)
+    if (reason && reason !== 'Manual work') out[reason] = (out[reason] || 0) + 1
+    return out
+  }, {})
   const counts = useMemo(() => workflowCounts(queue, decisions), [queue, decisions])
   const prog = useMemo(() => progress(queue, decisions), [queue, decisions])
 
@@ -957,7 +965,7 @@ export default function RemediationInbox({
                   headingRef={reviewHeadingRef}
                   saving={savingId != null && savingId === selected?.id}
                   error={saveError && selected && saveError.id === selected.id ? saveError : null}
-                  matchingFindings={matchingFindings} onApplyToMatching={applyToMatching} cluster={selectedCluster?.type === 'cluster' ? selectedCluster : null}
+                  matchingFindings={matchingFindings} matchingReadyCount={[selected, ...matchingFindings].filter(f => f && readyAcrossScan.some(ready => ready.id === f.id)).length} legacyApprovalControls={legacyApprovalControls} onApplyToMatching={applyToMatching} cluster={selectedCluster?.type === 'cluster' ? selectedCluster : null}
                   draft={selected ? (drafts[selected.id] ?? null) : null}
                   onDraftChange={(v) => selected && setDrafts((d) => ({ ...d, [selected.id]: v }))}
                   detailExtra={renderDetailExtra ? renderDetailExtra(selected) : null}
@@ -993,14 +1001,16 @@ export default function RemediationInbox({
       {(!bulkPreviewOpen || readyAcrossScan.length > 0) && <section className="run-approval-summary" aria-label="Whole-run approval">
         <div><strong>Review and verify changes</strong>
           {/* Keep approval readiness separate from verification and completed counts. */}
-          <p>{runCounts.ready} ready review items · {runCounts.individual} need proposal information or individual review · {runCounts.inspection} applied changes available to inspect · {runCounts.manual} manual review items</p>
+          {legacyApprovalControls ? <p>{runCounts.ready} ready review items · {runCounts.individual} need proposal information or individual review · {runCounts.inspection} applied changes available to inspect · {runCounts.manual} manual review items</p> : <p>{runCounts.ready} ready to apply · {runCounts.individual} still need a valid proposal or individual review · {runCounts.manual} need manual work</p>}
           <p>{runCounts.ready ? 'Approve the ready fixes together. ACP will save the changes and check the results.' : preparingProposals ? 'Please wait for remediation to finish preparing suggestions.' : 'No fixes are ready to approve. View readiness for the next step.'}</p>
           {preparingProposals && <p role="status">Preparing proposals — remediation is still processing. Readiness updates as work finishes.</p>}
+          {!legacyApprovalControls && Object.keys(unreadyReasons).length > 0 && <details><summary>Why some fixes aren’t ready</summary><ul>{Object.entries(unreadyReasons).map(([reason, count]) => <li key={reason}>{count} · {reason === 'Version unavailable — review individually' ? 'Need fresh proposal versions' : reason === 'Missing proposal' ? 'Need a complete suggestion' : reason}</li>)}</ul>{onOpenPlan && <button type="button" className="linklike" disabled={readOnly} onClick={onOpenPlan}>Refresh suggestions from the remediation plan</button>}</details>}
         </div>
         <button type="button" className={readyAcrossScan.length ? 'primary' : 'ghost'} disabled={savingId != null || (readyAcrossScan.length > 0 && (readOnly || !onDecide))}
-          onClick={() => { setBatchScopeIds(null); setBulkPreviewOpen(true); if (readyAcrossScan.length) setConfirmRunRequest(n => n + 1) }}>
-          {readyAcrossScan.length ? `Approve all ready in this run (${readyAcrossScan.length})` : 'View run readiness'}
+          onClick={() => { setBatchScopeIds(null); setBulkPreviewOpen(true); if (readyAcrossScan.length) { if (legacyApprovalControls) setConfirmRunRequest(n => n + 1); else setApplyRunRequest(n => n + 1) } }}>
+          {readyAcrossScan.length ? legacyApprovalControls ? `Approve all ready in this run (${readyAcrossScan.length})` : `Apply all ready fixes (${readyAcrossScan.length})` : 'View run readiness'}
         </button>
+        {!legacyApprovalControls && <button type="button" className="linklike" disabled={readOnly || !onOpenPlan} title="Change automatic approval in the remediation plan for the next run" onClick={onOpenPlan}>Auto-apply AI fixes: {autoApprove === null ? 'checking' : autoApprove ? 'On' : 'Off'}</button>}
       </section>}
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       {!bulkPreviewOpen && <>
@@ -1062,7 +1072,8 @@ export default function RemediationInbox({
               <span>↑/↓ or J/K: move · Home/End: first/last · Enter: open selected item</span>
             </details>
           </div>
-          {(tab === 'review' || tab === 'active' || tab === 'all' || tab === 'needs-review') && <button type="button" className="ghost" aria-expanded={bulkPreviewOpen}
+          {/* Retired sidebar approval control; the whole-scan action above is authoritative. */}
+          {legacyApprovalControls && (tab === 'review' || tab === 'active' || tab === 'all' || tab === 'needs-review') && <button type="button" className="ghost" aria-expanded={bulkPreviewOpen}
                   disabled={savingId != null}
                   onClick={() => { setBatchScopeIds(null); setBulkPreviewOpen(open => !open) }}
                   style={{ marginTop: 8, fontWeight: 700 }}>
@@ -1182,6 +1193,7 @@ export default function RemediationInbox({
           visible={batchScopeIds ? queue.filter(f => batchScopeIds.includes(f.id)) : queue}
           decisions={decisions} drafts={drafts}
           confirmRequest={confirmRunRequest} onConfirmRequestHandled={() => setConfirmRunRequest(0)} preparingProposals={preparingProposals} onOpenPlan={onOpenPlan}
+          applyRequest={applyRunRequest} onApplyRequestHandled={() => setApplyRunRequest(0)}
           // What this key NAMES is the set of findings the batch covers — and that set is the
           // `visible` prop above, which reads scanId and batchScopeIds and does not read `tab` at
           // all. `tab` was in the key anyway, so switching category counted as a scope change and

@@ -1,5 +1,10 @@
 /* Keep counts in distinct columns; narrow screens scroll this table, not the page. */
 .document-findings-scroll { max-width: 100%; min-width: 0; overflow-x: auto; }
+.document-findings-scroll-all { max-height: 32rem; overflow: auto; scrollbar-gutter: stable; scrollbar-width: auto; }
+.document-findings-scroll-all::-webkit-scrollbar { width: 10px; height: 10px; }
+.document-findings-scroll-all::-webkit-scrollbar-thumb { background: #b8adbe; border: 2px solid #faf8fc; border-radius: 8px; }
+.document-findings-scroll-all::-webkit-scrollbar-track { background: #faf8fc; }
+.document-findings-scroll-all thead { position: sticky; top: 0; z-index: 1; background: var(--surface, #fff); }
 .document-findings-scroll:focus-visible { outline: 3px solid var(--plum, #493446); outline-offset: 2px; }
 .document-findings-scroll .document-findings-table { min-width: 760px; width: 100%; table-layout: auto; }
 .document-findings-scroll .document-findings-table th,

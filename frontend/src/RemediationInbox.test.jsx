@@ -25,7 +25,7 @@ beforeEach(() => { try { localStorage.clear(); sessionStorage.clear() } catch {}
 
 // Interaction tests use a deterministic document sort so the queue order is stable;
 // the priority-default ordering (critical-first) is covered by remediationInboxModel.test.js.
-const render = async (props) => { await act(async () => { root.render(createElement(RemediationInbox, { initialTab: 'needs-review', initialSort: 'document', initialGroup: 'issue', onOpenWord: () => {}, onRecheck: () => {}, ...props })) }) }
+const render = async (props) => { await act(async () => { root.render(createElement(RemediationInbox, { legacyApprovalControls: true, initialTab: 'needs-review', initialSort: 'document', initialGroup: 'issue', onOpenWord: () => {}, onRecheck: () => {}, ...props })) }) }
 const click = async (el) => { await act(async () => { el.tagName === 'OPTION' ? (el.parentElement.value = el.value, el.parentElement.dispatchEvent(new Event('change', { bubbles: true }))) : el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
 const btnByText = (t) => [...container.querySelectorAll('button, select[aria-label="Filter by status"] option')].find((b) => b.textContent.includes(t))
 const detailHeading = () => container.querySelector('h3')?.textContent
