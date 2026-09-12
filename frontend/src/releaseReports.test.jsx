@@ -3,6 +3,16 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import ReleaseReports from './ReleaseReports.jsx'
 afterEach(async()=>{await unmountAll();vi.useRealTimers()})
+it('reloads reports when the release changes with the same published count', async () => {
+ const read=vi.fn().mockResolvedValueOnce({status:'completed',reports:[{name:'old.pdf'}]}).mockResolvedValue({status:'completed',reports:[{name:'new.pdf'}]})
+ const {root,container}=createTestRoot()
+ await act(async()=>root.render(createElement(ReleaseReports,{scanId:'scan',releaseId:'old',publishedCount:4,read})))
+ expect(container.textContent).toContain('old.pdf')
+ await act(async()=>root.render(createElement(ReleaseReports,{scanId:'scan',releaseId:'new',publishedCount:4,read})))
+ expect(read).toHaveBeenCalledTimes(2)
+ expect(container.textContent).toContain('new.pdf')
+ expect(container.textContent).not.toContain('old.pdf')
+})
 async function mount(props={}) {const {root,container}=createTestRoot();await act(async()=>root.render(createElement(ReleaseReports,{scanId:'scan',...props})));return container}
 it('shows saved report links without claiming compliance',async()=>{
  const read=vi.fn().mockResolvedValue({status:'completed',bundle_id:'b',reports:[{name:'Scan summary.html',url:'https://example.com/report',download_url:'/scans/scan/release/reports/b/0'}]})

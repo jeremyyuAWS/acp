@@ -24,7 +24,7 @@ export default function ReleaseReports({ scanId, publishedCount = 0, readOnly = 
     }
     load()
     return () => { live = false; clearTimeout(timer); controller.abort() }
-  }, [scanId, publishedCount, refresh, read])
+  }, [scanId, releaseId, publishedCount, refresh, read])
   const retryDelivery = async () => {
     setBusy(true); setError('')
     try { await retry(scanId); if (currentScan.current === scanId) setRefresh(n => n + 1) } catch { if (currentScan.current === scanId) setError('Report delivery could not be restarted.') } finally { if (currentScan.current === scanId) setBusy(false) }
