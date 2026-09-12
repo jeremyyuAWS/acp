@@ -159,6 +159,33 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
         events = {}
         event_details_complete = True
         if proposals:
+            # Decision-log evidence describes checks at approval time. Bind it to
+            # exact run/snapshot/item identity, never nearby model or file activity.
+            db.execute(cur, '''SELECT file,rule_id,detail FROM decision_log
+                WHERE scan_id=%s AND actor='system' AND action='hitl.approved_under_run_policy'
+                ORDER BY ts DESC,id DESC LIMIT 1001''', (scan_id,))
+            approval_logs = db.fetchall(cur)
+            if len(approval_logs) > 1000:
+                event_details_complete = False
+            approval_evidence = {}
+            proposal_by_id = {p['snapshot_id']: p for p in proposals}
+            for log in approval_logs[:1000]:
+                try:
+                    detail = json.loads(log.get('detail') or '{}')
+                except (TypeError, ValueError):
+                    continue
+                if (not isinstance(detail, dict) or detail.get('run_id') != run_id
+                        or detail.get('authorized_by') != owner or detail.get('executed_by') != 'system'
+                        or not isinstance(detail.get('approval_evidence'), dict)
+                        or not isinstance(detail.get('proposal_snapshot_ids'), list)):
+                    continue
+                for snapshot_id in detail['proposal_snapshot_ids']:
+                    if not isinstance(snapshot_id, str):
+                        continue
+                    proposal = proposal_by_id.get(snapshot_id)
+                    if (proposal and detail.get('item_id') == proposal['item_id']
+                            and log['file'] == proposal['file'] and log['rule_id'] == proposal['rule_id']):
+                        approval_evidence.setdefault(snapshot_id, detail['approval_evidence'])
             marks = ','.join(['%s'] * len(proposals))
             for table, fields, key in (
                 ('hitl_events', 'e.id,e.action,e.edited,e.proposal_snapshot_ids,e.created_at', 'human_reviews'),
@@ -197,6 +224,8 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
                         if snapshot_id not in json.loads(value.get('proposal_snapshot_ids') or '[]'):
                             continue
                         event_key = 'system_approvals'
+                        if snapshot_id in approval_evidence:
+                            value['approval_evidence'] = approval_evidence[snapshot_id]
                     events.setdefault(snapshot_id, {}).setdefault(event_key, []).append(value)
     from remediation_contribution import read_contribution
     measured_contribution = read_contribution(store, owner, scan_id, run_id)

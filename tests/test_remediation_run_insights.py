@@ -31,6 +31,7 @@ def store(tmp_path):
         db.execute(cur, 'CREATE TABLE stage_executions(execution_id TEXT PRIMARY KEY,owner_email TEXT,scan_id TEXT,stage TEXT)')
         db.execute(cur, 'INSERT INTO stage_executions VALUES(%s,%s,%s,%s)', ('run-1', OWNER, 'scan-1', 'remediate'))
         db.execute(cur, 'CREATE TABLE hitl_events(id TEXT,model_call_id TEXT,scan_id TEXT,file TEXT,rule_id TEXT,item_id TEXT,action TEXT,edited INT,proposal_snapshot_ids TEXT,created_at TEXT)')
+        db.execute(cur, 'CREATE TABLE decision_log(id TEXT,ts TEXT,actor TEXT,action TEXT,scan_id TEXT,file TEXT,rule_id TEXT,detail TEXT)')
         db.execute(cur, 'CREATE TABLE ai_validation_outcomes(id TEXT,model_call_id TEXT,scan_id TEXT,file TEXT,rule_id TEXT,item_id TEXT,outcome TEXT,detail TEXT,regressions TEXT,created_at TEXT)')
     return Store(db)
 

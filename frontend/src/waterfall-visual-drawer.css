@@ -43,3 +43,5 @@
 .wf-disabled-totals > div + div { border-top-color:#79529c; background:#f7f2fb; }
 .wf-disabled-totals strong { font-size:26px; }
 @media(max-width:400px) { .wf-disabled-totals { grid-template-columns:1fr; } }
+
+.waterfall-visual-drawer--review { --wf-drawer-accent: #9a3f62; --wf-drawer-tint: #f9edf3; }

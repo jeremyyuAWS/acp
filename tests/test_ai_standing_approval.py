@@ -57,9 +57,8 @@ def proposal(store, rule='2.4.6', locator='slide:1', value='Clear title', model=
         zone='local', latency_ms=0, ok=True, scan_id=SID, file=FILE)
     p = {'locator': locator, 'before': '', 'proposed_value': value, 'source': 'AI synthetic fixture',
          'model': model, 'model_call_id': call_id}
-    # Standing approval is the one path with no human reading the draft, so the
-    # second-model review is mandatory there. Fixtures that expect auto-approval must
-    # carry one; pass review=None to exercise the fail-closed path.
+    # Independent review is optional under explicit run consent. Fixtures can
+    # supply a receipt; review=None covers exact drafts without optional review.
     if review is not None:
         from ai_run_policy import optional_current_run_context
         ctx = optional_current_run_context()
@@ -98,6 +97,46 @@ def test_later_fallbacks_approve_once_without_human_confirmation(isolated_store,
     assert not [r for r in rows(s,'decision_log') if r['action']=='hitl.approved']
     assert read_run_budget(s,OWNER,SID,ctx.run_id)['policy']['auto_approve_ai'] is True
     assert not [j for j in rows(s,'jobs') if j['type'] in {'publish_file','release_continue'}]
+
+
+@pytest.mark.parametrize('review', [False, True])
+def test_automatic_approval_records_checked_evidence_without_claiming_verified_quality(isolated_store, monkeypatch, review):
+    s = isolated_store
+    job = seed(s, monkeypatch, review=review)
+    with run_context(s, job['payload'], job) as ctx:
+        item = s.enqueue_proposals(SID, FILE, '2.4.6', [proposal(s, review='accept' if review else None)])
+        approve_file(s, ctx)
+    log = next(r for r in rows(s, 'decision_log') if r['action'] == 'hitl.approved_under_run_policy')
+    detail = json.loads(log['detail'])
+    assert detail['authorized_by'] == OWNER
+    assert detail['executed_by'] == 'system'
+    assert detail['approval_evidence'] == {
+        'basis': 'authorized_run_and_exact_proposal',
+        'selected_criteria': 'passed', 'complete_proposed_values': 'passed',
+        'supported_writer': 'passed', 'current_source': 'passed',
+        'exact_run_provenance': 'passed',
+        'ai_review': 'accepted' if review else 'not_required',
+        'application': 'pending', 'post_change_verification': 'pending',
+        'proposal_count': 1, 'models': ['fallback-2'],
+    }
+    assert s.get_hitl_item(item)['status'] == 'approved'
+    assert not s.get_hitl_item(item)['applied']
+    assert len(apply_jobs(s)) == 1
+
+
+@pytest.mark.parametrize('review', [False, True])
+def test_approval_evidence_uses_persisted_review_requirement(isolated_store, monkeypatch, review):
+    from types import SimpleNamespace
+    s = isolated_store
+    job = seed(s, monkeypatch, review=review)
+    with run_context(s, job['payload'], job) as ctx:
+        s.enqueue_proposals(SID, FILE, '2.4.6', [proposal(s, review='accept' if review else None)])
+        supplied = SimpleNamespace(owner_id=ctx.owner_id, scan_id=ctx.scan_id,
+            run_id=ctx.run_id, file=ctx.file,
+            policy={**ctx.policy, 'ai_review': {'enabled': not review}})
+        approve_file(s, supplied)
+    log = next(r for r in rows(s, 'decision_log') if r['action'] == 'hitl.approved_under_run_policy')
+    assert json.loads(log['detail'])['approval_evidence']['ai_review'] == ('accepted' if review else 'not_required')
 
 
 def test_multiple_rows_commit_one_apply_job_and_recheck_exact_bytes(isolated_store, monkeypatch):
@@ -290,7 +329,30 @@ def test_system_approval_history_is_not_a_human_review(isolated_store,monkeypatc
     result=read_insights(s,OWNER,SID,ctx.run_id)
     assert result['standing_approval']=={'enabled':True,'authorized_by':OWNER}
     assert len(result['proposals'][0]['system_approvals'])==1
+    evidence = result['proposals'][0]['system_approvals'][0]['approval_evidence']
+    assert evidence['exact_run_provenance'] == 'passed'
+    assert evidence['ai_review'] == 'not_required'
+    assert evidence['application'] == evidence['post_change_verification'] == 'pending'
     assert not result['proposals'][0].get('human_reviews')
+    assert not result['proposals'][0]['version_verified']
+
+
+@pytest.mark.parametrize('field', ['run_id', 'authorized_by', 'item_id', 'proposal_snapshot_ids'])
+def test_insights_do_not_attach_approval_evidence_from_different_identity(isolated_store, monkeypatch, field):
+    from remediation_run_insights import read_insights
+    s = isolated_store
+    job = seed(s, monkeypatch)
+    with run_context(s, job['payload'], job) as ctx:
+        s.enqueue_proposals(SID, FILE, '2.4.6', [proposal(s)])
+        approve_file(s, ctx)
+    log = next(r for r in rows(s, 'decision_log') if r['action'] == 'hitl.approved_under_run_policy')
+    detail = json.loads(log['detail'])
+    detail[field] = ['unrelated-snapshot'] if field == 'proposal_snapshot_ids' else 'unrelated'
+    with s._db.cursor() as cur:
+        s._db.execute(cur, 'UPDATE decision_log SET detail=%s WHERE id=%s', (json.dumps(detail), log['id']))
+    result = read_insights(s, OWNER, SID, ctx.run_id)
+    assert len(result['proposals'][0]['system_approvals']) == 1
+    assert 'approval_evidence' not in result['proposals'][0]['system_approvals'][0]
     assert not result['proposals'][0]['version_verified']
 
 

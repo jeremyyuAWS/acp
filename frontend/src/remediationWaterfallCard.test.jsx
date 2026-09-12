@@ -191,3 +191,27 @@ it('labels disabled AI separately from a running overall run', async () => {
   expect(drawer.textContent).not.toContain('Chart scope unavailable')
   expect(drawer.textContent).toContain('Overall run · in progress')
 })
+
+it('keeps graph, model journey and Changes aligned to the exact saved step', async () => {
+  const run_graph = { contract_version: 'remediation-run-graph.v1', chain_version: 1, coverage: 'complete',
+    steps: ['primary', 'fallback_1'].map((step_id, position) => ({ step_id, position, configured: true, enabled: true,
+      provider: 'recorded', model: `model-${position}`, attempt_ids: [`attempt-${position}`], state: 'suggestions_ready' })),
+    attempts: ['primary', 'fallback_1'].map((step_id, generation_position) => ({ step_id, generation_position,
+      attempt_id: `attempt-${generation_position}`, lineage_available: true, purpose: generation_position ? 'fallback' : 'draft' })),
+  }
+  getRunInsights.mockResolvedValue({ scan_id: 'scan', batch_id: 'batch', coverage: 'complete', attempts: [],
+    proposals: [{ snapshot_id: 'fallback-proposal', attempt_id: 'attempt-1', file: 'sample.pdf',
+      proposal: { before: 'Old wording', proposed_value: 'Clear wording' } }], review_receipts: [] })
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot({terminal:true})} activity={{view:{...activity.view, run_graph}}} />))
+  expect(container.querySelector('[data-stage=approval]').textContent).toContain('Automatic approval or individual review')
+  await act(async () => container.querySelector('[data-node-id="configured:primary"]').click())
+  const journey = document.querySelector('[aria-label="Recorded model journey"]')
+  await act(async () => journey.querySelector('[data-stage=fallback_1] button').click())
+  expect(container.querySelector('[data-node-id="configured:fallback_1"]').getAttribute('aria-pressed')).toBe('true')
+  expect(document.querySelector('.waterfall-visual-drawer__model').textContent).toContain('model-1')
+  await tab('Changes')
+  expect(document.querySelector('[role=tabpanel]').textContent).toContain('Clear')
+  expect(document.querySelector('[role=tabpanel]').textContent).toContain('wording')
+  expect(document.querySelector('[role=tabpanel]').textContent).not.toContain('No matching saved changes')
+})

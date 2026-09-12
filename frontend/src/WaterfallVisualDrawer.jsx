@@ -2,8 +2,8 @@ import { useCallback, useId, useRef, useState } from 'react'
 import Drawer from './Drawer.jsx'
 import './waterfall-visual-drawer.css'
 
-const TABS = ['Overview', 'Attempts', 'Evidence']
-const STAGES = ['rules', 'model', 'fallback1', 'fallback2', 'approval', 'verification']
+const TABS = ['Overview', 'Changes', 'Attempts', 'Evidence']
+const STAGES = ['rules', 'model', 'fallback1', 'fallback2', 'review', 'approval', 'verification']
 
 // Identity is the authorized account/run scope. Changing stages retains the tab;
 // changing identity remounts the body so old attempt selections cannot leak.
@@ -12,7 +12,7 @@ export default function WaterfallVisualDrawer(props) {
 }
 
 function ScopedDrawer({ stageTitle = 'AI waterfall', provider, model, status,
-  stageKind = 'model', breadcrumb, overview, attempts, evidence, footer, onClose,
+  stageKind = 'model', breadcrumb, overview, changes, attempts, evidence, footer, onClose,
   initialTab = 'Overview' }) {
   const [tab, setTab] = useState(TABS.includes(initialTab) ? initialTab : 'Overview')
   const id = useId()
@@ -27,7 +27,7 @@ function ScopedDrawer({ stageTitle = 'AI waterfall', provider, model, status,
       tabsRef.current[TABS.indexOf(name)]?.focus()
     }
   }, [])
-  const slot = { Overview: overview, Attempts: attempts, Evidence: evidence }[tab]
+  const slot = { Overview: overview, Changes: changes, Attempts: attempts, Evidence: evidence }[tab]
   const content = typeof slot === 'function' ? slot({ selectTab }) : slot
   const crumb = breadcrumb || `Run › ${stageTitle}`
   const accent = STAGES.includes(stageKind) ? stageKind : 'model'

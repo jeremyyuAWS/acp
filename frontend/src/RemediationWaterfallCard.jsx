@@ -4,6 +4,7 @@ import Drawer from './Drawer.jsx'
 import RemediationAssessmentProgress from './RemediationAssessmentProgress.jsx'
 import WaterfallVisualDrawer from './WaterfallVisualDrawer.jsx'
 import WaterfallDrawerOverview from './WaterfallDrawerOverview.jsx'
+import WaterfallDrawerChanges from './WaterfallDrawerChanges.jsx'
 import RemediationRunInsights from './RemediationRunInsights.jsx'
 import { getFindingDispositions } from './api.js'
 import { authEpoch } from './apiIdentity.js'
@@ -91,6 +92,12 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
   const selectedRole = selectedModel?.stage || selection
   const [stageDrawer, setStageDrawer] = useState(false)
   const closeStageDrawer = useCallback(() => setStageDrawer(false), [])
+  const openStage = (stage, model = null) => {
+    setSelectionScope(identity)
+    setSelection(model?.id || stage)
+    setSelectedModel(model ? { ...model, id: model.id || stage } : null)
+    setStageDrawer(true)
+  }
   const storyLive = !snapshot.terminal && (snapshot.state === 'running' || (snapshot.state === 'needs_attention' && snapshot.also?.includes('running')))
   const [motionPaused, setMotionPaused] = useState(false)
   const motion = useWaterfallMotion(snapshot, data, { paused: paused || motionPaused, error: state.error, selected: selectedRole })
@@ -150,7 +157,7 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
     {!streamlined && <RemediationAssessmentProgress snapshot={snapshot} assessmentContext={assessmentContext} identity={identity} paused={visualsPaused || state.error} />}
     <div className="wf-layout wf-layout-graph">
       <RemediationWaterfallGraph stages={stages} aiEnabled={data?.ai_enabled}
-        selection={selectionScope === identity ? selection : 'rules'} onSelect={(stage, model) => { setSelectionScope(identity); setSelection(stage); setSelectedModel(model); setStageDrawer(true) }} motion={motion}
+        selection={selectionScope === identity ? selection : 'rules'} onSelect={openStage} motion={motion}
         snapshot={snapshot} viewAvailable={data?.available} runGraph={data?.run_graph}
         paused={visualsPaused} error={state.error} identity={identity}
         reviewCount={snapshot.review?.items} verifiedCount={snapshot.fixes?.verified} />
@@ -161,9 +168,10 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
     {stageDrawer && selectionScope === identity && createPortal(<WaterfallVisualDrawer identity={identity}
       stageTitle={selectedModel?.stepId === 'fallback_1' ? 'First fallback' : selectedModel?.stepId === 'fallback_2' ? 'Second fallback' : ({ rules: 'Rule-based changes', first: 'Primary model', next: 'Recorded fallback', review: 'AI review', approval: 'Approval', verify: 'Verification', unknown: 'Recorded AI work' })[selectedRole]}
       provider={selectedModel?.provider} model={selectedModel?.model} status={data?.ai_enabled === false && !['rules', 'approval', 'verify'].includes(selectedRole) ? 'AI off for this run' : snapshot.terminal ? 'Overall run: finished' : 'Overall run: in progress'}
-      stageKind={selectedModel?.stepId === 'fallback_1' ? 'fallback1' : selectedModel?.stepId === 'fallback_2' ? 'fallback2' : ({rules:'rules',approval:'approval',verify:'verification'})[selectedRole] || 'model'}
+      stageKind={selectedModel?.stepId === 'fallback_1' ? 'fallback1' : selectedModel?.stepId === 'fallback_2' ? 'fallback2' : ({rules:'rules',review:'review',approval:'approval',verify:'verification'})[selectedRole] || 'model'}
       breadcrumb={`Run › ${({primary:'Primary model',fallback_1:'First fallback',fallback_2:'Second fallback',rules:'Rules',first:'Initial AI',next:'Recorded fallback',review:'AI review',approval:'Approval',verify:'Verification',unknown:'Recorded AI'})[selectedModel?.stepId || selectedRole] || 'Recorded stage'}`} onClose={closeStageDrawer}
-      overview={({selectTab}) => <WaterfallDrawerOverview aiEnabled={data?.ai_enabled} scanId={scanId} batchId={batchId} identity={identity} selectedModel={selectedModel} role={selectedRole} description={selectedDescription} snapshot={snapshot} live={storyLive} paused={visualsPaused || state.error} selectTab={selectTab} />}
+      overview={({selectTab}) => <WaterfallDrawerOverview aiEnabled={data?.ai_enabled} scanId={scanId} batchId={batchId} identity={identity} selectedModel={selectedModel} role={selectedRole} view={data} onSelectStage={openStage} description={selectedDescription} snapshot={snapshot} live={storyLive} paused={visualsPaused || state.error} selectTab={selectTab} />}
+      changes={<WaterfallDrawerChanges key={identity} scanId={scanId} batchId={batchId} live={storyLive} paused={paused || motion.hidden} modelFilter={selectedModel} />}
       attempts={<RemediationAttemptStory scanId={scanId} batchId={batchId} modelFilter={selectedModel?.model || selectedModel?.attemptIds ? selectedModel : null} defaultOpen={true} live={storyLive} paused={paused || motion.hidden} reviewHref={`${reviewUrl.pathname}${reviewUrl.search}${reviewUrl.hash}`} />}
       evidence={<><div className="wf-detail">{stageEvidence}</div><RemediationRunInsights scanId={scanId} batchId={batchId} inlineDrilldown /></>}
     />, document.body)}
