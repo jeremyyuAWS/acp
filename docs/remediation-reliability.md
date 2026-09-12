@@ -10,6 +10,8 @@ Remediation uses the accepted run's cloud consent, permitted providers, model po
 
 The server's `ACP_BOUNDED_TEXT_PROFILE` or `ACP_BOUNDED_TEXT_MODELS_JSON` must provide unexpired image-capable primary and fallback models. The existing `anthropic-balanced` and `openai-balanced` catalogs identify supported image positions. A text-only third position is not used for images. This feature does not change an existing run's accepted budget or local-only policy.
 
+Single-image remediation prepares a transport derivative when needed: aspect-preserving resize to at most 1568 pixels and encoding at most 1 MB. PNG preserves transparency; a required JPEG conversion composites over a recorded white background. Inputs are bounded at 20 MB encoded and 16 million decoded pixels before allocation; animated images defer rather than losing frames. The original image stays untouched. Original and processed hashes, dimensions, formats and conversion settings are returned as safe `image_processing` metadata and included in the durable input identity, so different source images cannot share a replay even when derivatives match. Already-bounded PNG/JPEG bytes remain unchanged. Full-document manifest packaging is unchanged.
+
 Local vision waits up to 30 seconds for admission by default (`ACP_VISION_QUEUE_TIMEOUT`), instead of 0.25 seconds. Cloud concurrency defaults to four per process (`ACP_CLOUD_VISION_MAX_CONCURRENCY`). Explicit rate-limit rejections have bounded retries. Calls with uncertain paid usage are not repeated blindly.
 
 ## Recorded outcomes

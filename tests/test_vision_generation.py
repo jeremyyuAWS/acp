@@ -267,3 +267,107 @@ def test_frozen_three_position_policy_uses_verified_image_prefix_without_changin
     assert generated['ok']
     assert [c['model'] for c in calls] == ['claude-haiku-4-5-20251001', 'claude-sonnet-5']
     assert all(any(block.get('type') == 'image' for block in c['messages'][0]['content']) for c in calls)
+
+
+def sized_image(size, color='red', mode='RGB'):
+    out = BytesIO()
+    Image.new(mode, size, color).save(out, format='PNG')
+    return out.getvalue()
+
+
+def test_standard_144dpi_pdf_page_is_resized_and_sent(setup):
+    import base64
+    store, job, calls, outputs = setup
+    source = sized_image((1224, 1584))
+    outputs.append('A red bicycle beside a brick wall.')
+    with run_context(store, job['payload'], job) as ctx:
+        generated = vision.generate('Describe', source)
+        rows = AttemptHistory(store._db).list_run(ctx.owner_id, ctx.scan_id, ctx.run_id)
+    assert generated['ok']
+    processing = generated['image_processing']
+    assert processing['original_dimensions'] == [1224, 1584]
+    assert max(processing['processed_dimensions']) == 1568
+    assert processing['original_sha256'] != processing['processed_sha256']
+    assert rows[0]['input_sha256'] == generated['input_sha256']
+    url = calls[0]['messages'][0]['content'][-1]['image_url']['url']
+    sent = base64.b64decode(url.split(',', 1)[1])
+    assert len(sent) <= 1024 * 1024
+    assert list(Image.open(BytesIO(sent)).size) == processing['processed_dimensions']
+    assert Image.open(BytesIO(source)).size == (1224, 1584)
+
+
+def test_large_office_embedded_image_is_extracted_raw_then_prepared(setup):
+    import zipfile
+    from remediate_office import image_bytes_for_locator
+    store, job, calls, outputs = setup
+    source = sized_image((3200, 2400))
+    office = BytesIO()
+    with zipfile.ZipFile(office, 'w') as archive:
+        archive.writestr('word/_rels/document.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>')
+        archive.writestr('word/media/image1.png', source)
+    extracted = image_bytes_for_locator(office.getvalue(), 'word/document.xml#rId1')
+    assert extracted == source
+    outputs.append('A red bicycle beside a brick wall.')
+    with run_context(store, job['payload'], job):
+        generated = vision.generate('Describe', extracted)
+    assert generated['ok']
+    assert generated['image_processing']['original_dimensions'] == [3200, 2400]
+    assert generated['image_processing']['processed_dimensions'] == [1568, 1176]
+
+
+def test_bounded_image_bytes_stay_unchanged():
+    source = image()
+    prepared, metadata = vision.prepare_image(source)
+    assert prepared is source
+    assert metadata['original_sha256'] == metadata['processed_sha256']
+    assert metadata['transformed'] is False
+
+
+def test_resized_sources_with_identical_derivatives_do_not_replay(setup):
+    store, job, calls, outputs = setup
+    # Two different source encodings of identical pixels normalize identically.
+    source = sized_image((1600, 1600))
+    out = BytesIO()
+    Image.open(BytesIO(source)).save(out, format='PNG', compress_level=0)
+    other = out.getvalue()
+    assert other != source
+    outputs.extend(['A red bicycle beside a brick wall.', 'A red bicycle beside a brick wall.'])
+    with run_context(store, job['payload'], job):
+        first = vision.generate('Describe', source)
+        second = vision.generate('Describe', other)
+    assert first['ok'] and second['ok']
+    assert first['image_processing']['processed_sha256'] == second['image_processing']['processed_sha256']
+    assert first['operation_id'] != second['operation_id']
+    assert len(calls) == 2
+
+
+def test_large_alpha_image_preserves_transparency():
+    source = sized_image((2000, 1600), (255, 0, 0, 128), mode='RGBA')
+    prepared, metadata = vision.prepare_image(source)
+    assert Image.open(BytesIO(prepared)).mode == 'RGBA'
+    assert metadata['alpha_background'] is None
+
+
+def test_oversized_encoded_image_is_bounded_and_alpha_composite_is_explicit():
+    import random
+    pixels = random.Random(1).randbytes(1600 * 1600 * 4)
+    source = BytesIO()
+    Image.frombytes('RGBA', (1600, 1600), pixels).save(source, format='PNG', compress_level=0)
+    prepared, metadata = vision.prepare_image(source.getvalue())
+    assert metadata['original_bytes'] > 1024 * 1024
+    assert len(prepared) <= 1024 * 1024
+    assert metadata['processed_format'] == 'JPEG'
+    assert metadata['alpha_background'] == '#ffffff'
+    assert max(metadata['processed_dimensions']) <= 1568
+
+
+def test_decoded_pixel_budget_rejects_before_loading(monkeypatch):
+    original_open = Image.open
+    source = sized_image((4000, 4001))
+    def opened(*args, **kwargs):
+        img = original_open(*args, **kwargs)
+        img.load = lambda *a, **kw: pytest.fail('Huge pixels decoded')
+        return img
+    monkeypatch.setattr(Image, 'open', opened)
+    with pytest.raises(ValueError, match='decoded_limit'):
+        vision.prepare_image(source)
