@@ -203,6 +203,14 @@ def generate_document(request, *, images=None, pdf_bytes=None):
         return deferred('ai_disabled_or_budget_zero')
     if not ctx.scan_id or request.manifest.document_id != ctx.file:
         return deferred('document_wide_source_identity_mismatch')
+    native_pdf = (ctx.policy.get('document_wide_input_mode') == 'native_pdf'
+                  and request.manifest.document_format.value == 'pdf')
+    native_profile = ctx.policy.get('document_wide_model_profile') if native_pdf else None
+    if native_profile:
+        from native_pdf_quality import PROFILE_ID, native_profile_context
+        if native_profile != PROFILE_ID:
+            return deferred('document_wide_native_profile_unknown')
+        ctx = native_profile_context(ctx)
     if len((ctx.policy.get('generation_chain') or {}).get('steps', [])) > 2:
         return deferred('document_wide_two_position_policy_required')
     if request.manifest.document_format.value == 'docx':
@@ -217,10 +225,13 @@ def generate_document(request, *, images=None, pdf_bytes=None):
             or any(f.success_criterion not in request.manifest.selected_criteria
                    for f in request.manifest.findings)):
         return deferred('document_wide_invalid_manifest_scope')
-    native_pdf = (ctx.policy.get('document_wide_input_mode') == 'native_pdf'
-                  and request.manifest.document_format.value == 'pdf')
     try:
-        generator = _document_output_generator(configured_generator())
+        if native_profile:
+            from native_pdf_quality import configured_native_pdf_generator
+            generator = configured_native_pdf_generator(ctx)
+        else:
+            generator = configured_generator()
+        generator = _document_output_generator(generator)
         if native_pdf:
             from document_wide_pdf_transport import native_pdf_transport
             generator = native_pdf_transport(generator, request, pdf_bytes, VISION_MODELS)
@@ -234,6 +245,7 @@ def generate_document(request, *, images=None, pdf_bytes=None):
         return deferred(reason if reason.startswith('document_wide_') else 'verified_model_pricing_unavailable')
     prompt = (_SCHEMA + '\nDocument output allowance: doc-output.v1\nRequest ID: ' + json.dumps(request.request_id)
               + '\nInput mode: ' + ('native_pdf' if native_pdf else 'extracted_context')
+              + ('\nNative PDF model profile: ' + native_profile if native_profile else '')
               + '\nUntrusted document manifest:\n' + request.stable_prefix
               + '\n' + request.instruction_suffix)
     # Never accept a separately altered prefix that describes a different source.
