@@ -98,7 +98,7 @@ export function waterfallGraphModel({ stages = [], aiEnabled, selection = 'rules
   const groups = [
     [{ id: 'rules', stage: 'rules', role: 'Rules', title: 'Rule-based fixes', provider: 'No LLM call required', detail: 'Supported corrections under your plan' }],
     ...(recordedWithFallback || [aiNodes(1), aiNodes(2)]),
-    [{ id: 'approval', stage: 'approval', role: 'Your approval', title: 'Human review', provider: 'You decide what is applied', value: reviewCount, metric: 'review items', detail: 'Suggestions are not verified fixes' }],
+    [{ id: 'approval', stage: 'approval', role: 'Approval', title: 'Apply the saved approval plan', provider: 'Automatic approval or individual review', value: reviewCount, metric: 'review items', detail: 'Suggestions are not verified fixes' }],
     [{ id: 'verify', stage: 'verify', role: 'Verify', title: 'Check the changes', provider: 'Evidence of completion', value: verifiedCount, metric: 'verified changes', detail: 'Across all correction origins' }],
   ]
   const narrow = width < 850

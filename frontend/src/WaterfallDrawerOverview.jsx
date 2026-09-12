@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import WaterfallDrawerCharts, { SettledSpend } from './WaterfallDrawerCharts.jsx'
 import WaterfallCount from './WaterfallCount.jsx'
+import WaterfallDrawerStory from './WaterfallDrawerStory.jsx'
 import useWaterfallDrawerMetrics from './useWaterfallDrawerMetrics.js'
 import { buildWaterfallDrawerCharts } from './waterfallDrawerChartData.js'
 
@@ -10,7 +11,7 @@ export function selectedDrawerScope(model) {
   return stage ? { stage, provider: model?.provider || null, model: model?.model || null } : null
 }
 export default function WaterfallDrawerOverview({ scanId, batchId, identity, selectedModel, role,
-  description, snapshot, live, paused, selectTab, aiEnabled }) {
+  description, snapshot, live, paused, selectTab, aiEnabled, view, onSelectStage }) {
   const disabled = aiEnabled === false && !['rules', 'verify', 'approval'].includes(role)
   const scope = selectedDrawerScope(selectedModel)
   const metrics = useWaterfallDrawerMetrics({ scanId, batchId, scope: scope || {}, live, enabled: !!scope && !disabled })
@@ -43,6 +44,7 @@ export default function WaterfallDrawerOverview({ scanId, batchId, identity, sel
   </div>
   return <div className="wf-detail">
     <p>{description}</p>
+    <WaterfallDrawerStory view={view} selectedModel={selectedModel} snapshot={snapshot} selectTab={selectTab} onSelectStage={onSelectStage} />
     {selectedModel?.detail && selectedModel.detail !== 'Recorded outcome unknown.' && <p>{selectedModel.detail}</p>}
     {scope ? <>
       <p className="wf-secondary">Selected stage and model · {metrics.data?.mode === 'recorded' ? 'saved results' : live ? 'recorded activity updates' : 'saved results'}. Completions include the attempt lifecycle, not pure model response time.</p>
@@ -50,13 +52,14 @@ export default function WaterfallDrawerOverview({ scanId, batchId, identity, sel
       {metrics.error && <p role="status">{metrics.data ? 'Refresh delayed · showing the last recorded metrics.' : 'Stage metrics unavailable.'} <button type="button" onClick={metrics.refresh}>Retry metrics</button></p>}
       {metrics.data && <>
         <dl className="wf-spending" aria-label="Recorded attempt counters">{charts.contribution.rows.map(row => <div key={row.id}><dt>{row.label} · attempts</dt><dd><WaterfallCount value={row.value} identity={counterIdentity} paused={paused || reduced || metrics.error || !live} /></dd></div>)}</dl>
-        <WaterfallDrawerCharts {...charts} />
+        <details><summary>Recorded attempt activity and pace</summary><WaterfallDrawerCharts {...charts} onInspect={() => selectTab('Attempts')} /></details>
         <details><summary>Settled cost for this stage and model</summary><SettledSpend data={charts.spend} /></details>
       </>}
     </> : role === 'rules' || role === 'verify' || role === 'approval' ? <>
       <dl className="wf-spending"><div><dt>{role === 'approval' ? 'Review items · run total' : 'Verified changes · all origins, run total'}</dt><dd><WaterfallCount value={role === 'approval' ? snapshot.review?.items : snapshot.fixes?.verified} identity={`${identity}:${role}`} paused={paused || reduced || !live} /></dd></div></dl>
       <p>No model pace is attributed to this stage. Saved evidence uses the units recorded for this run.</p>
     </> : <p>Chart scope unavailable: the saved records do not establish an exact generation position. Recorded attempts remain available.</p>}
+    <button type="button" className="ghost" onClick={() => selectTab('Changes')}>Explore before and after</button>
     <button type="button" className="ghost" onClick={() => selectTab('Attempts')}>View attempts</button>
   </div>
 }

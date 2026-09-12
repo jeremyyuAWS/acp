@@ -34,7 +34,7 @@ function FallbackEvidence({ attempt, group }) {
     {evidence.comparable ? <p><strong>AI review comparison:</strong> {reviewVerdict(evidence.beforeReview.verdict)} → {reviewVerdict(evidence.afterReview.verdict)}. Both reviews identify their exact saved outputs.</p>
       : <p><strong>Improvement:</strong> Not measured. Comparable reviews of both outputs are not available in this page.</p>}
     {evidence.afterReview && <p><strong>Review of this fallback:</strong> {reviewVerdict(evidence.afterReview.verdict)}{evidence.afterReview.reason ? ` · ${attemptReason(evidence.afterReview.reason)}` : ''}</p>}
-    <p>An AI review is not an independent accessibility check or human approval.</p>
+    <p>AI review evaluates the draft. Eligible suggestions can be automatically approved under the saved run plan; post-change verification remains separate.</p>
   </details>
 }
 function ProposalPreview({ proposal }) {
@@ -102,7 +102,7 @@ export default function RemediationAttemptStory({ scanId, batchId, live = false,
           {group.receipts.map((receipt, index) => <section className="attempt-story-review" key={`${receipt.operation_id}:${receipt.proposal_sha256}:${index}`}>
             <RemediationThresholdDecision decision={receipt.review?.gate} />
             <h5>{reviewVerdict(receipt.review?.verdict)}</h5><p>{receipt.review?.reason ? attemptReason(receipt.review.reason) : 'No review explanation was retained.'}</p>
-            <p>This review is linked to the saved output by its operation and content fingerprint. An AI review does not replace human approval.</p>
+            <p>This review is linked to the saved output by its operation and content fingerprint. Approval follows the saved run plan: qualifying suggestions can proceed automatically; exceptions need individual review.</p>
             <ul>{rows(receipt.review?.steps).map((step, i) => <li key={step.attempt_id || i}>{attemptPurpose(step.purpose)} · {step.provider || 'Provider not recorded'} · {step.model || 'Model not recorded'}: {attemptReason(step.reason)}</li>)}</ul>
           </section>)}
           <div className="attempt-story-next"><strong>Next action</strong><p>{group.next}</p>{reviewHref && <a href={reviewHref}>Open Review</a>}</div>

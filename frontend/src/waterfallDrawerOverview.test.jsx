@@ -33,7 +33,7 @@ it('aborts old scope, ignores its late response, and stops polling on unmount', 
  await act(async () => root.render(<WaterfallDrawerOverview {...props} selectedModel={{stepId:'fallback_2',model:'m',provider:'p'}}/>))
  expect(signal.aborted).toBe(true)
  await act(async () => resolveOld(payload(70)))
- expect(container.querySelector('dd').textContent).toBe('9')
+ expect(container.querySelector('.wf-spending dd').textContent).toBe('9')
  await act(async () => root.render(null))
  const reads=getWaterfallDrawerMetrics.mock.calls.length
  await act(async () => vi.advanceTimersByTimeAsync(45000))
@@ -44,7 +44,7 @@ it('clears denied data and does not poll completed runs', async () => {
  const {root,container}=createTestRoot()
  await act(async () => root.render(<WaterfallDrawerOverview {...props}/>))
  await act(async () => vi.advanceTimersByTimeAsync(15000))
- expect(container.querySelector('dd')).toBeNull()
+ expect(container.querySelector('.wf-spending dd')).toBeNull()
  await act(async () => vi.advanceTimersByTimeAsync(30000))
  expect(getWaterfallDrawerMetrics).toHaveBeenCalledTimes(2)
  getWaterfallDrawerMetrics.mockResolvedValue(payload(4))

@@ -179,15 +179,38 @@ def approve_file(store, ctx):
         return
     with store.transaction():
         authorization(store, owner, sid, run_id)
+        with store._db.cursor() as cur:
+            store._db.execute(cur, '''SELECT policy_json FROM ai_spending_run_policies
+                WHERE owner_id=%s AND scan_id=%s AND run_id=%s''', (owner, sid, run_id))
+            saved_policy = json.loads(store._db.fetchone(cur)['policy_json'])
+        review_required = saved_policy.get('ai_review', {}).get('enabled') is True
         if _identity(store.get_file_record(sid, file) or {}) != _identity(record):
             raise ValueError('Corrected copy or source changed before automatic approval')
         approved = []
         for row in selected:
             request_id = f'standing:{run_id}:{row["id"]}'
-            note = f'Automatically approved under the run plan authorized by {owner}; not an individual human review.'
+            note = f'Automatically approved under the run plan authorized by {owner}; application and post-change verification are pending.'
+            # Record the evidence already checked by eligible_item. Approval is
+            # permission to apply the exact draft, not a claim of verified quality.
+            evidence = {
+                'basis': 'authorized_run_and_exact_proposal',
+                'selected_criteria': 'passed',
+                'complete_proposed_values': 'passed',
+                'supported_writer': 'passed',
+                'current_source': 'passed',
+                'exact_run_provenance': 'passed',
+                'ai_review': 'accepted' if review_required else 'not_required',
+                'application': 'pending',
+                'post_change_verification': 'pending',
+                'proposal_count': len(row['proposals']),
+                'models': sorted({p['model'] for p in row['proposals']}),
+            }
             updated, replay = store.complete_hitl_decision(row['id'], 'approved', note, None,
                 resolution=None, approved_values=[p['proposed_value'] for p in row['proposals']],
-                actor=owner, detail=json.dumps({'authorized_by': owner, 'executed_by': 'system', 'run_id': run_id}),
+                actor=owner, detail=json.dumps({'authorized_by': owner, 'executed_by': 'system',
+                                               'run_id': run_id, 'item_id': row['id'],
+                                               'proposal_snapshot_ids': row['proposal_snapshot_ids'],
+                                               'approval_evidence': evidence}),
                 request_id=request_id, expected_version=row['decision_version'],
                 expected_proposal_snapshot_ids=row['proposal_snapshot_ids'], expected_source_revision=revision,
                 standing_approval_run_id=run_id)
