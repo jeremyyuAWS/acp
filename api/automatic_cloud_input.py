@@ -41,8 +41,17 @@ def select_document_input(context, data):
             decision['reason'] = 'native_pdf_models_unavailable'
             return selected, decision
     import pypdf
-    pdf = pypdf.PdfReader(BytesIO(data), strict=True)
-    text_bytes = sum(len((page.extract_text() or '').encode('utf-8')) for page in pdf.pages)
+    try:
+        pdf = pypdf.PdfReader(BytesIO(data), strict=True)
+        text_bytes = 0
+        for page in pdf.pages:
+            text_bytes += len((page.extract_text() or '').encode('utf-8'))
+            if text_bytes > 60000 * 4:
+                decision['reason'] = 'native_pdf_text_extraction_limit'
+                return selected, decision
+    except Exception:
+        decision['reason'] = 'native_pdf_text_read_failed'
+        return selected, decision
     # Reserve the manifest's bounded text plus framing before choosing native input.
     allowance = text_bytes + 8192 * len(pdf.pages) + 60000 * 4 + 16384
     for model in generator.models[:2]:

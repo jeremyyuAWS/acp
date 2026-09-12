@@ -185,3 +185,48 @@ def test_saved_input_is_scoped_to_owner_run_and_exact_artifact(isolated_store):
     isolated_store.log_decision('system', 'document_wide.input_selected', scan_id='scan', file='a.pdf',
         detail=json.dumps({'owner_id': 'owner', 'run_id': 'run', 'source_sha256': 'same', 'strategy': 'automatic', 'input_mode': 'extracted'}))
     assert workflow._saved_input(isolated_store, ctx, 'same')['input_mode'] == 'extracted'
+
+
+def test_durable_job_and_accepted_summary_keep_automatic_authority(isolated_store):
+    from test_ai_run_policy import seed
+    from ai_run_policy import run_context
+    from accepted_remediation_plan import read_accepted_plan
+    seed(isolated_store)
+    frozen = snapshot_impact_policy(isolated_store, 'owner', policy())
+    batch = isolated_store.enqueue_stage_batch('scan', 'remediate', 'remediate_file', [{
+        'owner': 'owner', 'scan_id': 'scan', 'file': 'a.pdf', 'remediation_impact_policy': frozen,
+    }], snapshot_id='snapshot', request_fingerprint='automatic-cloud-input')
+    job = isolated_store.get_job(batch['job_ids'][0])
+    with run_context(isolated_store, job['payload'], job) as ctx:
+        assert ctx.enabled is True
+        assert ctx.policy['cloud_input_strategy'] == 'automatic'
+        assert ctx.policy['cap_units'] == 25_000_000
+    saved = read_accepted_plan(isolated_store, 'owner', 'scan', batch['batch_id'])
+    assert saved['policy']['cloud_input_strategy'] == 'automatic'
+    assert saved['policy']['ai_budget_usd'] == '25.00'
+    assert read_accepted_plan(isolated_store, 'other', 'scan', batch['batch_id']) is None
+
+
+def test_pikepdf_valid_but_text_reader_failure_is_safe_extracted_admission(monkeypatch, specs):
+    import native_pdf_quality, pypdf
+    from types import SimpleNamespace
+    from document_wide_native_pdf import validate_native_pdf
+    data = pdf_data()
+    assert validate_native_pdf(data) == data
+    generator, _ = make_generator(specs, lambda *a, **kw: pytest.fail('no paid admission dispatch'), context=1000000)
+    monkeypatch.setattr(native_pdf_quality, 'configured_native_pdf_generator', lambda ctx: generator)
+    def unreadable():
+        raise ValueError('unsupported text encoding')
+    monkeypatch.setattr(pypdf, 'PdfReader', lambda *a, **kw: SimpleNamespace(pages=[SimpleNamespace(extract_text=unreadable)]))
+    selected, decision = select_document_input(context(), data)
+    assert selected.policy['document_wide_input_mode'] == 'extracted'
+    assert decision['reason'] == 'native_pdf_text_read_failed'
+
+
+def test_automatic_failures_do_not_refer_to_removed_manual_controls():
+    from document_wide_workflow import _reason
+    for reason in ('document_wide_native_pdf_context_limit', 'document_wide_native_pdf_model_unavailable', 'request_rejected_before_dispatch'):
+        text = _reason(reason, 'native_pdf', automatic=True)
+        assert 'Choose Document context' not in text and 'Try Document context' not in text
+        assert 'Remaining findings stay in review' in text
+    assert 'Choose Document context' in _reason('document_wide_native_pdf_model_unavailable', 'native_pdf')
