@@ -544,11 +544,11 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
             "different questions and collapsing them would overstate the coverage.", muted))
 
     el.append(Spacer(1, 4))
-    el.append(Paragraph(
+    el.append(KeepTogether([Paragraph(
         "<b>A score of 100 therefore means: no blocking findings among the criteria ACP evaluated "
         "for that document's format.</b> It is a record of what was checked and what was fixed, not "
         "a statement that the document conforms to WCAG 2.1 AA, and it must not be represented as "
-        "such.", muted))
+        "such.", muted)]))
     return el
 
 
