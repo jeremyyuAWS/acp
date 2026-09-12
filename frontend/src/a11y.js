@@ -34,6 +34,8 @@ export function useDialog(panelRef, onClose) {
 // Native <details> menus do not dismiss themselves after opening. Keep transient identity
 // information from lingering over the workspace, while never closing it under a user who is
 // pointing at the panel or tabbing through its actions.
+export const ACCOUNT_MENU_DISMISS_MS = 2000
+
 export function useAutoDismissDetails(detailsRef, delayMs = 5000) {
   const binding = useRef(null)
   // Account controls can appear after authentication. Bind when the node arrives,
