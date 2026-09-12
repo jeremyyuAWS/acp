@@ -1809,6 +1809,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             onAutoApproveChange={readOnly ? undefined : runAiApproval.change}
             autoApproveSaving={runAiApproval.saving}
             autoApproveError={runAiApproval.error}
+            onAutoApproveRetry={runAiApproval.retry}
             autoApproveNotice={runAiApproval.notice} onDismissAutoApproveNotice={runAiApproval.dismissNotice}
             onPublish={readOnly ? undefined : () => onNavigate?.('publish')}
             onOpenPlan={readOnly ? undefined : openRemediationPlan}

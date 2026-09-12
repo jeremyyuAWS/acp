@@ -4221,13 +4221,15 @@ def get_release_status(sid: str, request: Request):
     if status is None:
         return {"release_id": None, "documents_total": 0, "published": 0,
                 "failed": 0, "remaining": 0, "roots": [], "documents": []}
+    from missing_corrected_copy import project_documents
+    documents = project_documents(core.store, sid, owner, status['documents'])
     return {"release_id": status["id"], "release_folder_name": status["folder_name"],
             "created_at": status["created_at"], "status": status["status"],
             "parent_folder_id": status.get("parent_folder_id"),
             "parent_folder_name": status.get("parent_folder_name"),
             "documents_total": status["documents_total"], "published": status["published"],
             "failed": status["failed"], "remaining": status["remaining"],
-            "roots": status["roots"], "documents": status["documents"]}
+            "roots": status["roots"], "documents": documents}
 
 
 class ReleasePreviewRequest(BaseModel):

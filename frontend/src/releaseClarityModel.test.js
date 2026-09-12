@@ -57,3 +57,13 @@ it('distinguishes a missing publishable copy from accessibility findings', () =>
   expect(state.reason).toContain('does not indicate an accessibility finding')
   expect(canSelectRelease(state)).toBe(false)
 })
+
+it('shows orphaned delivery as unconfirmed without selecting or assuming published', () => {
+  const result = {status: 'interrupted', explanation: 'No active publishing job remains.', published_url: 'https://drive.example/possibly-created'}
+  const state = releaseReadiness({...corrected, corrected_sha256: 'abc'}, {results: {'a.pdf': result}, allowRemainingIssues: true})
+  expect(state.status).toBe('attention')
+  expect(state.label).toBe('Delivery not confirmed')
+  expect(state.reason).toBe(result.explanation)
+  expect(canSelectRelease(state)).toBe(false)
+  expect(deliveryIsCurrent(corrected, result)).toBe(false)
+})

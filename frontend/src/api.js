@@ -2628,7 +2628,15 @@ export const repairAutomaticReleaseSourceIdentity = async (scanId, options = {})
   if (SIM) throw new Error('Source identity repair requires a connected Microsoft source.')
   const identity = authEpoch()
   options.signal?.throwIfAborted()
-  const token = await refreshSPToken({ interactive: false })
+  let token
+  try { token = await refreshSPToken({ interactive: false }) }
+  catch (cause) {
+    options.signal?.throwIfAborted()
+    const failure = new Error(cause?.message || 'Microsoft connection required', { cause })
+    failure.code = 'microsoft_connection_required'
+    failure.sourceIdentityRequestSent = false
+    throw failure
+  }
   options.signal?.throwIfAborted()
   if (authEpoch() !== identity) throw new Error('The signed-in account changed.')
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/automatic/repair-source-identity`, {
@@ -2673,18 +2681,18 @@ export const createReleaseFolder = (provider, parent, name) => fetch(`${BASE}/re
 const simulatedRunAiApproval = new Map()
 const simulatedApproval = (scanId, runId) => simulatedRunAiApproval.get(`${scanId}:${runId}`)
   || { supported: true, enabled: false, revision: 0, run_id: runId, source_revision: `sim:${scanId}:${runId}` }
-export const getRunAiApproval = (scanId, runId) => SIM ? sim(simulatedApproval(scanId, runId)) : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/ai-approval/${encodeURIComponent(runId)}`, {
-  headers: headers(), cache: 'no-store',
+export const getRunAiApproval = (scanId, runId, options = {}) => SIM ? sim(simulatedApproval(scanId, runId)) : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/ai-approval/${encodeURIComponent(runId)}`, {
+  headers: headers(), cache: 'no-store', signal: options.signal,
 }).then(j)
 
-export const setRunAiApproval = (scanId, runId, setting) => SIM ? (() => {
+export const setRunAiApproval = (scanId, runId, setting, options = {}) => SIM ? (() => {
   const current = simulatedApproval(scanId, runId)
   if (setting.expected_revision !== current.revision || setting.expected_source_revision !== current.source_revision) return Promise.reject(new Error('Automatic approval setting changed; refresh and try again'))
   const updated = { ...current, enabled: setting.enabled === true, revision: current.revision + 1 }
   simulatedRunAiApproval.set(`${scanId}:${runId}`, updated)
   return sim(updated)
 })() : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/ai-approval/${encodeURIComponent(runId)}`, {
-  method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(setting),
+  method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(setting), signal: options.signal,
 }).then(j)
 
 

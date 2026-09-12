@@ -396,7 +396,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           .map((row) => [row.file, row.published_url])),
       }))
     }
-    const failed = rows.filter((row) => row.status === 'failed').length
+    const failed = rows.filter((row) => ['failed', 'interrupted'].includes(row.status)).length
     const inFlight = rows.filter((row) => row.status === 'queued' || row.status === 'running').length
     if (inFlight) releaseHadPendingRef.current = true
     else if (rows.length && releaseHadPendingRef.current) {
@@ -429,6 +429,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       verification: row.verification, published_at: row.published_at,
       created: !!row.created_result,
       failure_category: row.failure_category, explanation: row.explanation,
+      recovery_explanation: row.recovery_explanation,
     })),
   })
   }
@@ -453,7 +454,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       applyReleaseStatus(status)
       setReleaseError(null)
       const rows = status?.documents || []
-      if (expectedFiles.every(file => rows.some(row => row.file === file && ['published', 'failed'].includes(row.status)))) return status
+      if (expectedFiles.every(file => rows.some(row => row.file === file && ['published', 'failed', 'interrupted'].includes(row.status)))) return status
       await new Promise(resolve => {
         const timer = window.setTimeout(() => { context.cancelWait = null; resolve() }, 2000)
         context.cancelWait = () => { window.clearTimeout(timer); context.cancelWait = null; resolve() }

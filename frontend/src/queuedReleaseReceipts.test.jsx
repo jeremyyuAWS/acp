@@ -126,3 +126,21 @@ it('includes saved copies with remaining work only after the user chooses it',as
  await act(async()=>[...c.querySelectorAll('button')].find(b=>b.textContent==='Publish 1 saved copy').click())
  expect(publishAllFiles.mock.calls[0][3]).toMatchObject({allowRemainingIssues:true,expectedArtifacts:{'a.pdf':'v1'}})
 })
+
+it('restores interrupted legacy delivery without replaying or calling it active', async () => {
+ getReleaseStatus.mockResolvedValue({...receipt('interrupted'),status:'attention'})
+ const c=await mount(props)
+ expect(c.textContent).toContain('Delivery not confirmed')
+ expect(c.textContent).toContain('1 need attention')
+ expect(c.textContent).not.toContain('being released.')
+ expect(publishAllFiles).not.toHaveBeenCalled()
+})
+
+it('shows a read-only reconstruction diagnosis without overwriting the saved outcome or retrying', async () => {
+ const recovery_explanation='This PDF has no accessibility tag tree and needs document reconstruction.'
+ getReleaseStatus.mockResolvedValue({release_id:'r',status:'attention',documents:[{file:'a.pdf',status:'failed',failure_category:'no_corrected_copy',explanation:'No saved copy.',recovery_explanation}]})
+ const c=await mount({...props,files:[verified('a.pdf',{compliant:false,remediated_at:null,corrected_sha256:null})]})
+ expect(c.textContent).toContain('No saved copy')
+ expect(c.textContent).toContain(recovery_explanation)
+ expect(publishAllFiles).not.toHaveBeenCalled()
+})

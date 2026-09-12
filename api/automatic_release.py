@@ -287,7 +287,8 @@ def ready(store, row, file):
     if work_state != 'done':
         raise ValueError('Waiting for this run to finish remediating the file.')
     if partial and (not record.get('remediated_at') or not re.fullmatch('[0-9a-f]{64}', record.get('corrected_sha256') or '')):
-        raise FileRemediationFinishedWithoutCopy('Remediation finished without a saved corrected copy. The original is unchanged; remaining issues are listed for follow-up.')
+        from missing_corrected_copy import explanation
+        raise FileRemediationFinishedWithoutCopy(explanation(store, row['scan_id'], row['owner_email'], file, record))
     if (not partial and not record.get('compliant')) or not record.get('remediated_at') or not re.fullmatch('[0-9a-f]{64}', record.get('corrected_sha256') or ''):
         raise ValueError('Waiting for a saved corrected artifact.' if partial else 'Waiting for a verified corrected artifact.')
     # Remaining-issue permission covers unresolved findings, not approved content

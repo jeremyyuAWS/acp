@@ -613,3 +613,16 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(btnByText('Clear search')).toBeTruthy()
   })
 })
+
+
+it('shows unavailable and a retry after a failed approval check without claiming On', async () => {
+  let retries = 0
+  await render({ queue: QUEUE, decisions: {}, legacyApprovalControls: false, autoApprove: null, autoApproveError: 'The approval check timed out.', onAutoApproveRetry: () => { retries += 1 } })
+  expect(container.textContent).toContain('Unavailable')
+  expect(container.textContent).not.toContain('Checking…')
+  const toggle = container.querySelector('[role="switch"]')
+  expect(toggle.checked).toBe(false)
+  expect(toggle.disabled).toBe(true)
+  await click([...container.querySelectorAll('button')].find(button => button.textContent === 'Retry AI approval check'))
+  expect(retries).toBe(1)
+})
