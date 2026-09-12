@@ -1,6 +1,7 @@
 import './document-findings-table.css'
 import RemediationCategoryPill from './RemediationCategoryPill.jsx'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import AssessWorklist from './AssessWorklist.jsx'
 import RemediationFileDetail from './RemediationFileDetail.jsx'
 import { documentRows } from './assessMetrics.js'
@@ -12,7 +13,12 @@ import './remediation-live-documents.css'
 import { getFindingDispositions, listHitlQueue, getReleaseStatus, getSourceStatus } from './api.js'
 import { changeCategory } from './remediationCategories.js'
 
-export default function RemediationLiveDocuments({ scanId, files, cap, assessment, fixes: suppliedFixes, fixTotal: suppliedTotal, refreshKey, snapshot, events = [], connected, progressDocuments }) {
+export default function RemediationLiveDocuments({ scanId, files, cap, assessment, fixes: suppliedFixes, fixTotal: suppliedTotal, refreshKey, snapshot, events = [], connected, progressDocuments, progressHostId = null, onShowDocuments }) {
+  const [progressHost, setProgressHost] = useState(null)
+  useLayoutEffect(() => {
+    const host = progressHostId ? document.getElementById(progressHostId) : null
+    setProgressHost(host?.dataset.scanId === scanId && host?.dataset.batchId === snapshot?.batch_id ? host : null)
+  }, [progressHostId, scanId, snapshot?.batch_id])
   const [progressFilter, setProgressFilter] = useState(null)
   const [outcomeFilter, setOutcomeFilter] = useState(null)
   const [scanEvidence, setScanEvidence] = useState(null)
@@ -111,12 +117,15 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
     const timer = setTimeout(() => setChanged([]), 1500)
     return () => clearTimeout(timer)
   }, [signature])
+  const progressSummary = <RemediationProgressSummary key={snapshot?.batch_id || scanId} animate={!!liveEvidence && !!connected && !snapshot?.terminal} documents={effectiveProgress} selected={progressFilter}
+    onSelect={selection => { setProgressFilter(selection); onShowDocuments?.() }} reconciling={liveError} />
   const selectedRow = documentList.find(row => row.file === selected)
   const nextRow = documentList[documentList.findIndex(row => row.file === selected) + 1]
   useEffect(() => { setSelected(null) }, [scanId])
   return <div className="remediation-live-documents">
     <div hidden={!!selectedRow}>
-    <RemediationProgressSummary documents={effectiveProgress} selected={progressFilter} onSelect={setProgressFilter} reconciling={liveError} />
+    {progressHost?.isConnected && progressHost.dataset.batchId === snapshot?.batch_id
+      ? createPortal(progressSummary, progressHost) : progressSummary}
     <p className="vh" role="status" aria-live="polite">{announcement}</p>
     {liveError && <p role="status">Live categories could not refresh. The last confirmed counts remain visible.</p>}
     {liveMode && !currentDocuments && <p className="muted">Current finding outcomes are reconciling. Assessment counts remain visible below.</p>}

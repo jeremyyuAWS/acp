@@ -418,7 +418,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                                    // The run's live state and its ONE stream, owned by
                                    // useRemediationRun at App level so both survive this
                                    // component being unmounted on every tab change.
-                                   runStream = null, delivery = null }) {
+                                   runStream = null, delivery = null, progressHostId = null }) {
   const [queue, setQueue] = useState([])
   // The master/detail RemediationInbox owns its own view state (search, tabs, sort, selection),
   // so the old accordion/prefs plumbing (single-open openId, the search/severity/criterion/group
@@ -1943,7 +1943,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         live={<>
           {releasePlanNotice && <div role="status">{releasePlanNotice}</div>}
           {remMsg && <div role="status">{remMsg}</div>}
-          <RemediationLiveDocuments snapshot={scopedSnapshot} events={runStream?.events || []} connected={!!runStream?.connected} key={runId} scanId={runId} files={impactScope} cap={cap} assessment={assessment}
+          <RemediationLiveDocuments progressHostId={progressHostId} onShowDocuments={() => setWorkspaceRequest({ mode: 'live' })} snapshot={scopedSnapshot} events={runStream?.events || []} connected={!!runStream?.connected} key={runId} scanId={runId} files={impactScope} cap={cap} assessment={assessment}
             fixes={fixSource} fixTotal={fixTotal} refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`} />
         </>}
         waterfall={<>

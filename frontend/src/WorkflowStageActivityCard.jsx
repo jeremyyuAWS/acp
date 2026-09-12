@@ -6,7 +6,7 @@ import { canonicalStageCardModel, alignRemediationAssessment } from './canonical
 const terminal = (state) => ['processing_complete', 'succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed'].includes(state)
 const shown = (value) => value == null ? '—' : Number(value).toLocaleString()
 
-export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen }) {
+export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen, progressHostId = null, progressScanId }) {
   const model = canonicalStageCardModel(alignRemediationAssessment(snapshot, null))
   if (!model) return null
   const domain = model.domain
@@ -34,7 +34,8 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
       ? <><b>{shown(total)} assessed findings</b> · Outcome breakdown</>
       : <><b>{shown(done)} of {shown(total)}</b> {domain?.unit || model.unit}</>}</p>
     {findingAccounting && <p className="workflow-sse-card__notice">{live ? 'Verified totals update as document work progresses.' : 'Automatic document work has stopped; remaining findings still need review or remediation.'} Outcomes show what happened to the findings. Document categories show how they can be remediated; individual bucket counts can differ.</p>}
-    {findingAccounting && <div className="finding-outcome-kpis" aria-label="Finding totals">
+    {model.stage === 'remediate' && progressHostId && <div id={progressHostId} data-scan-id={progressScanId} data-batch-id={model.executionId} aria-label="Document progress summary" />}
+    {findingAccounting && !progressHostId && <div className="finding-outcome-kpis" aria-label="Finding totals">
       <div><span>Total assessed</span><strong>{shown(total)}</strong></div>
       <div className="finding-outcome-kpis__verified"><span>Verified fixed</span><strong>{remaining == null ? '—' : <LiveCounter key={model.executionId || model.workflowRevision} value={verified} />}</strong></div>
       <div className="finding-outcome-kpis__remaining"><span>Remaining · not verified</span><strong>{shown(remaining)}</strong></div>
