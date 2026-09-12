@@ -5507,8 +5507,8 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     language_uploaded = False
     if language_values:
         if ext == "pdf":
-            from remediate_pdf import apply_pdf_approved
-            language_write_fn = apply_pdf_approved
+            from pdf_structural_language import apply_pdf_structure_language
+            language_write_fn = apply_pdf_structure_language
         else:
             from apply_text_values import apply_language_parts
             language_write_fn = lambda d, v: apply_language_parts(d, ext, v)  # noqa: E731
