@@ -39,10 +39,17 @@ def _fill_empty_title(content: bytes, text: str) -> bytes | None:
         if len(titles) != 1:
             return None
         body = titles[0].find('p:txBody', _NS)
-        if body is None or ''.join(body.xpath('.//a:t/text()', namespaces=_NS)).strip():
+        if body is None:
             return None
         # Fields and breaks are meaningful content, not an empty placeholder.
         if body.xpath('.//a:fld | .//a:br', namespaces=_NS):
+            return None
+        current = ''.join(body.xpath('.//a:t/text()', namespaces=_NS))
+        # The writer may have uploaded before its database transaction rolled
+        # back. Replaying the exact approved value is a successful no-op.
+        if current == text:
+            return content
+        if current.strip():
             return None
         nodes = body.xpath('.//a:t', namespaces=_NS)
         if nodes:
@@ -94,6 +101,7 @@ def apply_pptx_slide_titles(
         return data, [], unresolved
 
     applied: list[dict] = []
+    changed = False
     in_buf = io.BytesIO(data)
     out_buf = io.BytesIO()
 
@@ -108,6 +116,7 @@ def apply_pptx_slide_titles(
                     title = to_write.pop(num)
                     new_content = _fill_empty_title(content, title)
                     if new_content is not None:
+                        changed = changed or new_content != content
                         content = new_content
                         applied.append({
                             "locator": f"slide {num}",
@@ -122,4 +131,4 @@ def apply_pptx_slide_titles(
     for num in to_write:
         unresolved.append(f"slide {num}")
 
-    return out_buf.getvalue() if applied else data, applied, unresolved
+    return out_buf.getvalue() if changed else data, applied, unresolved

@@ -71,6 +71,16 @@ def test_stale_or_ambiguous_or_unwritable_title_is_not_claimed_applied(options):
     assert unresolved == ['slide 1']
 
 
+def test_exact_approved_title_retry_succeeds_without_rewriting_slide():
+    original = fixture(existing='Already saved approved title')
+    fixed, applied, unresolved = apply_pptx_slide_titles(original, {'slide 1': 'Already saved approved title'})
+    assert fixed == original
+    assert parts(fixed) == parts(original)
+    assert applied == [{'locator': 'slide 1', 'before': '(empty title placeholder)',
+                        'after': 'Already saved approved title'}]
+    assert unresolved == []
+
+
 @pytest.mark.parametrize('value', ['', '   ', 'Invalid\x00XML'])
 def test_empty_or_invalid_title_leaves_original_bytes(value):
     original = fixture()
