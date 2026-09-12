@@ -341,6 +341,25 @@ def test_partial_plan_still_requires_saved_artifact(prepared):
     assert not prepared.calls
 
 
+def test_missing_copy_diagnosis_does_not_admit_upload_or_change_failure_identity(prepared, monkeypatch):
+    import missing_corrected_copy
+    row = partial_authorize(prepared)
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, 'UPDATE file_records SET corrected_sha256=NULL,remediated_at=NULL WHERE scan_id=%s', (SID,))
+    captured = []
+    def diagnose(store, sid, owner, file, record):
+        captured.append((sid, owner, file))
+        assert record['corrected_sha256'] is None
+        return 'Unsupported structure; repair and explicitly approve a new plan.'
+    monkeypatch.setattr(missing_corrected_copy, 'explanation', diagnose)
+    result = tick(prepared, row)
+    entry = result['progress']['files'][FILE]
+    assert captured == [(SID, OWNER, FILE)]
+    assert entry['state'] == 'failed' and entry['failure_category'] == 'no_corrected_copy'
+    assert entry['message'] == 'Unsupported structure; repair and explicitly approve a new plan.'
+    assert not prepared.calls and not entry.get('artifact_digest')
+
+
 def test_completed_file_without_copy_does_not_hold_other_files_or_reports(prepared, monkeypatch):
     import release_report_delivery
     other = 'no-copy.pptx'

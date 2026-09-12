@@ -37,3 +37,9 @@ it('never retries an uncertain metadata POST',async()=>{
  await expect(api.repairAutomaticReleaseSourceIdentity('scan')).rejects.toThrow('Connection lost')
  expect(fetch).toHaveBeenCalledTimes(1)
 })
+
+it('marks credential failures as pre-dispatch so reconnection can safely resume recovery',async()=>{
+ const {api,fetch}=await setup();refresh.mockRejectedValue(new Error('Interaction required'))
+ await expect(api.repairAutomaticReleaseSourceIdentity('scan')).rejects.toMatchObject({code:'microsoft_connection_required',sourceIdentityRequestSent:false})
+ expect(fetch).not.toHaveBeenCalled()
+})

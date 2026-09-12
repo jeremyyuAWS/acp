@@ -25,6 +25,7 @@ export default function RemediationReleasePlan({ scanId, files, intent, onChange
   currentIntent.current = intent
   const paused = useRef(disabled)
   const repairAttempts = useRef(new Set())
+  const safeReconnectRetries = useRef(new Set())
   paused.current = disabled
   useEffect(() => {
     let live = true, timer = null, cancelRead = null, refreshes = 0
@@ -91,7 +92,10 @@ export default function RemediationReleasePlan({ scanId, files, intent, onChange
         } else if (!requireChoice && next && !choice.current.review && !background) onChange(next)
       } catch (failure) {
         if (!live || authEpoch() !== identity) return
-        if (repairing) setRepairError(sourceRepairNotice(failure))
+        if (repairing) {
+          if (failure?.code === 'microsoft_connection_required' && failure.sourceIdentityRequestSent === false) safeReconnectRetries.current.add(key)
+          setRepairError(sourceRepairNotice(failure))
+        }
         else setError('The release destination could not be checked.')
         if (background && currentIntent.current?.key === key) { onChange(null); onAnswered?.(false) }
         // A failed first read needs the same bounded recovery as a blocked preview.
@@ -137,12 +141,17 @@ export default function RemediationReleasePlan({ scanId, files, intent, onChange
       {preview.blocked_files.map(({file, reason}) => <li key={file}><b>{file}</b> — {reason}</li>)}
     </ul></details>}
     {preview && (!ready || preview.blocked_files?.length > 0) && <p>Publishing readiness refreshes automatically for up to five minutes while this page is open. You can still run remediation. Resolve the issue above, then <button type="button" className="linklike" disabled={disabled} onClick={() => setReload(n => n + 1)}>Refresh publishing readiness</button>.</p>}
-    {repairError && <p role="alert">{repairError}</p>}
+    {repairError && <p role="alert">{repairError}{safeReconnectRetries.current.has(key) && <> <button type="button" className="linklike" disabled={disabled} onClick={() => {
+      // Only a known credential failure before dispatch is safe to try again.
+      // A timed-out or otherwise uncertain POST retains its one-attempt guard.
+      safeReconnectRetries.current.delete(key); repairAttempts.current.delete(key); setRepairError(''); setReload(n => n + 1)
+    }}>Retry source checks after reconnecting</button></>}</p>}
     {error && <p role="alert">{error} <button className="linklike" type="button" disabled={disabled} onClick={() => setReload(n => n + 1)}>Refresh destination</button></p>}
   </section>
 }
 
 function sourceRepairNotice(failure) {
+  if (failure?.code === 'microsoft_connection_required' && failure.sourceIdentityRequestSent === false) return 'Reconnect Microsoft in Sources, then retry source checks here. Your assessment is saved; no rescan is needed. No source-recovery request was sent.'
   const reason = failure?.detail?.reason
   if (failure?.detail?.code === 'source_identity_repair_blocked') {
     if (reason === 'microsoft_connection_required') return 'Reconnect SharePoint to confirm source access. No files were published.'

@@ -9700,16 +9700,12 @@ class Store:
                 "SELECT * FROM release_documents WHERE release_id=%s ORDER BY file",
                 (release_id,))
             documents = self._db.fetchall(cur)
-            published = sum(d.get("status") == "published" for d in documents)
-            failed = sum(d.get("status") == "failed" for d in documents)
-            total = int(release.get("documents_total") or 0)
-            status = "completed" if total and published == total else "attention" if failed else "running"
             self._db.execute(cur,
-                "UPDATE release_executions SET status=%s,updated_at=%s WHERE id=%s AND owner_email=%s",
-                (status, self._now(), release_id, owner))
-            return {**release, "status": status, "roots": roots, "documents": documents,
-                    "published": min(total, published), "failed": failed,
-                    "remaining": max(0, total - published - failed)}
+                "SELECT scan_id,status,payload,created_at,updated_at FROM jobs "
+                "WHERE scan_id=%s AND type='publish_file'", (release["scan_id"],))
+            jobs = self._db.fetchall(cur)
+            from release_delivery_reconciliation import project_delivery
+            return {**project_delivery(release, documents, jobs, now=self._now()), "roots": roots}
 
     def release_for_scan(self, scan_id: str, owner: str) -> dict | None:
         with self._db.cursor() as cur:
@@ -9742,12 +9738,13 @@ class Store:
                     "SELECT * FROM release_documents WHERE release_id=%s "
                     "ORDER BY published_at DESC,file", (release["id"],))
                 documents = self._db.fetchall(cur)
-                published = sum(row.get("status") == "published" for row in documents)
-                failed = sum(row.get("status") == "failed" for row in documents)
-                total = int(release.get("documents_total") or 0)
-                history.append({**release, "roots": roots, "documents": documents,
-                                "published": min(total, published), "failed": failed,
-                                "remaining": max(0, total - published - failed)})
+                self._db.execute(cur,
+                    "SELECT scan_id,status,payload,created_at,updated_at FROM jobs "
+                    "WHERE scan_id=%s AND type='publish_file'", (release["scan_id"],))
+                jobs = self._db.fetchall(cur)
+                from release_delivery_reconciliation import project_delivery
+                history.append({**project_delivery(release, documents, jobs, now=self._now()),
+                                "roots": roots})
             return history
 
     def refresh_scan_aggregate(self, scan_id: str) -> dict:

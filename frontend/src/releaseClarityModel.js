@@ -18,6 +18,8 @@ export function deliveryIsCurrent(file, result, done = {}) {
 export function releaseReadiness(file, { done = {}, results = {}, sourceState = () => undefined, pending = {}, processing = {}, blockers = {}, allowRemainingIssues = false } = {}) {
   const result = results[file.file]
   if (deliveryIsCurrent(file, result, done)) return { status: 'released', label: 'Delivered', reason: 'Delivery recorded. Originals unchanged.' }
+  if (result?.status === 'failed' && result.failure_category === 'no_corrected_copy' && result.recovery_explanation) return { status: 'attention', label: 'No saved copy', reason: result.recovery_explanation }
+  if (result?.status === 'interrupted') return { status: 'attention', label: 'Delivery not confirmed', reason: result.explanation || 'No active publishing job remains. Check the destination and receipt before retrying.' }
   if (['queued', 'running'].includes(result?.status)) return { status: 'delivering', label: 'Delivering', reason: 'Release continues in the background. Return here for the receipt.' }
   if (sourceState(file) === 'stale') return { status: 'changed', label: 'Needs attention', reason: 'Source changed. Rescan before releasing this copy.' }
   if (sourceState(file) === 'unavailable') return { status: 'unreachable', label: 'Needs attention', reason: 'Source unreachable. Restore access and check again.' }

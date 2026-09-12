@@ -678,7 +678,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 }
 
 export default function RemediationInbox({
-  queue: suppliedQueue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false, legacyApprovalControls = false, autoApprove = null, automaticApprovalPolicy, onAutoApproveChange, autoApproveSaving = false, autoApproveError = null, autoApproveNotice = null, onDismissAutoApproveNotice,
+  queue: suppliedQueue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false, legacyApprovalControls = false, autoApprove = null, automaticApprovalPolicy, onAutoApproveChange, autoApproveSaving = false, autoApproveError = null, onAutoApproveRetry, autoApproveNotice = null, onDismissAutoApproveNotice,
   initialSort = 'priority', initialTab = 'review', initialGroup = 'document', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
@@ -1042,9 +1042,9 @@ export default function RemediationInbox({
               disabled={readOnly || autoApprove === null || autoApproveSaving || !onAutoApproveChange}
               onChange={event => onAutoApproveChange?.(event.target.checked)} />
             <span className="run-auto-approve-switch__track" aria-hidden="true"><span /></span>
-            <span>Auto-apply AI fixes <b>{autoApproveSaving ? 'Saving…' : autoApprove === null ? 'Checking…' : autoApprove ? 'On' : 'Off'}</b></span>
+            <span>Auto-apply AI fixes <b>{autoApproveSaving ? 'Saving…' : autoApprove === null ? autoApproveError ? 'Unavailable' : 'Checking…' : autoApprove ? 'On' : 'Off'}</b></span>
           </label>}
-          {autoApproveError && <p role="alert" className="run-auto-approve-error">{autoApproveError}</p>}
+          {autoApproveError && <div role="alert" className="run-auto-approve-error"><p>{autoApproveError}</p>{onAutoApproveRetry && <button type="button" className="ghost small" disabled={readOnly || autoApproveSaving} onClick={onAutoApproveRetry}>Retry AI approval check</button>}</div>}
           {autoApproveNotice && <div className="run-auto-approve-toast" role="status" aria-live="polite" aria-atomic="true"><button type="button" className="ghost small" aria-label="Dismiss automatic approval notification" onClick={onDismissAutoApproveNotice}>×</button><b>AI reviews will be automatically approved.</b><p>Ready AI fixes will be applied automatically. Items needing manual work stay in the review queue.</p></div>}
         </div>
       </section>}
