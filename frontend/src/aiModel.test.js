@@ -61,6 +61,7 @@ describe('no rendered string names a model the product never calls', () => {
       .map((line, i) => [i + 1, line])
       .filter(([, line]) => VENDOR.test(line))
       .filter(([, line]) => !/^\s*(\/\/|\*|\/\*)/.test(line))   // comments may explain the history
+      .filter(([, line]) => !(new Set(['RemediationPlanChoices.jsx', 'AcceptedRemediationPlanSummary.jsx']).has(f) && line.includes('GPT-4.1') && line.includes('Claude Sonnet 5'))) // Explicit native-PDF model consent, not a claim that a model ran.
       .filter(([, line]) => !/Claude-paced/.test(line))          // who built it, not what runs
     expect(offending.map(([n, l]) => `${f}:${n} ${l.trim()}`)).toEqual([])
   })

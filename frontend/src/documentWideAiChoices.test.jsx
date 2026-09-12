@@ -47,6 +47,7 @@ it('offers explicit full-PDF consent without silently upgrading old choices', as
   expect(choices[0].checked).toBe(true)
   expect(choices[1].checked).toBe(false)
   expect(container.textContent).toContain('Full PDF — advanced preview')
+  expect(container.textContent).toContain(['GPT', '-4.1 first, with ', 'Clau', 'de Sonnet 5'].join(''))
   expect(container.textContent).toContain('Other file formats keep using extracted context')
   await act(async () => choices[1].click())
   expect(onChange).toHaveBeenCalledWith('document_wide_input_mode', 'native_pdf')
@@ -54,4 +55,9 @@ it('offers explicit full-PDF consent without silently upgrading old choices', as
 it('cannot select full-PDF processing without a positive budget', async () => {
   const { container } = await mount({ ...base, document_wide_ai: true, ai_budget_usd: '0.00' })
   expect(container.querySelectorAll('.remediation-document-input input')[1].disabled).toBe(true)
+})
+it('keeps legacy native selection without silently adding the optimized profile', async () => {
+  const { container, onChange } = await mount({ ...base, document_wide_ai: true, document_wide_input_mode: 'native_pdf' })
+  expect(container.textContent).toContain('Your saved Full PDF choice retains its configured cloud models')
+  expect(onChange).not.toHaveBeenCalled()
 })

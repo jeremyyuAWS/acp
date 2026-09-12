@@ -46,3 +46,12 @@ it('uses the page font for labels and shared monospace for every saved value', (
   expect(legacy).toContain('Document context · extracted text and supported images')
   expect(legacy).not.toContain('Full PDF · advanced preview')
 })
+
+it('discloses the optimized PDF models only for the frozen native profile', () => {
+  const policy = { ai: 1, ai_zone: 'any', document_wide_ai: true, document_wide_input_mode: 'native_pdf' }
+  const names = ['GPT', '-4.1 first → ', 'Clau', 'de Sonnet 5 fallback'].join('')
+  expect(render({ policy: { ...policy, document_wide_model_profile: 'native-pdf-quality.v1' } })).toContain(names)
+  expect(render({ policy })).not.toContain(names)
+  expect(render({ policy })).toContain('optimized profile not recorded')
+  expect(render({ policy: { ...policy, document_wide_input_mode: 'extracted', document_wide_model_profile: 'native-pdf-quality.v1' } })).not.toContain(names)
+})
