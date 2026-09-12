@@ -15,9 +15,9 @@ async function mount(extra = {}) {
   await act(async () => root.render(createElement(RemediationWorkspaceTabs, { ...props, ...extra })))
   return { root, container }
 }
-it('has only Live and Review tabs and defaults to Live', async () => {
+it('has Live, Review and AI waterfall tabs and defaults to Live', async () => {
   const { container } = await mount()
-  expect([...container.querySelectorAll('[role=tab]')].map(n => n.textContent)).toEqual(['Live', 'Review'])
+  expect([...container.querySelectorAll('[role=tab]')].map(n => n.textContent)).toEqual(['Live', 'Review', 'AI waterfall'])
   expect(container.querySelector('#rem-panel-live').hidden).toBe(false)
   expect(container.querySelector('dialog').open).toBe(false)
 })
@@ -40,7 +40,7 @@ it.each(['plan', 'modes'])('opens legacy %s URLs in the plan dialog', async mode
   history.replaceState({}, '', `/?tab=remediate&mode=${mode}`)
   const { container } = await mount()
   expect(container.querySelector('dialog').open).toBe(true)
-  expect(container.querySelectorAll('[role=tab]')).toHaveLength(2)
+  expect(container.querySelectorAll('[role=tab]')).toHaveLength(3)
 })
 it('closes the plan and reveals Live on an accepted launch', async () => {
   history.replaceState({}, '', '/?tab=remediate&mode=plan')
@@ -54,8 +54,8 @@ it('supports keyboard wraparound and browser history', async () => {
   const live = container.querySelector('#rem-mode-live')
   const review = container.querySelector('#rem-mode-review')
   await act(async () => live.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })))
-  expect(document.activeElement).toBe(review)
-  expect(container.querySelector('#rem-panel-review').hidden).toBe(false)
+  expect(document.activeElement).toBe(container.querySelector('#rem-mode-waterfall'))
+  expect(container.querySelector('#rem-panel-waterfall').hidden).toBe(false)
   await act(async () => review.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })))
   expect(document.activeElement).toBe(live)
   history.replaceState({}, '', '/?tab=remediate&mode=plan')
@@ -109,4 +109,13 @@ it('closes an initial plan as soon as it is accepted', async () => {
   expect(container.querySelector('dialog').open).toBe(true)
   await act(async () => root.render(createElement(RemediationWorkspaceTabs, { ...props, planAccepted: true })))
   expect(container.querySelector('dialog').open).toBe(false)
+})
+
+it('reveals the third waterfall tab through clicks and direct links', async () => {
+  history.replaceState({}, '', '/?tab=remediate&mode=waterfall')
+  const {container}=await mount({waterfall:'graph content'})
+  expect(container.querySelector('#rem-panel-waterfall').hidden).toBe(false)
+  expect(container.querySelector('#rem-panel-waterfall').textContent).toBe('graph content')
+  await act(async()=>container.querySelector('#rem-mode-live').click())
+  expect(container.querySelector('#rem-panel-waterfall').hidden).toBe(true)
 })

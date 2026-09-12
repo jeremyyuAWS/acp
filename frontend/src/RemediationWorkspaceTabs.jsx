@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import RemediationPlanDialog from './RemediationPlanDialog.jsx'
 import useConfirmedRemediationActivity from './useConfirmedRemediationActivity.js'
-const MODES = ['live', 'review']
+const MODES = ['live', 'review', 'waterfall']
 const shownPlans = new Set()
 function planWasShown(runId) {
   if (shownPlans.has(runId)) return true
@@ -21,7 +21,7 @@ function modeFromLocation() {
 }
 
 export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snapshot = null,
-  plan, review, live, reviewOptional = false, workspaceRequest = null, planAccepted = false, assessmentReady = false, assessmentIdentity }) {
+  plan, review, live, waterfall, reviewOptional = false, workspaceRequest = null, planAccepted = false, assessmentReady = false, assessmentIdentity }) {
   const planIdentity = assessmentIdentity || runId
   // Live is the default workspace. Legacy Plan links open the required planning dialog.
   const [chosen, setChosen] = useState(() => modeFromLocation())
@@ -108,7 +108,7 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
         id={`rem-mode-${value}`} aria-controls={`rem-panel-${value}`} aria-selected={mode === value}
         tabIndex={mode === value ? 0 : -1} onKeyDown={(event) => onKeyDown(event, index)}
         onClick={() => select(value)}>
-        {value === 'live' ? 'Live' : reviewOptional ? 'Review suggestions · Optional' : 'Review'}
+        {value === 'live' ? 'Live' : value === 'waterfall' ? 'AI waterfall' : reviewOptional ? 'Review suggestions · Optional' : 'Review'}
         {value === 'review' && snapshot?.batch_id && (snapshot.scan_id || snapshot.run_id) === runId && <span>{reviewCount.toLocaleString()}</span>}
         {value === 'live' && activeWork && <span className="rem-mode-live-dot" aria-label="active">●</span>}
       </button>)}
@@ -124,5 +124,6 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
       <h2 className="sr-only">Live Processing</h2>
       {live}
     </div>
+    <div ref={node => { panels.current.waterfall = node }} id="rem-panel-waterfall" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-waterfall" hidden={mode !== 'waterfall'}>{waterfall}</div>
   </>
 }

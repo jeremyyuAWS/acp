@@ -1903,7 +1903,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           loading={acceptedPlan?.loading === true}
           authorization={acceptedAuthorization} />
       </details>}
-      {delivery}
+      {delivery && <details className="panel" aria-label="Publish corrected copies"><summary>Publish corrected copies</summary>{delivery}</details>}
       <section id="accepted-run-details" hidden={!runDetailsOpen} aria-label="Run details">
         <RemediationAutoRelease statusOnly onStatus={setAutomaticReleaseState} scanId={runId} files={impactScope} readOnly={readOnly} />
         {runDetailsOpen && <details><summary>Additional run information</summary>
@@ -1945,9 +1945,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           {remMsg && <div role="status">{remMsg}</div>}
           <RemediationLiveDocuments snapshot={scopedSnapshot} events={runStream?.events || []} connected={!!runStream?.connected} key={runId} scanId={runId} files={impactScope} cap={cap} assessment={assessment}
             fixes={fixSource} fixTotal={fixTotal} refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`} />
+        </>}
+        waterfall={<>
           {/* The large panel consumes the App-owned controller. Mounting this view opens no
               stream of its own, so the compact card, global card and panel stay on one cursor. */}
-          <RemediationOpsPanel streamlined snapshot={runStream?.snapshot || null}
+          <RemediationOpsPanel streamlined hideActivity snapshot={runStream?.snapshot || null}
                                assessmentContext={{ files, cap, assessment, scanId: runId, runStatus: run?.status }}
                                connected={!!runStream?.connected}
                                receivedAt={runStream?.receivedAt || null}
