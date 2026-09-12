@@ -207,6 +207,29 @@ def test_pdf_language_stale_or_prose_locator_is_never_credited(store, monkeypatc
     assert store.mark_file_compliant_if_reviewed(SID, FILE) is False
 
 
+@pytest.mark.parametrize('wrong_prefix', ['figure', 'field'])
+def test_language_approval_cannot_write_other_pdf_properties(store, monkeypatch, tmp_path, wrong_prefix):
+    path = tmp_path / FILE
+    if wrong_prefix == 'figure':
+        _tagged_pdf(path, n_figs=1)
+        locator = 'pdf:fig:1:0'
+    else:
+        _form_pdf(path, ['Text1'])
+        locator = 'pdf:field:1:0'
+    original = path.read_bytes()
+    blob = _Blob(original)
+    item_id = _seed(store, sc='3.1.2', rule_name='Language of Parts',
+                    locators=[locator], wcag_rule='PDF_PART_LANGUAGE')
+    store.update_hitl_item(item_id, 'approved', None, None)
+    store.approve_proposal_values(item_id, ['fr'])
+
+    _run_handler(monkeypatch, store, blob, residual='real')
+
+    assert blob.data == original and blob.uploads == []
+    assert store.count_unapplied_approved_values(SID, FILE) == 1
+    assert store.mark_file_compliant_if_reviewed(SID, FILE) is False
+
+
 def test_a_write_that_does_not_clear_the_criterion_credits_nothing(store, monkeypatch, tmp_path):
     """Credit follows the re-scan, not the write — same honesty rule as the Office lane."""
     src = tmp_path / FILE
