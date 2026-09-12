@@ -164,6 +164,42 @@ def test_successful_exact_receipt_completes_run(prepared):
     assert len(prepared.calls)==1
 
 
+def test_unknown_dispatch_keeps_reconciling_and_late_receipt_completes_reports(prepared, monkeypatch):
+    import release_report_delivery
+    destination=flow.preview(prepared.store,SID,OWNER,[FILE])['destination']
+    row=flow.authorize(prepared.store,SID,OWNER,prepared.run,[FILE],destination,'late-receipt',include_reports=True)
+    prepared.mode='unknown'
+    waiting=tick(prepared,row)
+    assert waiting['status'] in flow.ACTIVE
+    assert waiting['progress']['files'][FILE]['state']=='blocked'
+    assert len(prepared.calls)==1
+    release=prepared.store.ensure_release_execution(SID,OWNER,'sharepoint',1,preferred_folder_name=row['intent']['release_folder_name'],parent_folder_id=destination['folder_id'])
+    prepared.store.record_release_document(release['id'],OWNER,dict(file=FILE,status='published',artifact_digest='sha256:'+DIGEST))
+    reports=[]
+    monkeypatch.setattr(release_report_delivery,'queue_release_reports',lambda *args:reports.append(args[3]))
+    completed=tick(prepared,waiting)
+    assert completed['status']=='completed'
+    assert reports==[release['id']]
+    assert len(prepared.calls)==1
+
+
+def test_late_exact_receipts_correct_failed_public_status_without_reactivating(prepared):
+    row=authorize(prepared)
+    row=flow.publish_admission(prepared.store,row['id'],OWNER,SID,FILE,DIGEST)
+    row=persistence.save(prepared.store,row,status='failed',progress={**row['progress'],'files':{FILE:{'state':'failed','artifact_digest':DIGEST}}})
+    release=prepared.store.ensure_release_execution(SID,OWNER,'sharepoint',1,preferred_folder_name=row['intent']['release_folder_name'],parent_folder_id=row['intent']['destination']['folder_id'])
+    before=count_jobs(prepared)
+    assert flow.public(row,prepared.store)['status']=='failed'
+    prepared.store.record_release_document(release['id'],OWNER,dict(file=FILE,status='published',artifact_digest='sha256:'+'b'*64))
+    assert flow.public(row,prepared.store)['status']=='failed'
+    prepared.store.record_release_document(release['id'],OWNER,dict(file=FILE,status='published',artifact_digest='sha256:'+DIGEST))
+    status=flow.public(row,prepared.store)
+    assert status['status']=='completed'
+    assert status['progress']['published']==1
+    assert persistence.get(prepared.store,row['id'],OWNER)==row
+    assert count_jobs(prepared)==before
+
+
 def test_concurrent_duplicate_ticks_admit_one_delivery(prepared,monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     import threading
