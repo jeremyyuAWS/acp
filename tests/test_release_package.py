@@ -262,3 +262,12 @@ def test_automatic_package_contains_exact_corrected_bytes_and_follow_up_reports(
     assert checked[0][1]['allow_remaining_issues'] is True
     with pytest.raises(HTTPException, match='corrected copy changed'):
         scans._build_release_zip('scan-1', 'owner@example.com', scan, ['report.pdf'], rows, package_name='', preserve_hierarchy=True, include_manifest=True, expected_artifacts={'report.pdf':'f'*64})
+
+
+@pytest.fixture(autouse=True)
+def _candidate_assessment_for_delivery_fixture(monkeypatch):
+    # These delivery fixtures use sentinel bytes, not Office/PDF documents. Real
+    # saved-byte scanner gates are exercised in test_release_candidate_assessment.
+    import release_candidate_assessment
+    monkeypatch.setattr(release_candidate_assessment, 'assess_candidate',
+                        lambda *args, **kwargs: {'fixture_assessment': True})

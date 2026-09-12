@@ -232,12 +232,19 @@ class Verification:
     credit has to go through `cleared()`, which cannot be fooled by an empty residual that
     came from a scan which never ran."""
 
-    __slots__ = ("ok", "residual", "reason")
+    __slots__ = ("ok", "residual", "reason", "_assessment")
 
-    def __init__(self, ok: bool, residual=frozenset(), reason: str = ""):
+    def __init__(self, ok: bool, residual=frozenset(), reason: str = "", assessment=None):
         object.__setattr__(self, "ok", bool(ok))
         object.__setattr__(self, "residual", frozenset(residual))
         object.__setattr__(self, "reason", reason)
+        from copy import deepcopy
+        object.__setattr__(self, "_assessment", deepcopy(assessment))
+
+    @property
+    def assessment(self):
+        from copy import deepcopy
+        return deepcopy(self._assessment)
 
     def __setattr__(self, *_a):
         raise AttributeError("Verification is immutable")
@@ -293,8 +300,8 @@ def verify_residual(fixed_bytes: bytes, filename: str, *, scan_id: str | None = 
         skipped = fd.get("skipped_rules")
         return Verification(False, residual,
                             reason=f"scan status {status or 'missing'!r}"
-                                   + (f", {skipped} rule(s) skipped" if skipped else ""))
-    return Verification(True, residual)
+                                   + (f", {skipped} rule(s) skipped" if skipped else ""), assessment=fd)
+    return Verification(True, residual, assessment=fd)
 
 
 def verify_residual_scs(fixed_bytes: bytes, filename: str):

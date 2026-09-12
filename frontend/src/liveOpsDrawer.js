@@ -2233,15 +2233,29 @@ export function idleShare(app = {}) {
 export function queueRoleLoad(summary = {}) {
   const byStage = summary?.by_stage || {}
   const roles = summary?.worker_roles || {}
-  const rows = []
+  const pools = new Map()
   for (const [stage, row] of Object.entries(byStage)) {
     const queued = num(row?.queued) ?? 0
     if (!queued) continue
-    const role = roles[stage]
-    // Only a LIVE role's pool counts. A dead role's last-known pool_size is not capacity.
-    const slots = role && role.alive ? num(role.pool_size) : null
-    rows.push({ stage, queued, slots, over: slots != null && queued > slots, unknown: slots == null })
+    // Release's publish/package/continuation jobs are claimed by the Remediate lane.
+    // Aggregate demand BEFORE comparing it with capacity: these stages share one pool.
+    const workerRole = stage === 'release' ? 'remediate' : stage
+    const pool = pools.get(workerRole) || { stage: workerRole, queued: 0, stages: [] }
+    pool.queued += queued
+    pool.stages.push(stage)
+    pools.set(workerRole, pool)
   }
+  const rows = [...pools.values()].map((pool) => {
+    const roleKey = pool.stage === 'discover' ? 'discovery' : pool.stage
+    const role = roles[roleKey] || roles[pool.stage]
+    const measured = summary?.worker_capacity_by_role?.[roleKey]
+    // Only a LIVE role's pool counts. A dead role's last-known pool_size is not capacity.
+    const slots = measured
+      ? (measured.capacity_source === 'worker_instances' ? num(measured.worker_slots) : null)
+      : (role && role.alive ? num(role.pool_size) : null)
+    return { ...pool, label: pool.stages.includes('release') ? 'Remediate & Release' : pool.stage,
+      slots, over: slots != null && pool.queued > slots, unknown: slots == null }
+  })
   // Worst first: a role over its slots leads, then by how much work is stuck behind how little
   // capacity. A role whose slots are unknown sorts after the ones that are known to be over,
   // because a measured problem outranks an unmeasured one.
@@ -2274,7 +2288,7 @@ export function queueCapacityGauge(summary = {}) {
   }
   if (worst.unknown) {
     return { fraction: null, over: false,
-      label: `${totalQueued} waiting · ${worst.stage} has ${worst.queued} and is not reporting slots` }
+      label: `${totalQueued} waiting · ${worst.label} has ${worst.queued} and is not reporting slots` }
   }
   if (worst.over) {
     return {
@@ -2282,14 +2296,14 @@ export function queueCapacityGauge(summary = {}) {
       over: true,
       // Names the ROLE and its own slots. "scale remediate" is the action; "the fleet is busy"
       // is not.
-      label: `${totalQueued} waiting · ${worst.stage} has ${worst.queued} for ${worst.slots} `
+      label: `${totalQueued} waiting · ${worst.label} has ${worst.queued} for ${worst.slots} `
         + `${worst.slots === 1 ? 'slot' : 'slots'}`,
     }
   }
   return {
     fraction: Math.min(1, worst.queued / Math.max(1, worst.slots)),
     over: false,
-    label: `${totalQueued} waiting · ${worst.stage} has ${worst.queued} for ${worst.slots} `
+    label: `${totalQueued} waiting · ${worst.label} has ${worst.queued} for ${worst.slots} `
       + `${worst.slots === 1 ? 'slot' : 'slots'}`,
   }
 }

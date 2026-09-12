@@ -17,6 +17,9 @@ FILE = "Leave.docx"
 
 
 class FakeStore:
+    def set_job_phase(self, *args):
+        pass
+
     def __init__(self):
         self.documents = {}
         self.jobs = None
@@ -210,6 +213,7 @@ def test_sharepoint_worker_records_canonical_provider_receipt(monkeypatch):
         "destination": "graph:library-1:root-1:HR/Policies/Leave.docx",
         "content_digest": DIGEST,
         "receipt": {
+            "corrected_copy_assessment": {"fixture_assessment": True},
             "provider_id": "copy-1", "url": "https://sp/copy", "created": True,
             "checksum": "sha256:copy", "filename": FILE, "verified": True,
             "finding_lineage": {
@@ -520,3 +524,12 @@ def test_partial_release_worker_still_rejects_changed_corrected_bytes(monkeypatc
             "owner": OWNER, "allow_remaining_issues": True, "artifact_digest": "sha256:stale",
             "remediated_at": "now"}, {"attempts": 1})
     assert store.published is None
+
+
+@pytest.fixture(autouse=True)
+def _candidate_assessment_for_delivery_fixture(monkeypatch):
+    # Provider/fencing fixtures intentionally use sentinel bytes; the actual
+    # document gate is proven by test_release_candidate_assessment.
+    import release_candidate_assessment
+    monkeypatch.setattr(release_candidate_assessment, 'assess_candidate',
+                        lambda *args, **kwargs: {'fixture_assessment': True})

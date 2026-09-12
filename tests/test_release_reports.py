@@ -299,3 +299,30 @@ def test_change_report_shows_saved_unverified_ai_without_credit(isolated_store, 
     assert 'Original findings fixed and verified</td><td>Not recorded' in assets[0]['content'].decode()
     checklist = next(a['content'].decode() for a in assets if a['name'].startswith('checklist-one'))
     assert 'Suggested description' not in checklist
+
+
+def test_fresh_unknown_copy_report_and_manifest_keep_exact_artifact_uncertainty(isolated_store, monkeypatch):
+    import json
+    import core
+    from routes import scans
+    release_id = setup(isolated_store)
+    digest = 'a' * 64
+    isolated_store.record_release_document(release_id, OWNER, {'file': 'one.pdf',
+        'status': 'published', 'artifact_digest': 'sha256:' + digest})
+    evidence = {'artifact_sha256': digest, 'release_id': release_id,
+        'assessment_ok': False, 'assessment_status': 'unavailable',
+        'remaining_issues': None, 'remaining_criteria': [], 'reason': 'engine unavailable'}
+    isolated_store.log_decision(OWNER, 'release.corrected_copy_assessed', scan_id='scan',
+        file='one.pdf', detail=json.dumps(evidence))
+    assets = build_release_reports(isolated_store, 'scan', OWNER, release_id)
+    report = next(asset['content'].decode() for asset in assets if asset['name'].startswith('checklist-one'))
+    assert 'Current remaining findings are unknown' in report
+    assert 'No remaining issues are recorded' not in report
+    assert 'engine unavailable' in report and digest in report
+    exported = json.loads(next(asset['content'] for asset in assets if asset['name'] == 'saved-copy-assessments.json'))
+    assert exported['documents'][0]['remaining_issues'] is None
+    monkeypatch.setattr(core, 'store', isolated_store)
+    manifest = scans._release_manifest_payload(isolated_store.release_status(release_id, OWNER),
+        scan_id='scan', owner=OWNER, snapshot_id='snapshot')
+    document = next(row for row in manifest['documents'] if row['file'] == 'one.pdf')
+    assert document['corrected_copy_assessment'] == evidence

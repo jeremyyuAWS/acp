@@ -73,6 +73,7 @@ def _prepare_release_package(payload: dict, job: dict) -> None:
             package_name=payload.get("package_name") or "",
             preserve_hierarchy=payload.get("preserve_hierarchy") is not False,
             include_manifest=payload.get("include_manifest") is not False,
+            allow_remaining_issues=payload.get("allow_remaining_issues") is True if expected is not None else True,
             **({"expected_artifacts": expected, "report_assets": report_assets} if expected is not None else {}))
         _phase(job, "saving the package for download")
         if not _blob.upload_release_package(owner, scan_id, job["id"], output):
@@ -881,6 +882,7 @@ def _release_failure(release_id: str, owner: str, filename: str, record: dict,
         "released_relative_path": None,
         "status": "failed",
         "failure_category": category,
+        "artifact_digest": 'sha256:' + record['corrected_sha256'] if record.get('corrected_sha256') and category in {'release_assessment_remaining', 'release_assessment_unavailable', 'corrected_copy_unreadable'} else None,
         "explanation": explanation,
         "created": False,
     })
@@ -995,6 +997,11 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
             raise ReleaseArtifactError("Prior delivery has no exact artifact digest. Reconcile that delivery before retrying.", category="delivery_version_unresolved")
         if identity == "reuse":
             return
+        _phase(job, "assessing the saved corrected copy before publishing")
+        from release_candidate_assessment import assess_candidate
+        candidate_assessment = assess_candidate(
+            core.store, scan_id, filename, owner, content_digest, record.get("remediated_at"),
+            allow_remaining_issues=allow_remaining_issues, release_id=release_id)
         chosen_parent = release.get("parent_folder_id")
         if chosen_parent and source == "sharepoint":
             chosen_drive, _, chosen_item = chosen_parent.partition("/")
@@ -1099,6 +1106,7 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
             finding_lineage = (lineage_reader(execution_id, filename)
                                if callable(lineage_reader) else None)
             provider_receipt = {
+                "corrected_copy_assessment": candidate_assessment,
                 **({"release_review": payload.get("release_review") or release_review_evidence(record, owner=owner, allow_remaining_issues=True, store=core.store, scan_id=scan_id)} if allow_remaining_issues else {}),
                 "provider_id": publication.get("id"), "url": publication.get("url"),
                 "created": bool(publication.get("created")),
@@ -1117,6 +1125,7 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
             finding_lineage = (lineage_reader(execution_id, filename)
                                if callable(lineage_reader) else None)
             provider_receipt = {
+                "corrected_copy_assessment": candidate_assessment,
                 **({"release_review": payload.get("release_review") or release_review_evidence(record, owner=owner, allow_remaining_issues=True, store=core.store, scan_id=scan_id)} if allow_remaining_issues else {}),
                 "provider_id": publication.get("id"), "url": publication.get("url"),
                 "created": bool(publication.get("created")),

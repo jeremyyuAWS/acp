@@ -301,3 +301,12 @@ def test_uploaded_copy_uses_saved_drive_destination_without_cloud_source_lookup(
     assert freshness == ['local']
     assert len(svc.created) == 1
     assert store.documents[FILE]['status'] == 'published'
+
+
+@pytest.fixture(autouse=True)
+def _candidate_assessment_for_delivery_fixture(monkeypatch):
+    # Provider/fencing fixtures intentionally use sentinel bytes; the actual
+    # document gate is proven by test_release_candidate_assessment.
+    import release_candidate_assessment
+    monkeypatch.setattr(release_candidate_assessment, 'assess_candidate',
+                        lambda *args, **kwargs: {'fixture_assessment': True})

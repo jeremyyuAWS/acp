@@ -52,6 +52,9 @@ def test_jobless_release_reuses_identity_and_recovers_only_failed_items(isolated
 
 
 class _RouteStore:
+    def set_job_phase(self, *args):
+        pass
+
     def __init__(self, source):
         self.source = source
         self.events = []
@@ -336,3 +339,12 @@ def test_provider_diagnostics_accept_google_metadata_and_ignore_unsafe_values(ca
     assert result == {"error_type": "OSError"}
     assert "secret-token" not in caplog.text
     assert "document_id" not in caplog.text
+
+
+@pytest.fixture(autouse=True)
+def _candidate_assessment_for_delivery_fixture(monkeypatch):
+    # These delivery fixtures use sentinel bytes, not Office/PDF documents. Real
+    # saved-byte scanner gates are exercised in test_release_candidate_assessment.
+    import release_candidate_assessment
+    monkeypatch.setattr(release_candidate_assessment, 'assess_candidate',
+                        lambda *args, **kwargs: {'fixture_assessment': True})

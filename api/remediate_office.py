@@ -32,6 +32,7 @@ import os
 import posixpath
 import re
 import zipfile
+from html import unescape
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -132,14 +133,14 @@ def _strip_tags(xml_chunk: str) -> str:
 
 def _derive_alt(attrs: str, caption: str | None) -> tuple[str, str] | None:
     """Faithful alt source, in priority order. Returns (alt, source) or None."""
-    title = _ATTR(attrs, "title").strip()
+    title = unescape(_ATTR(attrs, "title")).strip()
     if title:
         return title, "the image's own Alt-Text title"
     if caption:
-        cap = _CAPTION_LEAD.sub("", caption).strip()
+        cap = unescape(_CAPTION_LEAD.sub("", caption)).strip()
         if len(cap) >= 4:
             return cap[:250], "the adjacent caption"
-    name = _ATTR(attrs, "name").strip()
+    name = unescape(_ATTR(attrs, "name")).strip()
     if name and not _GENERIC_NAME.match(name):
         return name, "the shape's descriptive name"
     return None
@@ -467,7 +468,10 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                 out.append(keep); continue
             alt, origin = src
             new_attrs = re.sub(r'\s*\bdescr="[^"]*"', "", attrs)  # drop the empty/junk descr
-            keep = f'<{tag}{new_attrs} descr="{_xesc(alt)}"{selfclose}>'
+            # `tag` is a matching expression for Excel's prefixed/default namespace
+            # variants, not an XML element name. Preserve the producer's actual name.
+            actual_tag = re.match(r"<([^\s/>]+)", keep).group(1)
+            keep = f'<{actual_tag}{new_attrs} descr="{_xesc(alt)}"{selfclose}>'
             fixed.append((alt, origin))
         out.append(keep)
     out.append(xml[last:])

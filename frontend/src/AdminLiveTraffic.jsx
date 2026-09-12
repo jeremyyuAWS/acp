@@ -12,7 +12,7 @@ import LiveOpsAiSummary from './LiveOpsAiSummary.jsx'
 import CapacityModeStrip from './CapacityModeStrip.jsx'
 import CollapsibleSection from './CollapsibleSection.jsx'
 import { appendSample, deriveEvents, formatDuration, mergeEvents, queueCapacityGauge,
-  durableRunEvents, sampleForNode, secondsSince, workflowStageRuns } from './liveOpsDrawer.js'
+  capacityForService, durableRunEvents, sampleForNode, secondsSince, workflowStageRuns } from './liveOpsDrawer.js'
 
 ensureResizeObserver(typeof window === 'undefined' ? globalThis : window)
 
@@ -22,6 +22,8 @@ const STAGE = {
   remediate: { label: 'Remediate', color: '#8B4D79' },
   release: { label: 'Release', color: '#A66A16' },
 }
+
+const workerLabel = (stage) => stage === 'remediate' ? 'Remediate & Release' : (STAGE[stage]?.label || stage)
 
 // Colours are TOKENS, not literals, so the high-contrast toggle reaches them. Every consumer
 // below puts these in a CSS property context — `color`, and a `border-left` shorthand — where
@@ -172,7 +174,8 @@ export function workerServiceRows(summary = {}) {
         recent_lifecycle_events: measured.recent_lifecycle_events || [],
         freshness_threshold_seconds: measured.freshness_threshold_seconds,
       } : {
-        jobs_in_flight: Number(load[stage]?.running || 0),
+        jobs_in_flight: Number(load[stage]?.running || 0)
+          + (stage === 'remediate' ? Number(load.release?.running || 0) : 0),
         utilization_pct: null,
         capacity_source: heartbeat.alive ? 'legacy_role_heartbeat' : 'unavailable',
         measured_at: heartbeat.heartbeat_at || null,
@@ -590,13 +593,8 @@ export function trafficEdgeStyle(color, active = false) {
   }
 }
 
-// THE SCOPE OF THIS NUMBER IS NOT THE STAGE IT IS DRAWN ON. api/routes/control.py reads ONE
-// container app — WORKER_APP_NAME, defaulting to `acp-worker` — so this is a tier-wide reading,
-// and it is attached to every stage node. Without the qualifier, Discover, Assess and Remediate
-// each display the same vCPU/RAM/disk figures as though they were that service's own allocation.
-//
-// The per-service numbers that ARE per-service (slots, active, available, heartbeat, version)
-// come from that role's own heartbeat and are shown alongside.
+// Hardware is selected by service identity through capacityForService. The scope note below
+// names the measured app explicitly; it never assigns one app's size to another worker lane.
 // What the size figure actually describes, said in terms of the services that ARE reporting.
 //
 // WORKER_APP_NAME names ONE container app, and production runs three worker services of two
@@ -648,6 +646,7 @@ export function infrastructureDetail(data, snapshot = {}, capacity = null) {
   const summary = snapshot?.summary || {}
   if (data.kind === 'worker') {
     const service = data.service || {}
+    const serviceCapacity = capacityForService(capacity, service)
     return {
       title: `${data.label} infrastructure`, subtitle: 'Live worker capacity and Azure configuration', color: data.color,
       facts: [
@@ -661,15 +660,13 @@ export function infrastructureDetail(data, snapshot = {}, capacity = null) {
         ['Unattributed running', service.unattributed_running ?? 'Not reported'],
         ['Capacity source', service.capacity_source || 'Not reported'],
         ['Capacity measured', service.measured_at || 'Not reported'],
-        ['Replica size', reportedWorkerSize(capacity)],
-        // Adjacent to the size deliberately: the figure above is ONE container app's, drawn on
-        // every stage node, so the row that says whose it is has to sit next to it rather than
-        // at the bottom of the list.
-        ['Size measured from', sizeScopeNote(capacity, workerServiceRows(snapshot?.summary || {}))],
-        ['Replicas', capacity?.configured ? `${capacityValue(capacity.current_replicas)} running · ${capacityValue(capacity.min_replicas)} min · ${capacityValue(capacity.max_replicas)} max` : 'Not reported'],
-        ['Live utilization', capacity?.metrics_available ? `${capacityValue(capacity.cpu_percent, '%')} CPU · ${capacityValue(capacity.memory_percent, '%')} memory` : 'Not reported'],
-        ['Active revision', capacity?.active_revision_name || 'Not reported'],
-        ['Revision health', capacity?.configured ? `${capacityValue(capacity.revision_health)} · ${capacityValue(capacity.revision_traffic_percent, '%')} traffic` : 'Not reported'],
+        ['Replica size', reportedWorkerSize(serviceCapacity)],
+        // Keep the named app beside its own size; unrelated app readings remain unavailable.
+        ['Size measured from', sizeScopeNote(serviceCapacity, workerServiceRows(snapshot?.summary || {}))],
+        ['Replicas', serviceCapacity?.configured ? `${capacityValue(serviceCapacity.current_replicas)} running · ${capacityValue(serviceCapacity.min_replicas)} min · ${capacityValue(serviceCapacity.max_replicas)} max` : 'Not reported'],
+        ['Live utilization', serviceCapacity?.metrics_available ? `${capacityValue(serviceCapacity.cpu_percent, '%')} CPU · ${capacityValue(serviceCapacity.memory_percent, '%')} memory` : 'Not reported'],
+        ['Active revision', serviceCapacity?.active_revision_name || 'Not reported'],
+        ['Revision health', serviceCapacity?.configured ? `${capacityValue(serviceCapacity.revision_health)} · ${capacityValue(serviceCapacity.revision_traffic_percent, '%')} traffic` : 'Not reported'],
         ['Heartbeat', service.age_s == null ? 'Not reported' : `${Math.round(service.age_s)}s ago · ${service.version || 'version unknown'}`],
       ],
     }
@@ -841,12 +838,13 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
   )
   ;['discover', 'assess', 'remediate'].forEach((stage, index) => {
     const service = serviceByStage.get(stage) || { stage, active: 0, available: 0, slots: 0, alive: false }
+    const serviceCapacity = capacityForService(capacity, service)
     // ariaLabel sits on the NODE, not in `data` — ReactFlow reads node.ariaLabel when it renders
     // the wrapper (index.js: "aria-label": node.ariaLabel). Nested in data it is silently ignored,
     // which is how this was first written and what the announcement test caught.
     nodes.push({ id: `stage:${stage}`, type: 'infra',
       position: { x: 720, y: WORKER_LANE_TOP + index * WORKER_LANE_GAP },
-      ariaLabel: `${STAGE[stage].label} workers, ${service.status || (service.alive ? 'online' : 'standby')}, `
+      ariaLabel: `${workerLabel(stage)} workers, ${service.status || (service.alive ? 'online' : 'standby')}, `
         + (service.capacity_source === 'worker_instances'
           ? `${service.active} busy of ${service.slots} slots. `
           : `slot utilization unavailable. ${service.jobs_in_flight || 0} jobs recorded in flight. `)
@@ -856,19 +854,17 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
           ? `${service.jobs_in_flight} jobs recorded in flight. ` : ''}`
         + 'Select for details.',
       data: { kind: 'worker',
-      label: `${STAGE[stage].label} workers`, status: service.status || (service.alive ? 'online' : 'standby'),
+      label: `${workerLabel(stage)} workers`, status: service.status || (service.alive ? 'online' : 'standby'),
       detail: service.capacity_source === 'worker_instances' ? `${service.active} / ${service.slots} slots busy`
         + `${service.healthy_replicas != null ? ` · ${service.healthy_replicas} healthy replicas` : ''}`
         + `${service.jobs_in_flight != null ? ` · ${service.jobs_in_flight} jobs recorded in flight` : ''}`
         + `${service.occupied_replicas ? ` · ${drainingReplicasFact(service)}` : ''}`
         + `${service.unattributed_running ? ` · ${service.unattributed_running} running job records are not attributed to live worker slots` : ''}`
         : `${service.jobs_in_flight || 0} jobs recorded in flight · ${service.capacity_unavailable_reason}`,
-      // Named rather than "Tier:", which claimed a coverage one container app does not have.
-      // The app name is what makes a figure repeated on all three stage nodes readable: it says
-      // whose size this is, so a stage it does not describe is visibly not describing itself.
-      metric: capacity?.configured && capacity.worker_app_name
-        ? `${capacity.worker_app_name}: ${reportedWorkerSize(capacity)}`
-        : reportedWorkerSize(capacity),
+      // Name the matching measured app. An unavailable service reading stays unavailable.
+      metric: serviceCapacity?.configured && serviceCapacity.worker_app_name
+        ? `${serviceCapacity.worker_app_name}: ${reportedWorkerSize(serviceCapacity)}`
+        : 'Service size not reported',
       color: STAGE[stage].color, service, gauge: nodeGauge({ kind: 'worker', service }) } })
   })
   nodes.push({ id: 'infra:output', type: 'infra', position: { x: 1000, y: 158 },
@@ -1175,7 +1171,7 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
       {services.map((service) => <div key={service.role} style={{ display: 'grid',
         gridTemplateColumns: 'minmax(110px,1fr) minmax(180px,2fr) minmax(130px,1fr)', gap: 12,
         alignItems: 'center', padding: '8px 12px', borderTop: '1px solid var(--line)', fontSize: 12 }}>
-        <span><b>{STAGE[service.stage]?.label || service.role}</b><br />
+        <span><b>{workerLabel(service.stage) || service.role}</b><br />
           <span style={{ color: service.alive ? PRESSURE.healthy.color : PRESSURE.stalled.color }}>
             ● {service.alive ? 'Online' : 'Offline'}
           </span>

@@ -2650,3 +2650,30 @@ describe('componentState: "healthy, not stalled" is a claim, not a default', () 
       service: { ...alive, age_s: 99999, unattributed_running: 13 } }, {}).label).toBe('Degraded')
   })
 })
+
+
+describe('shared Remediate and Release queue capacity', () => {
+  it('uses the Remediate pool for release-only work', () => {
+    const summary = { queued: 1, by_stage: { release: { queued: 1 } },
+      worker_roles: { remediate: { alive: true, pool_size: 10 } } }
+    expect(queueRoleLoad(summary).rows).toEqual([expect.objectContaining({ stage: 'remediate',
+      stages: ['release'], label: 'Remediate & Release', queued: 1, slots: 10, unknown: false })])
+    expect(queueCapacityGauge(summary)).toMatchObject({ fraction: 0.1, over: false })
+  })
+  it('compares combined demand with one shared pool', () => {
+    const summary = { queued: 12, by_stage: { remediate: { queued: 6 }, release: { queued: 6 } },
+      worker_roles: { remediate: { alive: true, pool_size: 10 }, release: { alive: true, pool_size: 90 } } }
+    const load = queueRoleLoad(summary)
+    expect(load.rows).toHaveLength(1)
+    expect(load.rows[0]).toMatchObject({ queued: 12, slots: 10, over: true })
+    expect(load.unattributed).toBe(0)
+  })
+  it('prefers measured capacity and preserves unavailable measurements', () => {
+    const summary = { queued: 12, by_stage: { release: { queued: 12 } },
+      worker_roles: { remediate: { alive: true, pool_size: 2 } },
+      worker_capacity_by_role: { remediate: { capacity_source: 'worker_instances', worker_slots: 20 } } }
+    expect(queueCapacityGauge(summary)).toMatchObject({ fraction: 0.6, over: false })
+    summary.worker_capacity_by_role.remediate.capacity_source = 'unavailable'
+    expect(queueCapacityGauge(summary).fraction).toBeNull()
+  })
+})

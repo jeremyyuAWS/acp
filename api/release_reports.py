@@ -9,6 +9,7 @@ from pathlib import Path
 from functools import lru_cache
 import csv
 import io
+import json
 import re
 
 
@@ -222,20 +223,30 @@ def build_release_report_sources(store, scan_id, owner, release_id):
     assets = []
     index = []
     appendices = []
+    candidate_assessments = []
     for name in names:
         file = files.get(name, {})
         outcome = outcomes.get(name, {})
+        from release_candidate_assessment import saved_assessment
+        candidate = saved_assessment(store, scan_id, owner, name,
+            outcome.get('artifact_digest'), release_id=release_id)
+        if candidate:
+            candidate_assessments.append({'file': name, **candidate})
         status = outcome.get('status', 'not attempted')
         url = outcome.get('released_document_url') if status == 'published' else None
         checklist = []
-        issues = [i for i in file.get('issues') or [] if selected(dict(i, file=name))]
+        # Fresh saved-copy findings are a separate artifact assessment, never a
+        # replacement of immutable source finding accounting or verification counts.
+        current_issues = candidate.get('remaining_issues') if candidate else None
+        issues = [i for i in (current_issues if isinstance(current_issues, list)
+                             else file.get('issues') or []) if selected(dict(i, file=name))]
         for issue in issues:
             rid = _rule(issue.get('wcag') or issue.get('rule_id') or issue.get('ruleId'))
-            if (name, rid) in fully_resolved or (name, rid) in machine_processing:
+            if not candidate and ((name, rid) in fully_resolved or (name, rid) in machine_processing):
                 continue
             task = next((q for q in open_queue if q['file'] == name and _rule(q['rule_id']) == rid), {})
             checklist.append([rid, issue.get('detail') or 'Accessibility issue remains', _location(issue), issue.get('severity') or 'Unclassified', issue.get('recommended_action') or issue.get('remediation') or task.get('instruction') or task.get('description') or 'Review and correct this issue in the source document; reassess when convenient.', task.get('assignee') or 'Unassigned', 'Remaining issue'])
-        for trace in [t for t in failed if t['file'] == name and (name, _rule(t['rule_id'])) not in fully_resolved and (name, _rule(t['rule_id'])) not in machine_processing]:
+        for trace in [t for t in failed if not (candidate and candidate.get('assessment_ok')) and t['file'] == name and (name, _rule(t['rule_id'])) not in fully_resolved and (name, _rule(t['rule_id'])) not in machine_processing]:
             rid = _rule(trace['rule_id'])
             if not any(r[0] == rid for r in checklist):
                 checklist.append([rid, f"{trace.get('finding_count', 0)} recorded findings: {trace.get('plain_name') or trace.get('rule_name') or rid}", 'Not recorded', 'Unclassified', 'Review and correct this issue in the source document.', 'Unassigned', 'Remaining issue'])
@@ -243,7 +254,7 @@ def build_release_report_sources(store, scan_id, owner, release_id):
             rid = _rule(task['rule_id'])
             if not any(r[0] == rid for r in checklist):
                 checklist.append([rid, task.get('title') or task.get('rule_name') or 'Follow-up review task', _location(task), task.get('severity') or 'Unclassified', task.get('instruction') or 'Inspect the saved copy when convenient; this task does not block publication.', task.get('assignee') or 'Unassigned', 'Applied, verification not recorded' if task.get('applied') else task.get('status') or 'Pending'])
-        for trace in [t for t in traces if t['file'] == name and t.get('outcome') == 'REVIEW' and selected(t) and t.get('fix_mode') not in ('auto', 'ai-assisted', 'assisted') and (name, _rule(t['rule_id'])) not in fully_resolved and (name, _rule(t['rule_id'])) not in machine_processing]:
+        for trace in [t for t in traces if not (candidate and candidate.get('assessment_ok')) and t['file'] == name and t.get('outcome') == 'REVIEW' and selected(t) and t.get('fix_mode') not in ('auto', 'ai-assisted', 'assisted') and (name, _rule(t['rule_id'])) not in fully_resolved and (name, _rule(t['rule_id'])) not in machine_processing]:
             rid = _rule(trace['rule_id'])
             if not any(r[0] == rid for r in checklist):
                 checklist.append([rid, trace.get('plain_name') or trace.get('rule_name') or 'Review recommended', 'Not recorded', 'Unclassified', 'Check the meaning or usability of the saved result when convenient.', 'Unassigned', 'Review recommended; not a verified pass'])
@@ -258,6 +269,15 @@ def build_release_report_sources(store, scan_id, owner, release_id):
                    '<p>Use the published corrected copy for follow-up. Recommendations below are guidance, '
                    'not additional edits saved to that copy. If you edit the file externally, reassess '
                    'the new version; this report describes the recorded version.</p></section>')
+        if candidate:
+            detail += ('<h2>Saved-copy assessment before publication</h2>'
+                f'<p>Exact corrected SHA-256: {_text(candidate.get("artifact_sha256"))}<br>'
+                f'Assessment status: {_text(candidate.get("assessment_status"))} · '
+                f'Completed selected checks: {_text(candidate.get("assessment_ok"))}<br>'
+                f'Remaining recorded findings: {_text(len(current_issues) if isinstance(current_issues, list) else None)}</p>')
+            if not candidate.get('assessment_ok'):
+                detail += '<p class="notice">Some checks could not be completed. Missing findings do not establish a pass. ' + _text(candidate.get('reason')) + '</p>'
+            detail += '<p>This assessment covers the run’s selected criteria; it does not establish full WCAG compliance or an Office/PDF checker pass.</p>'
         if status != 'published' and outcome.get('explanation'):
             detail += f'<p>Release explanation: {_text(outcome["explanation"])}</p>'
         original_file = sum(n for (f, _), n in original_groups.items() if f == name) if groups is not None else None
@@ -267,6 +287,8 @@ def build_release_report_sources(store, scan_id, owner, release_id):
                    f'<strong>Verified fixed:</strong> {_text(verified_file)} · '
                    f'<strong>Not yet verified fixed:</strong> {_text(remaining_file)}</p>'
                    '<h2>Remaining actions</h2>')
+        if candidate and not candidate.get('assessment_ok'):
+            detail += '<p class="notice">These are last-known recorded actions, not a complete fresh assessment of this copy. Current remaining findings are unknown.</p>'
         categorized = []
         for row in checklist:
             trace = next((t for t in traces if t['file'] == name and _rule(t['rule_id']) == row[0]), {})
@@ -274,11 +296,11 @@ def build_release_report_sources(store, scan_id, owner, release_id):
             category = _category(trace, task)
             categorized.append((category, row))
         detail += _table(['Criterion', 'Issue', 'Location', 'Remediation category', 'Recommended action', 'Owner', 'Status'],
-                         [[_text(r[0]), _text(r[1]) + '<br><small>Severity: ' + _text(r[3]) + '</small>', _text(r[2]), _text(CATEGORIES[key]), *[_text(v) for v in r[4:]]] for key, r in categorized]) if checklist else '<p>No remaining issues are recorded in the available evidence. This is not a guarantee of compliance.</p>'
+                         [[_text(r[0]), _text(r[1]) + '<br><small>Severity: ' + _text(r[3]) + '</small>', _text(r[2]), _text(CATEGORIES[key]), *[_text(v) for v in r[4:]]] for key, r in categorized]) if checklist else ('<p>Current remaining findings are unknown because the saved-copy assessment could not be completed.</p>' if candidate and not candidate.get('assessment_ok') else '<p>No remaining issues are recorded in the available evidence. This is not a guarantee of compliance.</p>')
         from remediation_audit_guide import build_remediation_audit_guide
         # Unlike legacy category accounting, the offline guide preserves each target.
         # A processing task for one image must not hide another finding under its SC.
-        guide_issues = [i for i in issues if (name, _rule(i.get('wcag') or i.get('rule_id') or i.get('ruleId'))) not in fully_resolved]
+        guide_issues = [i for i in issues if candidate or (name, _rule(i.get('wcag') or i.get('rule_id') or i.get('ruleId'))) not in fully_resolved]
         guide_tasks = [q for q in open_queue if q['file'] == name and (name, _rule(q['rule_id'])) not in fully_resolved
                        and not q.get('applied')]
         guide = build_remediation_audit_guide(
@@ -351,6 +373,15 @@ def build_release_report_sources(store, scan_id, owner, release_id):
     summary = f'<p>Scan: {_text(scan_id)} · Release: {_text(release_id)} · Generated: {_text(datetime.now(timezone.utc).isoformat())}</p>'
     summary += '<p>Original and current counts describe different points in time. Review tasks and change records are not added to finding totals. Not recorded means evidence is unavailable, not zero.</p>'
     summary += _table(['Measure', 'Count'], [[_text(k), _text(v)] for k, v in metrics])
+    if candidate_assessments:
+        summary += '<h2>Saved-copy assessments before publication</h2>' + _table(
+            ['File', 'Exact artifact SHA-256', 'Assessment status', 'Remaining findings'],
+            [[_text(r['file']), _text(r['artifact_sha256']), _text(r['assessment_status']),
+              _text(len(r['remaining_issues']) if isinstance(r.get('remaining_issues'), list) else None)]
+             for r in candidate_assessments])
+        assets.append({'name': 'saved-copy-assessments.json',
+            'content': json.dumps({'scan_id': scan_id, 'release_id': release_id, 'documents': candidate_assessments}).encode('utf-8'),
+            'content_type': 'application/json'})
     summary += '<h2>Documents and follow-up checklists</h2><p>Remediation categories describe recorded capability or state; future automatic fixes still require an accepted plan. Checklist entries, findings and change records use separate counts. Expand a category to see SCs by file.</p>' + _table(['Document', 'File type', 'Publication status', 'Original findings', 'Fixed and verified', 'Remediation category / SC', 'Incomplete checks', 'Published file', 'Follow-up'], index)
     summary += '<h2>Detailed printable checklists by document</h2>' + ''.join(appendices)
     assets.insert(0, {'name': 'scan-summary.html', 'content': _page('Remediation and publication summary', summary), 'content_type': 'text/html; charset=utf-8', 'report_kind': 'scan_summary'})

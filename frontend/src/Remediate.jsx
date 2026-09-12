@@ -3,6 +3,7 @@ import { remediationWorkRunning } from './remediationWorkRunning.js'
 import useAcceptedRemediationIdentity from './useAcceptedRemediationIdentity.js'
 import AcceptedRemediationPlanSummary from './AcceptedRemediationPlanSummary.jsx'
 import { getAcceptedRemediationPlan } from './api.js'
+import { automaticReviewQueue } from './automaticReviewQueue.js'
 import useRunAiApproval from './useRunAiApproval.js'
 import { assessMetrics } from './assessMetrics.js'
 import { reviewableRemediationItems } from './remediationReviewAvailability.js'
@@ -1066,8 +1067,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // just made is shown as the manual work it created, not as a closed decision) and before the
   // applied-fix evidence. Deduped by id because a finding can legitimately be in two of these
   // sources at once, and counting it twice is the same defect as dropping it.
-  const inboxQueue = reviewableRemediationItems(dedupeById([...queue, ...rejectedItems, ...decidedItems, ...autoFixItems]),
+  const reviewQueue = reviewableRemediationItems(dedupeById([...queue, ...rejectedItems, ...decidedItems, ...autoFixItems]),
     { files, exceptions: reviewExceptions?.run_id === runId ? reviewExceptions : null })
+  const inboxQueue = automaticReviewQueue(reviewQueue, runAiApproval.policy, { ...decisions, ...ackd })
   const hasRemediationResults = inboxQueue.length > 0 || files.some(file => file.remediated_at || file.drive_write_url)
     || (runStream?.snapshot?.terminal === true && runStream.snapshot.total_documents > 0)
   const inboxDecisions = { ...decisions, ...ackd }
@@ -1699,7 +1701,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 </p>
               // NOT unconditionally "All clear": an unreadable document is not a clear one, and
               // the reader who sees "All clear" stops reading (reviewQueueCopy.js).
-              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>{hasRemediationResults ? reviewLeadLine(files, reviewCounts.pendingItems) : 'Run the plan to generate fixes. Review items appear when there is a proposal or an exception to handle.'}</p>}
+              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>{hasRemediationResults ? (inboxQueue.some(row => row.automaticQueued) ? 'No individual approval is needed now. Automatic checks are queued; remaining work stays visible.' : reviewLeadLine(files, reviewCounts.pendingItems)) : 'Run the plan to generate fixes. Review items appear when there is a proposal or an exception to handle.'}</p>}
           </div>
           {reviewProgress.total > 0 && (
             <div className="rem-sec-prog">
@@ -1803,6 +1805,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           <RemediationInbox
             readOnly={readOnly}
             autoApprove={runAiApproval.enabled}
+            automaticApprovalPolicy={runAiApproval.policy}
             onAutoApproveChange={readOnly ? undefined : runAiApproval.change}
             autoApproveSaving={runAiApproval.saving}
             autoApproveError={runAiApproval.error}

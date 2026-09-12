@@ -10,6 +10,20 @@ Word table-header repair recognizes explicitly disabled header flags. PowerPoint
 
 Both normal release and delivery-only retry verify destination bytes before treating an upload as successful. A delivery retry does not run remediation or verification again and does not replace the customer's original file.
 
+Before a new publication or corrected-copy package is prepared, ACP assesses the saved corrected candidate through the same canonical whole-file assessment path used by remediation. The candidate must match its authorized corrected SHA-256 and current record both before and after assessment. Approved but unwritten changes remain blockers. The original Assess baseline is not overwritten: release-specific evidence records the candidate hash, selected scope, remaining findings, skipped checks and any uncertainty.
+
+Strict publishing rejects remaining findings or an assessment that could not establish a trustworthy result. Explicit publishing with remaining issues preserves that fresh evidence and does not claim full verification. A malformed corrected copy is not an acceptable remaining-issues delivery. Successful delivery still verifies the provider's bytes against the assessed artifact identity. Native Office/PDF checker success and full WCAG compliance are not established by selected automated checks alone.
+
+Automatic Excel image-description writes preserve the actual drawing element name and namespace spelling, rather than writing the regex used to locate it. Authored XML-escaped title, caption and name values are decoded once before being written as descriptions. Real saved-workbook regression fixtures preserve the original source, cells, formulas and images and run the accessibility detectors on the corrected copy.
+
+## Read-only saved-copy audit
+
+`python scripts/audit_remediated_copy.py original.docx corrected.docx --expected expected.json --output audit.json`
+
+This local audit accepts Word, Excel, PowerPoint and PDF files. It checks readability and exact corrected-byte identity, inventories Office drawing accessibility properties and checks explicitly supplied property expectations. `expected.json` may contain `corrected_sha256` and `images`; each image expectation must identify its exact `part`, expanded XML `tag` and string `id`, and provide the expected `description`, `title` or `decorative` property. The audit never guesses an ambiguous or missing object identity.
+
+Exit zero means the supplied claims passed against readable files. Missing expectations, hash mismatches, invalid XML and ambiguous identities cannot pass. A matching hash alone establishes file identity, not every recorded repair. Full change coverage and Office/PDF Accessibility Checker success remain explicitly unestablished; those require the appropriate assessment and semantic review. The audit reads local bytes without credentials, provider writes, run-state changes or approval changes. It does not establish that a source file on SharePoint is unchanged: use the production canary bundle for provider identity, original-byte, placement and permission evidence.
+
 This evidence work does not add general Word Track Changes, PowerPoint revision tracking, or PDF heading/tag-tree, complex-table and reading-order repair. Those require additional format-specific writers and preservation tests. A successful upload or changed screenshot does not establish accessibility compliance.
 
 AI-assisted expansion: document-wide review includes extracted document context and exact supported image evidence for Word, Excel and PowerPoint. It does not upload the original Office archive. Approved OCR transcripts replace simple Word inline body pictures and simple Excel drawing pictures with editable text; grouped, shared, cropped or rotated images remain unresolved. PDF language-of-parts proposals target existing text-bearing tagged leaves with their own `/ActualText`; approved writes change only `/Lang` and preserve page content. Untagged PDFs and ambiguous structures remain unsupported. These changes still require review of meaning and the saved-file verification path.

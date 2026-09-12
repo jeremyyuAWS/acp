@@ -141,6 +141,8 @@ def hitl_list(request: Request, status: str | None = None, scan_id: str | None =
     # Match the sealed assessment input used by remediation; legacy runs use the scan hash.
     from review_item_kind import serialize_review_item
     rows = [serialize_review_item(row) for row in rows]
+    from automatic_review_queue import annotate
+    rows = annotate(core.store, rows, owner)
     revisions = {}
     for row in rows:
         sid = row.get("scan_id")

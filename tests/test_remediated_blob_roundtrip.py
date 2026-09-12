@@ -22,7 +22,17 @@ def test_corrected_bytes_roundtrip_and_package_reader_stay_separate(monkeypatch,
                                    url=f'https://fixture.invalid/{container}/{blob}')
 
     monkeypatch.setattr(blob, '_service_client', lambda: Service())
-    body = b'actual verified corrected document'
+    # Use a real saved PDF so the corrected-copy gate also exercises these exact
+    # Blob bytes, rather than weakening it for this storage round-trip proof.
+    import io
+    from pypdf import PdfWriter
+    from pypdf.generic import NameObject, TextStringObject
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer._root_object[NameObject('/Lang')] = TextStringObject('en-US')
+    output = io.BytesIO()
+    writer.write(output)
+    body = output.getvalue()
     url = blob.upload_remediated('owner', 'scan', 'one.pdf', body, 'application/pdf')
     assert url.endswith('/remediated/owner/scan/one.pdf')
     assert blob.download_remediated('owner', 'scan', 'one.pdf') == body
@@ -41,6 +51,7 @@ def test_corrected_bytes_roundtrip_and_package_reader_stay_separate(monkeypatch,
     from test_release_artifact_readers import seed
     seed(isolated_store, body)
     monkeypatch.setattr(core, 'store', isolated_store)
+    monkeypatch.setattr(isolated_store, 'get_scan_scope', lambda *args, **kwargs: {'3.1.1': ['pdf']})
     blob.upload_remediated('reader@example.com', 'reader-scan', 'one.pdf', body, 'application/pdf')
     request = SimpleNamespace(state=SimpleNamespace(user_email='reader@example.com'), headers={})
     first = scans.publish_files('reader-scan', request, {'files': ['one.pdf']})

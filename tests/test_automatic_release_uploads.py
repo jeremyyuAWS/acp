@@ -179,3 +179,12 @@ def test_publication_waits_for_current_run_automatic_approval_coordination(prepa
     with prepared.store._db.cursor() as cur:
         prepared.store._db.execute(cur, "UPDATE jobs SET status='done' WHERE id=%s", (job,))
     assert flow.ready(prepared.store, row, FILE)['corrected_sha256'] == DIGEST
+
+
+@pytest.fixture(autouse=True)
+def _candidate_assessment_for_delivery_fixture(monkeypatch):
+    # Identity/recovery fixtures use sentinel A/B or corrected fixture bytes.
+    # Full saved-document scanner gates are proven in test_release_candidate_assessment.
+    import release_candidate_assessment
+    monkeypatch.setattr(release_candidate_assessment, 'assess_candidate',
+                        lambda *args, **kwargs: {'fixture_assessment': True})

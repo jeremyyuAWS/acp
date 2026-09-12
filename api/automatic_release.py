@@ -604,7 +604,8 @@ def advance(store, payload, job):
                     scan_id=row['scan_id'], owner=row['owner_email'], files=sorted(published),
                     preserve_hierarchy=True, include_manifest=True,
                     expected_artifacts=published, expected_source_revision=row['intent']['source_revision'],
-                    report_bundle_id=report_bundle), scan_id=row['scan_id'], max_attempts=3)
+                    report_bundle_id=report_bundle,
+                    allow_remaining_issues=row['intent'].get('allow_remaining_issues', False)), scan_id=row['scan_id'], max_attempts=3)
         stalled = progress['_delivery_watch']['needs_attention']
         persistence.save(store,row,status='completed' if completed else 'failed' if terminal or expired else 'blocked' if stalled else 'waiting',
                          progress=progress,schedule=not terminal and not expired,delay=STALLED_CHECK_SECONDS if stalled else 20)

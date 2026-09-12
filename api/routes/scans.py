@@ -3972,6 +3972,10 @@ def publish_files(sid: str, request: Request, body: dict):
                                 "created": False})
                 finish_synchronous(f, "completed", results[-1])
                 continue
+            from release_candidate_assessment import assess_candidate
+            candidate_assessment = assess_candidate(
+                core.store, sid, f, owner, content_digest, record.get("remediated_at"),
+                allow_remaining_issues=allow_remaining_issues, release_id=release_id)
             execution_id = (synchronous_execution or {}).get("execution_id")
             work_item_id = ((synchronous_execution or {}).get("items") or {}).get(f)
             publication = None
@@ -4054,6 +4058,7 @@ def publish_files(sid: str, request: Request, body: dict):
                            "verified": bool(publication.get("verified", True))}
                 if lineage is not None:
                     receipt["finding_lineage"] = lineage
+                receipt["corrected_copy_assessment"] = candidate_assessment
                 receipt["release_review"] = release_review_evidence(record, owner=owner, allow_remaining_issues=allow_remaining_issues, store=core.store, scan_id=sid)
                 core.store.finalize_side_effect(
                     reservation["effect_id"], reservation["reservation_token"], receipt)
@@ -4061,6 +4066,7 @@ def publish_files(sid: str, request: Request, body: dict):
                 receipt = {"checksum": content_digest, "filename": f, "verified": True}
                 if lineage is not None:
                     receipt["finding_lineage"] = lineage
+                receipt["corrected_copy_assessment"] = candidate_assessment
                 receipt["release_review"] = release_review_evidence(record, owner=owner, allow_remaining_issues=allow_remaining_issues, store=core.store, scan_id=sid)
                 core.store.record_side_effect_receipt(
                     execution_id=execution_id, work_item_id=work_item_id,
@@ -4083,7 +4089,8 @@ def publish_files(sid: str, request: Request, body: dict):
             finish_synchronous(f, "completed", result)
         except ReleaseArtifactError as exc:
             result = {"file": f, "status": "failed", "original_relative_path": source_path,
-                      "failure_category": exc.category, "explanation": str(exc), "created": False}
+                      "failure_category": exc.category, "explanation": str(exc), "created": False,
+                      "artifact_digest": artifact_tag(content_digest) if content_digest and exc.category in {'release_assessment_remaining', 'release_assessment_unavailable', 'corrected_copy_unreadable'} else None}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
             finish_synchronous(f, "failed", result)
@@ -4399,6 +4406,7 @@ def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
     release twice must produce the same digest.  The digest is tamper evidence, not a digital
     signature; ACP has no configured signing identity and must not imply non-repudiation.
     """
+    from release_candidate_assessment import saved_assessment
     roots = [{
         "provider": row.get("provider"),
         "provider_location": row.get("provider_location"),
@@ -4422,6 +4430,8 @@ def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
             else row.get("corrected_checksum") if row.get("verification") == "sha256" else None
         ),
         "verification": row.get("verification"),
+        "corrected_copy_assessment": saved_assessment(
+            core.store, scan_id, owner, row.get("file"), row.get("artifact_digest"), release_id=status.get("id")),
         "status": row.get("status"),
         "failure_category": row.get("failure_category"),
         "explanation": row.get("explanation"),
@@ -4629,7 +4639,8 @@ def _remediated_bytes(owner: str, scan_id: str, filename: str) -> bytes | None:
 
 def _build_release_zip(sid: str, owner: str, scan: dict, selected: list[str], rows: dict,
                        *, package_name: str, preserve_hierarchy: bool,
-                       include_manifest: bool, expected_artifacts: dict | None = None, report_assets: list | None = None):
+                       include_manifest: bool, expected_artifacts: dict | None = None, report_assets: list | None = None,
+                       allow_remaining_issues: bool = True):
     """Build a release ZIP into a spill-to-disk stream shared by sync and queued delivery."""
     import publish as _publish
     source = (scan.get("run") or {}).get("source") or "local"
@@ -4649,6 +4660,11 @@ def _build_release_zip(sid: str, owner: str, scan: dict, selected: list[str], ro
                         raise HTTPException(409, "The corrected copy changed before packaging")
                     from release_artifacts import require_current_record
                     require_current_record(core.store, sid, name, expected, row.get('remediated_at'), owner=owner, allow_remaining_issues=True)
+                from release_candidate_assessment import assess_candidate
+                digest = hashlib.sha256(data).hexdigest()
+                candidate_assessment = assess_candidate(
+                    core.store, sid, name, owner, digest, row.get("remediated_at"),
+                    allow_remaining_issues=allow_remaining_issues, data=data)
                 source_path = (row.get("source_relative_path") or row.get("path")
                                or row.get("parent_folder") or name)
                 if source == "sharepoint":
@@ -4664,7 +4680,8 @@ def _build_release_zip(sid: str, owner: str, scan: dict, selected: list[str], ro
                 documents.append({"file": row.get("file"),
                     "source_relative_path": row.get("source_relative_path") or row.get("path"),
                     "package_path": archive_path,
-                    "corrected_sha256": hashlib.sha256(data).hexdigest()})
+                    "corrected_sha256": hashlib.sha256(data).hexdigest(),
+                    "corrected_copy_assessment": candidate_assessment})
             status = core.store.release_for_scan(sid, owner)
             snapshot_id = core.store.stage_snapshot_id(sid)
             lineage = _canonical_lineage_export(sid, owner)["lineage"]

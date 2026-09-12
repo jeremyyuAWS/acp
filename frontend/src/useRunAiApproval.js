@@ -37,5 +37,5 @@ export default function useRunAiApproval(scanId, runId) {
       if (identityRef.current === identity) { writing.current = false; setSaving(false) }
     }
   } : undefined
-  return { enabled: current?.enabled ?? null, saving, error: error || (current?.supported === false ? current.reason : ''), change }
+  return { policy: current, enabled: current?.enabled ?? null, saving, error: error || (current?.supported === false ? current.reason : ''), change }
 }
