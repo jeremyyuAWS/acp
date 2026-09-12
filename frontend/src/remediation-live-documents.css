@@ -6,5 +6,12 @@
 @keyframes document-count-change { from { background-color:#eee6f5; } to { background-color:transparent; } }
 @media(prefers-reduced-motion:reduce) { .remediation-live-documents .live-document-table .live-document-changed { animation:none; outline:1px solid #8c769e; } }
 @media(max-width:640px) { .remediation-live-documents .live-document-table th,.remediation-live-documents .live-document-table td { padding:.5rem .3rem; } }
-.remediation-live-documents .live-document-categories button { border:1px solid #ded3e7; border-radius:18px; padding:5px 9px; background:#fff; color:#35283e; }
-.remediation-live-documents .live-document-categories button[aria-pressed=true] { outline:2px solid #77539d; outline-offset:1px; }
+/* One clickable pill per outcome: no badge nested inside a second button border. */
+.remediation-live-documents .live-finding-filters { gap:8px;padding:3px 0;overflow:visible; }
+.remediation-live-documents .live-finding-filter { display:inline-flex;align-items:center;gap:5px;min-height:36px;padding:7px 12px;border:1px solid currentColor;border-radius:999px;font-size:13px;line-height:1.3;white-space:nowrap;cursor:pointer; }
+.remediation-live-documents .live-finding-filter--all { background:#f8f5fb;color:#553c69; }
+.remediation-live-documents .live-finding-filter strong { font-size:inherit;line-height:inherit; }
+.remediation-live-documents .live-finding-filter[aria-pressed=true] { box-shadow:inset 0 0 0 2px currentColor;font-weight:600;outline:none; }
+.remediation-live-documents .live-finding-filter:focus-visible { outline:2px solid currentColor;outline-offset:-5px; }
+.remediation-live-documents .live-finding-filter:hover { filter:brightness(.97); }
+.remediation-live-documents .live-finding-filter.remediation-category-pill--remaining,.remediation-live-documents .live-finding-filter.remediation-category-pill--excluded,.remediation-live-documents .live-finding-filter.remediation-category-pill--superseded,.remediation-live-documents .live-finding-filter.remediation-category-pill--approved { background:#f5f1f8;color:#5d486f; }

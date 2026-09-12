@@ -22,3 +22,6 @@
 @keyframes remops-retry-in { from { background-color:#fff0b8; box-shadow:0 0 0 3px #e9bd49; } to { box-shadow:0 0 0 0 transparent; } }
 @keyframes remops-retry-turn { from { transform:rotate(-180deg); } to { transform:rotate(0deg); } }
 @media(prefers-reduced-motion:reduce) { .remops-activity>ol>li.remops-activity-retry, .remops-activity-retry .remops-activity-event>span:first-of-type { animation:none; } }
+
+.remops-activity details li{font-family:var(--font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.remops-delivery-tag{display:inline-block;margin:2px 0 2px 6px;padding:2px 8px;border:1px solid #b78635;border-radius:6px;background:#fff5de;color:#78501d;font-family:var(--font-family,system-ui,sans-serif);font-size:12px;line-height:1.5;vertical-align:middle}

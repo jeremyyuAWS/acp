@@ -719,3 +719,15 @@ it('shows a yellow retry only for a recorded retry, not for a failed verificatio
   expect(render(base)).toContain('remops-activity-retry')
   expect(render({...base,events:[{key:'failed',kind:'remediate.verification_failed',tone:'error',line:'Did not pass re-scan',documentKey:'A'}]})).not.toContain('remops-activity-retry')
 })
+
+ it('separates source delivery availability from the grouped saved-copy message', () => {
+  const markup = renderToStaticMarkup(createElement(RemediationOpsPanel, {
+    snapshot: SNAP, streamlined: true, events: [
+      { key: 'verified', documentKey: 'one', tone: 'success', line: 'Three fixes verified' },
+      { key: 'saved', documentKey: 'one', tone: 'neutral', line: 'Corrected copy of demo.pdf saved in ACP · source delivery is unavailable' },
+    ],
+  }))
+  const doc = new DOMParser().parseFromString(markup, 'text/html')
+  expect(doc.querySelector('.remops-activity details li .remops-delivery-tag')?.textContent).toBe('source delivery is unavailable')
+  expect(doc.querySelector('.remops-activity details li')?.textContent).toContain('Corrected copy of demo.pdf saved in ACP')
+ })

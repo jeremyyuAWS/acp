@@ -1,5 +1,5 @@
 import './document-findings-table.css'
-import RemediationCategoryPill from './RemediationCategoryPill.jsx'
+import RemediationCategoryPill, { categoryExplanation } from './RemediationCategoryPill.jsx'
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import AssessWorklist from './AssessWorklist.jsx'
@@ -12,7 +12,10 @@ import RemediationProgressSummary from './RemediationProgressSummary.jsx'
 import { liveDocumentCounts, materialKey, findingOutcomeTotals, recordedDocumentProgress } from './remediationLiveDocumentState.js'
 import './remediation-live-documents.css'
 import { getFindingDispositions, listHitlQueue, getReleaseStatus, getSourceStatus } from './api.js'
-import { changeCategory } from './remediationCategories.js'
+import { changeCategory, categoryLabel } from './remediationCategories.js'
+
+const OUTCOME_SHORT_LABELS = { automatic:'Auto', approval:'Approve', suggestion:'AI', manual:'Manual', unsupported:'No ACP', blocked:'Blocked', applied:'Pending', ai_applied:'AI applied', verified:'Verified', remaining:'Remaining', excluded:'Excluded', superseded:'Superseded', approved:'Approved · awaiting application' }
+const OUTCOME_EXPLANATIONS = { remaining:'Findings without a verified fix that still need follow-up.', excluded:'Findings deliberately excluded from remediation.', superseded:'Older finding records replaced by a later recorded outcome.', approved:'Approved changes awaiting application. Approval alone does not mean the finding is fixed.' }
 
 export default function RemediationLiveDocuments({ scanId, files, cap, assessment, fixes: suppliedFixes, fixTotal: suppliedTotal, refreshKey, snapshot, events = [], connected, progressDocuments, progressHostId = null, onShowDocuments }) {
   const search = useSearchFilter()
@@ -145,10 +148,14 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
     {displayedDocuments ? <section aria-label="Documents"><h3>Documents <small>· {displayedDocuments.length}</small></h3>
       {displayedDocuments.some(row => row.reconciliation) && <p role="status">{displayedDocuments.filter(row => row.reconciliation).length} documents have finding counts reconciling. Their outcomes are not included in live totals.</p>}
       <p className="muted">Each reconciled finding appears once. Counts update after saved results arrive{connected === false ? ' · reconnecting to live updates' : ''}.</p>
-      <div className="live-document-categories" aria-label="Live finding outcomes">
-        <button type="button" aria-pressed={!outcomeFilter} onClick={() => setOutcomeFilter(null)}>All findings</button>
-        {Object.entries(outcomeTotals).map(([category, count]) => <button type="button" key={category} aria-pressed={outcomeFilter === category} onClick={() => setOutcomeFilter(category)}>
-          {['remaining','excluded','superseded','approved'].includes(category) ? <span>{({ remaining:'Remaining', excluded:'Excluded', superseded:'Superseded', approved:'Approved · awaiting application' })[category]} <strong>{count}</strong></span> : <RemediationCategoryPill category={category} count={count} />}
+      <div className="live-document-categories live-finding-filters" aria-label="Live finding outcomes">
+        <button type="button" className="live-finding-filter live-finding-filter--all" aria-pressed={!outcomeFilter} onClick={() => setOutcomeFilter(null)}>All findings</button>
+        {Object.entries(outcomeTotals).map(([category, count]) => <button type="button" key={category}
+          className={`live-finding-filter remediation-category-pill--${category}`}
+          aria-label={`${OUTCOME_SHORT_LABELS[category] || categoryLabel(category)}: ${count} findings`}
+          title={OUTCOME_EXPLANATIONS[category] || categoryExplanation(category)}
+          aria-pressed={outcomeFilter === category} onClick={() => setOutcomeFilter(category)}>
+          {OUTCOME_SHORT_LABELS[category] || categoryLabel(category)} <strong>{count}</strong>
         </button>)}
       </div>
       <p className="muted">{visibleDocuments.length} of {displayedDocuments.length} documents shown · outcome counts cover reconciled documents in this view.</p>
