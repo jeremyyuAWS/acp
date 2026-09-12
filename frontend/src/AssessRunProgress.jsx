@@ -51,7 +51,8 @@ function activityLines(cur, completed, total, processing) {
 export function criterionTag(criterion) {
   const value = String(criterion || '')
   const internalSc = value.match(/^SC_(\d+)_(\d+)_(\d+)$/i)
-  return internalSc ? internalSc.slice(1).join('.') : value
+  const sc = value.match(/^(\d+\.\d+\.\d+)(?=\s|$)/)
+  return internalSc ? internalSc.slice(1).join('.') : sc ? sc[1] : value
 }
 
 function fmtElapsedSecs(s) {
