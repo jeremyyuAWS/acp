@@ -18,7 +18,7 @@ export async function authorizeAcceptedRelease(scanId, files, accepted, intent, 
       if (!request) throw new Error('No release request was sent')
       const status = await client.get(scanId, request.files)
       const saved = status?.authorization
-      if (saved?.request_id === request.request_id && saved.run_id === request.run_id && saved.source_revision === request.expected_source_revision && (saved.allow_remaining_issues === true) === request.allow_remaining_issues && (saved.include_reports === true) === request.include_reports && ['active', 'waiting', 'blocked', 'completed'].includes(saved.status)) {
+      if (saved?.request_id === request.request_id && saved.run_id === request.run_id && saved.source_revision === request.expected_source_revision && (saved.allow_remaining_issues === true) === request.allow_remaining_issues && (saved.include_reports === true) === request.include_reports && ['active', 'waiting', 'publishing', 'blocked', 'completed'].includes(saved.status)) {
         return 'Remediation started. Automatic release was confirmed after refreshing its saved status. See Live for progress and Stop.'
       }
     } catch { /* Unknown results remain unconfirmed; never retry the write. */ }

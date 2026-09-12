@@ -59,3 +59,10 @@ it('authorizes an explicitly forecast eligible subset without expanding to block
   await authorizeAcceptedRelease('scan', ['a', 'blocked'], accepted, { ...subset, files: ['outside'] }, c)
   expect(c.enable).not.toHaveBeenCalled()
 })
+
+it('reconciles the exact lost authorization while its download package is being prepared', async () => {
+  const c=client();c.enable.mockRejectedValue(new Error('lost'))
+  c.get.mockImplementation(async()=>({authorization:{request_id:c.enable.mock.calls[0][1].request_id,run_id:'accepted-run',source_revision:'source',status:'publishing'}}))
+  expect(await authorizeAcceptedRelease('scan',['a'],accepted,intent,c)).toContain('confirmed after refreshing')
+  expect(c.enable).toHaveBeenCalledOnce()
+})
