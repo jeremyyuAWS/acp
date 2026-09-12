@@ -9,7 +9,7 @@ const render = props => renderToStaticMarkup(createElement(Summary, props))
 it('formats frozen choices without any editable controls', () => {
   const html = render({ policy: { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '2.00', auto_approve_ai: true, document_wide_ai: true }, authorization: { allow_remaining_issues: true } })
   expect(html).toContain('Rules + Cloud AI')
-  expect(html).toContain('PDF form-field names, tagged PDF image descriptions, and Word image descriptions')
+  expect(html).toContain('PDF field names, tagged image descriptions and eligible tagged-text language marks; Word, Excel and PowerPoint image descriptions')
   expect(html).toContain('$2.00 USD')
   expect(html).toContain('Apply supported suggestions automatically')
   expect(html).toContain('Publish automatically after processing')

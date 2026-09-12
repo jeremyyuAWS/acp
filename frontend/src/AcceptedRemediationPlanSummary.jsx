@@ -22,7 +22,7 @@ export default function AcceptedRemediationPlanSummary({ policy, authorization, 
       <div><dt>Tools</dt><dd>{tools}</dd></div>
       {usesAI && <>
         <div><dt>AI suggestions</dt><dd>{policy.auto_approve_ai === true ? 'Apply supported suggestions automatically' : 'Review before applying'}</dd></div>
-        <div><dt>Document-wide AI</dt><dd>{policy.document_wide_ai === true ? 'Enabled · PDF form-field names, tagged PDF image descriptions, and Word image descriptions' : 'Off'}</dd></div>
+        <div><dt>Document-wide AI</dt><dd>{policy.document_wide_ai === true ? 'Enabled · PDF field names, tagged image descriptions and eligible tagged-text language marks; Word, Excel and PowerPoint image descriptions' : 'Off'}</dd></div>
         {policy.document_wide_ai === true && policy.document_wide_input_mode === 'native_pdf' && <div><dt>PDF AI models</dt><dd>{policy.document_wide_model_profile === 'native-pdf-quality.v1' ? 'GPT-4.1 first → Claude Sonnet 5 fallback for incomplete or invalid responses' : 'Configured cloud models · optimized profile not recorded'}</dd></div>}
         {policy.document_wide_ai === true && <div><dt>Document input</dt><dd>{policy.document_wide_input_mode === 'native_pdf' ? 'Full PDF · advanced preview; other formats use document context' : 'Document context · extracted text and supported images'}</dd></div>}
         {policy.ai_zone !== 'local' && <div><dt>AI spending limit</dt><dd>{typeof policy.ai_budget_usd === 'string' ? `$${policy.ai_budget_usd} USD` : 'Not recorded'}</dd></div>}

@@ -127,7 +127,7 @@ export default function RemediationPlanChoices({ step = null, answers, policy, d
             <span><strong>Review the document together</strong><span>Send document context and selected findings together for a coordinated set of suggestions. Preview · Cloud AI</span></span>
           </label>
         </div>
-        <p id={`${id}-document-wide-note`}>Document review supports Word image descriptions, PDF form-field names, and descriptions for existing tagged PDF images, within extraction and spending limits. Extracted PDF image suggestions require unambiguous page-image evidence. Other findings follow the usual process. Document review uses the configured primary model and at most one fallback.</p>
+        <p id={`${id}-document-wide-note`}>Document review supports Word, Excel and PowerPoint image descriptions, PDF form-field names, descriptions for existing tagged PDF images, and language marks for eligible existing tagged PDF text, within extraction and spending limits. Extracted PDF image suggestions require unambiguous page-image evidence. Other findings follow the usual process. Document review uses the configured primary model and at most one fallback.</p>
         {policy.document_wide_ai && <fieldset className="remediation-document-input">
           <legend>What should Cloud AI receive?</legend>
           <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">

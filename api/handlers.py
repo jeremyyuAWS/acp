@@ -4977,7 +4977,7 @@ _OFFICE_LINK_EXTS = tuple(_LINK_SCS_BY_EXT)
 # all — so an xlsx language lane could never clear its criterion and would strand every
 # approval it accepted. xlsx is therefore absent from _LANGUAGE_EXTS on purpose.
 _SENSORY_EXTS = ("docx", "pptx", "xlsx")
-_LANGUAGE_EXTS = ("docx", "pptx")
+_LANGUAGE_EXTS = ("docx", "pptx", "pdf")
 # 2.4.6 structure labels: sheet tab and table column renames (xlsx); slide title
 # fill-in (pptx — title placeholder exists but was left empty).
 _STRUCTURE_LABEL_EXTS = ("xlsx", "pptx")
@@ -5506,8 +5506,12 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
 
     language_uploaded = False
     if language_values:
-        from apply_text_values import apply_language_parts
-        language_write_fn = lambda d, v: apply_language_parts(d, ext, v)  # noqa: E731
+        if ext == "pdf":
+            from remediate_pdf import apply_pdf_approved
+            language_write_fn = apply_pdf_approved
+        else:
+            from apply_text_values import apply_language_parts
+            language_write_fn = lambda d, v: apply_language_parts(d, ext, v)  # noqa: E731
         working, language_uploaded = _apply_one_value_kind(
             scan_id=scan_id, filename=filename, working=working,
             values=language_values, scs_to_clear={"3.1.2"}, write_fn=language_write_fn,

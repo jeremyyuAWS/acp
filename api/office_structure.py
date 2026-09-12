@@ -2187,10 +2187,12 @@ def language_marked_spans(path: Path, ext: str) -> dict[str, str]:
 
     xlsx is absent by construction, not by omission: SpreadsheetML's rich-text run properties
     (CT_RPrElt) have no language element at all — verified against the schema — so there is
-    nowhere in the format to record this and no write can ever clear 3.1.2 there. PDF would
-    need a /Lang walk of the structure tree and is not built, so PDF behaviour is unchanged.
+    nowhere in the format to record this and no write can ever clear 3.1.2 there. PDF supports exact existing text-bearing /ActualText structure elements only.
     """
     fmt = (ext or "").lower().lstrip(".")
+    if fmt == "pdf":
+        from pdf_structural_language import language_marked_spans as pdf_language_marked_spans
+        return pdf_language_marked_spans(path)
     out: dict[str, list[str]] = {}
 
     def _collect(xml: str, run_re, lang_re, text_re) -> None:
@@ -2244,7 +2246,8 @@ def checks_for(path: Path, ext: str) -> list[dict]:
                 + office_color_only_checks(path, ext)
                 + office_non_text_content_checks(path, ext))
     if ext == ".pdf":
-        return (pdf_contrast_checks(path) + pdf_bypass_blocks_check(path) + pdf_form_field_checks(path)
+        from pdf_structural_language import language_parts_checks
+        return (language_parts_checks(path) + pdf_contrast_checks(path) + pdf_bypass_blocks_check(path) + pdf_form_field_checks(path)
                 + pdf_headings_labels_check(path) + pdf_link_purpose_check(path)
                 + pdf_text_spacing_checks(path) + pdf_use_of_color_checks(path)
                 + pdf_nontext_contrast_checks(path) + pdf_text_over_image_checks(path)

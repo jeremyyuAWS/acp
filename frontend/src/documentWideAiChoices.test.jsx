@@ -17,7 +17,7 @@ it('offers individual or document review with honest support scope', async () =>
   const advanced = container.querySelector('.remediation-document-wide')
   expect(advanced.tagName).toBe('FIELDSET')
   expect(advanced.textContent).toContain('PDF form-field names')
-  expect(advanced.textContent).toContain('Word image descriptions')
+  expect(advanced.textContent).toContain('Word, Excel and PowerPoint image descriptions')
   expect(advanced.textContent).toContain('existing tagged PDF images')
   expect(advanced.textContent).toContain('unambiguous page-image evidence')
   const checkbox = advanced.querySelectorAll('input')[1]
