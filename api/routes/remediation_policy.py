@@ -26,6 +26,7 @@ class ImpactPreviewRequest(BaseModel):
     auto_approve_ai: StrictBool | None = None
     document_wide_ai: StrictBool | None = None
     document_wide_input_mode: StrictStr | None = None
+    document_wide_model_profile: StrictStr | None = None
     ai_zone: StrictStr | None = None
     generation_chain: dict | None = None
 

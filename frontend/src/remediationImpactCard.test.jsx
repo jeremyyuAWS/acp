@@ -577,13 +577,14 @@ it.each(['any', 'local'])('automatic release previews and submits AI application
 
 
 it.each(['Rules only', 'Rules + Ollama · Local only'])('clears document-wide consent when choosing %s', async label => {
-  const initial = { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '1.00', document_wide_ai: true, document_wide_input_mode: 'native_pdf' }
+  const initial = { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '1.00', document_wide_ai: true, document_wide_input_mode: 'native_pdf', document_wide_model_profile: 'native-pdf-quality.v1' }
   getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || initial), capabilities: { ...result().capabilities, ai_budget: true } }))
   const { container } = await mount()
   const option = [...container.querySelectorAll('label')].find(node => node.querySelector('strong')?.textContent === label)
   await act(async () => option.querySelector('input').click())
   expect(getRemediationImpact.mock.calls.at(-1)[1].document_wide_ai).toBe(false)
   expect(getRemediationImpact.mock.calls.at(-1)[1]).not.toHaveProperty('document_wide_input_mode')
+  expect(getRemediationImpact.mock.calls.at(-1)[1]).not.toHaveProperty('document_wide_model_profile')
 })
 
 it('document review previews one fallback while preserving other accepted choices', async () => {
@@ -607,5 +608,14 @@ it('preserves explicit full-PDF mode in the accepted run policy', async () => {
   await act(async () => native.querySelector('input').click())
   await vi.waitFor(() => expect(getRemediationImpact.mock.calls.at(-1)[1]).toMatchObject({ document_wide_input_mode: 'native_pdf', ai_zone: 'any' }))
   await act(async () => button(container, 'Approve plan and start').click())
-  expect(onRun.mock.calls[0][0]).toMatchObject({ document_wide_input_mode: 'native_pdf' })
+  expect(onRun.mock.calls[0][0]).toMatchObject({ document_wide_input_mode: 'native_pdf', document_wide_model_profile: 'native-pdf-quality.v1' })
+})
+
+it.each(['Document context', 'Fix findings individually'])('clears optimized PDF models when choosing %s', async label => {
+  const initial = { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '1.00', document_wide_ai: true, document_wide_input_mode: 'native_pdf', document_wide_model_profile: 'native-pdf-quality.v1' }
+  getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || initial), capabilities: { execute: true, ai_budget: true } }))
+  const { container } = await mount()
+  const option = [...container.querySelectorAll('label')].find(n => n.querySelector('strong')?.textContent === label)
+  await act(async () => option.querySelector('input').click())
+  expect(getRemediationImpact.mock.calls.at(-1)[1]).not.toHaveProperty('document_wide_model_profile')
 })

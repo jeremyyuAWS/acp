@@ -173,7 +173,12 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       return
     }
     if (key === 'document_wide_input_mode') {
-      setPolicy(current => ({ ...(current || selected), document_wide_input_mode: value, ai_zone: 'any' }))
+      setPolicy(current => {
+        const next = { ...(current || selected), document_wide_input_mode: value, ai_zone: 'any' }
+        if (value === 'native_pdf') next.document_wide_model_profile = 'native-pdf-quality.v1'
+        else delete next.document_wide_model_profile
+        return next
+      })
       setNotice(''); setFilter(null); setImpactDetails(null)
       return
     }
@@ -182,6 +187,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       if (value === 'local') {
         if (Object.hasOwn(next, 'document_wide_ai')) next.document_wide_ai = false
         delete next.document_wide_input_mode
+        delete next.document_wide_model_profile
         next.ai_budget_usd = '0.00'
         delete next.generation_chain
         next.ai_review = { enabled: false }
@@ -192,7 +198,10 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     setNotice(''); setFilter(null); setImpactDetails(null); setPolicy(current => {
       const next = { ...(current || selected), [key]: value, ...(key === 'ai' && value === 0 && Object.hasOwn(current || selected, 'document_wide_ai') ? { document_wide_ai: false } : {}), ...(((key === 'ai' && value !== 1) || (key === 'ai_review' && value?.enabled !== true) || (key === 'ai_budget_usd' && !(Number(value) > 0))) && Object.hasOwn(current || selected, 'auto_approve_ai') ? { auto_approve_ai: false } : {}) }
       if ((key === 'ai' && value !== 1) || (key === 'document_wide_ai' && value === false)
-          || (key === 'ai_budget_usd' && !(Number(value) > 0))) delete next.document_wide_input_mode
+          || (key === 'ai_budget_usd' && !(Number(value) > 0))) {
+        delete next.document_wide_input_mode
+        delete next.document_wide_model_profile
+      }
       return next
     }) }
   const categoryFiles = (data?.files || []).filter(file => !filter || filter.type === 'all' || (filter.type === 'human' ? file.review > 0 || file.manual > 0 : filter.type === 'outlook' ? file.outlook === filter.key : file[filter.key] > 0))

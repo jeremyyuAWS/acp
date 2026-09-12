@@ -56,10 +56,19 @@ def normalize_policy(policy):
         if value and result.get('ai_zone') == 'local':
             raise ValueError('Document-wide AI is currently available only with Cloud AI. Local Ollama remains available for individual suggestions.')
         result['document_wide_ai'] = value
-    if "document_wide_input_mode" in policy:
-        from ai_run_policy import normalize_document_input_mode
-        result['document_wide_input_mode'] = normalize_document_input_mode(
-            {**policy, **result}, positive_budget=Decimal(result.get('ai_budget_usd', '0')) > 0)
+    if "document_wide_input_mode" in policy or "document_wide_model_profile" in policy:
+        from ai_run_policy import normalize_document_input_mode, normalize_document_model_profile
+        from ai_spending_budget import BudgetError
+        try:
+            for key, normalizer in (("document_wide_input_mode", normalize_document_input_mode),
+                                    ("document_wide_model_profile", normalize_document_model_profile)):
+                if key in policy:
+                    result[key] = normalizer({**policy, **result},
+                        positive_budget=Decimal(result.get('ai_budget_usd', '0')) > 0)
+        except BudgetError as exc:
+            # API policy validation uses ValueError for a 422 response; budget
+            # execution keeps BudgetError so invalid queued runs still fail closed.
+            raise ValueError(str(exc)) from exc
     if "auto_approve_ai" in policy:
         from ai_standing_approval import normalize
         result['auto_approve_ai'] = normalize(policy['auto_approve_ai'])
