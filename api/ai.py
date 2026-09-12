@@ -1583,6 +1583,15 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
             return out
         # vision unavailable / unusable → fall through to the text template below.
     prompt = _suggest_prompt(rule_id, rule_name, filename, detail, guidance, document_context, finding_id)
+    if (_managed_run is not None and getattr(_managed_run, 'policy', {}).get('cloud_input_strategy') == 'automatic'
+            and rule_id != '1.1.1'):
+        from automatic_cloud_input import try_local_text_draft
+        local = try_local_text_draft(prompt, _managed_run)
+        if local:
+            return {"suggestion": local['text'], "kind": _SUGGEST_KIND.get(rule_id, ("fix", ""))[0],
+                    "is_template": False, "model": local['model'], "provider": 'ollama',
+                    "processing_zone": local['zone'], "cost_usd": 0.0, "approval_required": True,
+                    "attempts": local['attempts'], "ai_call_id": local['call_id']}
     import time as _t
     _t0 = _t.monotonic()
     # Only the two evidence-approved 2.4.4 lanes may override the default cloud model. The

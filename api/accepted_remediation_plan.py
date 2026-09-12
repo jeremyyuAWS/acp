@@ -1,7 +1,7 @@
 """Read only the choices frozen into this owner's accepted remediation jobs."""
 import json
 
-_KEYS = frozenset({'rule_based', 'ai', 'ai_zone', 'ai_budget_usd', 'auto_approve_ai',
+_KEYS = frozenset({'rule_based', 'ai', 'ai_zone', 'ai_budget_usd', 'auto_approve_ai', 'cloud_input_strategy',
                    'document_wide_ai', 'document_wide_input_mode', 'document_wide_model_profile', 'generation_chain', 'ai_review'})
 
 def read_accepted_plan(store, owner, scan_id, run_id):
