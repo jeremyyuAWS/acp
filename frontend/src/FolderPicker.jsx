@@ -184,7 +184,7 @@ export default function FolderPicker({
   const shown = q ? folders.filter((f) => (f.name || '').toLowerCase().includes(q)) : folders
 
   const breadcrumb = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, font: 'inherit', fontSize: 13, marginBottom: 10,
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, font: 'inherit', fontSize: 'var(--text-breadcrumb)', marginBottom: 10,
                   flexWrap: 'wrap', color: 'var(--muted)', paddingBottom: 10,
                   borderBottom: '1px solid var(--line)' }}>
       <button type="button" className="ghost small" disabled={loading}
@@ -194,7 +194,7 @@ export default function FolderPicker({
       {stack.map((f, i) => (
         <span key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           {i > 0 && <span>›</span>}
-          <button type="button" style={{ background: 'none', border: 'none', padding: 0, font: 'inherit', fontSize: 13,
+          <button type="button" style={{ background: 'none', border: 'none', padding: 0, font: 'inherit', fontSize: 'var(--text-breadcrumb)',
             cursor: i < stack.length - 1 ? 'pointer' : 'default',
             color: i < stack.length - 1 ? 'var(--info-fg)' : 'var(--ink)',
             fontWeight: i === stack.length - 1 ? 600 : 400 }}

@@ -8,8 +8,9 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
   const reasonId = useId()
   const [excluded, setExcluded] = useState(new Set())
   useEffect(() => { setExcluded(new Set()) }, [runId])
-  const selectedReady = ready.filter(file => !excluded.has(file.file))
-  const readyNames = new Set(ready.map(file => file.file))
+  const eligibleReady = ready.filter(file => !fileStates[file.file]?.status || fileStates[file.file].status === 'ready')
+  const selectedReady = eligibleReady.filter(file => !excluded.has(file.file))
+  const readyNames = new Set(eligibleReady.map(file => file.file))
   const deliveredCount = files.filter(file => fileStates[file.file]?.status === 'released').length
   const allDelivered = files.length > 0 && deliveredCount === files.length
   const folderLinks = publishedFolders.filter(folder => folder.url)
@@ -94,7 +95,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
   const readyReason = readOnly ? 'History is read-only. Switch to the latest scan to publish.'
     : destinationPending ? 'Loading the saved release destination…' : publishing ? 'Publishing is in progress.' : !runId ? 'Choose a scan before releasing files.'
     : !files.length ? 'No files are selected in this scope.'
-    : !ready.length ? 'No files are currently eligible for publishing.'
+    : !eligibleReady.length ? 'No unpublished files are currently eligible for publishing.'
     : !selectedReady.length ? 'Select at least one ready file above.' : ''
   const approveReason = readOnly ? 'History is read-only. Switch to the latest scan to approve changes.'
     : destinationPending ? 'Loading the saved release destination…' : busy ? 'Authorization is in progress.' : activeRunning ? 'An authorized batch is already applying, verifying, and publishing. Follow its progress below.'
@@ -108,14 +109,19 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     <h3 className="release-quick-title">{allDelivered ? 'Publishing complete' : 'Publish your documents'}</h3>
     {deliveredCount > 0 && <div className="release-published-message" role="status">
       <strong>{allDelivered ? 'All files are already published.' : `${deliveredCount} ${deliveredCount === 1 ? 'file is' : 'files are'} already published.`}</strong>
-      <p>{allDelivered ? 'There is nothing more to select for this release.' : 'Published files are greyed out below.'} Open the saved copies in {providerLabel}. Originals are unchanged.</p>
+      <p>{allDelivered ? 'There is nothing more to select for this release.' : 'Already published files are excluded from the new batch.'} Open the saved copies in {providerLabel}. Originals are unchanged.</p>
       {folderLinks.map((folder, index) => <a key={folder.id || folder.url} href={folder.url} target="_blank" rel="noopener noreferrer">Open published folder{folderLinks.length > 1 ? ` ${index + 1}` : ''} in {providerLabel} ↗</a>)}
       {!folderLinks.length && <p>The folder link is not available yet. Check the delivery receipt below for recorded file links.</p>}
     </div>}
     <section className="release-quick-step" aria-labelledby={`${reasonId}-files`}>
-      <h4 id={`${reasonId}-files`}><span className="release-step-number">1</span> {allDelivered ? 'Published files' : 'Choose files'}</h4>
+      <h4 id={`${reasonId}-files`}><span className="release-step-number">1</span> {allDelivered ? 'Published files' : 'Publication batch'}</h4>
       {!allDelivered && releaseOptions && <details><summary>Publishing options</summary>{releaseOptions}</details>}
       <div className="release-quick-summary"><strong>{allDelivered ? `${deliveredCount} delivered` : `${selectedReady.length} ready to publish`}</strong><span>{files.length} files in this scope</span></div>
+      {!allDelivered && <p className="release-quick-batch-explanation">{excluded.size
+        ? `${selectedReady.length} eligible ${selectedReady.length === 1 ? 'copy is' : 'copies are'} included in your custom batch.`
+        : 'All unpublished eligible copies are included in one batch.'} {allowRemainingIssues ? 'Includes saved copies with remaining issues, as you chose. Pending suggestions are not applied.' : 'Copies must pass release eligibility checks before joining the batch.'}</p>}
+      <details className="release-quick-specific-files"><summary>{allDelivered ? 'View published files' : 'Choose specific files'}{!allDelivered && excluded.size > 0 ? ` · ${selectedReady.length} included` : ''}</summary>
+      {!allDelivered && excluded.size > 0 && <button type="button" className="ghost small" disabled={readOnly || publishing} onClick={() => setExcluded(new Set())}>Include all eligible files</button>}
       <div className="release-quick-file-list" role="group" aria-label="Files to publish">
         {files.filter(file => readyNames.has(file.file) || allDelivered).map(file => <label key={file.file} className={`release-quick-file${fileStates[file.file]?.status === 'released' ? ' release-quick-file--delivered' : ''}`}>
           <input type="checkbox" aria-label={`Publish ${file.file}`} checked={readyNames.has(file.file) && !excluded.has(file.file)} disabled={readOnly || publishing || !readyNames.has(file.file)}
@@ -125,6 +131,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
         </label>)}
         {!files.length && <p>No files are selected in this scope.</p>}
       </div>
+      </details>
 
     </section>
     <section className="release-quick-step" aria-labelledby={`${reasonId}-destination`}>
@@ -139,7 +146,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
       <div className="release-quick-buttons">
       <div className="release-quick-action">
         <button disabled={allDelivered || Boolean(readyReason)} aria-describedby={!allDelivered && readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(selectedReady.map(f => f.file))}>
-          {allDelivered ? 'All files published ✓' : publishing ? 'Publishing copies…' : allowRemainingIssues ? `Publish saved copies (${selectedReady.length})` : `Publish ready files (${selectedReady.length})`}
+          {allDelivered ? 'All files published ✓' : publishing ? 'Publishing copies…' : allowRemainingIssues ? `Publish batch with remaining issues (${selectedReady.length})` : `Publish batch (${selectedReady.length})`}
         </button>
         {announcement && <p role="status">{announcement}</p>}
         {!allDelivered && readyReason && <div id={`${reasonId}-ready`}><p>{readyReason}</p>

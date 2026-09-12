@@ -4,6 +4,10 @@
   --text-small: 12px;
   --text-control: 14px;
   --text-metric: 24px;
+  --text-table-heading: 12px;
+  --text-filename: 13px;
+  --text-breadcrumb: 13px;
+  --control-radius: 9px;
   --plum: #46303F;
   --amber: #F5B400;
   --ink: #2b2330;
@@ -130,7 +134,7 @@ h1.sub { margin: 0; font-weight: 400; }
 
 .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 22px 0 8px; }
 button {
-  font: inherit; font-size: 14px; cursor: pointer; border-radius: 9px; padding: 9px 16px;
+  font: inherit; font-family:var(--font-ui); font-size:var(--text-control); cursor: pointer; border-radius:var(--control-radius); padding: 9px 16px;
   background: var(--plum); color: #fff; border: 1px solid var(--plum);
 }
 button:hover { opacity: 0.92; }
@@ -193,10 +197,10 @@ button.ghost { background: #fff; color: var(--plum); border: 1px solid var(--lin
               animation: prep-pulse-anim 1.6s ease-in-out infinite; vertical-align: -1px; }
 @keyframes prep-pulse-anim { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 0 0 8px; }
+table { width: 100%; border-collapse: collapse; font-family:var(--font-ui); font-size:var(--text-body); }
+th { text-align: left; color: var(--muted); font-weight: 500; font-size:var(--text-table-heading); padding: 0 0 8px; }
 td { padding: 10px 0; border-top: 1px solid var(--line); }
-.fname { font-family: inherit; font-size: 13px; }
+.fname { font-family: inherit; font-size:var(--text-filename); }
 .machine-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
   font-size: 0.92em; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 /* Lifecycle prose remains sans like every other tab; only its evidence values are machine text. */
