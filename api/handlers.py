@@ -1843,12 +1843,7 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
         # approve, and the file can never re-validate to compliant (Publish stays empty).
         # A fully-cleared file still gets ONE verification item (user decision 2026-07-02)
         # so no unreviewed fix reaches Publish on trust alone.
-        review_rules = [
-            {"rule_id": r["rule_id"], "rule_name": r.get("rule_name"),
-             "finding_count": r.get("finding_count")}
-            for r in core.store.get_scan_traces(scan_id, file=filename)
-            if r.get("outcome") == "FAIL" and r["rule_id"] not in cleared
-        ]
+        review_rules = residual_remediation_review_rules(core.store, scan_id, filename, cleared)
         if review_rules:
             queued = core.store.queue_hitl_review_for_file(scan_id, filename, review_rules)
             if queued:
@@ -1861,6 +1856,15 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
                                            rule_id="auto/verify")
     except Exception:
         swallowed("_remediate_file: settling remediation state and routing findings to human review failed", scan_id)
+
+
+def residual_remediation_review_rules(store, scan_id, filename, cleared):
+    """Remaining failed or judgement findings need explicit review, never implicit success."""
+    return [{"rule_id": row["rule_id"], "rule_name": row.get("rule_name"),
+             "finding_count": row.get("finding_count")}
+            for row in store.get_scan_traces(scan_id, file=filename)
+            if row.get("outcome") in ("FAIL", "REVIEW") and row["rule_id"] not in cleared
+            and int(row.get("finding_count") or 0) > 0]
 
 
 # ── Fan-out scan pipeline (ADR 0007): discover → scan_file → finalize ─────────

@@ -103,6 +103,7 @@ def hitl_auto_queue(scan_id: str, request: Request):
     if core.store.get_scan(scan_id, owner=_request_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     created = core.store.queue_hitl_items(scan_id)
+    created.extend(core.store.reconcile_completed_remediation_reviews(scan_id))
     core.fire_webhook(created)
     return {"queued": len(created), "items": created}
 
