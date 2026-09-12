@@ -8,6 +8,7 @@ import RemediationProgressSummary from './RemediationProgressSummary.jsx'
 import { releaseProgressState } from './remediationLiveDocumentState.js'
 import ReleaseCopyDestination from './ReleaseCopyDestination.jsx'
 import ReleaseReports from './ReleaseReports.jsx'
+import ReleaseDeliveryCard from './ReleaseDeliveryCard.jsx'
 import { documentSelection, documentScopeSentence, documentsInSelection } from './remediableScope.js'
 import { openReport, publishFile, publishAllFiles, getReleaseStatus, getAutomaticRelease, resumeAutomaticRelease, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage, prepareReleasePackage, downloadPreparedReleasePackage, getQueueJob, putMyReleaseTemplates } from './api.js'
 import { releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
@@ -32,7 +33,7 @@ import { hasCorrectedCopy, hasSavedCorrectedCopy, deliveryIsCurrent, releaseRead
 // publish() persists via POST /scans/{sid}/publish.
 // readOnly: time-travel replay — publishing must act on the live estate, not a snapshot.
 export default function Publish({ run, files = [], certified = [], readOnly = false, onPublish, me,
-  triage = {}, cap, assessment }) {
+  triage = {}, cap, assessment, embedded = false, onOpenDetails }) {
   // Release operates on the exact document cohort chosen in Remediate. The banner below explains
   // the restriction; this filter enforces it for selection, delivery, packaging and set status.
   const releaseFiles = documentsInSelection(files, triage)
@@ -746,6 +747,22 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     } finally { setDownloading(false) }
   }
 
+  const changeRemainingIssues = value => { partialChoice.current = releaseScopeKey; setAllowRemainingIssues(value); setReleasePreview(null); setPackagePreview(null); setReviewedPlanKey(null); setBuilderStep(1); setDeliveryMethod('publish'); setSelectedFiles(new Set()); selectionInitialized.current = false }
+  const driveReconnect = (automaticAuthorization?.requires_reconnect === true || automaticAuthorization?.can_resume === true) && automaticAuthorization.resumable !== false && ['active', 'waiting', 'processing', 'publishing', 'blocked'].includes(automaticAuthorization.status) && <DriveReleaseReconnect
+        key={`${run?.id}:${automaticAuthorization.id}`} scanId={run?.id} authorizationId={automaticAuthorization.id} requiresReconnect={automaticAuthorization.requires_reconnect === true} readOnly={readOnly}
+        onResume={async () => { await resumeAutomaticRelease(run.id, automaticAuthorization.id); setAutomaticAuthorization(previous => previous?.id === automaticAuthorization.id ? {...previous, requires_reconnect:false, can_resume:false} : previous) }} />
+  if (embedded) return <ReleaseDeliveryCard ready={publishableReady} scopeCount={releaseFiles.length}
+    publishedCount={publishedCount} deliveringCount={deliveringCount} failedCount={failedCount}
+    publishing={publishing} loading={destinationPending || (settingsPending && !destinationLocked)} readOnly={readOnly}
+    allowRemainingIssues={allowRemainingIssues} onRemainingIssuesChange={changeRemainingIssues}
+    onPublish={names => publishAll(names, releaseFolderName, true)} onOpenDetails={onOpenDetails}
+    destinationLabel={releaseDestination ? `${releaseDestination.folder_name} / Remediated / ${releaseFolder?.name || releaseFolderName || 'Timestamp + user email'}` : releaseProvider === 'drive' ? 'Google Drive / Remediated / Timestamp + user email' : releaseProvider === 'sharepoint' ? 'SharePoint source library / Remediated / Timestamp + user email' : 'ACP managed storage'}
+    announcement={releaseAnnouncement} error={releaseError}
+    folders={releaseFolders.length ? releaseFolders : releaseFolder?.url ? [releaseFolder] : []}>
+    {driveReconnect}
+    {(releaseId || publishedList.length > 0) && <ReleaseReports scanId={run?.id} publishedCount={publishedCount} readOnly={readOnly} />}
+  </ReleaseDeliveryCard>
+
   return (
     <>
       {/* ABOVE the conformance report, not below it. The artifact this screen produces is a
@@ -756,9 +773,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           a report could be read as covering an estate that two documents of it were fixed in. */}
       <ScopeBanner run={run} fileCount={files.length}
                    docScope={documentScopeSentence(documentSelection(files, triage))} />
-      {(automaticAuthorization?.requires_reconnect === true || automaticAuthorization?.can_resume === true) && automaticAuthorization.resumable !== false && ['active', 'waiting', 'processing', 'publishing', 'blocked'].includes(automaticAuthorization.status) && <DriveReleaseReconnect
-        key={`${run?.id}:${automaticAuthorization.id}`} scanId={run?.id} authorizationId={automaticAuthorization.id} requiresReconnect={automaticAuthorization.requires_reconnect === true} readOnly={readOnly}
-        onResume={async () => { await resumeAutomaticRelease(run.id, automaticAuthorization.id); setAutomaticAuthorization(previous => previous?.id === automaticAuthorization.id ? {...previous, requires_reconnect:false, can_resume:false} : previous) }} />}
+      {driveReconnect}
       <section className="panel release-overview" aria-labelledby="release-title">
         <div className="release-overview__heading">
           <div>
@@ -824,7 +839,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         fileStates={Object.fromEntries(releaseFiles.map((file, index) => [file.file, states[index]]))}
         releaseOptions={<div className="panel" style={{ marginTop: 12, padding: 14 }}>
           <label><input type="checkbox" checked={allowRemainingIssues} disabled={readOnly || publishing}
-            onChange={event => { partialChoice.current = releaseScopeKey; setAllowRemainingIssues(event.target.checked); setReleasePreview(null); setPackagePreview(null); setReviewedPlanKey(null); setBuilderStep(1); setDeliveryMethod('publish'); setSelectedFiles(new Set()); selectionInitialized.current = false }} /> Publish with remaining issues</label>
+            onChange={event => changeRemainingIssues(event.target.checked)} /> Publish with remaining issues</label>
           <p className="muted" style={{ margin: '8px 0 0' }}>Optional: publish saved copies even when manual review or accessibility issues remain. Unapproved suggestions are not applied. Remaining issues stay in the audit record; publishing does not certify accessibility.</p>
         </div>}
         readyReasons={[...new Set(states.filter(state => state.status !== 'ready').map(state => state.reason))]}
