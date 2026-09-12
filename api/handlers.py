@@ -5008,7 +5008,7 @@ _FIELD_NAME_EXTS = ("pdf", "docx")
 # and 1.4.5 exempts charts precisely because a picture of data is not a picture of prose.
 # Replacing a chart with its axis labels destroys information, so 1.4.9 stays HUMAN and the
 # getter is narrowed to ("1.4.5",) rather than reading both bands into one map.
-_IMAGE_OF_TEXT_EXTS = ("pptx",)
+_IMAGE_OF_TEXT_EXTS = ("docx", "xlsx", "pptx")
 # ADR 0055. The 1.4.5 card's locator shape, recognised here only to decide whether the alt lane
 # needs the translation below — the translation itself lives beside the enumeration it mirrors,
 # in apply_office_image_of_text (docx/xlsx) and apply_pptx_image_of_text (pptx, delegated to by
@@ -5541,11 +5541,16 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     # credit for the 1.4.5 the reviewer actually fixed.
     image_of_text_uploaded = False
     if image_of_text_values:
-        from apply_pptx_image_replacement import apply_pptx_image_replacement
+        if ext == 'pptx':
+            from apply_pptx_image_replacement import apply_pptx_image_replacement
+            image_replacement_writer = apply_pptx_image_replacement
+        else:
+            from apply_office_image_replacement import apply_office_image_replacement
+            image_replacement_writer = lambda data, values: apply_office_image_replacement(data, ext, values)
         working, image_of_text_uploaded = _apply_one_value_kind(
             scan_id=scan_id, filename=filename, working=working,
             values=image_of_text_values, scs_to_clear={"1.4.5"},
-            write_fn=apply_pptx_image_replacement,
+            write_fn=image_replacement_writer,
             diff_rule_id="1.4.5", credit_rule_ids=_IMAGE_OF_TEXT_SCS,
             noun="image-of-text replacement", job=job,
             residual_state=residual_state, pending_credits=pending_credits)
