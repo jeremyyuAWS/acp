@@ -75,7 +75,7 @@ it('ignores a late response after a different document is opened', async () => {
 
 it('offers remediation-state filtering while keeping change records separate from findings', async () => {
   const { container } = await mount({ fixes: [{ ...fix, verified: true }] })
-  const button = [...container.querySelectorAll('button')].find(node => node.querySelector('[aria-label="Fixed and verified: 0 findings"]'))
+  const button = [...container.querySelectorAll('button')].find(node => node.getAttribute('aria-label') === 'Fixed and verified: 0 findings · 1 change records')
   expect(button.textContent).toContain('Verified 0 · 1 change records')
   await act(async () => button.click())
   expect(container.querySelectorAll('tbody tr')).toHaveLength(1)

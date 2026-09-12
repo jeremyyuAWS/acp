@@ -39,3 +39,15 @@ describe('shared page and native control typography', () => {
     expect(entry).toContain("import './styles.css'")
   })
 })
+
+it('shares control, document heading, filename and breadcrumb roles without changing expanded activity code typography', () => {
+  const css = fs.readFileSync(path.join(root, 'styles.css'), 'utf8')
+  expect(css).toMatch(/button\s*\{[^}]*font-family:\s*var\(--font-ui\)[^}]*font-size:\s*var\(--text-control\)/s)
+  expect(css).toMatch(/table\s*\{[^}]*font-family:\s*var\(--font-ui\)[^}]*font-size:\s*var\(--text-body\)/s)
+  expect(css).toContain('--text-table-heading: 12px')
+  expect(css).toContain('--text-filename: 13px')
+  expect(fs.readFileSync(path.join(root, 'FolderPicker.jsx'), 'utf8')).toContain("fontSize: 'var(--text-breadcrumb)'")
+  const activity = fs.readFileSync(path.join(root, 'remediation-ops-panel.css'), 'utf8')
+  expect(activity).toMatch(/\.remops-delivery-tag[^}]*font-family:var\(--font-ui/)
+  expect(activity).toMatch(/\.remops-activity details li[^}]*font-family:var\(--font-mono/)
+})

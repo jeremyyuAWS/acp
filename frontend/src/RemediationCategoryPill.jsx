@@ -1,6 +1,6 @@
 import { REMEDIATION_CATEGORIES, categoryLabel } from './remediationCategories.js'
 import './remediation-category-pills.css'
-const SHORT = { automatic: 'Auto', approval: 'Approve', suggestion: 'AI', manual: 'Manual', unsupported: 'No ACP', blocked: 'Blocked', applied: 'Pending', ai_applied: 'AI applied', verified: 'Verified' }
+export const CATEGORY_SHORT_LABELS = { automatic: 'Auto', approval: 'Approve', suggestion: 'AI', manual: 'Manual', unsupported: 'No ACP', blocked: 'Blocked', applied: 'Pending', ai_applied: 'AI applied', verified: 'Verified' }
 const EXPLANATIONS = {
   automatic: 'ACP has a supported rule-based fix that can run under your remediation plan without an AI suggestion or individual approval. It is counted as verified only after the fix passes its checks.',
   approval: 'A proposed fix is available, but approval is required before ACP applies it. Applying the proposal saves the change and starts verification.',
@@ -15,7 +15,7 @@ const EXPLANATIONS = {
 export const categoryExplanation = category => EXPLANATIONS[category] || EXPLANATIONS.blocked
 export default function RemediationCategoryPill({ category, count, unit = 'findings', fullLabel = false }) {
   return <span className={`remediation-category-pill remediation-category-pill--${category}`} title={categoryExplanation(category)} aria-label={`${categoryLabel(category)}${count == null ? '' : `: ${count} ${unit}`}`}>
-    {fullLabel ? categoryLabel(category) : SHORT[category]}{count != null && <> <strong className="remediation-category-pill__count">{count}</strong>{unit === 'records' && ' records'}</>}
+    {fullLabel ? categoryLabel(category) : CATEGORY_SHORT_LABELS[category]}{count != null && <> <strong className="remediation-category-pill__count">{count}</strong>{unit === 'records' && ' records'}</>}
   </span>
 }
 export function RemediationCategoryLegend() {

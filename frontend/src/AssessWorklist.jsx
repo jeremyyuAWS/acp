@@ -1,5 +1,5 @@
 import './document-findings-table.css'
-import RemediationCategoryPill, { categoryExplanation } from './RemediationCategoryPill.jsx'
+import RemediationCategoryPill, { categoryExplanation, CATEGORY_SHORT_LABELS } from './RemediationCategoryPill.jsx'
 import { useState } from 'react'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import { REMEDIATION_CATEGORIES, remediationCategory } from './remediationCategories.js'
@@ -79,7 +79,7 @@ const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1)
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
 
-const fname = { fontFamily: 'var(--font-mono)', fontSize: 12.5 }
+const fname = { fontFamily: 'var(--font-ui)', fontSize: 'var(--text-filename)' }
 const numCell = { fontVariantNumeric: 'tabular-nums', fontWeight: 700, textAlign: 'left' }
 const subline = { fontSize: 11, marginTop: 2, lineHeight: 1.45 }
 
@@ -244,7 +244,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
             {REMEDIATION_CATEGORIES.map(([key, label]) => {
               const count = stateScoped.reduce((n, row) => n + (row.findings || []).filter(finding => remediationCategory(finding) === key).length, 0)
               const changes = scopedChanges.filter(change => change.category === key).length
-              return <button key={key} className="remediation-category-filter" type="button" disabled={!count && !changes} aria-pressed={categoryChosen === key} title={categoryExplanation(key)} aria-description={categoryExplanation(key)} onClick={() => setCategoryChosen(current => current === key ? null : key)}><RemediationCategoryPill category={key} count={count} />{changes > 0 && ` · ${changes} change records`}</button>
+              return <button key={key} className={`remediation-category-filter remediation-category-pill--${key}`} type="button" disabled={!count && !changes} aria-pressed={categoryChosen === key} aria-label={`${label}: ${count} findings${changes > 0 ? ` · ${changes} change records` : ''}`} title={categoryExplanation(key)} aria-description={categoryExplanation(key)} onClick={() => setCategoryChosen(current => current === key ? null : key)}>{CATEGORY_SHORT_LABELS[key]} <strong>{count}</strong>{changes > 0 && ` · ${changes} change records`}</button>
             })}
           </div>
           <span className="muted worklist-auto-counts">Auto-fix available: {autoFindings} of {scopedFindings} findings · {docsWithAuto} of {plural(stateScoped.length, 'document', 'documents')}</span>

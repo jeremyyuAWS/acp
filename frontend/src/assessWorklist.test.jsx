@@ -90,7 +90,7 @@ const nameOf = (r) => r.querySelector('td div').textContent
 const order = (c) => rowsOf(c).map(nameOf)
 const named = (c, name) => rowsOf(c).find((r) => nameOf(r) === name)
 const cell = (r, col) => r.querySelector(`.col-${col} .n`).textContent
-const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.querySelector('.remediation-category-pill')?.getAttribute('aria-label') || b.textContent))
+const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.getAttribute('aria-label') || b.textContent))
 // "Show every row" — the state filter AND, now, the A11 pagination reveal if the filtered set still
 // exceeds one page. Existing callers asked for every row to be visible; A11 truncation is additive
 // and this keeps that promise rather than making every pre-existing test learn about page size.
@@ -305,7 +305,7 @@ describe('A19 severity filter and A24 auto-fixable toggle — narrow, never hide
   // count stays on screen whether or not it is the one selected, and a narrowed view still prints
   // the estate totals underneath it. Severity counts are FINDINGS ("Serious 2"), the toggle's
   // denominator is findings AND documents, and neither control invents a number of its own.
-  const refineBtn = (c, re) => [...c.querySelectorAll('.worklist-refine button')].find((b) => re.test(b.querySelector('.remediation-category-pill')?.getAttribute('aria-label') || b.textContent))
+  const refineBtn = (c, re) => [...c.querySelectorAll('.worklist-refine button')].find((b) => re.test(b.getAttribute('aria-label') || b.textContent))
   const autoInput = (c) => c.querySelector('.worklist-autoonly input')
 
   it('counts findings by remediation category without dropping zero categories', async () => {
@@ -590,4 +590,18 @@ it('deliberately retires the legend mount while retaining its component for rest
  for (const name of readdirSync('src').filter(name => name.endsWith('.jsx') && !name.includes('.test.'))) {
   expect(readFileSync(`src/${name}`, 'utf8'), name).not.toContain('<RemediationCategoryLegend')
  }
+})
+
+it('uses one clickable category surface and the shared filename face', async () => {
+  const c = await mount({ initialFilter:'all', files:[doc('alpha.docx',[finding('1.1.1'),finding('1.3.1')])] })
+  const filters = [...c.querySelectorAll('.remediation-category-filter')]
+  expect(filters.length).toBeGreaterThan(0)
+  expect(filters.every(filter => !filter.querySelector('.remediation-category-pill'))).toBe(true)
+  const automatic = filters.find(filter => filter.textContent.startsWith('Auto'))
+  expect(automatic.classList.contains('remediation-category-pill--automatic')).toBe(true)
+  expect(automatic.getAttribute('title')).toContain('rule-based fix')
+  const filename = [...c.querySelectorAll('td div')].find(element => element.textContent === 'alpha.docx')
+  expect(filename.style.fontFamily).toBe('var(--font-ui)')
+  await act(async () => automatic.click())
+  expect(automatic.getAttribute('aria-pressed')).toBe('true')
 })
