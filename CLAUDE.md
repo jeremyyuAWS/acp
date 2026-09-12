@@ -673,7 +673,7 @@ not on that list; components that are supposed to be live are.
 `AssessmentReconciliation`, `CanonicalStageCard`, `ConfidenceDashboard`, `ControlPlane`, `Dashboard`,
 `DiscoverCompleteSummary`, `DiscoveryCompleteness`, `Disposition`, `DispositionReviewWorkspace`,
 `EstateCoverage`, `EstateTreemap`, `FileTypeConfig`, `Insight`, `LifecycleOverrideControl`, `LiveAssessment`, `PiiPanel`,
-`ProcessingDetails`, `RemediationApprovals`, `RemediationDocProgress`, `RemediationPreview`, `RemediationRunProgress`, `RemediationTransform`, `RetiredVisibleBulkApproval`, `RiskScore`, `RolePrivilege`, `Rubric`, `ScanScope`,
+`ProcessingDetails`, `RemediationApprovals`, `RemediationDocProgress`, `RemediationPreview`, `RemediationRunProgress`, `RemediationTransform`, `RetiredReleaseAssessmentDetails`, `RetiredVisibleBulkApproval`, `RiskScore`, `RolePrivilege`, `Rubric`, `ScanScope`,
 `ScanScopeChip`, `ScanSetup`, `ScopeFunnel`, `ScopeRules`, `ScreenReaderDemo`, `Upload`,
 `WordCloud`.
 
