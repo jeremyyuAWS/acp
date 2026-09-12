@@ -18,6 +18,7 @@ def profile_specs():
 class _AuthorizedNativeProviders:
     """Instance-local routing authorized by the explicitly saved native profile.
 
+    Current admin provider permissions remain a ceiling on the saved selection.
     Credential and endpoint lookups still use the configured providers module.
     No global/module function, environment or application setting is mutated.
     """
@@ -31,7 +32,7 @@ class _AuthorizedNativeProviders:
         return MODELS[0][0]
 
     def permitted_text_providers(self):
-        return frozenset(provider for provider, _ in MODELS)
+        return frozenset(provider for provider, _ in MODELS) & self._providers.permitted_text_providers()
 
 
 def configured_native_pdf_generator(ctx, *, provider_module=None, post=None):

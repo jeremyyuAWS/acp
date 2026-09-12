@@ -27,6 +27,7 @@ def test_exact_native_primary_fallback_and_accounted_replay(setup, pdf_request, 
         context_token_limit=32768) for p, m in quality.MODELS))
     class Providers(FakeProviders):
         selected = 'anthropic'  # Global default must remain Anthropic.
+        fallbacks = ('openai',)
     def post(url, **kwargs):
         calls.append((url, kwargs['json']))
         if mode == 'unknown':
@@ -80,6 +81,7 @@ def test_profile_authorization_requires_frozen_native_cloud_selection(setup, mon
 def test_missing_provider_key_fails_before_transport(setup, monkeypatch):
     store, job, _, _ = setup
     class Providers(FakeProviders):
+        fallbacks = ('anthropic',)
         @staticmethod
         def _text_key_for(provider): return None if provider == 'anthropic' else 'fixture'
     with run_context(store, job['payload'], job) as ctx:
@@ -121,3 +123,29 @@ def test_disabled_local_profiles_never_enter_factory(setup,pdf_request,monkeypat
         monkeypatch.setattr(provider,'managed_context',lambda:policy(ctx,**change))
         assert provider.generate_document(request,pdf_bytes=data)['deferred']
     assert not calls
+
+
+def test_profile_cannot_override_admin_provider_withdrawal(setup):
+    store, job, _, _ = setup
+    class Providers(FakeProviders):
+        selected = 'anthropic'
+        fallbacks = ()  # OpenAI credential exists, but admin has not permitted egress.
+    with run_context(store, job['payload'], job) as ctx:
+        with pytest.raises(ValueError, match='not authorised'):
+            quality.configured_native_pdf_generator(policy(ctx), provider_module=Providers,
+                post=lambda *a, **k: pytest.fail('must not dispatch'))
+
+
+def test_revoked_permission_stops_existing_generator_before_http(setup, specs, monkeypatch):
+    from llm_waterfall_provider import PreDispatchRejected
+    store, job, _, _ = setup
+    class Providers(FakeProviders):
+        fallbacks = ('anthropic',)
+    monkeypatch.setattr(quality, 'profile_specs', lambda: tuple(replace(specs[0], provider=p, model=m,
+        context_token_limit=32768) for p, m in quality.MODELS))
+    with run_context(store, job['payload'], job) as ctx:
+        generator = quality.configured_native_pdf_generator(policy(ctx), provider_module=Providers,
+            post=lambda *a, **k: pytest.fail('permission revoked before paid HTTP'))
+        Providers.fallbacks = ()
+        with pytest.raises(PreDispatchRejected, match='governance changed'):
+            generator.generate_text(quality.MODELS[1][1], 'test')
