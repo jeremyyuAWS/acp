@@ -166,6 +166,31 @@ def test_real_store_change_report_wires_exact_release_evidence(isolated_store, m
     assert 'Released corrected copy' not in checklist
 
 
+@pytest.mark.parametrize('available', [True, False])
+def test_change_navigation_only_targets_rendered_page_sections(isolated_store, monkeypatch, available):
+    from release_reports import build_release_report_sources
+    store = isolated_store
+    store.init_scan_run('nav', 'sharepoint', 1, '2026-09-11T10:00:00Z', 'rubric', 'hash', owner='owner', status='completed')
+    release = store.ensure_release_execution('nav', 'owner', 'sharepoint', 1)
+    store.record_release_document(release['id'], 'owner', {'file': 'file.pdf', 'status': 'published'})
+    store.record_remediation_diffs('nav', 'file.pdf', [
+        {'rule_id': 'SC_1_1_1', 'before': '', 'after': 'Description', 'note': f'pdf:fig:{page}:0'}
+        for page in range(1, 5)])
+    calls = []
+    def visual(*args):
+        calls.append(args)
+        return ''.join(f'<section id="pdf-evidence-page-{page}">Page {page}</section>' for page in range(1, 4)) if available else '<p>Page images unavailable</p>'
+    monkeypatch.setattr(evidence, 'build_visual_evidence', visual)
+    assets = build_release_report_sources(store, 'nav', 'owner', release['id'])
+    report = next(a['content'].decode() for a in assets if a['name'].startswith('changes-'))
+    assert len(calls) == 1
+    assert ('href="#pdf-evidence-page-1"' in report) is available
+    assert 'href="#pdf-evidence-page-4"' not in report
+    if not available:
+        assert 'href="#pdf-evidence-page-' not in report
+    assert 'pdf:fig:4:0' in report  # Location remains useful without an image link.
+
+
 def test_oversized_download_rejected_before_hash_or_render(monkeypatch):
     build, _ = setup(monkeypatch, pdf(), b'oversized', 'sha256:' + '0' * 64)
     monkeypatch.setattr(evidence, 'MAX_BYTES', 4)

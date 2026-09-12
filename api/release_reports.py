@@ -265,11 +265,16 @@ def build_release_report_sources(store, scan_id, owner, release_id):
         changes = [d for d in diffs['items'] if d['file'] == name]
         from unverified_changes import saved_changes
         saved_unverified = [d for d in saved_changes(store, scan_id, name) if selected(d)]
+        from pdf_release_evidence import build_visual_evidence
+        visual_evidence = build_visual_evidence(store, scan_id, owner, name, outcome, changes + saved_unverified)
+        evidence_targets = set(re.findall(r'id="(pdf-evidence-page-\d+)"', visual_evidence))
         detail += f'<p><strong>Recorded edit outcomes:</strong> {len(changes)} verified-process change records · {len(saved_unverified)} applied AI change records pending verification. These are change counts, not finding counts.</p>'
         detail += '<h2>Recorded changes by success criterion</h2><p>Change records are separate from findings. Verified finding totals in the checklist require matching ledger evidence.</p>'
         from pdf_release_evidence import evidence_links
         def change_location(d):
             links = evidence_links(d) if name.lower().endswith('.pdf') else ''
+            links = ' '.join(link for link in re.findall(r'<a\b[^>]*>.*?</a>', links)
+                             if any(f'href="#{target}"' in link for target in evidence_targets))
             return _text(_location(d)) + ('<br>' + links if links else '')
         for sc in sorted({_rule(d['rule_id']) for d in changes}):
             records = [d for d in changes if _rule(d['rule_id']) == sc]
@@ -286,8 +291,7 @@ def build_release_report_sources(store, scan_id, owner, release_id):
                     for d in records]) + '</details>'
         if not changes and not saved_unverified:
             detail += '<p>No change records are available for this file.</p>'
-        from pdf_release_evidence import build_visual_evidence
-        detail += build_visual_evidence(store, scan_id, owner, name, outcome, changes + saved_unverified)
+        detail += visual_evidence
         appendices.append(f'<section class="document-appendix"><h2>Document: {_text(name)}</h2>{checklist_detail}</section>')
         assets.append({'name': report_name.replace('checklist-', 'changes-', 1), 'content': _page(f'Change record — {name}', detail), 'content_type': 'text/html; charset=utf-8'})
         assets.append({'name': report_name, 'content': _page(f'Follow-up checklist — {name}', checklist_detail), 'content_type': 'text/html; charset=utf-8'})
