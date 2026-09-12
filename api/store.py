@@ -8458,9 +8458,9 @@ class Store:
         what the certification PDF's 'Before → After' section renders."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT rule_id,seq,before,after,note FROM remediation_diff "
+                "SELECT rule_id,seq,before,after,note,TRUE AS verified FROM remediation_diff "
                 "WHERE scan_id=%s AND file=%s ORDER BY rule_id, seq", (scan_id, file))
-            return self._db.fetchall(cur)
+            return [{**row, "verified": bool(row["verified"])} for row in self._db.fetchall(cur)]
 
     def list_remediation_diffs(self, scan_id: str, limit: int = 2000) -> list[dict]:
         """Every verified-cleared before→after record across the whole scan — the honest,
@@ -8470,9 +8470,9 @@ class Store:
         Includes `file` so the caller can reconcile per-document."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT file,rule_id,seq,before,after,note FROM remediation_diff "
+                "SELECT file,rule_id,seq,before,after,note,TRUE AS verified FROM remediation_diff "
                 "WHERE scan_id=%s ORDER BY rule_id, file, seq LIMIT %s", (scan_id, limit))
-            return self._db.fetchall(cur)
+            return [{**row, "verified": bool(row["verified"])} for row in self._db.fetchall(cur)]
 
     def remediation_diff_page(self, scan_id: str, limit: int = 2000) -> dict:
         """Bounded details and full totals from one database statement/snapshot."""
@@ -8480,14 +8480,15 @@ class Store:
             self._db.execute(cur,
                 "WITH totals AS (SELECT COUNT(*) AS total, COUNT(DISTINCT file) AS documents "
                 "FROM remediation_diff WHERE scan_id=%s), "
-                "page AS (SELECT file,rule_id,seq,before,after,note FROM remediation_diff "
+                "page AS (SELECT file,rule_id,seq,before,after,note,TRUE AS verified FROM remediation_diff "
                 "WHERE scan_id=%s ORDER BY rule_id,file,seq LIMIT %s) "
                 "SELECT totals.total,totals.documents,page.* FROM totals LEFT JOIN page ON 1=1 "
                 "ORDER BY page.rule_id,page.file,page.seq", (scan_id, scan_id, limit))
             rows = self._db.fetchall(cur)
         total, documents = int(rows[0]['total']), int(rows[0]['documents'])
-        items = [{key: row[key] for key in ('file', 'rule_id', 'seq', 'before', 'after', 'note')}
+        items = [{key: row[key] for key in ('file', 'rule_id', 'seq', 'before', 'after', 'note', 'verified')}
                  for row in rows if row['file'] is not None]
+        items = [{**row, 'verified': bool(row['verified'])} for row in items]
         return {'items': items, 'total': total, 'documents': documents,
                 'loaded': len(items), 'complete': len(items) == total}
 
@@ -12803,6 +12804,8 @@ class Store:
             safe_detail = {key: detail[key] for key in
                            ("documents", "fixes", "criterion", "destination")
                            if key in detail and isinstance(detail[key], (str, int, float, bool))}
+            if detail.get("delivery_status") in ("saved_in_acp", "failed", "delivered"):
+                safe_detail["delivery_status"] = detail["delivery_status"]
             result.setdefault(str(row["scan_id"]), []).append({
                 "seq": int(row["seq"]), "occurred_at": row.get("occurred_at"),
                 "kind": row.get("kind"), "phase": row.get("phase"),

@@ -8,9 +8,9 @@ it('partitions findings and never calls approval an applied edit',()=>{
   expect(Object.values(rows[0].liveCounts).reduce((a,b)=>a+b,0)).toBe(2)
 })
 it('rejects duplicate identities, mismatched batches and missing instances',()=>{
-  expect(liveDocumentCounts(docs,{...ledger,items:[ledger.items[0],ledger.items[0]]},[],'batch')).toBeNull()
+  expect(liveDocumentCounts(docs,{...ledger,items:[ledger.items[0],ledger.items[0]]},[],'batch')[0].reconciliation.reason).toContain('duplicated')
   expect(liveDocumentCounts(docs,ledger,[],'other')).toBeNull()
-  expect(liveDocumentCounts(docs,{...ledger,items:[ledger.items[0]]},[],'batch')).toBeNull()
+  expect(liveDocumentCounts(docs,{...ledger,items:[ledger.items[0]]},[],'batch')[0]).toMatchObject({liveCounts:null,reconciliation:{expected:2,recorded:1}})
 })
 it('does not refetch for heartbeats or another scans material event',()=>{
   const key=materialKey('scan',{batch_id:'batch',documents:{processing:1}})
@@ -42,4 +42,25 @@ it('requires endpoints, corrected evidence and current artifact receipt for rele
   expect(confirmedReleaseProgress(file,{documents:[{file:file.file,status:'published',artifact_digest:'sha256:new'}]},source)).toBe('published')
   expect(confirmedReleaseProgress(file,release,{files:[{file:file.file,state:'conflict'}]})).toBe('attention')
   expect(confirmedReleaseProgress(file,release,source,[{file:file.file,status:'pending'}])).toBe('attention')
+})
+
+it('contains mismatches to one document and keeps confirmed identities in other documents',()=>{
+  const second={file:'two.docx',totalFindings:1,findings:[{sc:'1.1.1',fixMode:'auto'}]}
+  const result=liveDocumentCounts([...docs,second],{...ledger,items:[...ledger.items,{file:'two.docx',finding_id:'c',rule_id:'1.1.1',disposition:'resolved_verified'},{file:'two.docx',finding_id:'d',rule_id:'1.1.1'}]},[],'batch')
+  expect(result[0].liveCounts).toEqual({verified:1,approved:1})
+  expect(result[1]).toMatchObject({liveCounts:null,reconciliation:{expected:1,recorded:2}})
+})
+it('requires the same criterion population even when totals happen to match',()=>{
+  const result=liveDocumentCounts(docs,{...ledger,items:ledger.items.map(row=>({...row,rule_id:'2.4.2'}))},[],'batch')
+  expect(result[0].liveCounts).toBeNull()
+  expect(result[0].reconciliation.reason).toContain('criteria differ')
+})
+it('normalizes criterion ids without treating capability as proof of resolution',()=>{
+  const result=liveDocumentCounts(docs,{...ledger,items:ledger.items.map(row=>({...row,rule_id:'SC_1_1_1'}))},[],'batch')
+  expect(result[0].liveCounts).toEqual({verified:1,approved:1})
+})
+it('does not let an applied review record override a recorded failed outcome',()=>{
+  const data={...ledger,items:ledger.items.map(row=>({...row,disposition:'remediation_failed',review_item_id:row.finding_id}))}
+  const review=ledger.items.map(row=>({id:row.finding_id,file:'one.docx',applied:true}))
+  expect(liveDocumentCounts(docs,data,review,'batch')[0].liveCounts).toEqual({blocked:2})
 })

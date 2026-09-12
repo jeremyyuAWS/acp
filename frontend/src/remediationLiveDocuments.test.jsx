@@ -122,9 +122,9 @@ it('does not invent category movement when canonical findings are incomplete', a
   getScanRemediationDiffs.mockResolvedValue({items:[{...fix,verified:true}],total:1,documents:1,loaded:1,complete:true})
   const {container}=await mount({snapshot:{batch_id:'batch'},connected:true})
   await act(async()=>vi.advanceTimersByTime(400))
-  expect(container.querySelector('.live-document-table')).toBeNull()
-  expect(container.textContent).toContain('outcomes are reconciling')
-  expect(container.textContent).toContain('AI 2')
+  expect(container.querySelector('.live-document-table')).not.toBeNull()
+  expect(container.textContent).toContain('finding counts reconciling')
+  expect(container.textContent).toContain('0 recorded / 1 assessed')
 })
 
 it('distinguishes unique WCAG criteria from individual findings without multiplying', async () => {
@@ -205,4 +205,17 @@ it('reuses source freshness for thirty seconds while refreshing new release rece
   await act(async()=>root.render(createElement(RemediationLiveDocuments,{...props,snapshot,connected:true,refreshKey:2})))
   await act(async()=>vi.advanceTimersByTime(400))
   expect(getSourceStatus).toHaveBeenCalledTimes(2)
+})
+
+it('shows valid live findings despite another document population mismatch',async()=>{
+  vi.useFakeTimers()
+  getFindingDispositions.mockResolvedValue({available:true,batch_id:'batch',items:[{finding_id:'a',file:'A.docx',rule_id:'1.1.1',disposition:'resolved_verified'}]})
+  listHitlQueue.mockResolvedValue([])
+  getScanRemediationDiffs.mockResolvedValue({items:[],total:0})
+  const {container}=await mount({snapshot:{batch_id:'batch'},connected:true})
+  await act(async()=>vi.advanceTimersByTime(400))
+  expect(container.querySelectorAll('.live-document-table tbody tr')).toHaveLength(2)
+  expect(container.querySelector('.progress-verified strong').textContent).toBe('1')
+  expect(container.querySelector('.live-document-table tbody').textContent).toContain('0 recorded / 1 assessed')
+  expect(container.querySelector('[aria-label="Live finding outcomes"]').textContent).toContain('Verified 1')
 })

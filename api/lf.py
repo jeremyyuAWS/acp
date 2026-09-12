@@ -35,6 +35,7 @@ _ENV = (os.environ.get("LANGFUSE_TRACING_ENVIRONMENT") or os.environ.get("ACP_EN
 _ENV = _re.sub(r"[^a-z0-9_-]", "-", _ENV)[:40] or "production"
 
 _client = None
+_client_lock = _threading.Lock()
 
 # A trace export is optional work and must never occupy a scan worker.  Langfuse's SDK flush is
 # synchronous and may retry for minutes when its ingestion endpoint returns 500 (observed in
@@ -81,7 +82,7 @@ def exporter_health() -> dict:
                        and (_time.monotonic() - _flush_started_mono) >= stalled_after)
         if not _ENABLED:
             state = "disabled"
-        elif stalled or _flush_consecutive_failures:
+        elif stalled or _flush_consecutive_failures or _ingestion_consecutive_failures:
             state = "degraded"
         elif exporting:
             state = "exporting"
@@ -100,6 +101,12 @@ def exporter_health() -> dict:
             "last_error_at": _flush_last_error_at,
             "last_duration_s": _flush_last_duration_s,
             "next_retry_at": _flush_next_retry_at,
+            "ingestion_successes": _ingestion_successes,
+            "ingestion_failures": _ingestion_failures,
+            "ingestion_last_error": _ingestion_last_error,
+            "ingestion_last_error_at": _ingestion_last_error_at,
+            "ingestion_circuit_open": _time.monotonic() < _ingestion_retry_mono,
+            "telemetry_calls_skipped": _ingestion_skipped,
         }
 
 # Friendly source labels for trace names/summaries.
@@ -245,18 +252,112 @@ def enabled() -> bool:
     return _ENABLED
 
 
+_ingestion_lock = _threading.Lock()
+_ingestion_failures = 0
+_ingestion_successes = 0
+_ingestion_consecutive_failures = 0
+_ingestion_retry_mono = 0.0
+_ingestion_last_error = None
+_ingestion_last_error_at = None
+_ingestion_skipped = 0
+
+
+_sdk_error_filter = None
+
+
+def _bound_sdk_error_logging():
+    """The SDK catches its own upload errors; keep repeated outages from flooding logs."""
+    import logging
+    global _sdk_error_filter
+    if _sdk_error_filter is not None:
+        return
+
+    class Filter(logging.Filter):
+        def __init__(self):
+            super().__init__()
+            self.count = 0
+            self.lock = _threading.Lock()
+
+        def filter(self, record):
+            if record.levelno < logging.ERROR:
+                return True
+            with self.lock:
+                self.count += 1
+                count = self.count
+            if count & (count - 1):
+                return False
+            record.msg = f"Langfuse SDK export error (occurrence {count}); see exporter health"
+            record.args, record.exc_info, record.exc_text = (), None, None
+            return True
+
+    _sdk_error_filter = Filter()
+    logging.getLogger("langfuse").addFilter(_sdk_error_filter)
+
+
+def _ingestion_transport(inner=None):
+    """Observe actual SDK HTTP results: SDK flush only joins its queue, not delivery."""
+    import httpx
+
+    class Transport(httpx.BaseTransport):
+        def __init__(self):
+            self.inner = inner or httpx.HTTPTransport(retries=0)
+
+        def handle_request(self, request):
+            global _ingestion_failures, _ingestion_successes, _ingestion_consecutive_failures
+            global _ingestion_retry_mono, _ingestion_last_error, _ingestion_last_error_at
+            with _ingestion_lock:
+                if _time.monotonic() < _ingestion_retry_mono:
+                    raise httpx.ConnectError("Telemetry export circuit is open", request=request)
+            try:
+                response = self.inner.handle_request(request)
+                failed = response.status_code >= 400
+                reason = f"http_{response.status_code}" if failed else None
+            except Exception:
+                failed, reason = True, "connection_error"
+                response = None
+            with _ingestion_lock:
+                if failed:
+                    _ingestion_failures += 1
+                    _ingestion_consecutive_failures += 1
+                    _ingestion_last_error, _ingestion_last_error_at = reason, _utc_now()
+                    delay = min(300.0, 5.0 * 2 ** min(_ingestion_consecutive_failures - 1, 6))
+                    _ingestion_retry_mono = _time.monotonic() + delay
+                else:
+                    _ingestion_successes += 1
+                    _ingestion_consecutive_failures = 0
+                    _ingestion_retry_mono = 0.0
+            if response is None:
+                raise httpx.ConnectError("Telemetry endpoint unavailable", request=request)
+            return response
+
+        def close(self):
+            self.inner.close()
+
+    return Transport()
+
+
 def _lf():
-    global _client
+    global _client, _ingestion_skipped
     if not _ENABLED:
         return None
-    if _client is None:
-        from langfuse import Langfuse  # lazy — import only when creds present
-        # `environment` stamps every trace (item: prod/staging/demo separation). Passed via **kw so
-        # an older SDK that doesn't accept it still constructs — the field just stays "default".
-        try:
-            _client = Langfuse(public_key=_PK, secret_key=_SK, host=_HOST, environment=_ENV)
-        except TypeError:
-            _client = Langfuse(public_key=_PK, secret_key=_SK, host=_HOST)
+    with _ingestion_lock:
+        if _time.monotonic() < _ingestion_retry_mono:
+            _ingestion_skipped += 1
+            return None
+    with _client_lock:
+        if _client is None:
+            import httpx
+            from langfuse import Langfuse  # lazy — import only when creds present
+            # `environment` stamps every trace (item: prod/staging/demo separation). Passed via **kw so
+            # an older SDK that doesn't accept it still constructs — the field just stays "default".
+            _bound_sdk_error_logging()
+            options = dict(public_key=_PK, secret_key=_SK, host=_HOST, threads=1,
+                           max_retries=1, timeout=2, flush_at=100, flush_interval=10.0,
+                           httpx_client=httpx.Client(transport=_ingestion_transport(), timeout=2.0))
+            try:
+                _client = Langfuse(**options, environment=_ENV)
+            except TypeError:
+                _client = Langfuse(**options)
     return _client
 
 
@@ -416,8 +517,12 @@ def _flush_loop():
             _flush_last_attempt_at = _utc_now()
         try:
             lf = _lf()
-            if lf:
-                lf.flush()
+            if lf is None:
+                with _flush_lock:
+                    _flush_started_mono = None
+                    _flush_requested = bool(_ENABLED)
+                return
+            lf.flush()
             finished = _time.monotonic()
             with _flush_lock:
                 _flush_successes += 1

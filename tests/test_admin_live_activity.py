@@ -257,6 +257,19 @@ def test_admin_live_activity_carries_bounded_sanitized_remediation_events(isolat
     assert "secret" not in str(events)
 
 
+def test_delivery_status_projection_is_enum_only(isolated_store):
+    isolated_store.save_scan(_scan())
+    isolated_store.enqueue_job("remediate_file", {}, scan_id="scan-live-1")
+    for status in ("saved_in_acp", "failed", "delivered", "private-filename.docx"):
+        isolated_store.append_scan_event("scan-live-1", "remediate.delivery_failed",
+            owner_email="admin@example.org", detail={"delivery_status": status})
+    events = isolated_store.admin_live_activity()[0]["recent_events"]
+    assert [event["detail"] for event in events] == [
+        {"delivery_status": "saved_in_acp"}, {"delivery_status": "failed"},
+        {"delivery_status": "delivered"}, {},
+    ]
+
+
 def test_admin_live_activity_omits_inactive_runs(isolated_store):
     isolated_store.save_scan(_scan())
     job_id = isolated_store.enqueue_job("scan_file", {"file": "done.docx"}, scan_id="scan-live-1")

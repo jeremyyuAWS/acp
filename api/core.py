@@ -2373,6 +2373,7 @@ def set_job(job_id: str, state: dict) -> None:
             # fall through to in-memory
             _JOB_REDIS_DIRTY.add(job_id)
             swallowed("core.set_job: writing the job state to Redis failed")
+            _reset_token_redis()
     if not REDIS_URL:
         import logging as _log
         _log.warning("REDIS_URL not set — job %s state stored in-memory only; "
@@ -2424,6 +2425,7 @@ def update_job(job_id: str, patch: dict) -> None:
             except Exception:
                 _JOB_REDIS_DIRTY.add(job_id)
                 swallowed("core.update_job: patching the job state in Redis failed")
+                _reset_token_redis()
         else:
             # Coalescing is also an intentionally deferred write. Mark the mirror newer so the
             # next flush carries every suppressed field, not only that later call's patch.
@@ -2460,11 +2462,37 @@ def get_job_state(job_id: str) -> dict | None:
                     state = _j.loads(v)
             except Exception:
                 swallowed("core.get_job_state: reading the job state from Redis failed")
-    if state is None:
+                _reset_token_redis()
+    cache_missing = state is None
+    if cache_missing:
         state = JOBS.get(job_id)
+    # The shared live cache is optional; durable queue ownership and terminality are not.
+    # Another replica cannot see this process's mirror after a Redis outage. Never invent
+    # completion from its absence, or let a stale mirror override a durable terminal result.
+    if REDIS_URL and (cache_missing or _job_is_stale(state) or job_id in _JOB_REDIS_DIRTY):
+        try:
+            durable = get_store().get_job(job_id)
+            if isinstance(durable, dict) and durable.get("status") in (
+                    "queued", "running", "done", "dead", "cancelled"):
+                status = durable["status"]
+                terminal = status in ("done", "dead", "cancelled")
+                previous = state or {}
+                phase = previous.get("phase")
+                if status != "running" or previous.get("done") or phase in (
+                        None, "error", "failed", "complete", "done", "cancelled"):
+                    phase = {"done": "complete", "dead": "error"}.get(status, status)
+                state = {**previous, "job_id": job_id,
+                         "phase": phase, "error": None,
+                         "scan_id": durable.get("scan_id") or (durable.get("payload") or {}).get("scan_id"),
+                         "done": terminal, "updated_at": durable.get("updated_at"),
+                         "state_source": "durable_queue"}
+                if status == "dead":
+                    state["error"] = "The job failed. Check the scan for details."
+        except Exception:
+            swallowed("core.get_job_state: reading durable queue fallback failed")
     if state is None:
         return None
-    if _job_is_stale(state):
+    if _job_is_stale(state) and state.get("state_source") != "durable_queue":
         return {**state, "phase": "error", "done": True,
                 "error": (state.get("error") or
                           "scan interrupted — the server likely restarted mid-run; "
