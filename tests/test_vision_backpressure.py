@@ -216,3 +216,21 @@ def test_cloud_requests_still_have_bounded_admission(monkeypatch):
         assert ai._bounded_vision_generate(CloudProvider(), 'describe', b'image')['reason'] == 'capacity_busy'
     finally:
         ai._CLOUD_VISION_GATE.release()
+
+
+def test_assessment_vision_deadline_bounds_provider_timeout_and_stops_later_calls(monkeypatch):
+    _runtime(monkeypatch)
+    clock = [100.0]
+    monkeypatch.setattr(ai.time, 'monotonic', lambda: clock[0])
+    timeouts = []
+    class Provider:
+        name = 'ollama'
+        def generate(self, *args, **kwargs):
+            timeouts.append(kwargs['timeout'])
+            clock[0] += 15
+            return {'ok': True, 'text': 'A useful draft'}
+    with ai.assessment_vision_budget(10):
+        assert ai._bounded_vision_generate(Provider(), 'describe', b'image', timeout=120)['ok']
+        assert ai._bounded_vision_generate(Provider(), 'describe', b'image', timeout=120)['reason'] == 'assessment_vision_budget_exhausted'
+    assert timeouts == [10]
+    assert ai._VISION_DEADLINE.get() is None

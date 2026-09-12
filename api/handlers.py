@@ -3846,7 +3846,14 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
 
     def _work():
         try:
-            _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _lf,
+            from ai import assessment_vision_budget
+            try:
+                budget = max(0, float(_os.environ.get("ACP_ASSESS_VISION_BUDGET_S", "240")))
+            except ValueError:
+                budget = 240
+            budget = min(cap * 0.4, budget)
+            with assessment_vision_budget(budget):
+                _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _lf,
                                           user=user, rubric_hash=rubric_hash,
                                           incremental=incremental, job=job)
             outcome["done"] = True

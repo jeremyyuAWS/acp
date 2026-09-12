@@ -5,6 +5,7 @@
 - Timeout and dead-letter assessment records retain the source modified timestamp and checksum supplied by their job inputs.
 - Automatic planning freezes only eligible files. Failed, incomplete or untracked files remain excluded with explicit reasons; publication identity and freshness checks are preserved.
 - Canonical, active legacy remediation jobs retain immutable proposal versions independently of managed AI spending permissions. Forged identities, cancelled executions and replacement proposals without authenticated producer context do not reuse valid version links.
+- Optional assessment vision has a per-file deadline (default 240 seconds, at most 40% of the outer file timeout), and provider timeouts are reduced to its remaining time. This does not limit the separate document-wide remediation workflow.
 - Remote vision API admission is bounded independently of local GPU inference; GPU saturation no longer consumes cloud fallback slots. Existing permission and budget gates remain authoritative.
 
 The historic 147-file scan is absent from production file and inventory storage. It cannot be repaired or verified from those missing records. No historical source timestamp was guessed and no production patient documents were modified for these tests.

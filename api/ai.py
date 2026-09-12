@@ -30,6 +30,8 @@ import re
 import threading
 import time
 import hashlib
+from contextlib import contextmanager
+from contextvars import ContextVar
 from swallowed import swallowed
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
@@ -133,6 +135,19 @@ def _leave_vision_capacity() -> None:
     _VISION_GATE.release()
 
 
+_VISION_DEADLINE = ContextVar('assessment_vision_deadline', default=None)
+
+
+@contextmanager
+def assessment_vision_budget(seconds):
+    """Optional enrichment must leave time for structural assessment and persistence."""
+    token = _VISION_DEADLINE.set(time.monotonic() + max(0, seconds))
+    try:
+        yield
+    finally:
+        _VISION_DEADLINE.reset(token)
+
+
 def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs) -> dict:
     """Bound local GPU and remote API requests independently; keep authorization unchanged."""
     from llm_waterfall_provider import managed_context, defer_managed
@@ -141,6 +156,13 @@ def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs
     if _run is not None and not (isinstance(provider, OllamaVisionProvider) and (getattr(_run, 'enabled', False) or (getattr(_run, 'local_drafting', False) and provider.zone == 'local'))):
         defer_managed('legacy_ai_path_not_budgeted', kind='_bounded_vision_generate')
         return {'ok': False, 'text': None, 'reason': 'vision_pricing_not_verified', 'model': 'not-dispatched'}
+    deadline = _VISION_DEADLINE.get()
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {'ok': False, 'reason': 'assessment_vision_budget_exhausted',
+                    'provider': getattr(provider, 'name', 'unknown'), 'model': 'not-dispatched'}
+        kwargs['timeout'] = min(kwargs.get('timeout', remaining), remaining)
     cloud_api = is_remote_vision_api(provider)
     admitted = _CLOUD_VISION_GATE.acquire(timeout=VISION_QUEUE_TIMEOUT) if cloud_api else _enter_vision_capacity()
     if not admitted:
@@ -890,7 +912,7 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
         if circuit_res.get("ok"):
             _VISION_CIRCUITS.pop(circuit_key, None)
         elif circuit_enabled and circuit_reason not in (
-                _providers.REASON_EMPTY, _providers.REASON_UNUSABLE, "capacity_busy"):
+                _providers.REASON_EMPTY, _providers.REASON_UNUSABLE, "capacity_busy", "assessment_vision_budget_exhausted"):
             previous = _VISION_CIRCUITS.get(circuit_key) or {"failures": 0}
             failures = previous.get("failures", 0) + 1
             if failures >= VISION_CIRCUIT_FAILURES:
