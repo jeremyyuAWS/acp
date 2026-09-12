@@ -23,6 +23,16 @@ const flush=async()=>act(async()=>{for(let i=0;i<5;i++)await Promise.resolve()})
 async function mount(){const{container,root}=createTestRoot();await act(async()=>root.render(createElement(PeopleAccess)));await flush();return container}
 const selector=c=>c.querySelector('select[aria-label="Workspace role for person@example.com"]')
 async function choose(c,value){await act(async()=>{selector(c).value=value;selector(c).dispatchEvent(new Event('change',{bubbles:true}))});await flush()}
+it('keeps onboarding access distinct from assigning an existing workspace role',async()=>{
+ const c=await mount()
+ await act(async()=>[...c.querySelectorAll('button')].find(b=>b.textContent==='+ Add people').click())
+ const dialog=document.querySelector('[role="dialog"]')
+ const access=[...dialog.querySelectorAll('label')].find(label=>label.querySelector('select'))
+ expect(access.textContent).toContain('Access level')
+ expect([...access.querySelector('select').options].map(o=>o.value)).toEqual(['user','admin'])
+ expect(c.querySelectorAll('.people-row select')).toHaveLength(1)
+ expect(api.assignWorkspaceRole).not.toHaveBeenCalled()
+})
 it('mounts one selector and one visible Workspace role column without an Access level field',async()=>{
  const c=await mount();expect(c.querySelectorAll('.people-row select')).toHaveLength(1)
  expect(c.querySelector('.people-head').textContent).toContain('Workspace role')

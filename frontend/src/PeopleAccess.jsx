@@ -348,7 +348,7 @@ export default function PeopleAccess() {
       <div><h3 id="people-title" style={{ margin: 0 }}>People</h3><div className="muted" style={{ fontSize: 13, marginTop: 3 }}>{active} with access{pending ? ` · ${pending} need attention` : ''}</div></div>
       {data.can_manage && <button ref={addButtonRef} onClick={() => setOpen(true)}>+ Add people</button>}
     </div>
-    {data.can_manage && roles.length > 0 && <p className="muted" style={{fontSize:12}}>Platform Admin includes platform administration. Choosing another role removes that access; custom roles grant their configured workspace permissions.</p>}
+    {data.can_manage && roles.length > 0 && <p className="muted" style={{fontSize:12}}>Platform Admin includes platform administration. Other roles use their configured workspace permissions.</p>}
     {data.domains?.length > 0 && <div role="note" className="people-domain-note">
       <b>Domain-wide access is on.</b> Anyone at {data.domains.map((d) => `@${d}`).join(', ')} can sign in even if they are not listed here.
     </div>}
@@ -480,7 +480,7 @@ export default function PeopleAccess() {
           <label style={{ padding: 12, border: `2px solid ${provider === 'google' ? '#315F9E' : 'var(--line)'}`, borderRadius: 9 }}><input type="radio" name="provider" value="google" checked={provider === 'google'} onChange={() => setProvider('google')} /> <b>Google</b><div className="muted" style={{ margin: '5px 0 0 22px', fontSize: 12 }}>Google Drive</div></label>
           <label style={{ padding: 12, border: `2px solid ${provider === 'microsoft' ? '#315F9E' : 'var(--line)'}`, borderRadius: 9 }}><input type="radio" name="provider" value="microsoft" checked={provider === 'microsoft'} onChange={() => setProvider('microsoft')} /> <b>Microsoft</b><div className="muted" style={{ margin: '5px 0 0 22px', fontSize: 12 }}>SharePoint / OneDrive</div></label>
         </div></fieldset>
-        <label style={{ display: 'grid', gap: 6, marginTop: 16, fontSize: 13, fontWeight: 700 }}>Workspace role<select value={role} onChange={(e) => setRole(e.target.value)}><option value="user">User — scan and work with documents</option><option value="admin">Platform Admin — manage ACP settings</option></select></label>
+        <label style={{ display: 'grid', gap: 6, marginTop: 16, fontSize: 13, fontWeight: 700 }}>Access level<select value={role} onChange={(e) => setRole(e.target.value)}><option value="user">User — scan and work with documents</option><option value="admin">Platform Admin — manage ACP settings</option></select></label>
         <div role="note" className="muted" style={{ marginTop: 14, padding: 11, borderRadius: 8, background: '#F4F2F5', fontSize: 12, lineHeight: 1.5 }}>{provider === 'microsoft' ? (data.invite_enabled ? 'ACP will send a Microsoft guest invitation and grant access when you add them.' : 'ACP will grant access now. Microsoft guest invitations are not connected, so you will see one short setup step afterward.') : 'ACP will grant access now. If the Google OAuth app is still in testing, also add this email as a Google test user.'}</div>
         {error && <p role="alert" style={{ color: 'var(--error-fg-strong)', fontSize: 13 }}>{error}</p>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}><button type="button" className="ghost" onClick={close}>Cancel</button><button type="submit" disabled={busy}>{busy ? 'Adding…' : 'Add person'}</button></div>
