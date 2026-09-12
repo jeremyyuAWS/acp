@@ -10546,10 +10546,9 @@ class Store:
                 snapshot_ids = capture_proposals(
                     self._db, cur, optional_current_run_context(), scan_id=scan_id,
                     file=file, rule_id=sc, item_id=row['id'], proposals=proposals)
-                if snapshot_ids:
-                    self._db.execute(cur,
-                        "UPDATE hitl_queue SET proposal_snapshot_ids=%s WHERE id=%s",
-                        (_json.dumps(snapshot_ids), row['id']))
+                self._db.execute(cur,
+                    "UPDATE hitl_queue SET proposal_snapshot_ids=%s WHERE id=%s",
+                    (_json.dumps(snapshot_ids), row['id']))
                 self.sync_hitl_finding_dispositions(row["id"], "pending")
                 return row["id"]
             item_id = uuid.uuid4().hex[:12]
@@ -16071,7 +16070,9 @@ class Store:
                 self.save_file_result(scan_id, {
                     "file": r["file"], "engine": "n/a", "status": "error", "score": None,
                     "compliant": 0, "skipped_rules": 0, "issues": [],
-                    "drive_file_id": r.get("drive_file_id")}, now_iso, job=job)
+                    "drive_file_id": r.get("drive_file_id"),
+                    "source_modified": r.get("source_modified"),
+                    "checksum": r.get("checksum")}, now_iso, job=job)
             except Exception:
                 swallowed("store._record_dead_scan_files: saving an error row for a dead scan file failed")
             # The REASON, in the one place the UI already looks for it: fileErrorReason.js reads

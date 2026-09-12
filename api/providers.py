@@ -1557,3 +1557,8 @@ def _managed_vision_deferral(*, local_ollama=False, endpoint=None):
     defer_managed('vision_pricing_not_verified', kind='vision')
     return _result(text=None, model='not-dispatched', provider='governed',
         zone='none', latency_ms=0, ok=False, reason='vision_pricing_not_verified')
+
+
+def is_remote_vision_api(provider):
+    """API providers have capacity independent of local/serverless GPU inference."""
+    return getattr(provider, 'name', '') in {'openai', 'anthropic', 'azure_openai', 'gemini', 'bedrock'}

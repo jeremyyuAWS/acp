@@ -86,3 +86,13 @@ it('explains blocked files and refreshes readiness without blaming the connectio
   expect(v.input().disabled).toBe(false)
   expect(v.input().checked).toBe(false)
 })
+
+it('freezes only eligible files when the selection includes blocked files', async () => {
+  const v = await mount({files:['a','failed'], read:async()=>({planning:{...planning,
+    reason:'1 file can publish. 1 file will be skipped.',
+    blocked_files:[{file:'failed',reason:'Assessment failed.'}]}})})
+  expect(v.input().disabled).toBe(false)
+  expect(v.onChange).toHaveBeenLastCalledWith(expect.objectContaining({files:['a']}))
+  expect(v.container.textContent).toContain('1 file will be skipped')
+  expect(v.container.querySelector('[aria-label="Files blocking automatic publishing"]').textContent).toContain('failed — Assessment failed.')
+})

@@ -1305,7 +1305,8 @@ def _rem_event(scan_id: str, kind: str, job: dict | None, file: str | None, **de
 def _remediate_file(payload: dict, job: dict) -> None:
     from ai_run_policy import run_context
     from remediation_contribution import SOURCE
-    with run_context(core.store, payload, job) as context:
+    from remediation_run_insights import proposal_context
+    with run_context(core.store, payload, job) as context, proposal_context(core.store, payload, job):
         source_token = SOURCE.set(None)
         try:
             result = _remediate_file_with_policy(payload, job)
@@ -3845,7 +3846,14 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
 
     def _work():
         try:
-            _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _lf,
+            from ai import assessment_vision_budget
+            try:
+                budget = max(0, float(_os.environ.get("ACP_ASSESS_VISION_BUDGET_S", "240")))
+            except ValueError:
+                budget = 240
+            budget = min(cap * 0.4, budget)
+            with assessment_vision_budget(budget):
+                _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _lf,
                                           user=user, rubric_hash=rubric_hash,
                                           incremental=incremental, job=job)
             outcome["done"] = True
@@ -3875,7 +3883,9 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
             core.store.save_file_result(scan_id, {
                 "file": name, "engine": "n/a", "status": "error", "score": None,
                 "compliant": 0, "skipped_rules": 0, "issues": [],
-                "drive_file_id": item.get("drive_file_id")}, now, job=job)
+                "drive_file_id": item.get("drive_file_id"),
+                "source_modified": item.get("source_modified"),
+                "checksum": item.get("checksum")}, now, job=job)
         except Exception:
             swallowed("_analyse_and_persist_one: store.save_file_result for a timed-out file failed — this "
                        "file will never reach the files_done counter", scan_id)

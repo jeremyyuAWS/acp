@@ -30,6 +30,8 @@ import re
 import threading
 import time
 import hashlib
+from contextlib import contextmanager
+from contextvars import ContextVar
 from swallowed import swallowed
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
@@ -86,6 +88,8 @@ _VISION_CIRCUITS: dict[tuple[str, str, str], dict] = {}
 _VISION_CIRCUIT_LOCK = threading.Lock()
 _MISSING_VISION_MODELS_WARNED: set[tuple[str, str]] = set()
 _VISION_GATE = threading.BoundedSemaphore(VISION_MAX_CONCURRENCY)
+# Remote APIs do not consume local GPU slots. Keep their admission bounded separately.
+_CLOUD_VISION_GATE = threading.BoundedSemaphore(max(1, int(_envf("ACP_CLOUD_VISION_MAX_CONCURRENCY", 2))))
 _VISION_RUNTIME_LOCK = threading.Lock()
 _VISION_RUNTIME = {
     "active": 0, "peak_active": 0, "admitted": 0, "backpressured": 0,
@@ -131,15 +135,37 @@ def _leave_vision_capacity() -> None:
     _VISION_GATE.release()
 
 
+_VISION_DEADLINE = ContextVar('assessment_vision_deadline', default=None)
+
+
+@contextmanager
+def assessment_vision_budget(seconds):
+    """Optional enrichment must leave time for structural assessment and persistence."""
+    token = _VISION_DEADLINE.set(time.monotonic() + max(0, seconds))
+    try:
+        yield
+    finally:
+        _VISION_DEADLINE.reset(token)
+
+
 def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs) -> dict:
-    """Run one provider request inside the shared GPU admission limit."""
+    """Bound local GPU and remote API requests independently; keep authorization unchanged."""
     from llm_waterfall_provider import managed_context, defer_managed
     _run = managed_context()
-    from providers import OllamaVisionProvider
+    from providers import OllamaVisionProvider, is_remote_vision_api
     if _run is not None and not (isinstance(provider, OllamaVisionProvider) and (getattr(_run, 'enabled', False) or (getattr(_run, 'local_drafting', False) and provider.zone == 'local'))):
         defer_managed('legacy_ai_path_not_budgeted', kind='_bounded_vision_generate')
         return {'ok': False, 'text': None, 'reason': 'vision_pricing_not_verified', 'model': 'not-dispatched'}
-    if not _enter_vision_capacity():
+    deadline = _VISION_DEADLINE.get()
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {'ok': False, 'reason': 'assessment_vision_budget_exhausted',
+                    'provider': getattr(provider, 'name', 'unknown'), 'model': 'not-dispatched'}
+        kwargs['timeout'] = min(kwargs.get('timeout', remaining), remaining)
+    cloud_api = is_remote_vision_api(provider)
+    admitted = _CLOUD_VISION_GATE.acquire(timeout=VISION_QUEUE_TIMEOUT) if cloud_api else _enter_vision_capacity()
+    if not admitted:
         return {
             "ok": False, "reason": "capacity_busy",
             "provider": getattr(provider, "name", "unknown"),
@@ -154,7 +180,10 @@ def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs
                 _vision_metric("timeouts")
         return result
     finally:
-        _leave_vision_capacity()
+        if cloud_api:
+            _CLOUD_VISION_GATE.release()
+        else:
+            _leave_vision_capacity()
 
 
 def reset_vision_circuits() -> None:
@@ -883,7 +912,7 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
         if circuit_res.get("ok"):
             _VISION_CIRCUITS.pop(circuit_key, None)
         elif circuit_enabled and circuit_reason not in (
-                _providers.REASON_EMPTY, _providers.REASON_UNUSABLE, "capacity_busy"):
+                _providers.REASON_EMPTY, _providers.REASON_UNUSABLE, "capacity_busy", "assessment_vision_budget_exhausted"):
             previous = _VISION_CIRCUITS.get(circuit_key) or {"failures": 0}
             failures = previous.get("failures", 0) + 1
             if failures >= VISION_CIRCUIT_FAILURES:
@@ -1200,7 +1229,7 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     # build never leaves the box. The escalation is transparent: the numbered path is attached, not
     # hidden or dressed up as a score.
     escalation = None
-    if not grounded:
+    if not grounded or not alt:
         esc = _escalate_vision(prompt, image_bytes, scan_id=scan_id, file=file)
         if esc:
             alt = esc["alt"]

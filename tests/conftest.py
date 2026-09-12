@@ -99,6 +99,8 @@ def _acp_pid_alive(pid: int) -> bool:
 def _acp_claim_tmpdir() -> None:
     inherited = os.environ.get("ACP_PYTEST_TMP")
     if inherited and os.path.isdir(inherited):
+        inherited = str(Path(inherited).resolve())
+        os.environ["ACP_PYTEST_TMP"] = inherited
         tempfile.tempdir = inherited      # an xdist worker: share the session's directory
         return
     _TMP_ROOT.mkdir(exist_ok=True)
@@ -119,7 +121,7 @@ def _acp_claim_tmpdir() -> None:
     for i, (mtime, d) in enumerate(sorted(finished, reverse=True)):
         if i >= _TMP_KEEP_DEAD or (now - mtime) >= _TMP_MAX_AGE_S:
             shutil.rmtree(d, ignore_errors=True)
-    claimed = tempfile.mkdtemp(prefix=f"run-{os.getpid()}-", dir=_TMP_ROOT)
+    claimed = str(Path(tempfile.mkdtemp(prefix=f"run-{os.getpid()}-", dir=_TMP_ROOT)).resolve())
     os.environ["ACP_PYTEST_TMP"] = claimed   # xdist workers inherit this
     tempfile.tempdir = claimed
 

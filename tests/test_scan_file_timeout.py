@@ -56,13 +56,16 @@ def test_a_file_over_the_cap_is_recorded_as_error_and_returns(store, monkeypatch
 
     monkeypatch.setattr(handlers, "_analyse_and_persist_one_impl", _slow)
     t0 = time.monotonic()
-    _call()
+    _call(item={"file": "big.pptx", "drive_file_id": "d1", "source_modified": "2026-08-20T00:00:00Z", "checksum": "source-checksum"})
     elapsed = time.monotonic() - t0
     assert started.is_set()
     assert elapsed < 3                       # returned near the cap, did NOT wait out the 5s work
     assert len(store.saved) == 1
     rec = store.saved[0]
     assert rec["file"] == "big.pptx" and rec["status"] == "error" and rec["score"] is None
+    assert rec["drive_file_id"] == "d1"
+    assert rec["source_modified"] == "2026-08-20T00:00:00Z"
+    assert rec["checksum"] == "source-checksum"
     assert store.decisions and store.decisions[0][1].get("file") == "big.pptx"
 
 

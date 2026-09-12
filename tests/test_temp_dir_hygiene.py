@@ -94,3 +94,16 @@ def test_the_redirect_never_points_at_the_bare_system_temp():
     assert td != Path(tempfile.gettempdir()).resolve().parent
     assert "acp-pytest" in td.parts
     assert td.name.startswith("run-"), f"expected a per-run directory, got {td}"
+
+
+def test_inherited_symlink_directory_is_published_canonically(tmp_path, monkeypatch):
+    import conftest
+    actual = tmp_path / f'run-{os.getpid()}-fixture'
+    actual.mkdir()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(actual, target_is_directory=True)
+    monkeypatch.setenv('ACP_PYTEST_TMP', str(alias))
+    monkeypatch.setattr(tempfile, 'tempdir', tempfile.tempdir)
+    conftest._acp_claim_tmpdir()
+    assert os.environ['ACP_PYTEST_TMP'] == str(actual.resolve())
+    assert tempfile.tempdir == str(actual.resolve())
