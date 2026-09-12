@@ -48,6 +48,13 @@ def _apply_docx(xml: str, rels: dict[str, str], values: dict[str, str]) -> tuple
         if not href or href not in values:
             continue
         inner = m.group(3)
+        # The simple-label writer collapses runs. Preserve complex hyperlinks
+        # (revisions, fields, drawings and bookmarks) by declining the edit.
+        simple = re.sub(r'<w:rPr\b[^>]*/>|<w:rPr\b[^>]*>.*?</w:rPr>', '', inner, flags=re.S)
+        simple = re.sub(r'<w:t\b[^>]*>[^<]*</w:t>', '', simple, flags=re.S)
+        simple = re.sub(r'</?w:r\b[^>]*>', '', simple)
+        if simple.strip():
+            continue
         before = "".join(_os._WT.findall(inner))
         after = values[href]
         rpr_m = re.search(r"<w:rPr\b[^>]*/>|<w:rPr\b[^>]*>.*?</w:rPr>", inner, re.S)
@@ -64,6 +71,7 @@ def _apply_docx(xml: str, rels: dict[str, str], values: dict[str, str]) -> tuple
 def _apply_pptx(xml: str, rels: dict[str, str], values: dict[str, str]) -> tuple[str, list[dict]]:
     applied: list[dict] = []
     out, last = [], 0
+    groups = []
     for m in re.finditer(r"(<a:r>)(.*?)(</a:r>)", xml, re.S):
         inner = m.group(2)
         hm = _os._A_HLINK.search(inner)
@@ -72,14 +80,28 @@ def _apply_pptx(xml: str, rels: dict[str, str], values: dict[str, str]) -> tuple
         href = rels.get(hm.group(1))
         if not href or href not in values:
             continue
-        before = "".join(_os._AT.findall(inner))
+        # Adjacent linked runs are one visible label, often split by formatting.
+        # Applying the entire approved label to each run duplicates its text.
+        if groups and groups[-1][0] == href and not xml[groups[-1][1][-1].end():m.start()].strip():
+            groups[-1][1].append(m)
+        else:
+            groups.append((href, [m]))
+    for href, matches in groups:
+        before = ''.join(''.join(_os._AT.findall(m.group(2))) for m in matches)
+        # Do not remove meaningful non-text run content in an unsupported shape.
+        if any(re.sub(r'<a:t\b[^>]*>[^<]*</a:t>', '',
+                      re.sub(r'<a:rPr\b[^>]*/>|<a:rPr\b[^>]*>.*?</a:rPr>', '', m.group(2), flags=re.S),
+                      flags=re.S).strip() for m in matches):
+            continue
         after = values[href]
-        rpr_m = re.search(r"<a:rPr\b[^>]*/>|<a:rPr\b[^>]*>.*?</a:rPr>", inner, re.S)
-        rpr = rpr_m.group(0) if rpr_m else ""
-        new_inner = f'{rpr}<a:t>{_xesc_text(after)}</a:t>'
-        out.append(xml[last:m.start()])
-        out.append(m.group(1) + new_inner + m.group(3))
-        last = m.end()
+        for index, m in enumerate(matches):
+            inner = m.group(2)
+            rpr_m = re.search(r"<a:rPr\b[^>]*/>|<a:rPr\b[^>]*>.*?</a:rPr>", inner, re.S)
+            rpr = rpr_m.group(0) if rpr_m else ""
+            new_inner = f'{rpr}<a:t>{_xesc_text(after) if index == 0 else ""}</a:t>'
+            out.append(xml[last:m.start()])
+            out.append(m.group(1) + new_inner + m.group(3))
+            last = m.end()
         applied.append({"locator": href, "before": before or "(empty link text)", "after": after})
     out.append(xml[last:])
     return "".join(out), applied

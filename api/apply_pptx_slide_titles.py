@@ -15,39 +15,56 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from copy import deepcopy
+from lxml import etree
 
 # "slide 1", "slide 12" etc.
 _SLIDE_LOC = re.compile(r"^slide\s+(\d+)$", re.IGNORECASE)
 
-# A pptx title placeholder shape block.  The type attr may be single or double quoted, and
-# the ph element may appear before or after other children of nvSpPr, so we match the whole
-# <p:sp>…</p:sp> by presence of the ph type marker.
-#
-# BOTH "title" AND "ctrTitle". The Title Slide layout's centred title is `ctrTitle`, and the
-# detector (office_structure._PPTX_TITLE_PH) counts it as the slide's title for 2.4.6. This
-# regex matched only "title", so an approved title on a Title Slide was returned as unresolved
-# and never credited — found by tests/test_remediation_verified_pptx_titles.py, the lane's
-# first round-trip proof. The two must name the same shapes or the lane has a hole.
-_TITLE_SP = re.compile(
-    r"<p:sp\b[^>]*>.*?<p:ph[^>]+type=[\"'](?:title|ctrTitle)[\"'][^>]*/?>.*?</p:sp>",
-    re.DOTALL,
-)
-
-# The text body inside a shape.
-_TXBODY = re.compile(r"(<p:txBody\b[^>]*>)(.*?)(</p:txBody>)", re.DOTALL)
+# Both ordinary and centred titles match the detector's placeholder types.
+_NS = {'p': 'http://schemas.openxmlformats.org/presentationml/2006/main',
+       'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'}
 
 
-def _xesc(s: str) -> str:
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+def _fill_empty_title(content: bytes, text: str) -> bytes | None:
+    """Change exactly one empty title, retaining layout, language and run styling.
 
-
-def _rewrite_txbody(sp_xml: str, text: str) -> str:
-    """Replace whatever text runs are in the title shape's txBody with `text`."""
-    def _replace(m):
-        open_tag, _, close_tag = m.group(1), m.group(2), m.group(3)
-        new_run = f'<a:p><a:r><a:rPr lang="en-US"/><a:t>{_xesc(text)}</a:t></a:r></a:p>'
-        return f"{open_tag}<a:bodyPr/><a:lstStyle/>{new_run}{close_tag}"
-    return _TXBODY.sub(_replace, sp_xml, count=1)
+    A regex beginning at a preceding body shape can cross into the title shape,
+    replacing the body's first text instead. Select the actual placeholder node.
+    Existing text is a stale approval, and multiple title slots are ambiguous.
+    """
+    try:
+        root = etree.fromstring(content, etree.XMLParser(resolve_entities=False, no_network=True))
+        titles = root.xpath('.//p:sp[p:nvSpPr/p:nvPr/p:ph[@type="title" or @type="ctrTitle"]]', namespaces=_NS)
+        if len(titles) != 1:
+            return None
+        body = titles[0].find('p:txBody', _NS)
+        if body is None or ''.join(body.xpath('.//a:t/text()', namespaces=_NS)).strip():
+            return None
+        # Fields and breaks are meaningful content, not an empty placeholder.
+        if body.xpath('.//a:fld | .//a:br', namespaces=_NS):
+            return None
+        nodes = body.xpath('.//a:t', namespaces=_NS)
+        if nodes:
+            nodes[0].text = text
+        else:
+            paragraph = body.find('a:p', _NS)
+            if paragraph is None:
+                paragraph = etree.SubElement(body, '{' + _NS['a'] + '}p')
+            run = etree.Element('{' + _NS['a'] + '}r')
+            end = paragraph.find('a:endParaRPr', _NS)
+            if end is not None:
+                properties = deepcopy(end)
+                properties.tag = '{' + _NS['a'] + '}rPr'
+                run.append(properties)
+            etree.SubElement(run, '{' + _NS['a'] + '}t').text = text
+            paragraph.insert(list(paragraph).index(end) if end is not None else len(paragraph), run)
+        result = etree.tostring(root, encoding='utf-8')
+        reopened = etree.fromstring(result)
+        actual = reopened.xpath('.//p:sp[p:nvSpPr/p:nvPr/p:ph[@type="title" or @type="ctrTitle"]]/p:txBody//a:t/text()', namespaces=_NS)
+        return result if ''.join(actual).strip() == text.strip() else None
+    except (etree.XMLSyntaxError, ValueError):
+        return None
 
 
 def apply_pptx_slide_titles(
@@ -68,7 +85,7 @@ def apply_pptx_slide_titles(
     unresolved: list[str] = []
     for locator, title in values.items():
         m = _SLIDE_LOC.match(locator.strip())
-        if m:
+        if m and isinstance(title, str) and title.strip():
             to_write[int(m.group(1))] = title
         else:
             unresolved.append(locator)
@@ -89,17 +106,9 @@ def apply_pptx_slide_titles(
                 num = int(sm.group(1))
                 if num in to_write:
                     title = to_write.pop(num)
-                    xml = content.decode("utf-8", "replace")
-                    rewrote = [False]
-
-                    def _rewrite(m, _t=title, _flag=rewrote):
-                        result = _rewrite_txbody(m.group(0), _t)
-                        _flag[0] = True
-                        return result
-
-                    new_xml = _TITLE_SP.sub(_rewrite, xml, count=1)
-                    if rewrote[0]:
-                        content = new_xml.encode("utf-8")
+                    new_content = _fill_empty_title(content, title)
+                    if new_content is not None:
+                        content = new_content
                         applied.append({
                             "locator": f"slide {num}",
                             "before": "(empty title placeholder)",
@@ -113,4 +122,4 @@ def apply_pptx_slide_titles(
     for num in to_write:
         unresolved.append(f"slide {num}")
 
-    return out_buf.getvalue(), applied, unresolved
+    return out_buf.getvalue() if applied else data, applied, unresolved
