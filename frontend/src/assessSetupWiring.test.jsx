@@ -84,6 +84,22 @@ describe('AssessSetup drives the run (approved board 2)', () => {
     expect(container.querySelector('.assess-lifecycle-ignore')).toBe(null)
   })
 
+  it('lets the authoritative Document activity card own running progress without a duplicate list', async () => {
+    assessScan.mockResolvedValueOnce({ deferred: true })
+    getScan.mockResolvedValueOnce({ run: { files: 2 }, files: [
+      { file: 'a.docx', score: 71 }, { file: 'b.pdf', score: null },
+    ] })
+    let start = null
+    const onActivity = vi.fn()
+    await mount({ controlled: true, onActivity, onReady: fn => { start = fn } })
+    await act(async () => { start({ level: 'AA', includeLifecycleFlagged: false }) })
+    await settle()
+    expect(onActivity).toHaveBeenCalled()
+    expect(container.querySelector('.assessrun')).toBeNull()
+    expect(container.querySelector('[aria-label="Per-document assessment progress"]')).toBeNull()
+    expect(container.querySelector('.alscore')).toBeNull()
+  })
+
   it('hands out a start function that carries the pre-run screen decision to the API', async () => {
     let start = null
     await mount({ controlled: true, onReady: (fn) => { start = fn } })

@@ -680,7 +680,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
             <b>Existing work found.</b> {executionNotice}
           </div>
         )}
-        {phase === 'running' && (
+        {/* Retired in the controlled Assess screen: AssessRunProgress owns the single
+            document activity panel. Keep the standalone presentation available. */}
+        {phase === 'running' && !controlled && (
           <div className="assessrun">
             {workersDown && !progressIsConfirmed({ completed: progress, inFlight: liveQueue?.workersBusy }) && (
               <div role="alert" style={{ margin: '0 0 10px', padding: '10px 14px', borderRadius: 8,

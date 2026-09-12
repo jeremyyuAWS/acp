@@ -231,3 +231,24 @@ describe('Stop — board-exact placement, inline with what stopping does', () =>
     expect(explainAt - stopAt).toBeLessThan(400)
   })
 })
+
+ describe('single document activity presentation', () => {
+  it('uses the bottom-list layout with current processing and completed criteria, without scores', () => {
+    const html = render({ ...SNAP, documents: { completed: 8, displayed: 1, truncated: false, items: [
+      { file: 'Finished.pdf', score: 19, criteria: ['1.3.1'] },
+    ] } })
+    expect(html).toContain('Processing now:')
+    expect(html).toContain('Finance/Q3 Board Pack.pdf')
+    expect(html).toContain('Completed 8 of 22')
+    expect(html).toContain('max-height:420px')
+    expect(html).toContain('Finished.pdf')
+    expect(html).toContain('1.3.1')
+    expect(html.match(/class="assesslist"/g)).toHaveLength(1)
+    expect(html).not.toContain('/100')
+  })
+  it('shows the current-document banner before any file finishes', () => {
+    const html = render({ ...SNAP, kpis: { completed: 0, processing: 1 }, documents: { completed: 0, displayed: 0, items: [] } })
+    expect(html).toContain('Processing now:')
+    expect(html).toContain('Completed 0 of 22')
+  })
+ })

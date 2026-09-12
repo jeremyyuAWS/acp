@@ -278,6 +278,38 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
   const documents = m.documents
   const updateMode = snapshot?._live?.mode || 'live'
 
+  const documentActivity = (documents?.items?.length > 0 || (!isFinished && cur?.file)) && (
+              <section aria-label="Completed document activity"
+                       style={{ marginTop: 14, border: '1px solid var(--line,#e4e8ec)',
+                                borderRadius: 9, overflow: 'hidden' }}>
+                <strong className="vh">Document activity</strong>
+                <div className="assessfile" style={{ margin: '0 0 8px', padding: '10px 12px', background: 'var(--info-bg,#eff6ff)', border: '1px solid var(--info-border,#cfe0f9)', borderRadius: 8 }}>
+                  {!isFinished && cur?.file && <>
+                    <span className="assessfilelabel muted">Processing now:</span>
+                    <span className="assessfname">{cur.file}</span>
+                    <span className="assess-live-stage">{stepLabel(cur)}</span>
+                  </>}
+                  <span className="muted assessphase">{documents?.truncated
+                    ? `Latest ${documents.displayed.toLocaleString()} of ${(documents.completed ?? completed).toLocaleString()} completed`
+                    : `Completed ${completed.toLocaleString()} of ${total.toLocaleString()}`}</span>
+                </div>
+                <ul className="assesslist" aria-label="Durable per-document assessment progress"
+                    style={{ maxHeight: 420, overflowY: 'auto', margin: 0, padding: '7px 11px' }}>
+                  {(documents?.items || []).map((row) => (
+                    <li key={row.file} className="done">
+                      <span className="alstate" aria-hidden="true">✓</span>
+                      <span className="alname" title={row.file}>{row.file}</span>
+                      {row.criteria.length
+                        ? <span className="alscs">{row.criteria.map((criterion) => (
+                            <b key={criterion} title={criterion}>{criterionTag(criterion)}</b>
+                          ))}</span>
+                        : <span className="alclean">no failures</span>}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )
+
   return (
     <section className="assess-run-progress" role="region"
              aria-label={isFinished ? 'Assessment complete' : 'Assessment in progress'}
@@ -292,8 +324,8 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
           <div><dt><Term k="assessment_eligible">Eligible</Term></dt><dd>{total.toLocaleString()}</dd></div>
         </dl>
         {isPreparing ? (
-          <PrepChecklist m={m} total={total} completed={completed}
-                         processing={processing} elapsed={elapsed} />
+          <><PrepChecklist m={m} total={total} completed={completed}
+                         processing={processing} elapsed={elapsed} />{documentActivity}</>
         ) : (
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -350,36 +382,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
                         detail={isFinished ? 'Complete' : eta || 'After all documents finish'} />
             </div>
 
-            {documents?.items?.length > 0 && (
-              <section aria-label="Completed document activity"
-                       style={{ marginTop: 14, border: '1px solid var(--line,#e4e8ec)',
-                                borderRadius: 9, overflow: 'hidden' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12,
-                              padding: '8px 11px', background: 'var(--surface-2,#f7f6f8)',
-                              fontSize: 12.5 }}>
-                  <strong>Document activity</strong>
-                  <span className="muted">
-                    {documents.truncated
-                      ? `Latest ${documents.displayed.toLocaleString()} of ${documents.completed.toLocaleString()} completed`
-                      : `${documents.completed.toLocaleString()} completed`}
-                  </span>
-                </div>
-                <ul className="assesslist" aria-label="Durable per-document assessment progress"
-                    style={{ maxHeight: 300, overflowY: 'auto', margin: 0, padding: '7px 11px' }}>
-                  {documents.items.map((row) => (
-                    <li key={row.file} className="done">
-                      <span className="alstate" aria-hidden="true">✓</span>
-                      <span className="alname" title={row.file}>{row.file}</span>
-                      {row.criteria.length
-                        ? <span className="alscs">{row.criteria.map((criterion) => (
-                            <b key={criterion} title={criterion}>{criterionTag(criterion)}</b>
-                          ))}</span>
-                        : <span className="alclean">no failures</span>}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
+            {documentActivity}
 
             <details open={!isFinished} className="assess-live-details"
                      style={{ borderTop: '1px solid var(--line,#e4e8ec)', marginTop: 14 }}>
