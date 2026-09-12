@@ -49,7 +49,7 @@ it('returns failed applications to Needs review even if a prior write was record
   expect(matchesWorkflow(row, 'awaiting-validation')).toBe(false)
 })
 
-it('places one full-width queue control after document progress and above both review panels', async () => {
+it('places one compact queue control after document progress and above both review panels', async () => {
   const { root, container } = createTestRoot()
   await act(async () => root.render(<RemediationInbox queue={rows} decisions={{}} onDecide={async () => true} />))
   const pills = container.querySelector('.review-queue-tabs')

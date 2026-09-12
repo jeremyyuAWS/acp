@@ -77,18 +77,17 @@
   .rinbox-completion-drain { animation: none; }
 }
 
-.review-queue-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 100%; margin: 12px 0 16px; }
-.review-queue-tabs .review-queue-pill { position: relative; display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 54px; padding: 12px 28px; border: 2px solid transparent; border-radius: 999px; font-size: 14px; font-weight: 600; }
+.review-queue-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 14px; }
+.review-queue-tabs .review-queue-pill { position: relative; display: flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 8px; min-height: 36px; padding: 6px 14px; border: 1px solid transparent; border-radius: 999px; font-size: 13px; font-weight: 600; }
 .review-queue-tabs .review-queue-pill--review { background: #fff1cf; color: #714800; }
 .review-queue-tabs .review-queue-pill--awaiting-validation { background: #e0efff; color: #174e7a; }
 .review-queue-tabs .review-queue-pill--completed { background: #dcf4e5; color: #205e39; }
-.review-queue-tabs .review-queue-pill[aria-pressed="true"] { border-color: currentColor; box-shadow: inset 0 0 0 1px currentColor; }
-.review-queue-tabs strong { font-size: 20px; font-variant-numeric: tabular-nums; }
+.review-queue-tabs .review-queue-pill[aria-pressed="true"] { border-color: currentColor; }
+.review-queue-tabs strong { font-size: 14px; font-variant-numeric: tabular-nums; }
 .review-queue-label { overflow-wrap: anywhere; }
-.review-queue-selected { position: absolute; left: 12px; font-weight: 800; }
+.review-queue-selected { font-weight: 800; }
 .review-queue-tabs .review-queue-pill:focus-visible { outline: 3px solid #493446; outline-offset: 3px; }
 .review-queue-tabs .review-queue-pill:disabled { opacity: .65; cursor: wait; }
-@media (max-width: 540px) { .review-queue-tabs { grid-template-columns: 1fr; gap: 8px; } }
 @media (forced-colors: active) { .review-queue-tabs .review-queue-pill[aria-pressed="true"] { border: 3px solid Highlight; } }
 .review-queue-delta { position: absolute; right: 4px; bottom: 4px; padding: 1px 4px; background: #e8eff6; color: #234460; border-radius: 5px; font-weight: 700; animation: queue-delta 2.2s ease-out forwards; }
 .review-queue-delta.positive { color: #176329; background: #e8f5e9; }
