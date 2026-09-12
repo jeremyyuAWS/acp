@@ -24,7 +24,7 @@ import { getSources, getRubric, getConfig, getMe, getMyAccess, getMyScope, getCa
 import { beginOrResumeIntent, completeIntent, abandonIntent, outcomeIsUncertain } from './submitIntent'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
-import { useAutoDismissDetails } from './a11y.js'
+import { ACCOUNT_MENU_DISMISS_MS, useAutoDismissDetails } from './a11y.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
 import { loadRolePrivileges } from './RolePrivilege.jsx'
 import { loadFileTypeConfig, visibleForFileTypes } from './FileTypeConfig.jsx'
@@ -427,7 +427,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [myDataOpen, setMyDataOpen] = useState(false)
   const accountMenuRef = useRef(null)
-  useAutoDismissDetails(accountMenuRef, 3000)
+  useAutoDismissDetails(accountMenuRef, ACCOUNT_MENU_DISMISS_MS)
   const [scanList, setScanList] = useState([])
   // true only when the user explicitly picked an older scan from the time-travel picker —
   // distinguishes "user went back in time" from "a new scan arrived while they were reading".
