@@ -121,7 +121,10 @@ def public(row, store=None):
             stalled_files += 1
         counts[category] += 1
         details[file] = entry
-    return dict(id=row['id'], status=row['status'], run_id=row['run_id'], files=list(files),
+    # Exact receipts describe delivery even after a terminal failure. This is
+    # read-only presentation, never renewed authority; Stop remains explicit.
+    status = 'completed' if row['status'] == 'failed' and files and counts['published'] == len(files) else row['status']
+    return dict(id=row['id'], status=status, run_id=row['run_id'], files=list(files),
                 request_id=row['request_id'], source_revision=row['intent']['source_revision'],
                 destination_label=destination_label(row['intent']['destination']), destination=row['intent']['destination'],
                 progress=counts, file_progress=details, stopped_at=row.get('stopped_at'),
@@ -479,7 +482,9 @@ def advance(store, payload, job):
             persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc),waiting_for_delivery=False))
         except Exception:
             persistence.update_file(store,row['id'],row['owner_email'],file,
-                dict(state='blocked' if row['intent']['source'] == 'drive' else 'failed',
+                # A lost response is not proof of failure. Retain admission and
+                # continue receipt checks without dispatching the artifact again.
+                dict(state='blocked',
                      message='Delivery outcome is unknown. Reconcile its receipt before retrying.'))
     with store.transaction():
         row = persistence.get(store,row['id'],row['owner_email'],lock=True)
