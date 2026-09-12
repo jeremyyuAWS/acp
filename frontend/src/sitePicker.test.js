@@ -103,12 +103,12 @@ describe('Discover wires it', () => {
     expect(a).toMatch(/folders: preset/)
   })
 
-  it('gates the button on the SharePoint token', () => {
-    // Same gate the Drive button uses. Offering a picker that cannot authenticate produces an
-    // error where a missing button would have produced an obvious next step: connect the source.
+  it('deliberately retires the Discover scan entry while retaining the site picker', () => {
     const d = read('Discover.jsx')
-    expect(d).toMatch(/\{hasSPToken && \(/)
-    expect(d).toMatch(/hasSPToken = false/)
+    expect(d).not.toContain('Start new SharePoint scan')
+    expect(d).not.toContain('setShowSites(true)')
+    expect(d).toContain("Discover's new-scan entry is retired")
+    expect(d).toContain('{showSites && (')
   })
 
   it('is fed the token flag by App', () => {
@@ -119,8 +119,8 @@ describe('Discover wires it', () => {
 
   it('keeps the SharePoint site picker independent of the Drive scan gate', () => {
     // The 2026-09-02 PRD simplification removed Discover's Drive scan button entirely — users
-    // initiate scans from the Sources tab. The SharePoint site picker remains as Discover's own
-    // local modal because it is a selection step (which site to scan), not a repeat rescan action.
+    // initiate scans from the Sources tab. The SharePoint site-picker implementation is
+    // retained for restoration, but its Discover entry button is deliberately retired too.
     const d = read('Discover.jsx')
     expect(d).toMatch(/const \[showSites, setShowSites\] = useState\(false\)/)
     expect(d).not.toMatch(/showPicker/)

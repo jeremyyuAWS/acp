@@ -249,3 +249,10 @@ describe('the estate overview keeps the whole estate and the assessable subset a
     expect(c).toMatch(/Eligible—/)
   })
 })
+
+it.each([true, false])('does not offer a new SharePoint scan from Discover with token=%s', async hasSPToken => {
+ const onScan = () => { throw new Error('Discover must not start a new scan from its summary') }
+ await mount({hasSPToken, onScan})
+ expect([...container.querySelectorAll('button')].some(button => button.textContent.includes('Start new SharePoint scan'))).toBe(false)
+ expect(container.textContent).toContain('0 documents discovered')
+})
