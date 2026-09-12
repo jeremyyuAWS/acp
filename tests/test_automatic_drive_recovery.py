@@ -301,3 +301,12 @@ def test_route_worker_receipt_and_automatic_completion_round_trip(drive, monkeyp
     # A continuation replay consumes the receipt, never issues another create.
     tick(drive, row)
     assert svc.created == ['planned-1']
+
+
+@pytest.fixture(autouse=True)
+def _candidate_assessment_for_delivery_fixture(monkeypatch):
+    # Identity/recovery fixtures use sentinel A/B or corrected fixture bytes.
+    # Full saved-document scanner gates are proven in test_release_candidate_assessment.
+    import release_candidate_assessment
+    monkeypatch.setattr(release_candidate_assessment, 'assess_candidate',
+                        lambda *args, **kwargs: {'fixture_assessment': True})

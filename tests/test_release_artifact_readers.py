@@ -1,5 +1,6 @@
 """Real Store/API reader contract for exact Release artifacts; no provider calls."""
 import hashlib
+import pytest
 from types import SimpleNamespace
 
 
@@ -92,3 +93,12 @@ def test_partial_release_keeps_real_pending_review_and_records_remaining_issues(
     assert audit['remaining_issue_count'] == 1
     assert audit['pending_review_items'] == [{'id': items[0]['id'], 'rule_id': 'SC_1_1_1', 'status': 'pending'}]
     assert audit['remaining_issues'][0]['detail'] == 'Image needs a description'
+
+
+@pytest.fixture(autouse=True)
+def _candidate_assessment_for_delivery_fixture(monkeypatch):
+    # Identity/recovery fixtures use sentinel A/B or corrected fixture bytes.
+    # Full saved-document scanner gates are proven in test_release_candidate_assessment.
+    import release_candidate_assessment
+    monkeypatch.setattr(release_candidate_assessment, 'assess_candidate',
+                        lambda *args, **kwargs: {'fixture_assessment': True})

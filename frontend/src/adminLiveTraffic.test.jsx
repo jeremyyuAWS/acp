@@ -496,7 +496,7 @@ describe('Admin live traffic graph', () => {
 
   it('puts reported compute, memory, storage, replicas, and health in worker drilldown', () => {
     const capacity = {
-      configured: true, cpu_cores_per_replica: 2, memory_per_replica: '4Gi',
+      configured: true, worker_app_name: 'acp-assess', cpu_cores_per_replica: 2, memory_per_replica: '4Gi',
       ephemeral_storage_per_replica: '8Gi', current_replicas: 2, min_replicas: 1,
       max_replicas: 10, metrics_available: true, cpu_percent: 54, memory_percent: 67,
       active_revision_name: 'worker--v12', revision_health: 'Healthy', revision_traffic_percent: 100,
@@ -505,9 +505,7 @@ describe('Admin live traffic graph', () => {
       assess: { alive: true, pool_size: 2, age_s: 3, version: 'v12' },
     } } }, new Map(), capacity, 'live')
     const worker = graph.nodes.find((node) => node.id === 'stage:assess').data
-    // Loosened from toBe by the scope fix: the node metric now carries a `Tier:` qualifier,
-    // because one container app's size is drawn on all three stage nodes. Still asserts the
-    // measured size reaches the node, which is what this test was protecting.
+    // Only the matching service may display this app's compute and memory figures.
     expect(worker.metric).toContain('2 vCPU · 4Gi RAM · 8Gi temporary disk')
     const detail = infrastructureDetail(worker, { summary: {} }, capacity)
     expect(detail.facts).toContainEqual(['Replica size', '2 vCPU · 4Gi RAM · 8Gi temporary disk'])
@@ -657,12 +655,12 @@ describe('Idle map: scope and announcement', () => {
     const labels = detail.facts.map(([label]) => label)
     expect(labels).toContain('Replica size')
     expect(detail.facts.find(([l]) => l === 'Size measured from')[1])
-      .toMatch(/Measured from acp-worker, which is not one of the 3 reporting worker services/)
+      .toBe('Not reported')
   })
 
-  it('marks the on-node size as the tier figure it is', () => {
+  it('does not assign an unrelated app size to a worker node', () => {
     const stage = buildTrafficGraph(snapshot, new Map(), capacity).nodes.find((n) => n.id === 'stage:assess')
-    expect(stage.data.metric).toMatch(/^acp-worker: /)
+    expect(stage.data.metric).toBe('Service size not reported')
   })
 
   it('names every node for a screen reader', () => {
@@ -904,5 +902,36 @@ describe('shared Release worker infrastructure', () => {
     expect(worker.data.label).toBe('Remediate & Release workers')
     expect(worker.ariaLabel).toContain('Remediate & Release workers')
     expect(graph.nodes.some(node => node.id === 'stage:release')).toBe(false)
+  })
+})
+
+
+describe('role-specific infrastructure hardware', () => {
+  const snapshot = { summary: { worker_roles: {
+    discovery: { alive: true, pool_size: 12 }, assess: { alive: true, pool_size: 20 },
+    remediate: { alive: true, pool_size: 10 } } }, runs: [] }
+  const assess = { configured: true, worker_app_name: 'acp-assess', cpu_cores_per_replica: 2,
+    memory_per_replica: '4Gi', ephemeral_storage_per_replica: '8Gi' }
+  it('shows the measured app only in its own lane when no other app metadata exists', () => {
+    const graph = buildTrafficGraph(snapshot, new Map(), assess)
+    expect(graph.nodes.find(node => node.id === 'stage:assess').data.metric).toContain('acp-assess: 2 vCPU')
+    for (const stage of ['discover', 'remediate']) {
+      const node = graph.nodes.find(node => node.id === `stage:${stage}`)
+      expect(node.data.metric).toBe('Service size not reported')
+      const detail = infrastructureDetail(node.data, snapshot, assess)
+      expect(detail.facts.find(([label]) => label === 'Replica size')[1]).toBe('Size telemetry not configured')
+      expect(detail.facts.find(([label]) => label === 'Replicas')[1]).toBe('Not reported')
+    }
+  })
+  it('uses each measured role app metadata when the multi-app response provides it', () => {
+    const capacity = { ...assess, apps: { 'acp-assess': assess,
+      'acp-discovery': { configured: true, cpu_cores_per_replica: 1, memory_per_replica: '2Gi', ephemeral_storage_per_replica: '4Gi' },
+      'acp-remediate': { configured: true, cpu_cores_per_replica: 3, memory_per_replica: '6Gi', ephemeral_storage_per_replica: '12Gi' } } }
+    const graph = buildTrafficGraph(snapshot, new Map(), capacity)
+    for (const [stage, app, cpu] of [['discover', 'acp-discovery', 1], ['assess', 'acp-assess', 2], ['remediate', 'acp-remediate', 3]]) {
+      const node = graph.nodes.find(node => node.id === `stage:${stage}`)
+      expect(node.data.metric).toContain(`${app}: ${cpu} vCPU`)
+      expect(infrastructureDetail(node.data, snapshot, capacity).facts.find(([label]) => label === 'Replica size')[1]).toContain(`${cpu} vCPU`)
+    }
   })
 })
