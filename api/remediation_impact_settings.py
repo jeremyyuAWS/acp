@@ -24,12 +24,22 @@ class ImpactPolicyConflict(ValueError):
 def normalize_policy(policy):
     if not isinstance(policy, dict):
         raise ValueError("A remediation policy is required.")
+    if 'cloud_input_strategy' in policy:
+        if policy['cloud_input_strategy'] != 'automatic' or policy.get('ai_zone') != 'any' or policy.get('ai') != 1:
+            raise ValueError('Automatic cloud input requires enabled Cloud AI.')
+        if any(key in policy for key in ('document_wide_input_mode', 'document_wide_model_profile')):
+            raise ValueError('Automatic cloud input cannot include a manual document selection.')
+        from ai_model_profiles import RECOMMENDED_RUN_BUDGET_USD
+        policy = {**policy, 'ai_budget_usd': policy.get('ai_budget_usd', RECOMMENDED_RUN_BUDGET_USD),
+                  'document_wide_ai': True}
     result = {}
     for key, maximum in (("rule_based", 2), ("ai", 3)):
         value = policy.get(key)
         if type(value) is not int or not 0 <= value <= maximum:
             raise ValueError(f"{key} must be an integer between 0 and {maximum}.")
         result[key] = value
+    if 'cloud_input_strategy' in policy:
+        result['cloud_input_strategy'] = 'automatic'
     if "ai_budget_usd" in policy:
         amount = policy["ai_budget_usd"]
         if not isinstance(amount, str) or not re.fullmatch(r"\d{1,7}(?:\.\d{1,2})?", amount):
