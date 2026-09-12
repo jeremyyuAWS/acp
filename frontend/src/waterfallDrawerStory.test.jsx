@@ -74,3 +74,35 @@ it('does not present affected verification or delivery totals as proof', async (
  expect(container.textContent).not.toContain('9 verified changes')
  expect(container.textContent).not.toContain('2 delivered documents')
 })
+
+it('draws bounded whole-run dot charts with distinct units, explicit zero and unknown stages', async () => {
+ const {root,container}=createTestRoot();const selectTab=vi.fn()
+ await act(async()=>root.render(<RecordedRemediationJourney snapshot={{fixes:{applied:12345,verified:3},delivery:{delivered:0}}} selectTab={selectTab}/>))
+ const stages=[...container.querySelectorAll('.wds-process li')]
+ expect(stages.map(stage=>stage.querySelector('strong').textContent)).toEqual(['Analyze','Generate','Check','Approve','Apply','Verify','Publish'])
+ for (const stage of stages.slice(0,4)) {
+   expect(stage.querySelector('svg').getAttribute('aria-label')).toContain('completion not recorded. No progress inferred')
+   expect(stage.querySelectorAll('.wds-dot-filled')).toHaveLength(0)
+   expect(stage.querySelectorAll('.wds-unknown-node')).toHaveLength(3)
+   expect(stage.textContent).toContain('Not recorded')
+ }
+ expect(stages[4].querySelectorAll('.wds-dot-filled')).toHaveLength(12)
+ expect(stages[4].textContent).toContain('+12,333 more')
+ expect(stages[4].querySelector('svg').getAttribute('aria-label')).toContain('12,345 applied changes')
+ expect(stages[5].querySelectorAll('.wds-dot-filled')).toHaveLength(3)
+ expect(stages[6].querySelectorAll('.wds-dot-filled')).toHaveLength(0)
+ expect(stages[6].querySelector('.wds-unknown-node')).toBeNull()
+ expect(stages[6].querySelector('svg').getAttribute('aria-label')).toContain('0 delivered documents')
+ expect(container.querySelector('[role=progressbar]')).toBeNull()
+ expect(container.textContent).toContain('not this model’s contribution')
+ for (const [index,tab] of ['Evidence','Attempts','Changes','Changes','Evidence','Evidence','Evidence'].entries()) {
+   await act(async()=>stages[index].querySelector('button').click())
+   expect(selectTab).toHaveBeenLastCalledWith(tab)
+ }
+})
+it('draws no numeric chart for corrupt or malformed totals', async () => {
+ const {root,container}=createTestRoot()
+ await act(async()=>root.render(<RecordedRemediationJourney snapshot={{fixes:{applied:-1,verified:5},delivery:{delivered:2},integrity:{ok:false,affected:['fixes','delivery']}}}/>))
+ expect(container.querySelectorAll('.wds-dot-filled')).toHaveLength(0)
+ expect(container.querySelectorAll('.wds-process li[data-recorded=false]')).toHaveLength(7)
+})

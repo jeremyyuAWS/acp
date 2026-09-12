@@ -51,6 +51,24 @@ export function RunEvidenceSummary({ snapshot = {}, selectTab }) {
   </section>
 }
 
+// A dot represents one recorded item, never a percentage of stage completion.
+function StageChart({ name, value, unit }) {
+  const recorded = known(value)
+  const visible = recorded ? Math.min(value, 12) : 0
+  return <div className="wds-stage-chart">
+    <svg viewBox="0 0 156 58" role="img" aria-label={recorded ? `${name}: ${count(value)} ${unit}. One dot per item; at most twelve shown.` : `${name}: completion not recorded. No progress inferred.`}>
+      {recorded ? <>
+        {Array.from({ length: 12 }, (_, i) => <circle key={i} cx={12 + (i % 6) * 24} cy={16 + Math.floor(i / 6) * 24} r="7" className={i < visible ? 'wds-dot-filled' : 'wds-dot-empty'} />)}
+      </> : <>
+        <path d="M26 29H130" className="wds-unknown-line" />
+        {[26, 78, 130].map(x => <circle key={x} cx={x} cy="29" r="13" className="wds-unknown-node" />)}
+        {[26, 78, 130].map(x => <text key={x} x={x} y="34" textAnchor="middle">?</text>)}
+      </>}
+    </svg>
+    {recorded && value > 12 && <span className="wds-chart-overflow">+{count(value - 12)} more</span>}
+  </div>
+}
+
 export function RecordedRemediationJourney({ snapshot = {}, selectTab }) {
   const fixes = integrityAffects(snapshot, 'fixes') ? {} : snapshot.fixes || {}
   const delivery = integrityAffects(snapshot, 'delivery') ? {} : snapshot.delivery || {}
@@ -65,7 +83,13 @@ export function RecordedRemediationJourney({ snapshot = {}, selectTab }) {
   ]
   return <section className="wds-panel" aria-label="Remediation journey"><h3>Follow the change</h3>
     <p className="wds-note">Whole run · stages explain the process, not a claim that every document completed each step.</p>
-    <ol className="wds-process">{stages.map(([name, value, description, tab]) => <li key={name} data-recorded={known(value)}><button type="button" onClick={() => selectTab?.(tab)}><strong>{name}</strong><span>{known(value) ? `${count(value)} ${description}` : value === null ? description : `${description} · not recorded`}</span></button></li>)}</ol>
+    <ol className="wds-process">{stages.map(([name, value, description, tab], index) => <li key={name} data-stage={name.toLowerCase()} data-recorded={known(value)}><button type="button" onClick={() => selectTab?.(tab)} aria-label={`${name} · ${known(value) ? `${count(value)} ${description}` : 'completion not recorded'} · inspect ${tab.toLowerCase()}`}>
+      <span className="wds-stage-heading"><span className="wds-stage-number">{String(index + 1).padStart(2, '0')}</span><strong>{name}</strong><span aria-hidden="true">↗</span></span>
+      <StageChart name={name} value={value} unit={description} />
+      <span className="wds-stage-total">{known(value) ? `${count(value)} ${description}` : 'Not recorded'}</span>
+      {!known(value) && <span className="wds-stage-hint">{description}</span>}
+    </button></li>)}</ol>
+    <p className="wds-note">Dots show recorded items, not completion percentages. Counts overlap and use different units; they are whole-run totals, not this model’s contribution.</p>
     <p className="wds-note">Approval permits a change; verification checks its result. Publication is separate. Stage durations are unavailable in these run totals.</p>
   </section>
 }
