@@ -2616,6 +2616,7 @@ export const getAutomaticRelease = (scanId, files = [], options = {}) => {
   if (SIM) return sim({ available: false, reason: 'Automatic release requires a connected remediation run.', authorization: null }, 50)
   const query = new URLSearchParams()
   files.forEach(file => query.append('files', file))
+  if (options.destination) query.set('destination', JSON.stringify(options.destination))
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/automatic?${query}`, {
     headers: headers(), signal: options.signal,
   }).then(j)
@@ -2649,3 +2650,8 @@ export const resumeAutomaticRelease = (scanId, authorizationId) => fetch(
 export const getAcceptedRemediationPlan = (scanId, batchId) => SIM
   ? sim({ scan_id: scanId, run_id: batchId, policy: null, available: false })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/accepted-plan/${encodeURIComponent(batchId)}`, { headers: headers(), cache: 'no-store' }).then(j)
+
+export const createReleaseFolder = (provider, parent, name) => fetch(`${BASE}/release/folders`, {
+  method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+  body: JSON.stringify({ provider, parent, name }),
+}).then(j)

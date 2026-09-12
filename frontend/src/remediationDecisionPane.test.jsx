@@ -174,7 +174,7 @@ describe('Guided pane — auto-fix rows get an obvious, honestly-labelled decisi
   it('opens Publish without recording skipped inspection as acceptance', async () => {
     const decisions = {}, writes = [], destinations = []
     await renderInbox({ queue: [CONTRAST_AUTO], decisions,
-      onDecide: (f, d) => writes.push([f.id, d]), onPublish: () => destinations.push('publish') })
+      onDecide: (f, d) => writes.push([f.id, d]), legacyApprovalControls: true, onPublish: () => destinations.push('publish') })
     const publish = btnByText('Skip inspection and publish')
     expect(container.querySelector('.rinbox-wrap').firstElementChild.contains(publish)).toBe(true)
     expect([...container.querySelectorAll('button')].filter(button => button.textContent.includes('Skip inspection and publish'))).toHaveLength(1)
@@ -185,9 +185,9 @@ describe('Guided pane — auto-fix rows get an obvious, honestly-labelled decisi
     expect(btnByText('Mark inspected')).toBeTruthy()
   })
   it('offers Publish beside pending work but never from read-only history', async () => {
-    await renderInbox({ queue: [CONTRAST_APPLY], onPublish: () => {} })
+    await renderInbox({ queue: [CONTRAST_APPLY], legacyApprovalControls: true, onPublish: () => {} })
     expect(btnByText('Skip inspection and publish')).toBeTruthy()
-    await renderInbox({ queue: [CONTRAST_AUTO], readOnly: true, onPublish: () => {} })
+    await renderInbox({ queue: [CONTRAST_AUTO], readOnly: true, legacyApprovalControls: true, onPublish: () => {} })
     expect(btnByText('Skip inspection and publish')).toBeFalsy()
   })
 
@@ -210,4 +210,11 @@ describe('Guided pane — auto-fix rows get an obvious, honestly-labelled decisi
     await click(btnByText('This looks wrong'))
     expect(calls).toContainEqual([2, 'rejected'])
   })
+})
+
+it('retires skip-inspection navigation and hides overlapping run approval in automatic mode', async () => {
+  await renderInbox({ queue:[CONTRAST_APPLY], autoApprove:true, onPublish:()=>{}, onDecide:()=>{} })
+  expect(btnByText('Skip inspection and publish')).toBeFalsy()
+  expect(btnByText('Apply all ready fixes')).toBeFalsy()
+  expect(btnByText('Auto-apply AI fixes: On')).toBeTruthy()
 })

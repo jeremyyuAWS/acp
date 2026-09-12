@@ -497,3 +497,25 @@ it('Release reconnect resumes the exact saved authorization without publishing o
   expect(publishAllFiles).toHaveBeenCalledTimes(1)
   expect(c.querySelector('.release-confirm')).toBeNull()
  })
+
+it('defaults to Manage publication and keeps reports in a separate keyboard accessible tab', async () => {
+  const c = await mount({run, files:[verified('a.pdf')]})
+  const manage = c.querySelector('#release-tab-manage')
+  const reports = c.querySelector('#release-tab-reports')
+  expect(manage.getAttribute('aria-selected')).toBe('true')
+  expect(c.querySelector('#release-panel-reports').hidden).toBe(true)
+  expect(c.querySelector('#release-panel-manage').textContent).toContain('Publish your documents')
+  await click(reports)
+  expect(c.querySelector('#release-panel-manage').hidden).toBe(true)
+  expect(c.querySelector('#release-panel-reports').textContent).toContain('Publication outcomes')
+  expect(c.querySelector('#release-panel-reports').textContent).toContain('Assessment reports')
+  await click(manage)
+  expect(c.querySelector('#release-panel-manage').hidden).toBe(false)
+})
+
+it('shows approved unapplied changes as Processing without another approval barrier', async () => {
+  listHitlQueue.mockResolvedValue([{file:'a.pdf',status:'approved',applied:null}])
+  const c = await mount({run, files:[held('a.pdf')]})
+  expect(row(c,'a.pdf').textContent).toContain('No further approval needed')
+  expect(c.querySelector('[aria-label="Release status overview"]').textContent).not.toContain('1 Needs attention')
+})

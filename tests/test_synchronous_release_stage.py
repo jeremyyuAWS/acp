@@ -69,6 +69,9 @@ class _RouteStore:
                 "drive_file_id": "source-1", "source_relative_path": "Policies/one.pdf",
                 "corrected_sha256": "sha256-content"}
 
+    def release_for_scan(self, *args):
+        return None
+
     def ensure_release_execution(self, *args, **kwargs):
         return {"id": "release-1", "created_at": "2026-09-05T10:00:00+00:00",
                 "folder_name": "Release"}

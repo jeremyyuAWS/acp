@@ -260,7 +260,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
 
   const stepNames = ['Changes', 'Models', 'Publishing']
   const startButton = <button type="button" className="remediation-impact__run" disabled={!questionsComplete || readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
-    onClick={() => { if (questionsComplete && ready) onRun(selected, data) }}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>
+    onClick={() => { if (questionsComplete && ready) onRun(selected, data) }}>{runBusy ? 'Remediation is running…' : automaticRelease ? 'Start automatic remediation & publishing' : 'Approve plan and start'}</button>
   return <section data-wizard={requireAnswers || undefined} data-step={requireAnswers ? step : undefined} id="remediation-plan" tabIndex={-1} className="remediation-impact" aria-labelledby={titleId} aria-busy={loading}>
     <header className="remediation-impact__header"><div><span className="remediation-impact__eyebrow">{scopeKey === null ? 'Remediation planner' : 'Selected remediation scope'} · Preview only</span>
       <h2 id={titleId}>Choose your remediation plan</h2>

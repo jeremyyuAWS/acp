@@ -50,6 +50,19 @@ def _prepare_release_package(payload: dict, job: dict) -> None:
     rows = {row.get("file"): row for row in scan.get("files", [])}
     if any(name not in rows for name in files):
         raise FatalJobError("corrected file not found")
+    expected = payload.get('expected_artifacts')
+    report_assets = None
+    if expected is not None:
+        if core.store.remediation_source_revision(scan_id) != payload.get('expected_source_revision'):
+            raise FatalJobError('The assessed source changed before packaging')
+        if set(expected) != set(files):
+            raise FatalJobError('The automatic package scope changed')
+        if payload.get('report_bundle_id'):
+            from release_report_delivery import _get
+            bundle = _get(core.store, payload['report_bundle_id'], owner)
+            if not bundle or bundle['scan_id'] != scan_id:
+                raise FatalJobError('Package reports do not belong to this assessment')
+            report_assets = bundle['assets']
     _phase(job, "building the ZIP package")
     from routes.scans import _build_release_zip
     import blob as _blob
@@ -59,7 +72,8 @@ def _prepare_release_package(payload: dict, job: dict) -> None:
             scan_id, owner, scan, files, rows,
             package_name=payload.get("package_name") or "",
             preserve_hierarchy=payload.get("preserve_hierarchy") is not False,
-            include_manifest=payload.get("include_manifest") is not False)
+            include_manifest=payload.get("include_manifest") is not False,
+            **({"expected_artifacts": expected, "report_assets": report_assets} if expected is not None else {}))
         _phase(job, "saving the package for download")
         if not _blob.upload_release_package(owner, scan_id, job["id"], output):
             raise FatalJobError("durable package storage is not configured")
@@ -898,12 +912,18 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
         raise FatalJobError("publish_file job missing release identity")
     scan = core.store.get_scan(scan_id, owner=owner)
     source = ((scan or {}).get("run") or {}).get("source")
-    if not scan or source not in {"sharepoint", "drive"}:
+    source_origin = source
+    if not scan or source not in {"sharepoint", "drive", "local"}:
         raise FatalJobError("publish_file job is not an owned supported cloud scan")
     provider = "Google Drive" if source == "drive" else "SharePoint"
     release = core.store.release_status(release_id, owner)
     if not release or release.get("scan_id") != scan_id:
         raise FatalJobError("release execution does not belong to this scan")
+    if source == "local":
+        source = release.get("source")
+        if source not in {"drive", "sharepoint"}:
+            raise FatalJobError("Uploaded cloud delivery needs a saved cloud destination")
+    provider = "Google Drive" if source == "drive" else "SharePoint"
     from release_artifacts import release_ready, release_review_evidence
     allow_remaining_issues = payload.get("allow_remaining_issues") is True
     record = core.store.get_file_record(scan_id, filename)
@@ -968,7 +988,7 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
             raise ReleaseArtifactError("The corrected artifact changed after this release was requested.")
         record = require_current_record(core.store, scan_id, filename, content_digest,
                                         payload.get("remediated_at") or record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
-        require_current_source(source, record, sp_token=token, drive_service=drive_svc)
+        require_current_source(source_origin, record, sp_token=token, drive_service=drive_svc)
         record = require_current_record(core.store, scan_id, filename, content_digest, record.get("remediated_at"), owner=owner, allow_remaining_issues=allow_remaining_issues)
         identity = reuse_state(saved, content_digest)
         if identity == "unresolved":
@@ -5406,11 +5426,17 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     _phase(job, "fetching the corrected copy")
     working = _blob.download_remediated(owner, scan_id, filename)
     if not working:
-        # The remediated copy is what we edit; the original is never modified. Without it
-        # there is nothing to write into, and pretending otherwise would strand the reviewer.
-        core.store.log_decision("system", "apply.no_remediated_copy", scan_id=scan_id,
-                                file=filename, detail="no stored remediated copy to write into")
-        return
+        record = core.store.get_file_record(scan_id, filename) or {}
+        # An approval may precede the first Remediate run. Start a new corrected
+        # copy from the exact assessed bytes; never substitute the original for
+        # a previously saved correction that has gone missing.
+        if not record.get('remediated_at'):
+            from scanner import read_cached_source
+            working = read_cached_source(scan_id, filename, owner, checksum=record.get('checksum'))
+        if not working:
+            core.store.log_decision("system", "apply.no_remediated_copy", scan_id=scan_id,
+                                    file=filename, detail="no stored corrected copy or assessed source available")
+            raise FatalJobError('No corrected copy or assessed source is available. Start remediation again to restore the copy; the approval remains saved.')
 
     if payload.get('standing_approval'):
         from ai_standing_approval import check_application

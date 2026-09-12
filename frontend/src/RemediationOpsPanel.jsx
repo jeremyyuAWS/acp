@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import useConfirmedRemediationActivity from './useConfirmedRemediationActivity.js'
 import LiveCounter from './LiveCounter.jsx'
+import PlannedRemediationWaterfall from './PlannedRemediationWaterfall.jsx'
 import RemediationWaterfallCard from './RemediationWaterfallCard.jsx'
 import RemediationThroughput from './RemediationThroughput.jsx'
 import { counterRows, secondaryRows, freshness, headline, integrityAffects, partitionSums } from './remediationSnapshot.js'
@@ -266,7 +267,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   const [announcement, setAnnouncement] = useState('')
   const line = headline(snapshot)
   useEffect(() => { setAnnouncement('') }, [line])
-  if (!snapshot || snapshot.state === 'draft') return null
+  if (!snapshot || snapshot.state === 'draft') return assessmentContext?.scanId ? <PlannedRemediationWaterfall /> : null
   const fresh = freshness({ snapshot, connected, receivedAt })
   const suspect = snapshot.integrity?.ok === false
   const documentCountsSuspect = integrityAffects(snapshot, 'documents')

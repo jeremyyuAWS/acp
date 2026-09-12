@@ -704,3 +704,12 @@ it('separates the prominent activity feed from the third-tab waterfall without d
   expect(html).not.toContain('Recent remediation activity')
   expect(html).not.toContain('Saved corrected copy')
 })
+
+it('shows the planned waterfall in the selected assessment before a run exists', () => {
+  const html = render({ snapshot: null, streamlined: true, assessmentContext: {scanId:'scan-1'} })
+  expect(html).toContain('Planned remediation waterfall')
+  expect(html).toContain('Plan preview')
+  expect(html).toContain('AI models')
+  expect(html).toContain('local or cloud')
+  expect(html).not.toContain('verified changes')
+})

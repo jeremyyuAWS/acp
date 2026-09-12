@@ -241,3 +241,24 @@ def test_prepared_package_download_is_owner_scoped(monkeypatch):
         scans.download_prepared_release_package(
             "scan-1", "package-job-1", _request("other@example.com"))
     assert exc.value.status_code == 404
+
+
+def test_automatic_package_contains_exact_corrected_bytes_and_follow_up_reports(monkeypatch):
+    import release_artifacts
+    store = _Store()
+    scan = store.get_scan('scan-1', owner='owner@example.com')
+    rows = {r['file']:r for r in scan['files']}
+    data = b'current-corrected-copy'
+    digest = hashlib.sha256(data).hexdigest()
+    monkeypatch.setattr(scans.core, 'store', store)
+    monkeypatch.setattr(scans, '_remediated_bytes', lambda *a:data)
+    checked = []
+    monkeypatch.setattr(release_artifacts, 'require_current_record', lambda *a,**kw:checked.append((a,kw)))
+    output, size, filename = scans._build_release_zip('scan-1', 'owner@example.com', scan, ['report.pdf'], rows, package_name='', preserve_hierarchy=True, include_manifest=True, expected_artifacts={'report.pdf':digest}, report_assets=[{'name':'follow-up.html','content':'Remaining work','encoding':'utf-8'}])
+    with output, zipfile.ZipFile(output) as archive:
+        assert archive.read('Remediated/Clinical/2026/report.pdf') == data
+        assert archive.read('Reports/follow-up.html') == b'Remaining work'
+        assert 'release-manifest.json' in archive.namelist()
+    assert checked[0][1]['allow_remaining_issues'] is True
+    with pytest.raises(HTTPException, match='corrected copy changed'):
+        scans._build_release_zip('scan-1', 'owner@example.com', scan, ['report.pdf'], rows, package_name='', preserve_hierarchy=True, include_manifest=True, expected_artifacts={'report.pdf':'f'*64})

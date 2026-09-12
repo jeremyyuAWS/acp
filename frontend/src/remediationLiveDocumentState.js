@@ -75,7 +75,7 @@ export function recordedDocumentProgress(row, file, { confirmed, release, source
 }
 
 export function releaseProgressState(state) {
-  return ({ ready: 'ready', released: 'published', delivering: 'processing' })[state?.status] || 'attention'
+  return ({ ready: 'ready', released: 'published', delivering: 'processing', applying: 'processing' })[state?.status] || 'attention'
 }
 
 export function confirmedReleaseProgress(file, release, source, review = []) {

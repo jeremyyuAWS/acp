@@ -16,7 +16,7 @@ const result = (policy = { rule_based: 2, ai: 1 }) => ({
   findings: [{ file: 'C.docx', lane: 'manual', primary_reason: 'human_judgment' }], integrity: { complete: true }, capabilities: { execute: true, save_future: true, assign: true, ai_automatic: false },
 })
 async function mount(props = {}) { const { container, root } = createTestRoot(); await act(async () => root.render(createElement(RemediationImpactCard, { runId: 'run-1', ...props }))); return { container, root } }
-const button = (container, label) => [...container.querySelectorAll('button')].find(node => node.textContent === label)
+const button = (container, label) => [...container.querySelectorAll('button')].find(node => node.textContent === label || (label === 'Approve plan and start' && node.textContent === 'Start automatic remediation & publishing'))
 beforeEach(() => { vi.clearAllMocks(); getRemediationImpact.mockImplementation(async (_id, policy) => result(policy || undefined)); saveRemediationImpactPolicy.mockResolvedValue({}) })
 afterEach(unmountAll)
 const managedChoices = () => getRemediationImpact.mockImplementation(async (_id, policy) => {

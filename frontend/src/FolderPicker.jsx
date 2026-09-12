@@ -60,11 +60,17 @@ export default function FolderPicker({
   maxSelections = null,
   allowAll = true,
   confirmLabel = null,
+  onCreateFolder,
+  canUseFolder,
 }) {
   const [stack, setStack] = useState([{ id: 'root', name: rootName }])
   const [folders, setFolders] = useState([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
+  const [newFolderOpen, setNewFolderOpen] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
+  const [creatingFolder, setCreatingFolder] = useState(false)
+  const [createError, setCreateError] = useState('')
   const [filter, setFilter] = useState('')
   // The running selection, as {id, name} so a chip can NAME the folder. Ids alone would render
   // the chips as opaque Drive/Graph ids, which is not a boundary a reader can check a count
@@ -104,7 +110,7 @@ export default function FolderPicker({
   }, [lister])
 
   useEffect(() => {
-    setFilter(''); load(current.id)
+    setFilter(''); setNewFolderOpen(false); setNewFolderName(''); setCreateError(''); load(current.id)
     return () => { ++loadEpoch.current }
   }, [current.id, load])
 
@@ -178,15 +184,17 @@ export default function FolderPicker({
   const shown = q ? folders.filter((f) => (f.name || '').toLowerCase().includes(q)) : folders
 
   const breadcrumb = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, marginBottom: 10,
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, font: 'inherit', fontSize: 13, marginBottom: 10,
                   flexWrap: 'wrap', color: 'var(--muted)', paddingBottom: 10,
                   borderBottom: '1px solid var(--line)' }}>
       <button type="button" className="ghost small" disabled={loading}
               onClick={() => load(current.id, true)}>Refresh folders</button>
+      {canUseFolder?.(current) && <button type="button" className="ghost small" disabled={loading || creatingFolder} onClick={() => setPicked([{id:current.id,name:current.name}] )}>Select current folder</button>}
+      {onCreateFolder && canUseFolder?.(current) && <button type="button" className="ghost small" disabled={loading || creatingFolder} onClick={() => {setNewFolderOpen(true);setCreateError('')}}>New folder</button>}
       {stack.map((f, i) => (
         <span key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           {i > 0 && <span>›</span>}
-          <button type="button" style={{ background: 'none', border: 'none', padding: 0, fontSize: 12,
+          <button type="button" style={{ background: 'none', border: 'none', padding: 0, font: 'inherit', fontSize: 13,
             cursor: i < stack.length - 1 ? 'pointer' : 'default',
             color: i < stack.length - 1 ? 'var(--info-fg)' : 'var(--ink)',
             fontWeight: i === stack.length - 1 ? 600 : 400 }}
@@ -197,6 +205,22 @@ export default function FolderPicker({
       ))}
     </div>
   )
+
+  const createFolderForm = newFolderOpen && <form aria-label="Create delivery folder" onSubmit={async event => {
+    event.preventDefault()
+    if (!newFolderName.trim() || creatingFolder) return
+    setCreatingFolder(true); setCreateError('')
+    try {
+      const folder = await onCreateFolder(current.id, newFolderName.trim())
+      setPicked([{id:folder.id,name:folder.name}]);setNewFolderOpen(false);setNewFolderName('');load(current.id,true)
+    } catch (failure) {setCreateError(failure?.message || 'The folder could not be confirmed. Refresh folders before trying again.')}
+    finally {setCreatingFolder(false)}
+  }} style={{marginBottom:12}}>
+    <label>Folder name <input aria-label="New folder name" autoFocus value={newFolderName} onChange={event=>setNewFolderName(event.target.value)} disabled={creatingFolder} maxLength={255} style={{font:'inherit'}} /></label>
+    <button type="submit" className="primary" disabled={creatingFolder || !newFolderName.trim()}>{creatingFolder ? 'Creating…' : 'Create folder'}</button>
+    <button type="button" className="ghost" disabled={creatingFolder} onClick={()=>setNewFolderOpen(false)}>Cancel</button>
+    {createError && <p role="alert">{createError}</p>}
+  </form>
 
   const filterBox = (
     <div style={{ marginBottom: 8 }}>
@@ -418,7 +442,7 @@ export default function FolderPicker({
             the wrap point sane on a narrow screen rather than letting either column collapse. */}
         <div style={{ flex: '65 1 320px', minWidth: 0 }}>
           {breadcrumb}
-          {filterBox}
+          {createFolderForm}{filterBox}
           {list}
         </div>
         <div style={{ flex: '35 1 240px', minWidth: 0 }} role="region" aria-label="Current scope">
@@ -451,7 +475,7 @@ export default function FolderPicker({
         </div>
 
         {breadcrumb}
-        {filterBox}
+        {createFolderForm}{filterBox}
         {list}
 
         {multi && <div style={{ marginBottom: 14 }}>{chips}</div>}

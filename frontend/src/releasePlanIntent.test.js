@@ -49,3 +49,13 @@ it('does not claim recovered consent if saved report or remaining-issue flags di
  const notice=await authorizeAcceptedRelease('scan',['a'],accepted,{...intent,allow_remaining_issues:true,include_reports:true},c)
  expect(notice).toContain('could not be confirmed')
 })
+
+it('authorizes an explicitly forecast eligible subset without expanding to blocked files', async () => {
+  const c = client()
+  const subset = { ...intent, key: releasePlanKey('scan', ['a', 'blocked']), scope_files: ['a', 'blocked'] }
+  await authorizeAcceptedRelease('scan', ['a', 'blocked'], accepted, subset, c)
+  expect(c.enable).toHaveBeenCalledWith('scan', expect.objectContaining({ files: ['a'] }))
+  c.enable.mockClear()
+  await authorizeAcceptedRelease('scan', ['a', 'blocked'], accepted, { ...subset, files: ['outside'] }, c)
+  expect(c.enable).not.toHaveBeenCalled()
+})

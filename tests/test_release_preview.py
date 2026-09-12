@@ -188,3 +188,18 @@ def test_partial_preview_requires_opt_in_and_exact_corrected_artifact(monkeypatc
     assert result["documents"][0]["release_review"]["remaining_issue_count"] == 1
     scan["files"][0]["corrected_sha256"] = None
     assert not preview(allow_remaining_issues=True)["can_release"]
+
+
+def test_uploaded_file_previews_selected_sharepoint_destination(monkeypatch):
+    class UploadStore(_Store):
+        def get_scan(self, sid, owner=None):
+            value=super().get_scan(sid,owner)
+            value['run']['source']='local'
+            return value
+    monkeypatch.setattr(scans.core,'store',UploadStore())
+    monkeypatch.setattr(scans,'_preflight_release_destination', lambda request,destination: {'ready':True})
+    result=scans.preview_release_destination('scan-1',_request(),scans.ReleasePreviewRequest(files=['Report.pdf'],destination={'provider':'sharepoint','folder_id':'target/folder','folder_name':'Outputs'}))
+    assert result['provider']=='sharepoint'
+    assert result['documents'][0]['provider_location']=='graph:target'
+    assert result['documents'][0]['destination_path'].startswith('Outputs/Remediated/')
+    assert result['can_release'] is True

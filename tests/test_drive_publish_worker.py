@@ -285,3 +285,19 @@ def test_release_folder_lookup_uses_supported_sort_and_follows_pagination():
     svc.search_pages = {None: {"files": [], "nextPageToken": "second"},
                         "second": {"files": [{"id": "existing-root"}]}}
     assert publish._find_folder(svc, "parent", name="Remediated")["id"] == "existing-root"
+
+
+def test_uploaded_copy_uses_saved_drive_destination_without_cloud_source_lookup(worker, monkeypatch):
+    import handlers
+    import release_artifacts
+    store, svc, payload, job = worker
+    store.get_scan = lambda *args, **kwargs: {'run': {'source': 'local'}}
+    original_status = store.release_status
+    store.release_status = lambda *args: {**original_status(*args), 'source': 'drive', 'parent_folder_id': 'target-folder'}
+    freshness = []
+    original_check = release_artifacts.require_current_source
+    monkeypatch.setattr(release_artifacts, 'require_current_source', lambda source, *args, **kwargs: (freshness.append(source), original_check(source, *args, **kwargs)))
+    handlers._publish_file_guarded(payload, job)
+    assert freshness == ['local']
+    assert len(svc.created) == 1
+    assert store.documents[FILE]['status'] == 'published'

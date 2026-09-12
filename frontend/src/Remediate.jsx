@@ -1,3 +1,4 @@
+import AutomaticReleasePackage from './AutomaticReleasePackage.jsx'
 import { remediationWorkRunning } from './remediationWorkRunning.js'
 import useAcceptedRemediationIdentity from './useAcceptedRemediationIdentity.js'
 import AcceptedRemediationPlanSummary from './AcceptedRemediationPlanSummary.jsx'
@@ -1942,6 +1943,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               loading={acceptedPlan?.loading === true}
               authorization={acceptedAuthorization} />
           </details>}
+          <AutomaticReleasePackage scanId={runId} authorization={acceptedAuthorization} />
           {delivery && <details className="panel" aria-label="Publish corrected copies"><summary>Publish corrected copies</summary>{delivery}</details>}
           <details className="panel" id="accepted-run-details" open={runDetailsOpen} onToggle={event => setRunDetailsOpen(event.currentTarget.open)} aria-label="Run details">
             <summary>Run details</summary>
