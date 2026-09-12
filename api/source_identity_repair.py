@@ -36,6 +36,9 @@ def _selection(snapshot):
     payload = job.get('payload') or {}
     if isinstance(payload, str):
         payload = json.loads(payload)
+    stage = snapshot.get('discover_stage') or {}
+    if not payload.get('stage_execution_id') or stage.get('execution_id') != payload['stage_execution_id'] or stage.get('state') != 'succeeded' or stage.get('is_current') != 1:
+        raise RepairBlocked('discovery_provenance_unavailable')
     # Only the original default /me/drive selection is repairable. Explicit library,
     # site, multi-folder, or later unknown routing must never be guessed.
     if payload.get('source') != 'sharepoint' or any(payload.get(k) for k in ('site','sites','site_id','drive_id','driveId','folder','folders')):

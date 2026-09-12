@@ -8,9 +8,9 @@ def snapshot(n=1):
              'drive_file_id':f'item-{i}','drive_id':None,'site_id':None,
              'source_modified':'2026-09-12T12:00:00Z','checksum':None} for i in range(n)]
     return {'run':{'source':'sharepoint','scope':{'kind':'sharepoint','site':None}},
-            'job':{'id':'discovery','status':'done','payload':{'source':'sharepoint','folder':None,'folders':None}},
+            'job':{'id':'discovery','status':'done','payload':{'source':'sharepoint','folder':None,'folders':None,'stage_execution_id':'discover-execution'}},
             'inventory':rows,'records':[dict(file=r['file'],drive_file_id=r['drive_file_id'],source_modified=r['source_modified'],checksum=None,remediated_at=None,status='analysed',score=80) for r in rows],
-            'remediation':False}
+            'remediation':False,'discover_stage':{'execution_id':'discover-execution','state':'succeeded','is_current':1}}
 
 
 class FakeStore:
@@ -106,8 +106,9 @@ def seed_real(store):
     saved=snapshot()
     with store._db.cursor() as c:
         store._db.execute(c,"INSERT INTO scan_runs(id,source,owner_email,scope,status) VALUES(%s,%s,%s,%s,%s)",('s','sharepoint','owner','{"kind":"sharepoint","site":null}','done'))
-        store._db.execute(c,"INSERT INTO jobs(id,type,status,payload,scan_id,created_at) VALUES(%s,%s,%s,%s,%s,%s)",('discovery','scan_discover','done','{"source":"sharepoint","folder":null,"folders":null}','s','2026-09-12'))
+        store._db.execute(c,"INSERT INTO jobs(id,type,status,payload,scan_id,created_at) VALUES(%s,%s,%s,%s,%s,%s)",('discovery','scan_discover','done','{"source":"sharepoint","folder":null,"folders":null,"stage_execution_id":"discover-execution"}','s','2026-09-12'))
         store._db.execute(c,"INSERT INTO file_records(scan_id,file,drive_file_id,source_modified,status,score) VALUES(%s,%s,%s,%s,%s,%s)",('s','file-0.docx','item-0','2026-09-12T12:00:00Z','analysed',80))
+        store._db.execute(c,"INSERT INTO stage_executions(execution_id,workflow_id,workflow_revision,scan_id,owner_email,stage,input_snapshot_id,request_fingerprint,state,created_at,updated_at) VALUES(%s,%s,1,%s,%s,%s,%s,%s,%s,%s,%s)",('discover-execution','s','s','owner','discover','frozen-source','discover-request','succeeded','2026-09-12','2026-09-12'))
     store.add_inventory('s',saved['inventory'])
 
 
@@ -269,3 +270,26 @@ def test_malformed_provider_answer_structured_refusal_no_write(bad):
     with pytest.raises(repair.RepairBlocked,match='ambiguous_metadata'):
         repair.repair(store,'s','owner','token',post=lambda batch:{'responses':[bad,{'id':'0','status':200,'body':{}}]})
     assert not store.writes
+
+
+@pytest.mark.parametrize('change',[
+    lambda s:s['discover_stage'].update(is_current=0),
+    lambda s:s['discover_stage'].update(state='failed'),
+    lambda s:s['discover_stage'].update(execution_id='different-execution'),
+    lambda s:s.update(discover_stage=None),
+    lambda s:s['job']['payload'].pop('stage_execution_id')])
+def test_stale_failed_unknown_discover_lineage_never_repairable(change):
+    store=FakeStore();change(store.saved)
+    assert not repair.probe(store,'s','owner')['available']
+    with pytest.raises(repair.RepairBlocked,match='discovery_provenance_unavailable'):
+        repair.repair(store,'s','owner','token',post=lambda _:pytest.fail('no Graph for invalid lineage'))
+    assert not store.writes
+
+
+@pytest.mark.parametrize('column,value',[('is_current',0),('state','failed'),('owner_email','another-owner'),('scan_id','another-scan')])
+def test_real_store_discover_lineage_owner_current_success_is_required(isolated_store,column,value):
+    seed_real(isolated_store)
+    assert repair.probe(isolated_store,'s','owner')['available']
+    with isolated_store._db.cursor() as c:
+        isolated_store._db.execute(c,f'UPDATE stage_executions SET {column}=%s WHERE execution_id=%s',(value,'discover-execution'))
+    assert not repair.probe(isolated_store,'s','owner')['available']

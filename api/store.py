@@ -3817,11 +3817,20 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT id,status,payload FROM jobs WHERE scan_id=%s AND type='scan_discover' ORDER BY created_at DESC,id DESC LIMIT 1", (scan_id,))
             job = self._db.fetchone(cur)
+            payload = (job or {}).get("payload") or {}
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except ValueError:
+                    payload = {}
+            execution_id = payload.get("stage_execution_id") if isinstance(payload, dict) else None
+            self._db.execute(cur, "SELECT execution_id,state,is_current FROM stage_executions WHERE execution_id=%s AND scan_id=%s AND owner_email=%s AND stage='discover'", (execution_id,scan_id,owner))
+            discover_stage = self._db.fetchone(cur)
             self._db.execute(cur, "SELECT file,drive_file_id,source_modified,checksum,remediated_at,status,score FROM file_records WHERE scan_id=%s ORDER BY file", (scan_id,))
             records = self._db.fetchall(cur)
             self._db.execute(cur, "SELECT execution_id FROM stage_executions WHERE scan_id=%s AND stage='remediate' LIMIT 1", (scan_id,))
             remediation = bool(self._db.fetchone(cur))
-        return {"run": scan.get("run") or {}, "job": job, "inventory": self.list_inventory(scan_id), "records": records, "remediation": remediation}
+        return {"run": scan.get("run") or {}, "job": job, "discover_stage": discover_stage, "inventory": self.list_inventory(scan_id), "records": records, "remediation": remediation}
 
     def backfill_verified_default_drive(self, scan_id: str, owner: str, expected: dict, drive_id: str) -> int:
         """Atomic metadata-only repair: original assessment and source revision stay frozen."""
