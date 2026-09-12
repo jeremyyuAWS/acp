@@ -86,7 +86,7 @@ describe('Release Center: confirmation before a release', () => {
 
   it('follows durable SharePoint jobs instead of treating submission as completion', () => {
     const s = pub()
-    expect(s).toMatch(/releaseProvider === 'sharepoint' && res\?\.queued/)
+    expect(s).toMatch(/if \(res\?\.queued\)/)
     expect(s).toMatch(/await getReleaseStatus\(run\.id\)/)
     expect(s).toMatch(/row\.status === 'queued' \|\| row\.status === 'running'/)
     expect(s).toMatch(/still running safely in the background/)
