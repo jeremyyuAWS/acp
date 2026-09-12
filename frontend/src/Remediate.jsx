@@ -1224,6 +1224,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // corrected copy. A button claiming otherwise would claim an action ACP cannot perform, so the
   // awaiting-revalidation count is reported as state in the summary line instead.
   const planAccepted = !!acceptedBatchId || !!(acceptedLaunch && acceptedLaunch.scanId === runId)
+  const remediationHasStarted = planAccepted || remStarted || hasRemediationResults || !!scopedSnapshot?.batch_id
   const openRemediationPlan = () => planAccepted ? setRunDetailsOpen(true) : setWorkspaceRequest({ mode: 'plan' })
   const primary = readOnly ? null
     : remRunning ? { label: 'Applying fixes…', disabled: true }
@@ -1922,7 +1923,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               person, and the ONE action this state of the run calls for. Counts come from the same
               derivations the panels under Run details use, and a lane with no data passes nothing rather
               than a zero, so "none" and "not known" never read the same. */}
-          <RemediationRunHeader
+          {/* The summary card is retired after launch; Live and document status own progress. */}
+          {remediationHasStarted && <p className="muted rem-live-scope">{documentScopeSentence(documentSelection(files, triage))}</p>}
+          {!remediationHasStarted && <RemediationRunHeader
             assessedAt={assessedAt}
             docScope={documentScopeSentence(documentSelection(files, triage))}
             counts={{ automaticOnly: false, autoFixed: fixTotal ?? undefined, autoFixedLoaded: fixSource.length, documents: fixDocumentTotal ?? undefined,
@@ -1931,7 +1934,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             primary={primary}
             readOnly={readOnly}
             runDetailsOpen={runDetailsOpen}
-            onOpenRunDetails={() => { setRunDetailsOpen((v) => !v); setWorkspaceRequest({ mode: 'live' }) }} />
+            onOpenRunDetails={() => { setRunDetailsOpen((v) => !v); setWorkspaceRequest({ mode: 'live' }) }} />}
           {planAccepted && <details className="panel" aria-label="Saved automation settings">
             <summary>Saved automation plan · repairs and verification continue automatically</summary>
             <AcceptedRemediationPlanSummary
@@ -1940,13 +1943,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               authorization={acceptedAuthorization} />
           </details>}
           {delivery && <details className="panel" aria-label="Publish corrected copies"><summary>Publish corrected copies</summary>{delivery}</details>}
-          <section id="accepted-run-details" hidden={!runDetailsOpen} aria-label="Run details">
+          <details className="panel" id="accepted-run-details" open={runDetailsOpen} onToggle={event => setRunDetailsOpen(event.currentTarget.open)} aria-label="Run details">
+            <summary>Run details</summary>
             <RemediationAutoRelease statusOnly onStatus={setAutomaticReleaseState} scanId={runId} files={impactScope} readOnly={readOnly} />
             {runDetailsOpen && <details><summary>Additional run information</summary>
               <RemediationRunDetails sections={runDetailSections} open />
               <RemediationReleaseAccess files={impactScope} readOnly={readOnly} onNavigate={onNavigate} />
             </details>}
-          </section>
+          </details>
           {releasePlanNotice && <div role="status">{releasePlanNotice}</div>}
           {remMsg && <div role="status">{remMsg}</div>}
           <RemediationLiveDocuments progressHostId={progressHostId} onShowDocuments={() => setWorkspaceRequest({ mode: 'live' })} snapshot={scopedSnapshot} events={runStream?.events || []} connected={!!runStream?.connected} key={runId} scanId={runId} files={impactScope} cap={cap} assessment={assessment}
