@@ -1,5 +1,6 @@
 import './waterfall-drawer-story.css'
 import { recordedRunGraphGroups } from './remediationRunGraphPresentation.js'
+import { integrityAffects } from './remediationSnapshot.js'
 import RemediationCategoryPill from './RemediationCategoryPill.jsx'
 
 const known = value => Number.isSafeInteger(value) && value >= 0
@@ -38,9 +39,9 @@ export function RunBudgetMeter({ spending }) {
 }
 
 export function RunEvidenceSummary({ snapshot = {}, selectTab }) {
-  const fixes = snapshot.fixes || {}
-  const review = snapshot.review || {}
-  return <section className="wds-panel" aria-label="Run verification evidence"><h3>Results and evidence</h3><p className="wds-note">Whole run · all origins, including rule-based changes</p>
+  const fixes = integrityAffects(snapshot, 'fixes') ? {} : snapshot.fixes || {}
+  const review = integrityAffects(snapshot, 'review') ? {} : snapshot.review || {}
+  return <section className="wds-panel" aria-label="Run verification evidence"><h3>What happened?</h3><p className="wds-note">Whole run · all origins, including rule-based changes</p>
     <dl className="wds-outcomes">
       <div className="wds-verified"><dt><RemediationCategoryPill category="verified" /> changes</dt><dd>{count(fixes.verified)}</dd></div>
       <div className="wds-applied"><dt>↳ Applied changes</dt><dd>{count(fixes.applied)}</dd></div>
@@ -50,6 +51,25 @@ export function RunEvidenceSummary({ snapshot = {}, selectTab }) {
   </section>
 }
 
+export function RecordedRemediationJourney({ snapshot = {}, selectTab }) {
+  const fixes = integrityAffects(snapshot, 'fixes') ? {} : snapshot.fixes || {}
+  const delivery = integrityAffects(snapshot, 'delivery') ? {} : snapshot.delivery || {}
+  const stages = [
+    ['Analyze', null, 'Stage completion not recorded', 'Evidence'],
+    ['Generate', null, 'Inspect recorded model attempts', 'Attempts'],
+    ['Check', null, 'Inspect saved validation records', 'Changes'],
+    ['Approve', null, 'Inspect the saved approval decision', 'Changes'],
+    ['Apply', fixes.applied, 'applied changes', 'Evidence'],
+    ['Verify', fixes.verified, 'verified changes', 'Evidence'],
+    ['Publish', delivery.delivered, 'delivered documents', 'Evidence'],
+  ]
+  return <section className="wds-panel" aria-label="Remediation journey"><h3>Follow the change</h3>
+    <p className="wds-note">Whole run · stages explain the process, not a claim that every document completed each step.</p>
+    <ol className="wds-process">{stages.map(([name, value, description, tab]) => <li key={name} data-recorded={known(value)}><button type="button" onClick={() => selectTab?.(tab)}><strong>{name}</strong><span>{known(value) ? `${count(value)} ${description}` : value === null ? description : `${description} · not recorded`}</span></button></li>)}</ol>
+    <p className="wds-note">Approval permits a change; verification checks its result. Publication is separate. Stage durations are unavailable in these run totals.</p>
+  </section>
+}
+
 export default function WaterfallDrawerStory({ view, selectedModel, snapshot, selectTab, onSelectStage }) {
-  return <div className="wds-story"><RecordedModelJourney graph={view?.run_graph} selectedModel={selectedModel} onSelectStage={onSelectStage} /><RunEvidenceSummary snapshot={snapshot} selectTab={selectTab}/><RunBudgetMeter spending={view?.spending}/></div>
+  return <div className="wds-story"><RunEvidenceSummary snapshot={snapshot} selectTab={selectTab}/><RecordedRemediationJourney snapshot={snapshot} selectTab={selectTab}/><RecordedModelJourney graph={view?.run_graph} selectedModel={selectedModel} onSelectStage={onSelectStage} /><RunBudgetMeter spending={view?.spending}/></div>
 }

@@ -1,7 +1,7 @@
 import { act } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createTestRoot, unmountAll } from './testRoots.js'
-import { RecordedModelJourney, RunBudgetMeter, RunEvidenceSummary } from './WaterfallDrawerStory.jsx'
+import WaterfallDrawerStory, { RecordedRemediationJourney, RecordedModelJourney, RunBudgetMeter, RunEvidenceSummary } from './WaterfallDrawerStory.jsx'
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 afterEach(async () => { await unmountAll() })
 it('navigates exact saved model position without claiming inferred transitions', async () => {
@@ -52,4 +52,25 @@ it('retains exact attempt identities when navigating a saved generation position
  await act(async()=>root.render(<RecordedModelJourney graph={graph} onSelectStage={onSelectStage}/>))
  await act(async()=>container.querySelector('button').click())
  expect(onSelectStage).toHaveBeenCalledWith('first',expect.objectContaining({identityKind:'configured',attemptIds:['a']}))
+})
+
+it('leads with recorded outcomes and distinguishes process explanation from completion', async () => {
+ const {root,container}=createTestRoot();const selectTab=vi.fn()
+ await act(async()=>root.render(<WaterfallDrawerStory snapshot={{fixes:{applied:8,verified:3},delivery:{delivered:0}}} selectTab={selectTab}/>))
+ expect(container.querySelector('.wds-story section h3').textContent).toBe('What happened?')
+ const stages=[...container.querySelectorAll('.wds-process li')]
+ expect(stages).toHaveLength(7)
+ expect(stages[0].dataset.recorded).toBe('false')
+ expect(stages[4].textContent).toContain('8 applied changes')
+ expect(stages[5].textContent).toContain('3 verified changes')
+ expect(stages[6].textContent).toContain('0 delivered documents')
+ await act(async()=>stages[1].querySelector('button').click())
+ expect(selectTab).toHaveBeenCalledWith('Attempts')
+ expect(container.textContent).toContain('Stage durations are unavailable')
+})
+it('does not present affected verification or delivery totals as proof', async () => {
+ const {root,container}=createTestRoot()
+ await act(async()=>root.render(<RecordedRemediationJourney snapshot={{fixes:{verified:9},delivery:{delivered:2},integrity:{ok:false,affected:['fixes','delivery']}}}/>))
+ expect(container.textContent).not.toContain('9 verified changes')
+ expect(container.textContent).not.toContain('2 delivered documents')
 })

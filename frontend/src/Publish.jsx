@@ -3,6 +3,9 @@ import RemediationLiveDocuments from './RemediationLiveDocuments.jsx'
 import ScopeBanner from './ScopeBanner.jsx'
 import DriveReleaseReconnect from './DriveReleaseReconnect.jsx'
 import ReleaseQuickActions from './ReleaseQuickActions.jsx'
+import ReleaseCompletionDocuments from './ReleaseCompletionDocuments.jsx'
+import RemediationProgressSummary from './RemediationProgressSummary.jsx'
+import { releaseProgressState } from './remediationLiveDocumentState.js'
 import ReleaseCopyDestination from './ReleaseCopyDestination.jsx'
 import ReleaseReports from './ReleaseReports.jsx'
 import { documentSelection, documentScopeSentence, documentsInSelection } from './remediableScope.js'
@@ -34,6 +37,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   // the restriction; this filter enforces it for selection, delivery, packaging and set status.
   const releaseFiles = documentsInSelection(files, triage)
   const [automaticAuthorization, setAutomaticAuthorization] = useState(null)
+  const [outcomeFilter, setOutcomeFilter] = useState('all')
+  useEffect(() => setOutcomeFilter('all'), [run?.id])
   const [allowRemainingIssues, setAllowRemainingIssues] = useState(false)
   const releaseScopeKey = JSON.stringify([run?.id, [...new Set(releaseFiles.map(file => file.file))].sort()])
   const partialChoice = useRef(null)
@@ -265,6 +270,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const previewBlockers = Object.fromEntries([...(releasePreview?.blockers || []), ...(packagePreview?.blockers || [])].map((item) => [item.file, item.reason]))
   const stateOf = (file) => releaseReadiness(file, { done, results: releaseResults, sourceState: srcOf, pending: pendingReview.byFile, allowRemainingIssues })
   const states = releaseFiles.map(stateOf)
+  const progressDocuments = releaseFiles.map((file, index) => ({ file:file.file, progressState:releaseProgressState(states[index]) }))
   const attentionCount = states.filter((state) => !['ready', 'released', 'delivering'].includes(state.status)).length
   const deliveringCount = states.filter((state) => state.status === 'delivering').length
   const staleReady = ready.filter((f) => !done[f.file] && srcOf(f) === 'stale')
@@ -735,7 +741,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                     onClick={startRelease}>More delivery options</button>
           </div>
         </div>
-        <p aria-label="Release status overview" className="release-clarity-counts">
+        <RemediationProgressSummary documents={progressDocuments}
+          selected={outcomeFilter === 'all' ? null : outcomeFilter}
+          onSelect={state => setOutcomeFilter(state || 'all')} />
+        <p hidden aria-label="Release status overview" className="release-clarity-counts">
           <span><b>{publishableReady.length}</b> Ready</span>
           <span><b>{attentionCount}</b> Needs attention</span>
           <span><b>{publishedCount}</b> Delivered</span>
@@ -811,8 +820,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         }} />
 
       <details className="panel"><summary>Assessment findings and saved changes (optional)</summary>
-      <RemediationLiveDocuments key={run?.id} scanId={run?.id} files={releaseFiles} cap={cap} assessment={assessment} refreshKey={publishedCount} />
+      <RemediationLiveDocuments key={run?.id} scanId={run?.id} files={releaseFiles} cap={cap} assessment={assessment} refreshKey={publishedCount} progressDocuments={progressDocuments} />
       </details>
+      <ReleaseCompletionDocuments files={releaseFiles} states={states} progressDocuments={progressDocuments} results={releaseResults} urls={pubUrls}
+        filter={outcomeFilter} onFilter={setOutcomeFilter} readOnly={readOnly} publishing={publishing}
+        onRetry={names => publishAll(names, releaseFolder?.name || releaseFolderName, true)} />
 
         {(releaseId || publishedList.length > 0) && <section className="release-receipt" aria-label="Delivery receipt">
           <h3>{failedCount ? 'Partial delivery receipt' : deliveringCount ? 'Delivery in progress' : 'Delivery receipt'}</h3>

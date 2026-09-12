@@ -1,0 +1,14 @@
+.remediation-progress-summary { border:1px solid #e8e2ed; border-radius:14px; padding:16px; margin:12px 0 20px; }
+.remediation-progress-summary-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.remediation-progress-summary-heading h3 { margin:0 0 12px; }
+.remediation-progress-summary-counts { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
+.remediation-progress-summary-counts > * { border:1px solid var(--progress-color); border-radius:10px; padding:12px; background:var(--progress-bg); color:#292331; text-align:left; }
+.remediation-progress-summary-counts strong { display:block; font-size:26px; line-height:1.3; }
+.remediation-progress-summary-counts span { font-size:14px; }
+.remediation-progress-summary-counts [aria-pressed=true] { outline:2px solid var(--progress-color); outline-offset:2px; }
+.progress-processing { --progress-color:#197caa; --progress-bg:#edf8ff; }
+.progress-verified { --progress-color:#357e66; --progress-bg:#edf9f3; }
+.progress-attention { --progress-color:#b24869; --progress-bg:#fff0f4; }
+.progress-ready { --progress-color:#77539d; --progress-bg:#f5effc; }
+.progress-published { --progress-color:#3c7735; --progress-bg:#eff9ed; }
+@media(max-width:700px) { .remediation-progress-summary-counts { grid-template-columns:repeat(2,minmax(0,1fr)); } }

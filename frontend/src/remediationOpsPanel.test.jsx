@@ -679,3 +679,21 @@ describe('streamlined Live View deliberately retires duplicate progress surfaces
     expect(html).toContain('Detailed accounting and finding evidence')
   })
 })
+
+describe('document activity milestones', () => {
+  it('groups parallel-document updates and keeps delivery problems visible beside verified results', () => {
+    const markup = renderToStaticMarkup(createElement(RemediationOpsPanel, {
+      snapshot: SNAP, streamlined: true,
+      events: [
+        { key: '3', documentKey: 'one', tone: 'success', line: 'Three fixes verified', occurredAt: '2026-09-11T21:00:00Z' },
+        { key: '2', documentKey: 'one', tone: 'error', line: 'Provider write permission required', occurredAt: '2026-09-11T20:59:59Z' },
+        { key: '1', documentKey: 'two', tone: 'neutral', line: 'Saved in ACP', occurredAt: '2026-09-11T20:59:58Z' },
+      ],
+    }))
+    expect(markup).toContain('remops-activity-error')
+    expect(markup).toContain('1 other updates for this document')
+    expect(markup).toContain('Provider write permission required')
+    expect(markup).toContain('Three fixes verified')
+    expect(markup).toContain('Saved in ACP')
+  })
+})
