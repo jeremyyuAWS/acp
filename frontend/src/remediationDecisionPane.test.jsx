@@ -133,9 +133,11 @@ describe('Guided pane — preserves the #412/#415 behaviours', () => {
     expect(btnByText('Needs manual work').closest('details')).toBeNull()
     expect(btnByText('Edit proposed fix').closest('details')).toBe(more)
     await click(more.querySelector('summary'))
-    for (const label of ['Apply this fix', 'Edit proposed fix', 'Needs manual work', 'Defer']) {
+    for (const label of ['Apply this fix', 'Edit proposed fix', 'Needs manual work']) {
       expect([...actions.querySelectorAll('button')].some((button) => button.textContent.includes(label))).toBe(true)
     }
+    expect(btnByText('Defer')).toBeFalsy()
+    expect(btnByText('Not applicable')).toBeFalsy()
     await click(btnByText('Edit proposed fix'))
     expect(document.activeElement).toBe(container.querySelector('textarea[aria-label="Edit the proposed fix"]'))
   })

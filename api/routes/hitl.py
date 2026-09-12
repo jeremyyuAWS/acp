@@ -139,6 +139,8 @@ def hitl_list(request: Request, status: str | None = None, scan_id: str | None =
     rows = core.store.list_hitl_queue(status=status, scan_id=scan_id, owner=owner,
                                       include_superseded=include_superseded)
     # Match the sealed assessment input used by remediation; legacy runs use the scan hash.
+    from review_item_kind import serialize_review_item
+    rows = [serialize_review_item(row) for row in rows]
     revisions = {}
     for row in rows:
         sid = row.get("scan_id")

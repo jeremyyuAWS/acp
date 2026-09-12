@@ -4,7 +4,8 @@ import ScopeBanner from './ScopeBanner.jsx'
 import DriveReleaseReconnect from './DriveReleaseReconnect.jsx'
 import ReleaseQuickActions from './ReleaseQuickActions.jsx'
 import ReleaseCompletionDocuments from './ReleaseCompletionDocuments.jsx'
-import RemediationProgressSummary from './RemediationProgressSummary.jsx'
+import RemediationProgressSummary, { PROGRESS_STATES } from './RemediationProgressSummary.jsx'
+import ProgressQueueDrawer from './ProgressQueueDrawer.jsx'
 import { releaseProgressState } from './remediationLiveDocumentState.js'
 import ReleaseCopyDestination from './ReleaseCopyDestination.jsx'
 import ReleaseReports from './ReleaseReports.jsx'
@@ -39,9 +40,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const releaseFiles = documentsInSelection(files, triage)
   const [automaticAuthorization, setAutomaticAuthorization] = useState(null)
   const [outcomeFilter, setOutcomeFilter] = useState('all')
+  const [progressQueue, setProgressQueue] = useState(null)
   const [releaseTab, setReleaseTab] = useState('manage')
   useEffect(() => setReleaseTab('manage'), [run?.id])
-  useEffect(() => setOutcomeFilter('all'), [run?.id])
+  useEffect(() => { setOutcomeFilter('all'); setProgressQueue(null) }, [run?.id])
   const [allowRemainingIssues, setAllowRemainingIssues] = useState(false)
   const releaseScopeKey = JSON.stringify([run?.id, [...new Set(releaseFiles.map(file => file.file))].sort()])
   const partialChoice = useRef(null)
@@ -178,9 +180,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         const q = await listHitlQueue(run.id)
         if (!live) return
         const scoped = (q || []).filter(item => releaseFiles.some(file => file.file === item.file))
-        const pending = scoped.filter(item => !item.status || item.status === 'pending')
+        const pending = scoped.filter(item => item.rule_id !== 'auto/verify' && (!item.status || item.status === 'pending'))
         const byFile = pending.reduce((counts, item) => ({ ...counts, [item.file]: (counts[item.file] || 0) + 1 }), {})
-        const applying = scoped.filter(item => item.status === 'approved' && !item.applied && !item.apply_outcome)
+        const applying = scoped.filter(item => item.status === 'approved' && !item.resolution && !item.applied && !item.apply_outcome)
         setPendingReview({ items: pending.length, files: Object.keys(byFile).length, byFile })
         setProcessingReview(applying.reduce((counts, item) => ({ ...counts, [item.file]: (counts[item.file] || 0) + 1 }), {}))
         if (applying.length) timer = window.setTimeout(refresh, 5000)
@@ -299,7 +301,6 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const stateOf = (file) => releaseReadiness(file, { done, results: releaseResults, sourceState: srcOf, pending: pendingReview.byFile, processing: processingReview, allowRemainingIssues })
   const states = releaseFiles.map(stateOf)
   const progressDocuments = releaseFiles.map((file, index) => ({ file:file.file, progressState:releaseProgressState(states[index]) }))
-  const attentionCount = states.filter((state) => !['ready', 'released', 'delivering', 'applying'].includes(state.status)).length
   const deliveringCount = states.filter((state) => state.status === 'delivering').length
   const staleReady = ready.filter((f) => !done[f.file] && srcOf(f) === 'stale')
   const publishableReady = ready.filter((f) => stateOf(f).status === 'ready')
@@ -782,6 +783,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
 
   return (
     <>
+      {progressQueue && <ProgressQueueDrawer title={progressQueue.key ? PROGRESS_STATES.find(([key]) => key === progressQueue.key)?.[1] || 'Document progress' : 'All release documents'}
+        scopeLabel={`${releaseFiles.length} files in this release scope`}
+        files={releaseFiles.flatMap((file,index) => {
+          const progress = progressDocuments[index].progressState
+          if (progressQueue.key && progress !== progressQueue.key) return []
+          return [{file:file.file,status:file.assessment_blocked ? 'blocked' : progress,
+            label:file.assessment_blocked ? 'Blocked' : PROGRESS_STATES.find(([key]) => key === progress)?.[1],
+            reason:file.assessment_blocked_reason || states[index].reason,findingCount:file.total_findings}]
+        })} onClose={() => setProgressQueue(null)}/>}
       {/* ABOVE the conformance report, not below it. The artifact this screen produces is a
           compliance record, and "certified" against an unstated scope is a claim nobody can
           check later — so what was assessed is stated before what was concluded. */}
@@ -807,12 +817,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                     onClick={startRelease}>More delivery options</button>
           </div>
         </div>
-        <RemediationProgressSummary documents={progressDocuments}
-          selected={outcomeFilter === 'all' ? null : outcomeFilter}
-          onSelect={state => setOutcomeFilter(state || 'all')} />
+        <RemediationProgressSummary variant="release" documents={progressDocuments} queueMode
+          selected={progressQueue?.key}
+          onSelect={state => setProgressQueue({key:state})} />
+        <p className="muted">Manage remaining work in Remediate.</p>
         <p hidden aria-label="Release status overview" className="release-clarity-counts">
           <span><b>{publishableReady.length}</b> Ready</span>
-          <span><b>{attentionCount}</b> Needs attention</span>
           <span><b>{publishedCount}</b> Delivered</span>
           {deliveringCount > 0 && <span><b>{deliveringCount}</b> Delivering</span>}
         </p>

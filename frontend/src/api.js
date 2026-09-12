@@ -2672,3 +2672,9 @@ export const setRunAiApproval = (scanId, runId, setting) => SIM ? (() => {
 })() : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/ai-approval/${encodeURIComponent(runId)}`, {
   method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(setting),
 }).then(j)
+
+
+export const getStageProgressQueue = (executionId, bucket) => (SIM
+  ? sim({ execution_id: executionId, bucket, available: false, files: [], count: null })
+  : fetch(`${BASE}/stage-executions/${encodeURIComponent(executionId)}/queue?bucket=${encodeURIComponent(bucket)}`,
+    { headers: headers(), cache: 'no-store' }).then(j))

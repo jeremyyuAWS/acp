@@ -82,7 +82,10 @@ def plan(store, sid, owner, files, destination, folder_name):
     # every document (177 full queue reads on the observed legacy run).
     records = store.get_file_records(sid, owner=owner)
     rows_by_file = {}
+    from review_item_kind import optional_inspection
     for row in store.list_hitl_queue(scan_id=sid, owner=owner, include_superseded=True):
+        if optional_inspection(row):
+            continue
         rows_by_file.setdefault(row['file'], []).append(row)
     planned = {}
     for file in sorted(set(files)):

@@ -320,9 +320,9 @@ function AzureCapacity({ capacity, state }) {
     </span>}>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 8, marginTop: 9 }}>
       {tiles.map(([label, value, detail]) => <div key={label} style={{ minWidth: 0, padding: 10, border: '1px solid var(--line)', borderRadius: 9 }}>
-        <div className="muted" style={{ fontSize: 10.5 }}>{label}</div>
-        <b style={{ display: 'block', fontSize: 17, overflowWrap: 'anywhere' }}>{value}</b>
-        <div className="muted" style={{ fontSize: 11, overflowWrap: 'anywhere' }}>{detail}</div>
+        <div className="liveops-infra__label">{label}</div>
+        <b className="liveops-infra__value">{value}</b>
+        <div className="liveops-infra__meta">{detail}</div>
       </div>)}
     </div>
   </CollapsibleSection>

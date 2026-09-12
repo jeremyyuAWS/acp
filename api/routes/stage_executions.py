@@ -124,3 +124,15 @@ def cancel_execution(execution_id: str, body: RevisionMutation, request: Request
 @router.post("/stage-executions/{execution_id}/supersede")
 def supersede_execution(execution_id: str, body: RevisionMutation, request: Request):
     return _control(execution_id, "supersede", body, request)
+
+
+@router.get("/stage-executions/{execution_id}/queue")
+def execution_queue(execution_id: str, request: Request, bucket: str):
+    _execution_or_404(execution_id, request)
+    import progress_queues
+    try:
+        return progress_queues.read(core.store, execution_id, _owner(request), bucket)
+    except PermissionError:
+        raise HTTPException(404, "queue not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))

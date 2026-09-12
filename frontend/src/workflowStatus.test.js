@@ -20,9 +20,9 @@ describe('workflowStatusOf — pipeline stage from real state (no invented flags
   it('an approved/accepted decision → awaiting-validation (fix in, not yet re-scanned)', () => {
     expect(workflowStatusOf({ id: 1, hasProposal: true, after: 'x' }, { 1: { state: 'accepted' } })).toBe('awaiting-validation')
   })
-  it('an assigned or deferred decision → manual (a person will hand-fix it)', () => {
+  it('assignment remains manual; a recorded deferral completes the review task', () => {
     expect(workflowStatusOf({ id: 1 }, { 1: { state: 'assigned' } })).toBe('manual')
-    expect(workflowStatusOf({ id: 1 }, { 1: { state: 'deferred' } })).toBe('manual')
+    expect(workflowStatusOf({ id: 1 }, { 1: { state: 'deferred' } })).toBe('completed')
   })
   it('verified → completed; rejected → completed; not_applicable → completed', () => {
     expect(workflowStatusOf({ id: 1, status: 'verified' })).toBe('completed')

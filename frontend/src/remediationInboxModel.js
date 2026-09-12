@@ -82,11 +82,20 @@ export function railColorOf(lane) {
   return lane?.attention ? lane.color : NEUTRAL_RAIL
 }
 
+export const optionalInspectionOf = f => f?.inspectionOnly === true || f?._raw?.inspection_only === true || (f?.rule_id || f?.ruleId) === 'auto/verify'
+export function recordedReviewDecision(f, decisions = {}) {
+  const d = decisions[f?.id] ?? decisions[f?.file]
+  if (d?.state === 'not_applicable' || f?.resolution === 'out_of_scope' || f?._raw?.resolution === 'out_of_scope') return 'not_applicable'
+  if (d?.state === 'deferred' || ['skipped', 'deferred'].includes(String(f?.status || '').toLowerCase())) return 'deferred'
+  return null
+}
+
 const RESOLVED_STATUSES = new Set(['approved', 'applied', 'accepted', 'rejected', 'resolved', 'verified'])
 
 /** The lane for a finding, from its status first (blocked/recheck win) then its remediation shape. */
 export function laneOf(f) {
   const st = String(f?.status || '').toLowerCase()
+  if (optionalInspectionOf(f)) return LANES.review
   if (st === 'blocked') return LANES.blocked
   // A rejection recorded on the row itself (hitl_queue.status), read back on a later load. It is
   // the same outcome as the in-session `rejectedFix` handoff below and gets the same lane — the
@@ -131,6 +140,7 @@ export function effortLabel(f) {
 /** Has this finding been acted on? Resolved rows lose their unread emphasis and drop out of the
  *  "next unresolved" walk. A finding is resolved by an explicit status or a recorded decision. */
 export function isResolved(f, decisions = {}) {
+  if (optionalInspectionOf(f) || recordedReviewDecision(f, decisions)) return true
   if (RESOLVED_STATUSES.has(String(f?.status || '').toLowerCase())) return true
   const d = decisions[f?.id] ?? decisions[f?.file]
   return !!(d && (d.state === 'accepted' || d.state === 'approved' || d.state === 'rejected' || d.state === 'not_applicable'))
@@ -158,13 +168,13 @@ export function rowModel(f, decisions = {}) {
   const resolved = isResolved(f, decisions)
   return {
     id: f?.id,
-    issue: issueLabel(f),
+    issue: optionalInspectionOf(f) ? 'Automatic changes recorded' : issueLabel(f),
     file: f?.file || '',
     location: locationLabel(f),
     sc: normSc(f?.rule_id ?? f?.ruleId ?? f?.wcag) || null, // the WCAG SC number, as a compact row pill
-    did: lane.didLine,
-    action: lane.action,
-    laneShort: lane.short,   // the quiet remediation-state word (demoted from a loud coloured pill)
+    did: optionalInspectionOf(f) ? 'Saved automatic change' : lane.didLine,
+    action: optionalInspectionOf(f) ? 'Browse saved changes' : lane.action,
+    laneShort: optionalInspectionOf(f) ? 'Inspection optional' : lane.short,   // the quiet remediation-state word (demoted from a loud coloured pill)
     severity: f?.severity || null,
     confidence: f?.confidence ?? null,
     effort: effortLabel(f),
@@ -226,6 +236,7 @@ export const WORKFLOW_LABELS = {
 
 /** The pipeline stage a finding sits in, for the workflow top tabs. */
 export function workflowStatusOf(f, decisions = {}) {
+  if (optionalInspectionOf(f) || recordedReviewDecision(f, decisions)) return 'completed'
   const st = String(f?.status || '').toLowerCase()
   const d = decisions[f?.id] ?? decisions[f?.file]
   const lane = laneOf(f)
@@ -249,8 +260,6 @@ export function workflowStatusOf(f, decisions = {}) {
   // no re-scan to await. The in-session handoff row (rejectedFix, no durable status) keeps its
   // place in Manual fixes, which is where the person who bounced it back picks it up.
   if (st === 'rejected') return 'completed'
-  // A skip is a deferral, not a resolution: the item is still owed a decision, by hand.
-  if (st === 'skipped') return 'manual'
   if (lane.key === 'blocked') return 'blocked'
   // Completed: fully re-validated, a rejection that ended the work, or an out-of-scope (not
   // applicable) judgement — the last two are settled with no re-scan to await. not_applicable also

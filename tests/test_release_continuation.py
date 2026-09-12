@@ -316,3 +316,13 @@ def test_continuation_folder_uses_owner_timezone(prepared, monkeypatch):
     st.set_user_setting(OWNER, 'release_timezone', 'America/New_York')
     row = flow.plan(st, SID, OWNER, [FILE], None, None)
     assert row['intent']['release_folder_name'] == '2026-01-10 20-35 EST - ' + OWNER
+
+
+def test_optional_inspection_is_not_an_authorization_or_manual_blocker(prepared):
+    st, _, _ = prepared
+    item = st.queue_hitl_deferral(SID, FILE, 'Automatic fix applied — verify the result', 1, rule_id='auto/verify')
+    row = flow.plan(st, SID, OWNER, [FILE], None, 'Authorized release')
+    assert all(r['id'] != item for r in row['intent']['files'][FILE]['rows'])
+    assert not row['intent']['files'][FILE]['blockers']
+    assert st.get_hitl_item(item)['status'] == 'pending'
+    assert not st.get_hitl_item(item).get('validated')

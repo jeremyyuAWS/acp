@@ -294,7 +294,10 @@ def ready(store, row, file):
     # promised for this document. Job completion alone cannot prove that write.
     if store.count_unapplied_approved_values(row['scan_id'], file):
         raise ValueError('Approved changes still need application and verification.')
+    from review_item_kind import optional_inspection
     for item in store.list_hitl_queue(scan_id=row['scan_id'], owner=row['owner_email'], include_superseded=True):
+        if optional_inspection(item):
+            continue
         if partial or item.get('file') != file or item.get('superseded'):
             continue
         if item.get('status') not in {'approved', 'resolved'}:

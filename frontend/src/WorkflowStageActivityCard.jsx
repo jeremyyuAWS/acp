@@ -1,4 +1,7 @@
-import WorkflowOutcomeTiles from './WorkflowOutcomeTiles.jsx'
+import WorkflowOutcomeTiles, { outcomeTileModel } from './WorkflowOutcomeTiles.jsx'
+import ProgressQueueDrawer from './ProgressQueueDrawer.jsx'
+import { getStageProgressQueue } from './api.js'
+import { useEffect, useState } from 'react'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import { canonicalStageCardModel, alignRemediationAssessment } from './canonicalStageCard.js'
 
@@ -8,6 +11,31 @@ const shown = (value) => value == null ? '—' : Number(value).toLocaleString()
 export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen, progressHostId = null, progressScanId, onOutcomeFilter }) {
   snapshot = alignRemediationAssessment(snapshot, null)
   const model = canonicalStageCardModel(snapshot)
+  const [selection, setSelection] = useState(null)
+  const [queueView, setQueueView] = useState({ files: [], loading: false, error: null })
+  const executionId = model?.executionId
+  const queue = selection?.executionId === executionId ? selection.key : null
+  const queueIdentity = queue ? `${executionId}:${queue}` : null
+  const queueModel = outcomeTileModel(model?.stage, snapshot?.domain_reconciliation)
+  const tile = queueModel?.tiles.find(item => item.key === queue)
+  const expected = tile?.value
+  useEffect(() => { setSelection(null) }, [executionId])
+  useEffect(() => {
+    if (!queue || !executionId) return undefined
+    let active = true
+    setQueueView(previous => previous.identity === queueIdentity ? { ...previous, error: null } : { identity: queueIdentity, files: [], loading: true, error: null })
+    getStageProgressQueue(executionId, queue).then(result => {
+      if (!active) return
+      if (!result.available || result.execution_id !== executionId || result.bucket !== queue) {
+        setQueueView({ identity: queueIdentity, files: [], loading: false, error: result.reason || 'Recorded queue membership is unavailable.' })
+      } else if (expected != null && result.count !== expected) {
+        setQueueView({ identity: queueIdentity, files: [], loading: false, error: 'This queue changed while loading. Live counts will refresh automatically.' })
+      } else setQueueView({ identity: queueIdentity, files: result.files || [], loading: false, error: null })
+    }).catch(error => {
+      if (active) setQueueView({ identity: queueIdentity, files: [], loading: false, error: error.message || 'Could not load this queue.' })
+    })
+    return () => { active = false }
+  }, [queue, queueIdentity, executionId, expected, snapshot?.generated_at])
   if (!model) return null
   const domain = model.domain
   const done = domain?.accounted ?? model.accounted
@@ -34,8 +62,8 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
     {findingAccounting && <p className="workflow-sse-card__notice">{live ? 'Verified totals update as document work progresses.' : 'Automatic document work has stopped; remaining findings still need review or remediation.'} Outcomes show what happened to the findings. Document categories show how they can be remediated; individual bucket counts can differ.</p>}
     {model.stage === 'remediate' && progressHostId && <div id={progressHostId} data-scan-id={progressScanId} data-batch-id={model.executionId} aria-label="Document progress summary" />}
     {['remediate', 'release'].includes(model.stage) ? <>
-      <WorkflowOutcomeTiles stage={model.stage} domain={snapshot.domain_reconciliation}
-        baseline={snapshot.progress_baseline} executionId={model.executionId} onFilter={onOutcomeFilter} />
+      <WorkflowOutcomeTiles queueMode stage={model.stage} domain={snapshot.domain_reconciliation}
+        baseline={snapshot.progress_baseline} executionId={model.executionId} onFilter={bucket => { setSelection({ key: bucket, executionId }); onOutcomeFilter?.(bucket) }} />
       <details className="workflow-sse-card__outcome-details">
         <summary>Outcome details</summary>
         {domain?.buckets?.length > 0 && <dl className="workflow-sse-card__metrics">
@@ -60,5 +88,8 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
       </li>)}</ul>
     </details>}
     {!model.integrityOk && <p className="workflow-sse-card__notice"><b>Accounting is reconciling.</b> {missingOutcomes > 0 ? `${missingOutcomes} assessed finding${missingOutcomes === 1 ? '' : 's'} still lack a recorded outcome. This is not a count of fixes completed.` : 'Durable totals remain visible while ACP verifies this snapshot.'}</p>}
+    {queue && <ProgressQueueDrawer title={tile?.label || 'File queue'}
+      scopeLabel={model.stage === 'remediate' ? `${expected ?? '—'} findings · this remediation run` : `${expected ?? '—'} requested files · this release`}
+      {...(queueView.identity === queueIdentity ? queueView : { files: [], loading: true })} onClose={() => setSelection(null)} />}
   </section>
 }

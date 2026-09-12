@@ -9,7 +9,7 @@
 .remediation-progress-summary-counts > * { border:1px solid var(--progress-color); border-radius:10px; padding:12px; background:var(--progress-bg); color:#292331; text-align:left; }
 .remediation-progress-summary-counts strong { display:block; font-size:26px; line-height:1.3; }
 .remediation-progress-summary-counts span { font-size:14px; }
-.remediation-progress-summary-counts [aria-pressed=true] { outline:2px solid var(--progress-color); outline-offset:2px; }
+.remediation-progress-summary-counts :is([aria-pressed=true],[aria-expanded=true]) { outline:2px solid var(--progress-color); outline-offset:2px; }
 .progress-processing, .coverage-processing { --progress-color:#197caa; --progress-bg:#edf8ff; }
 .progress-verified, .coverage-verified { --progress-color:#357e66; --progress-bg:#edf9f3; }
 .progress-attention, .coverage-attention { --progress-color:#b24869; --progress-bg:#fff0f4; }
@@ -35,3 +35,12 @@
 .remediation-progress-summary-counts > * { position:relative; overflow:hidden; isolation:isolate; }
 .remediation-progress-summary-counts .kpi-tile-fill { position:absolute; z-index:-1; inset:0 auto 0 0; background:var(--progress-color); opacity:.08; transition:width 400ms ease; pointer-events:none; }
 @media(prefers-reduced-motion:reduce) { .remediation-progress-summary-counts .kpi-tile-fill { transition:none; } }
+
+/* Assess uses a compact near-white card, subtle border and 28px headline. */
+.remediation-progress-summary-counts > * { min-height:0; border:1px solid #e6eaef; border-radius:9px; padding:14px 16px; background:#f7f9fb; color:var(--ink); }
+.remediation-progress-summary-counts strong { font-size:28px; line-height:1.05; font-weight:800; letter-spacing:-.01em; margin:5px 0; }
+.remediation-progress-summary-counts .progress-tile-label { display:block; font-size:11.5px; color:#6B747D; margin:0 0 4px; }
+.remediation-progress-summary-counts small { font-size:11.5px; margin-top:4px; }
+.remediation-progress-summary-counts .kpi-tile-fill { opacity:.025; }
+.remediation-progress-summary-counts--release { grid-template-columns:repeat(4,minmax(0,1fr)); }
+@media(max-width:700px) { .remediation-progress-summary-counts--release { grid-template-columns:repeat(2,minmax(0,1fr)); } }

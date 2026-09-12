@@ -6,7 +6,17 @@ export function materialKey(scanId, snapshot, events = []) {
   const relevant = events.filter(e => (!e.scan_id || e.scan_id === scanId) && /applied|verified|review|completed|failed|proposal|disposition|stored|delivered/.test(e.kind || e.action || ''))
   const eventKeys = relevant.map(event => String(event.id || event.event_id || event.occurred_at || event.key || event.kind)).sort()
   return JSON.stringify([snapshot?.batch_id, snapshot?.state, snapshot?.documents, snapshot?.findings,
-    snapshot?.finding_accounting, snapshot?.finding_reconciliation, snapshot?.fixes, snapshot?.delivery, snapshot?.review, snapshot?.file_processing, eventKeys])
+    snapshot?.finding_accounting, snapshot?.finding_reconciliation, snapshot?.assessment_blocked_files, snapshot?.fixes, snapshot?.delivery, snapshot?.review, snapshot?.file_processing, eventKeys])
+}
+
+// These are explicit assessment diagnostics, not missing live ledger evidence.
+export function confirmedAssessmentBlock(file = {}, snapshot) {
+  const blockedFiles = snapshot?.assessment_blocked_files
+  const recorded = blockedFiles?.find(row => row.file === file.file)
+  if (Array.isArray(blockedFiles) && !recorded) return null
+  if (!recorded && file.assessment_blocked !== true) return null
+  return { reason: recorded?.reason || file.assessment_blocked_reason || 'Assessment could not read this file.',
+    category: recorded?.category || file.assessment_blocked_category || 'assessment_failed' }
 }
 
 export function liveDocumentCounts(documents, ledger, review = [], batchId) {
@@ -14,6 +24,7 @@ export function liveDocumentCounts(documents, ledger, review = [], batchId) {
   const identityCounts = ledger.items.reduce((counts, finding) => counts.set(finding.finding_id, (counts.get(finding.finding_id) || 0) + 1), new Map())
   const result = []
   for (const doc of documents) {
+    if (doc.assessmentBlocked) { result.push({ ...doc, liveCounts:null, reconciliation:null }); continue }
     const findings = ledger.items.filter(f => f.file === doc.file)
     const identities = new Set()
     const invalidIdentity = findings.some(finding => !finding.finding_id || identityCounts.get(finding.finding_id) > 1 || identities.has(finding.finding_id) || !identities.add(finding.finding_id))
@@ -60,6 +71,7 @@ export function findingOutcomeTotals(documents = []) {
 // independent recorded fact without turning individual repair records into
 // whole-document verification.
 export function recordedDocumentProgress(row, file, { confirmed, release, source, review = [], snapshot } = {}) {
+  if (row.assessmentBlocked || confirmedAssessmentBlock(file || {file:row.file}, snapshot)) return 'attention'
   if (snapshot?.active_attempts?.some(attempt => attempt.file === row.file && attempt.lease_valid === true)) return 'processing'
   const releaseProgress = file && confirmedReleaseProgress(file, release, source, review)
   if (releaseProgress) return releaseProgress

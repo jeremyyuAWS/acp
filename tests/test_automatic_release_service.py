@@ -477,3 +477,14 @@ def test_delivery_job_transition_resets_stall_but_heartbeat_does_not():
     changed = flow.delivery_watch(progress, {FILE: ['running']})
     assert not changed['needs_attention']
     assert changed['last_progress_at'] != progress['_delivery_watch']['last_progress_at']
+
+
+def test_optional_automatic_inspection_does_not_block_strict_saved_copy(prepared):
+    item = prepared.store.queue_hitl_deferral(SID, FILE, 'Automatic fix applied — verify the result', 1, rule_id='auto/verify')
+    row = authorize(prepared)
+    assert flow.ready(prepared.store, row, FILE)['corrected_sha256'] == DIGEST
+    assert prepared.store.get_hitl_item(item)['status'] == 'pending'
+    assert not prepared.store.get_hitl_item(item).get('validated')
+    prepared.store.queue_hitl_deferral(SID, FILE, 'Missing faithful alt text', 1, rule_id='1.1.1')
+    with pytest.raises(ValueError, match='review or manual work remains'):
+        flow.ready(prepared.store, row, FILE)

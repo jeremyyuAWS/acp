@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useRef } from 'react'
 import {
   rowModel, laneOf, sortQueue, groupByDocument, nextUnresolvedId, progress, railColorOf,
   matchesWorkflow, workflowCounts, workflowStatusOf, workflowStepIndex, isResolved, isAiAssistedDraft,
-  WORKFLOW_TABS, WORKFLOW_LABELS, SORTS,
+  WORKFLOW_TABS, WORKFLOW_LABELS, SORTS, optionalInspectionOf, recordedReviewDecision,
 } from './remediationInboxModel.js'
 import { clusterRows, clusterOfFinding, batchTargetsOf } from './remediationClusters.js'
 import { fixSteps, appName } from './remediationGuide.js'
@@ -372,7 +372,9 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
   // not an edit-and-apply — the change is already written, so we don't offer an editable draft.
   const isAutoFix = lane.key === 'review'
   const resolved = isResolved(f, decisions)
-  const eyebrow = isHandoff ? 'Needs manual handling' : lane.key === 'manual' ? 'Manual remediation' : 'Review'
+  const inspectionOnly = optionalInspectionOf(f)
+  const reviewDecision = recordedReviewDecision(f, decisions)
+  const eyebrow = inspectionOnly ? 'Saved changes · optional inspection' : isHandoff ? 'Needs manual handling' : lane.key === 'manual' ? 'Manual remediation' : 'Review'
   // A drafted AI value the reviewer can adjust before applying. `draft` falls back to the finding's
   // proposed value until the reviewer types; `edited` flips the primary action to "Save edited fix".
   const canEdit = !resolved && !isManual && !isAutoFix && f.after != null && f.after !== ''
@@ -449,7 +451,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             // A rejection writes nothing, so it gets its own line: saying "Written → Re-scan →
             // Certified" under a declined fix would describe a change that was never made.
             <span className="muted" style={{ fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              {String(f?.status || '').toLowerCase() === 'rejected' || decisions[f?.id]?.state === 'rejected' ? (
+              {inspectionOnly ? <><span>Automatic change recorded.</span><span>Inspection is optional. Verification: {f.validated ? 'passed the recorded checks' : 'not confirmed by this review record'}.</span></> : reviewDecision ? <><span>Decision recorded: {reviewDecision === 'deferred' ? 'Deferred' : 'Not applicable'}.</span><span>{reviewDecision === 'deferred' ? 'Remaining work stays recorded for follow-up.' : 'This criterion was excluded from scope.'} No fix or verification is claimed.</span></> : String(f?.status || '').toLowerCase() === 'rejected' || decisions[f?.id]?.state === 'rejected' ? (
                 <>
                   <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 600 }}>✓ Decision recorded.</span>
                   <span>You rejected this suggestion — nothing was written to the document.</span>
@@ -470,10 +472,10 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             <>
               {onOpenWord && <button className="primary" disabled={saving} onClick={() => onOpenWord(f)}>Open in Word</button>}
               {onRecheck && <button className="ghost" disabled={saving} onClick={() => onRecheck(f)}>Upload &amp; recheck</button>}
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
+              {legacyApprovalControls && <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>}
               {/* Out of scope — this criterion doesn't apply to the document. Resolves the finding and
                   takes it out of the coverage denominator (persisted as an out_of_scope resolution). */}
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
+              {legacyApprovalControls && <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>}
             </>
           ) : isAutoFix ? (
             /* An auto-applied fix: the change is already written, so the decision is a clear approve or
@@ -486,7 +488,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
               </button>
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
               {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
+              {legacyApprovalControls && <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>}
             </>
           ) : (
             <>
@@ -500,8 +502,8 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>{legacyApprovalControls ? 'No, needs manual work' : 'Needs manual work'}</button>
               <details><summary>More options</summary>
               {canEdit && <button className="ghost" disabled={saving} onClick={() => draftRef.current?.focus()}>Edit proposed fix</button>}
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
+              {legacyApprovalControls && <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>}
+              {legacyApprovalControls && <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>}
               {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
               </details>
             </>
@@ -531,14 +533,14 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             </div>
             {onOpenWord && <button className="ghost" onClick={() => onOpenWord(f)}>View full document</button>}
           </div>
-          <Meta row={{ ...r, wcag: (f.rule_id || f.ruleId || '') }} />
+          <Meta row={{ ...r, wcag: inspectionOnly ? '' : (f.rule_id || f.ruleId || '') }} />
           {/* Indigo, not the generic "applied" blue — a distinct color for a distinct claim (this
               specific change has durable, recorded evidence of AI origin), per aiAppliedUnverified's
               own evidence gate above. Still counted in the generic 'applied' bucket everywhere else
               (remediationCategory), so no total changes — this is a rendering-only distinction. */}
           {aiAppliedUnverified(f) && <span className="remediation-category-pill remediation-category-pill--ai_applied" title="AI wrote this change. Verification has not confirmed that the finding is resolved. It remains in pending counts.">AI applied · not verified</span>}
         </div>
-        <p className="remediation-review-problem" style={{ fontSize: 15, lineHeight: 1.55, margin: '18px 0 0' }}>{problemOf(f, r.issue)}</p>
+        <p className="remediation-review-problem" style={{ fontSize: 15, lineHeight: 1.55, margin: '18px 0 0' }}>{inspectionOnly ? 'Saved automatic changes are available to browse. No review action is needed.' : problemOf(f, r.issue)}</p>
         {displayText(f.problemStatement).length > EXCERPT_LIMIT && <details className="remediation-full-text" key={`problem-${f.id}`}>
           <summary>Show full problem description</summary><p>{displayText(f.problemStatement)}</p>
         </details>}
@@ -549,7 +551,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
           <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: '10px 0 0' }}><b>Your task:</b> {taskLineOf(f, lane)}</p>
         )}
 
-        {isManual ? (
+        {inspectionOnly ? <section className="remediation-saved-changes" aria-label="Saved automatic changes"><h3>Saved automatic changes</h3><p>The automatic remediation change has been recorded. Browse the saved change evidence below; no approval or inspection is required.</p><p>Verification: {f.validated ? 'Recorded checks passed.' : 'This inspection record does not confirm verification. See the recorded run results.'}</p></section> : isManual ? (
           /* Manual / handoff: there is no applied change to judge — show HOW to make it instead. */
           <div style={{ marginTop: 18 }}>
             <ManualSteps f={f} />
@@ -1235,7 +1237,7 @@ export default function RemediationInbox({
       </div>
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
       {!bulkPreviewOpen && <WorkspaceFooter position={position} total={visIds.length} onPrev={goPrev} onNext={goNext}
-                       activeStep={selected ? workflowStepIndex(selected, decisions) : null} />}
+                       activeStep={selected && !optionalInspectionOf(selected) && !recordedReviewDecision(selected, decisions) ? workflowStepIndex(selected, decisions) : null} />}
     </div>
   )
 }

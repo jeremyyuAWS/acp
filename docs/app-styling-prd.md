@@ -16,7 +16,7 @@ Use the existing `--font-ui` system sans stack for headings, body copy, filename
 | Filenames, breadcrumbs | 13px | 400 | 1.5 |
 | Table headers, metadata | 12px | 500; metadata 400 | 1.5 |
 | Metadata, timestamps, tags | 12px | 400; tags 500 | 1.5 |
-| KPI counts | 32px | 700 | 1.1 |
+| KPI counts | 28px | 700 | 1.1 |
 
 Use `--font-mono` for technical identifiers, code, hashes, and the expanded Live Activity sub-bullets specifically requested by the owner (13px). Keep delivery-status tags in the UI sans font even within those sub-bullets. KPI counts use tabular numerals so updates do not shift adjacent content. Filename text must not switch font when data arrives, a tab changes, or polling reconnects.
 
@@ -42,7 +42,7 @@ Use a bounded vertical scroll container for long file lists and horizontal scrol
 ## Live Activity and KPI tiles
 Live Activity uses a 15px sans headline, 12px timestamp, and 13px monospace expanded sub-bullets. Keep icons and timestamps aligned across success, failure, and retry cards. Delivery tags retain their sans font and remain readable on every card background.
 
-Use large, consistent KPI tiles for file coverage, document status, findings, and publication. Each domain states its scope. Fixed Before values, current counts, and signed deltas have a consistent hierarchy. Connection gaps retain confirmed values; unknown values show an em dash rather than zero. Reduced motion disables count and pulse animation. Animations must not change tile dimensions or replay on refresh.
+Use compact Assess-style KPI tiles for file coverage, document status, findings, and publication: near-white surfaces, subtle borders, 9px radius, 14–16px padding, and 28px counts. Use semantic accents rather than large saturated backgrounds. Each domain states its scope. Fixed Before values, current counts, and signed deltas have a consistent hierarchy. Connection gaps retain confirmed values; unknown values show an em dash rather than zero. Reduced motion disables count and pulse animation. Animations must not change tile dimensions or replay on refresh.
 
 ## Release batch default
 Default to all unpublished eligible saved copies as one batch. Show a compact batch summary and “Publish batch (N)” action. “Choose specific files” reveals individual controls. Exclude already delivered files, and distinguish blockers from unresolved findings that the selected publishing policy permits. Never imply approved changes are applied before corrected bytes are actually saved.
@@ -58,3 +58,13 @@ Default to all unpublished eligible saved copies as one batch. Show a compact ba
 
 ## Rollout
 First establish shared tokens and reusable controls. Then align file tables, filters, and breadcrumbs. Finally align activity cards, KPI surfaces, and legacy panels. Preserve workflow behavior and validate each phase; the PRD is broader than the styling fixes already merged in PR #1999.
+
+
+## Queue drawers and optional inspection
+Clicking a file, document, finding, or publication KPI opens a right-side drawer instead of scrolling to the bottom table. Show exact queue membership, searchable filenames, status tags, blocked reasons, and per-file finding counts where relevant. Finding and publication queues stay bound to their immutable execution. Missing membership evidence shows unavailable, never a different batch. Support Escape, focus trapping and restoration, narrow-screen layout, and reduced motion. Opening a drawer does not change table filters.
+
+Automatically applied change records are optional to browse. They do not require Defer, Not applicable, or an individual approval click. They count as recorded review tasks, not verified accessibility fixes. Preserve historical decisions honestly. Remaining issues and real pending proposals retain their actual states.
+
+Known assessment failures remain visible as Blocked files with the recorded reason and unavailable finding counts. Corruption, timeout, and access failures must not be conflated. Do not offer remediation until readable assessment evidence exists. Unknown ledger telemetry alone is not a blocker diagnosis.
+
+Release omits the remediation Needs attention tile and duplicate counter; users manage that work in Remediate. Actual publication failures remain in Release as Delivery issues.
