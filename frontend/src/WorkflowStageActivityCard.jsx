@@ -1,3 +1,4 @@
+import LiveCounter from './LiveCounter.jsx'
 import './finding-outcome-kpis.css'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import { canonicalStageCardModel, alignRemediationAssessment } from './canonicalStageCard.js'
@@ -32,10 +33,10 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
     <p className="workflow-sse-card__outcome">{findingAccounting
       ? <><b>{shown(total)} assessed findings</b> · Outcome breakdown</>
       : <><b>{shown(done)} of {shown(total)}</b> {domain?.unit || model.unit}</>}</p>
-    {findingAccounting && <p className="workflow-sse-card__notice">Outcomes show what happened to the findings. Document categories show how they can be remediated; individual bucket counts can differ.</p>}
+    {findingAccounting && <p className="workflow-sse-card__notice">Processing complete means automatic document work has stopped; remaining findings still need review or remediation. Outcomes show what happened to the findings. Document categories show how they can be remediated; individual bucket counts can differ.</p>}
     {findingAccounting && <div className="finding-outcome-kpis" aria-label="Finding totals">
       <div><span>Total assessed</span><strong>{shown(total)}</strong></div>
-      <div className="finding-outcome-kpis__verified"><span>Verified fixed</span><strong>{remaining == null ? '—' : shown(verified)}</strong></div>
+      <div className="finding-outcome-kpis__verified"><span>Verified fixed</span><strong>{remaining == null ? '—' : <LiveCounter key={model.executionId || model.workflowRevision} value={verified} />}</strong></div>
       <div className="finding-outcome-kpis__remaining"><span>Remaining · not verified</span><strong>{shown(remaining)}</strong></div>
       <p>{remaining == null ? 'Finding totals are being reconciled; remaining is not yet confirmed.' : `${shown(verified)} verified fixed + ${shown(remaining)} remaining = ${shown(total)} assessed findings.`} Remaining includes review, manual work, excluded findings, and findings without a verified fix. These are findings, not change records.</p>
     </div>}

@@ -1,3 +1,4 @@
+import { remediationWorkRunning } from './remediationWorkRunning.js'
 import useAcceptedRemediationIdentity from './useAcceptedRemediationIdentity.js'
 import AcceptedRemediationPlanSummary from './AcceptedRemediationPlanSummary.jsx'
 import { getAcceptedRemediationPlan } from './api.js'
@@ -983,7 +984,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // completions (ticks every poll), so the card moves in real time with the worker queue.
   const liveFixed = remProg ? Math.max(0, remProg.done - (remProg.failed || 0)) : 0
   const reVerified = verified + serverFixed + liveFixed
-  const remLive = !!remProg || remBusy
+  const remLive = remediationWorkRunning(runStream?.snapshot, acceptedBatchId, remBusy, remProg)
   const pendingHitlFiles = new Set(queue.map((q) => q.file))
   // The run's review total, from the queue the SERVER holds: outstanding rows plus rows that
   // already carry a decision. It used to be the pending count plus this session's own tally, so
@@ -1209,7 +1210,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // is true as soon as `acted.approved + acted.rejected + acted.deferred > 0`. So clearing the
   // review queue — the step that unblocks remediation — was exactly what removed the button
   // that runs it. The two branches were mutually exclusive and nobody could reach the second.
-  const remRunning = remBusy || (remProg != null && remProg.done < remProg.total)
+  const remRunning = remLive
   // ONE action, and which one it is follows the state of the run (PRD §5.2): apply what ACP can do
   // unattended, then work the exceptions, then publish. It never approves an AI draft — the automatic
   // branch is scoped to `autoBatch`, the deterministic partition, and drafts are not in it.
