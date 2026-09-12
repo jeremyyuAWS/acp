@@ -1207,7 +1207,7 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     # build never leaves the box. The escalation is transparent: the numbered path is attached, not
     # hidden or dressed up as a score.
     escalation = None
-    if not grounded:
+    if not grounded or not alt:
         esc = _escalate_vision(prompt, image_bytes, scan_id=scan_id, file=file)
         if esc:
             alt = esc["alt"]

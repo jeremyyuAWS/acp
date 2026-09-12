@@ -147,3 +147,29 @@ def test_a_failed_escalation_leaves_the_local_evidence_line_for_the_reviewer(mon
     assert "confirm it matches the intent" in out["evidence"]
     # It must NOT claim a cloud model helped when none did.
     assert "cloud" not in out["evidence"]
+
+
+def test_grounded_ocr_can_use_enabled_cloud_when_local_provider_fails(monkeypatch):
+    import ai
+    import ocr
+    import providers
+    monkeypatch.setattr(ocr, 'ocr_text', lambda *_: 'Quarter One Quarter Two')
+    monkeypatch.setattr(ai, '_vision_generate', lambda *a, **kw: None)
+    monkeypatch.setattr(providers, 'cloud_vision_provider', lambda: _cloud())
+    monkeypatch.setattr(ai, '_trace_ai', lambda *a, **kw: 'cloud-call')
+    out = ai.describe_image_structured(b'image', filename='chart.png', allow_transcription=False)
+    assert out['grounded'] is True
+    assert out['provider'] == 'anthropic'
+    assert out['model'] == 'claude-sonnet-5'
+    assert out['ai_call_id'] == 'cloud-call'
+    assert out['alt'].startswith('A quarterly revenue chart')
+
+
+def test_grounded_local_failure_does_not_dispatch_without_cloud_permission(monkeypatch):
+    import ai
+    import ocr
+    import providers
+    monkeypatch.setattr(ocr, 'ocr_text', lambda *_: 'Quarter One Quarter Two')
+    monkeypatch.setattr(ai, '_vision_generate', lambda *a, **kw: None)
+    monkeypatch.setattr(providers, 'cloud_vision_provider', lambda: None)
+    assert ai.describe_image_structured(b'image', allow_transcription=False) is None
