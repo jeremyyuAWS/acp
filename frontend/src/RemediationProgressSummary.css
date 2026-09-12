@@ -1,6 +1,10 @@
 .remediation-progress-summary { border:1px solid #e8e2ed; border-radius:14px; padding:16px; margin:12px 0 20px; }
 .remediation-progress-summary-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; }
 .remediation-progress-summary-heading h3 { margin:0 0 12px; }
+.remediation-progress-summary-heading { flex-wrap:wrap; }
+.remediation-progress-filter-help { margin:0 0 12px; font-size:14px; }
+.remediation-progress-filter-selection { margin:12px 0 0; font-size:14px; font-weight:600; }
+.remediation-progress-summary-counts small { display:block; margin-top:8px; font-size:12px; }
 .remediation-progress-summary-counts { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
 .remediation-progress-summary-counts > * { border:1px solid var(--progress-color); border-radius:10px; padding:12px; background:var(--progress-bg); color:#292331; text-align:left; }
 .remediation-progress-summary-counts strong { display:block; font-size:26px; line-height:1.3; }
