@@ -18,7 +18,7 @@ it('offers Release beside unfinished documents but excludes absent verification 
   await act(async () => container.querySelector('button').click())
   expect(navigate).toHaveBeenCalledWith('publish')
   const source = readFileSync(join(import.meta.dirname, 'Remediate.jsx'), 'utf8')
-  expect(source.indexOf('<RemediationReleaseAccess')).toBeLessThan(source.indexOf('<RemediationWorkspaceTabs'))
+  expect(source.indexOf('<RemediationReleaseAccess')).toBeGreaterThan(source.indexOf('live={<>'))
   expect(source).not.toContain('Continue to Release')
 })
 it('allows going to Release before a saved copy exists without claiming it is ready', async () => {

@@ -18,7 +18,7 @@ it('moves approval out of Needs review, advances selection, and keeps it out of 
     return <RemediationInbox queue={rows} decisions={decisions} initialSort="document" onDecide={async (row, decision) => setDecisions(d => ({ ...d, [row.id]: decision }))} />
   }
   await act(async () => root.render(<Workspace />))
-  await click([...container.querySelectorAll('button')].find(b => b.textContent.includes('Yes, apply fix')))
+  await click([...container.querySelectorAll('button')].find(b => b.textContent.includes('Apply this fix')))
   const tabs = () => [...container.querySelectorAll('.review-queue-tabs button')]
   expect(tabs()[0].querySelector('strong').textContent).toBe('1')
   expect(tabs()[1].querySelector('strong').textContent).toBe('1')

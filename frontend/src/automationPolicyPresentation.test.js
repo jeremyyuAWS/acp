@@ -12,7 +12,7 @@ describe('automation policy presentation contract', () => {
     const tabs = remediate.indexOf('<RemediationWorkspaceTabs')
     expect(header).toBeGreaterThan(-1)
     expect(policy).toBeGreaterThan(-1)
-    expect(policy).toBeGreaterThan(header)
+    expect(header).toBeGreaterThan(remediate.indexOf('live={<>'))
     expect(policy).toBeGreaterThan(tabs)
     expect(remediate.slice(tabs, policy)).toContain('plan={<>')
   })

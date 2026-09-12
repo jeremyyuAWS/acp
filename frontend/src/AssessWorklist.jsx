@@ -1,6 +1,7 @@
 import './document-findings-table.css'
-import RemediationCategoryPill, { RemediationCategoryLegend } from './RemediationCategoryPill.jsx'
+import RemediationCategoryPill, { categoryExplanation } from './RemediationCategoryPill.jsx'
 import { useState } from 'react'
+import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import { REMEDIATION_CATEGORIES, remediationCategory } from './remediationCategories.js'
 import { documentRows, SEVERITIES, SEVERITY_LABEL } from './assessMetrics.js'
 
@@ -120,7 +121,9 @@ export function RetiredSeverity({ row }) {
  *                    component offers selection ONLY over the deterministic fixes; it never
  *                    lets a bulk action silently sweep up an AI draft awaiting approval.
  */
-export default function AssessWorklist({ files, cap, assessment, criteria, level = 'AA', onOpenFile, onBulkFix, renderProgress, initialFilter = null, openLabel, changeRows = [] }) {
+export default function AssessWorklist({ files, cap, assessment, criteria, level = 'AA', onOpenFile, onBulkFix, renderProgress, initialFilter = null, openLabel, changeRows = [], scrollAll = true }) {
+  const search = useSearchFilter()
+  const facets = [{ key: 'type', label: 'file type', get: row => row.file.split('.').pop().toUpperCase() }]
   const rows = documentRows(files, { cap, assessment, criteria, level })
   // null means "no filter chosen yet", not "all". Resolved below against the rows that actually
   // exist, so the default follows the data as it loads rather than freezing whatever was true on
@@ -156,10 +159,12 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
 
   let visible = stateScoped
   if (categoryChosen) visible = visible.filter(row => row.findings?.some(finding => remediationCategory(finding) === categoryChosen) || changeRows.some(change => change.file === row.file && change.category === categoryChosen))
+  const searchScope = visible
+  visible = visible.filter(matchesFilters(search, facets, row => row.file))
   const filtered = visible.length < rows.length
   // The page actually on screen. `hidden` rows are still counted in the totals below — this only
   // ever cuts how many ROWS render, never a number.
-  const truncated = !expanded && visible.length > PAGE_SIZE
+  const truncated = !scrollAll && !expanded && visible.length > PAGE_SIZE
   const shown = truncated ? visible.slice(0, PAGE_SIZE) : visible
   const hiddenRows = truncated ? visible.slice(PAGE_SIZE) : []
 
@@ -232,16 +237,14 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
       {/* A19 severity filter + A24 auto-fixable toggle. Shown only when there is finding work in
           scope to narrow — a run with nothing to fix has nothing for either control to do. Every
           chip keeps its count whether selected or not, so a narrowed view still says what it hid. */}
-      <RemediationCategoryLegend />
       {(scopedFindings > 0 || scopedChanges.length > 0) && (
         <div className="worklist-refine" style={{ display: 'flex', alignItems: 'center', gap: 16,
                                                   flexWrap: 'wrap', marginTop: 10 }}>
           <div role="group" aria-label="Filter documents by remediation category" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            <button type="button" aria-pressed={!categoryChosen} onClick={() => setCategoryChosen(null)}>All remediation categories</button>
             {REMEDIATION_CATEGORIES.map(([key, label]) => {
               const count = stateScoped.reduce((n, row) => n + (row.findings || []).filter(finding => remediationCategory(finding) === key).length, 0)
               const changes = scopedChanges.filter(change => change.category === key).length
-              return <button key={key} className="remediation-category-filter" type="button" disabled={!count && !changes} aria-pressed={categoryChosen === key} onClick={() => setCategoryChosen(key)}><RemediationCategoryPill category={key} count={count} />{changes > 0 && ` · ${changes} change records`}</button>
+              return <button key={key} className="remediation-category-filter" type="button" disabled={!count && !changes} aria-pressed={categoryChosen === key} title={categoryExplanation(key)} aria-description={categoryExplanation(key)} onClick={() => setCategoryChosen(current => current === key ? null : key)}><RemediationCategoryPill category={key} count={count} />{changes > 0 && ` · ${changes} change records`}</button>
             })}
           </div>
           <span className="muted worklist-auto-counts">Auto-fix available: {autoFindings} of {scopedFindings} findings · {docsWithAuto} of {plural(stateScoped.length, 'document', 'documents')}</span>
@@ -273,7 +276,8 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
         </div>
       )}
 
-      <div className="document-findings-scroll" role="region" aria-label="Document findings table" tabIndex={0}>
+      <SearchFilterBar ctl={search} items={searchScope} facets={facets} noun="documents" />
+      <div className={`document-findings-scroll${scrollAll ? ' document-findings-scroll-all' : ''}`} role="region" aria-label="Document findings table" tabIndex={0}>
       <table className="document-findings-table" style={{ marginTop: 10 }}>
         <thead>
           <tr>

@@ -13,7 +13,7 @@ const applied = Array.from({ length: 119 }, (_, i) => ({ id: `applied-${i}`, fil
 const click = async el => act(async () => el.tagName === 'OPTION' ? (el.parentElement.value = el.value, el.parentElement.dispatchEvent(new Event('change', { bubbles: true }))) : el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 async function mount(Component, props) {
   const { root, container } = createTestRoot()
-  const render = async next => act(async () => root.render(createElement(Component, { ...props, ...next })))
+  const render = async next => act(async () => root.render(createElement(Component, { legacyApprovalControls: true, ...props, ...next })))
   await render()
   return { container, render, button: name => [...container.querySelectorAll('button, select[aria-label="Filter by status"] option')].find(b => b.textContent.includes(name)) }
 }

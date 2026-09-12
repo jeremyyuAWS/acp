@@ -19,13 +19,26 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import AssessWorklist from './AssessWorklist.jsx'
 
 afterEach(unmountAll)
+
+it('renders every document in a bounded scroll region and combines search with file type filters', async () => {
+  const c = await mount({ initialFilter: 'all', files: [doc('alpha.docx', [finding('1.1.1')]), doc('beta.pdf', [finding('1.1.1')]), doc('gamma.docx', [finding('1.1.1')]), ...Array.from({length: 6}, (_, i) => doc(`extra${i}.pdf`, [finding('1.1.1')]))] })
+  expect(rowsOf(c)).toHaveLength(9)
+  expect(c.querySelector('[aria-label="Document findings table"]').classList.contains('document-findings-scroll-all')).toBe(true)
+  await act(async () => [...c.querySelectorAll('[aria-label="Filter by file type"] button')].find(b => b.textContent.startsWith('DOCX')).click())
+  expect(order(c)).toEqual(['alpha.docx','gamma.docx'])
+  const input = c.querySelector('input[type="search"]')
+  await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'GAMMA'); input.dispatchEvent(new Event('input', {bubbles:true})) })
+  expect(order(c)).toEqual(['gamma.docx'])
+  await act(async () => [...c.querySelectorAll('.sfbar button')].find(b => b.textContent.includes('clear')).click())
+  expect(rowsOf(c)).toHaveLength(9)
+})
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const read = (f) => readFileSync(join(HERE, f), 'utf8')
@@ -142,7 +155,7 @@ describe('the severity partition sums to the row it sits in', () => {
     expect(category.textContent).toContain('AI 1')
     expect(category.querySelector('details')).toBeNull()
     expect(category.querySelector('[aria-label="Fully automated: 2 findings"]')).not.toBeNull()
-    expect(c.querySelector('[aria-label="Remediation category legend"]').textContent).toContain('Fully automated')
+    expect(c.querySelector('[aria-label="Remediation category legend"]')).toBeNull()
     expect(cell(row, 'findings')).toBe('3')
     expect(c.querySelector('th').parentElement.textContent).not.toContain('Severity')
   })
@@ -325,7 +338,7 @@ describe('A19 severity filter and A24 auto-fixable toggle — narrow, never hide
     expect(c.querySelector('.col-auto')).toBeNull()
     expect(c.querySelector('.col-person')).toBeNull()
     expect(order(c)).toContain('board.pdf')
-    expect(c.querySelector('.remediation-category-legend').closest('details').open).toBe(false)
+    expect(c.querySelector('.remediation-category-legend')).toBeNull()
   })
 
   it('offers an empty remediation category but does not let it be chosen', async () => {
@@ -361,7 +374,7 @@ describe('A11 progressive disclosure — a page can narrow what renders, never w
     // documentRows ranks by severity weight DESCENDING, so doc6 (7 findings) leads and doc0
     // (1 finding) trails. The page shows the five heaviest; "the other 2" are the two lightest —
     // doc1 (2 findings) and doc0 (1 finding) — summing to 3.
-    const c = await mount({ files: SEVEN })
+    const c = await mount({ files: SEVEN, scrollAll: false })
     await act(async () => { btn(c, /^All /).click() })
     expect(rowsOf(c)).toHaveLength(5)
     expect(order(c)).toEqual(['doc6.docx', 'doc5.docx', 'doc4.docx', 'doc3.docx', 'doc2.docx'])
@@ -370,7 +383,7 @@ describe('A11 progressive disclosure — a page can narrow what renders, never w
   })
 
   it('reveals every row on demand, and the page-hidden line disappears', async () => {
-    const c = await mount({ files: SEVEN })
+    const c = await mount({ files: SEVEN, scrollAll: false })
     await act(async () => { btn(c, /^All /).click() })
     await act(async () => { btn(c, /^Show the other/).click() })
     expect(rowsOf(c)).toHaveLength(7)
@@ -378,7 +391,7 @@ describe('A11 progressive disclosure — a page can narrow what renders, never w
   })
 
   it('does not truncate a set that already fits on one page', async () => {
-    const c = await mount({ files: SEVEN.slice(0, 5) })
+    const c = await mount({ files: SEVEN.slice(0, 5), scrollAll: false })
     await act(async () => { btn(c, /^All /).click() })
     expect(rowsOf(c)).toHaveLength(5)
     expect(c.textContent).not.toMatch(/Show the other/)
@@ -552,4 +565,29 @@ it('labels the screenshot category total as 23 findings and keeps change records
   ] })
   expect(c.textContent).toContain('23 assessed findings across the document categories')
   expect(c.textContent).toContain('Change records are separate and are not added to findings')
+})
+
+it('explains category totals on hover and clears a selected pill without an All button', async () => {
+ const c = await mount({files:ESTATE})
+ expect(c.textContent).not.toContain('All remediation categories')
+ const filters = [...c.querySelectorAll('.remediation-category-filter')]
+ expect(filters).toHaveLength(9)
+ for (const button of filters) {
+  expect(button.title.length).toBeGreaterThan(75)
+  expect(button.getAttribute('aria-description')).toBe(button.title)
+ }
+ const auto = filters.find(b => b.textContent.startsWith('Auto'))
+ const before = rowsOf(c).length
+ await act(async () => auto.click())
+ expect(auto.getAttribute('aria-pressed')).toBe('true')
+ await act(async () => auto.click())
+ expect(auto.getAttribute('aria-pressed')).toBe('false')
+ expect(rowsOf(c)).toHaveLength(before)
+})
+
+it('deliberately retires the legend mount while retaining its component for restoration', () => {
+ expect(readFileSync('src/RemediationCategoryPill.jsx','utf8')).toContain('export function RemediationCategoryLegend')
+ for (const name of readdirSync('src').filter(name => name.endsWith('.jsx') && !name.includes('.test.'))) {
+  expect(readFileSync(`src/${name}`, 'utf8'), name).not.toContain('<RemediationCategoryLegend')
+ }
 })

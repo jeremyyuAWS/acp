@@ -3,6 +3,7 @@ import RemediationCategoryPill from './RemediationCategoryPill.jsx'
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import AssessWorklist from './AssessWorklist.jsx'
+import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import RemediationFileDetail from './RemediationFileDetail.jsx'
 import { documentRows } from './assessMetrics.js'
 import { getFileRemediationDiffs, getScanRemediationDiffs } from './api.js'
@@ -14,6 +15,8 @@ import { getFindingDispositions, listHitlQueue, getReleaseStatus, getSourceStatu
 import { changeCategory } from './remediationCategories.js'
 
 export default function RemediationLiveDocuments({ scanId, files, cap, assessment, fixes: suppliedFixes, fixTotal: suppliedTotal, refreshKey, snapshot, events = [], connected, progressDocuments, progressHostId = null, onShowDocuments }) {
+  const search = useSearchFilter()
+  const facets = [{ key: 'type', label: 'file type', get: row => row.file.split('.').pop().toUpperCase() }]
   const [progressHost, setProgressHost] = useState(null)
   useLayoutEffect(() => {
     const host = progressHostId ? document.getElementById(progressHostId) : null
@@ -42,7 +45,7 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
   const material = materialKey(scanId, snapshot, events)
   const [confirmedRefresh, setConfirmedRefresh] = useState(0)
   useEffect(() => {
-    setLiveEvidence(null); setScanEvidence(null); setProgressFilter(null); setOutcomeFilter(null); signatures.current = null; setChanged([]); setAnnouncement('')
+    setLiveEvidence(null); setScanEvidence(null); setProgressFilter(null); setOutcomeFilter(null); signatures.current = null; setChanged([]); setAnnouncement(''); search.clear()
   }, [scanId, snapshot?.batch_id])
   useEffect(() => {
     if (!liveMode || !scanId) return
@@ -105,7 +108,8 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
   })
   const progressFiles = new Set(effectiveProgress.filter(document => !progressFilter || document.progressState === progressFilter).map(document => document.file))
   const fallbackFiles = progressFilter ? files.filter(file => progressFiles.has(file.file)) : files
-  const visibleDocuments = (currentDocuments || []).filter(row => (!outcomeFilter || row.liveCounts?.[outcomeFilter] > 0) && (!progressFilter || effectiveProgress.some(document => document.file === row.file && document.progressState === progressFilter)))
+  const searchScope = (currentDocuments || []).filter(row => (!outcomeFilter || row.liveCounts?.[outcomeFilter] > 0) && (!progressFilter || effectiveProgress.some(document => document.file === row.file && document.progressState === progressFilter)))
+  const visibleDocuments = searchScope.filter(matchesFilters(search, facets, row => row.file))
   const signature = JSON.stringify(currentDocuments?.map(r => [r.file, r.liveCounts, r.reconciliation]) || [])
   useEffect(() => {
     if (!currentDocuments) return
@@ -140,12 +144,13 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
         </button>)}
       </div>
       <p className="muted">{visibleDocuments.length} of {currentDocuments.length} documents shown · outcome counts cover reconciled documents in this view.</p>
-      <div className="document-findings-scroll" role="region" aria-label="Document findings table" tabIndex={0}><table className="live-document-table document-findings-table"><thead><tr><th scope="col">Document</th><th scope="col" className="findings-criteria-heading">WCAG criteria <br />with issues</th><th scope="col" className="findings-total-heading">Total <br />findings</th><th scope="col">Remediation categories</th><th scope="col"><span className="vh">Details</span></th></tr></thead>
+      <SearchFilterBar ctl={search} items={searchScope} facets={facets} noun="documents" />
+      <div className="document-findings-scroll document-findings-scroll-all" role="region" aria-label="Document findings table" tabIndex={0}><table className="live-document-table document-findings-table"><thead><tr><th scope="col">Document</th><th scope="col" className="findings-criteria-heading">WCAG criteria <br />with issues</th><th scope="col" className="findings-total-heading">Total <br />findings</th><th scope="col">Remediation categories</th><th scope="col"><span className="vh">Details</span></th></tr></thead>
         <tbody>{visibleDocuments.map(row => <tr key={row.file} className={changed.includes(row.file) ? 'live-document-changed' : undefined}>
           <th scope="row">{row.file}</th><td>{new Set(row.findings.map(f => f.sc)).size}</td><td>{row.totalFindings}</td><td>{row.reconciliation && <span role="status">Reconciling · {row.reconciliation.recorded} recorded / {row.reconciliation.expected ?? "unknown"} assessed. {row.reconciliation.reason}</span>}<div className="live-document-categories">{Object.entries(row.liveCounts || {}).map(([category, count]) =>
             ['remaining','excluded','superseded','approved'].includes(category) ? <span key={category}>{({ remaining:'Remaining', excluded:'Excluded', superseded:'Superseded', approved:'Approved · awaiting application' })[category]} <strong>{count}</strong></span>
             : <RemediationCategoryPill key={category} category={category} count={count} />)}</div></td>
-          <td><button type="button" onClick={() => { opener.current = document.activeElement; setSelected(row.file) }}>View fixes</button></td>
+          <td><button type="button" className="ghost small" onClick={() => { opener.current = document.activeElement; setSelected(row.file) }}>View fixes</button></td>
         </tr>)}</tbody>
       </table></div>
     </section> : <AssessWorklist changeRows={scopedFixes.map(fix => ({ ...fix, category: changeCategory(fix) }))} files={fallbackFiles} cap={cap} assessment={assessment} initialFilter="all" openLabel="View fixes"

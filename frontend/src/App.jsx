@@ -1,4 +1,3 @@
-import { RemediationActivityPanel } from './RemediationOpsPanel.jsx'
 import { reviewBadgeTitle } from './remediationCountSummary.js'
 import { prepareWorkflowEntry } from './workflowEntry.js'
 import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
@@ -2271,11 +2270,6 @@ export default function App() {
         assessmentFindings={assessed && resultsReady ? { scanId: run?.id, rows: assessNavRows, total: assessNavRows.reduce((sum, row) => sum + row.totalFindings, 0) } : null}
         activeStage={view === 'publish' ? 'release'
           : ['discover', 'assess', 'remediate'].includes(view) ? view : null}
-        stageAfter={{remediate: view === 'remediate' && isVisible(access, 'remediate')
-          && remRun.snapshot?.scan_id === canonicalScanId ? <RemediationActivityPanel
-            snapshot={remRun.snapshot} events={remRun.events} connected={remRun.connected}
-            receivedAt={remRun.receivedAt} activityStatus={remRun.activityStatus}
-            updateMode={remRun.connected ? 'live' : 'polling'} /> : null}}
         stageDetails={{
           discover: canonicalStage?.stage === 'discover' && busy && progress
             && (!canonicalScanId || liveScanId === canonicalScanId) ? (

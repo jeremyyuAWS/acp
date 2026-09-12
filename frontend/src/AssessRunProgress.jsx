@@ -385,7 +385,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
 
             {documentActivity}
 
-            <details open={!isFinished} className="assess-live-details"
+            <details className="assess-live-details"
                      style={{ borderTop: '1px solid var(--line,#e4e8ec)', marginTop: 14 }}>
               <summary style={{ cursor: 'pointer', padding: '10px 0 4px', fontSize: 12.5,
                                 fontWeight: 650, color: 'var(--ink)' }}>
