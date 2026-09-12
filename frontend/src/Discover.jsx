@@ -1178,17 +1178,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
             <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, proposes a classification &amp; a lifecycle action — you confirm or override{lockedCount ? <> · <span className="lockwarn">🔒 {lockedCount} could not be opened (password-protected / unsupported)</span></> : null}</div>
           </div>
         )}
-        {/* Gated on the SharePoint token for the same reason the Drive button is gated on its
-            own: offering a picker that cannot authenticate produces an error where a missing
-            button would have produced an obvious next step (connect the source). */}
-        {hasSPToken && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <button className="ghost" disabled={busy} onClick={() => setShowSites(true)}
-                    title="Start a new SharePoint scan — every document library on each selected site is scanned">
-              Start new SharePoint scan…
-            </button>
-          </div>
-        )}
+        {/* Discover's new-scan entry is retired. Start scans from Sources;
+            the site-picker implementation below is retained for restoration. */}
       </div>
 
       {/* ONE site travels as `folder`, which is what the backend reads it as — _list treats
