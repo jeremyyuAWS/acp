@@ -240,6 +240,26 @@ def build_run_impact(store, scan_id, owner, policy=None, scope=None):
             result['capabilities'].update(execute=False, reason='The approved generation models are unavailable in current settings.')
     if selected['ai'] > 1:
         result['capabilities'].update(execute=False, reason=CAPABILITIES['ai_automatic_reason'])
+    if (selected.get('document_wide_model_profile') == 'native-pdf-quality.v1'
+            and any(str(f.get('file', '')).lower().endswith('.pdf') for f in files)):
+        from types import SimpleNamespace
+        from native_pdf_quality import configured_native_pdf_generator
+        from llm_waterfall_provider import dispatch_endpoint
+        # Same current governance, credentials and expiring model checks as dispatch.
+        # This creates a generator only: it never sends a probe or reserves money.
+        def no_transport(*args, **kwargs):
+            raise RuntimeError('Readiness preflight cannot call a provider')
+        try:
+            readiness = SimpleNamespace(policy=selected, enabled=result['capabilities']['ai_enabled'],
+                                        file=next(f['file'] for f in files if str(f.get('file', '')).lower().endswith('.pdf')))
+            generator = configured_native_pdf_generator(readiness, post=no_transport)
+            if any(not dispatch_endpoint(spec, generator.providers) for spec in generator.specs.values()):
+                raise ValueError('Native PDF provider endpoint unavailable')
+        except Exception:
+            result['capabilities'].update(execute=False, reason=(
+                'The PDF quality profile is not ready. An administrator must permit OpenAI and Anthropic '
+                'and configure their credentials, connections, and current GPT-4.1 / Sonnet 5 model settings. '
+                'Choose Document context to use the standard AI settings.'))
     result['scope'] = {'type': 'selected_files' if scope is not None else 'assessment', 'files': len(files)}
     result['assessment_gaps'] = {'files': sum(bool(f.get('complete') is not True or f.get('blocked')) for f in files)}
     if hasattr(store, 'remediation_status'):
