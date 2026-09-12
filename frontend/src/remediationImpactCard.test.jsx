@@ -490,6 +490,84 @@ it.each(['any', 'local'])('automatic release previews and submits AI application
   expect(getRemediationImpact.mock.calls.at(-1)[1].auto_approve_ai).toBe(false)
 })
 
+it.each(['Local + cloud models', 'Local models'])('settles automatic publishing with canonical review settings for %s', async modelChoice => {
+  const reviewDefaults = { enabled:false, mode:'review_all', minimum_reliability:null,
+    max_review_attempts:1, review_model:'strong', permitted_families:[], evaluation_versions:{} }
+  let reads = 0
+  getRemediationImpact.mockImplementation(async (_id, policy) => {
+    // Bound a broken polling cycle so the regression fails rather than hanging.
+    if (++reads > 8) throw new Error('Repeated identical plan requests')
+    const chosen = policy || { rule_based:2, ai:1, ai_budget_usd:'25.00' }
+    const canonical = { ...chosen, ...(chosen.ai_review ? {ai_review:{...reviewDefaults,...chosen.ai_review}} : {}),
+      ...(chosen.cloud_input_strategy === 'automatic' ? { ai_budget_usd:'25.00', document_wide_ai:true } : {}) }
+    return {...result(canonical),capabilities:{...result().capabilities,ai_budget:true}}
+  })
+  const onRun = vi.fn()
+  const scopeFiles = ['A.docx']
+  const props = {runId:'run-1',onRun,requireAnswers:true,scopeFiles,releaseAnswered:false}
+  const {container,root} = await mount(props)
+  const choice = text => [...container.querySelectorAll('label')].find(node => node.textContent.includes(text)).querySelector('input')
+  await act(async()=>choice('Apply rule-based fixes automatically').click())
+  await act(async()=>button(container,'Next').click())
+  await act(async()=>choice(modelChoice).click())
+  await act(async()=>button(container,'Next').click())
+  expect(button(container,'Approve plan and start').disabled).toBe(true)
+  await act(async()=>root.render(createElement(RemediationImpactCard,{...props,releaseAnswered:true,automaticRelease:true})))
+  const start = button(container,'Approve plan and start')
+  expect(start.disabled).toBe(false)
+  expect(reads).toBeLessThanOrEqual(5)
+  expect(onRun).not.toHaveBeenCalled()
+  const settledReads = reads
+  await act(async()=>root.render(createElement(RemediationImpactCard,{...props,releaseAnswered:true,automaticRelease:true})))
+  expect(reads).toBe(settledReads)
+  await act(async()=>start.click())
+  expect(onRun).toHaveBeenCalledOnce()
+  expect(onRun.mock.calls[0][0]).toMatchObject({rule_based:2,auto_approve_ai:true,ai_review:{enabled:false}})
+  expect(onRun.mock.calls[0][1].policy).toMatchObject(onRun.mock.calls[0][0])
+  expect(getRemediationImpact.mock.calls.at(-1)[2]).toEqual(scopeFiles)
+})
+
+it('preserves managed cloud budget omission when publishing is answered before the model preview returns', async () => {
+  let resolveCloud
+  const normalize = policy => ({...policy,ai_review:{enabled:false,mode:'review_all',minimum_reliability:null,
+    max_review_attempts:1,review_model:'strong',permitted_families:[],evaluation_versions:{},...policy.ai_review},
+    ...(policy.cloud_input_strategy === 'automatic' ? {ai_budget_usd:policy.ai_budget_usd ?? '25.00',document_wide_ai:true} : {})})
+  getRemediationImpact.mockImplementation((_id,policy) => {
+    const chosen = policy || {rule_based:2,ai:1,ai_budget_usd:'25.00'}
+    const response = {...result(normalize(chosen)),capabilities:{...result().capabilities,ai_budget:true}}
+    if (chosen.cloud_input_strategy === 'automatic' && !chosen.auto_approve_ai && !resolveCloud) {
+      return new Promise(resolve => {resolveCloud=()=>resolve(response)})
+    }
+    return Promise.resolve(response)
+  })
+  const onRun = vi.fn()
+  const props={runId:'run-1',onRun,requireAnswers:true,releaseAnswered:false,scopeFiles:['A.docx']}
+  const {container,root}=await mount(props)
+  const choice = text => [...container.querySelectorAll('label')].find(node=>node.textContent.includes(text)).querySelector('input')
+  await act(async()=>choice('Apply rule-based fixes automatically').click())
+  await act(async()=>button(container,'Next').click())
+  await act(async()=>choice('Local + cloud models').click())
+  await act(async()=>button(container,'Next').click())
+  await act(async()=>root.render(createElement(RemediationImpactCard,{...props,releaseAnswered:true,automaticRelease:true})))
+  const automaticRequests=getRemediationImpact.mock.calls.map(call=>call[1]).filter(policy=>policy?.cloud_input_strategy==='automatic')
+  expect(automaticRequests.every(policy=>policy.ai_budget_usd===undefined || policy.ai_budget_usd==='25.00')).toBe(true)
+  const reads=getRemediationImpact.mock.calls.length
+  await act(async()=>resolveCloud())
+  expect(getRemediationImpact).toHaveBeenCalledTimes(reads)
+  expect(button(container,'Approve plan and start').disabled).toBe(false)
+  expect(onRun).not.toHaveBeenCalled()
+  await act(async()=>button(container,'Approve plan and start').click())
+  expect(onRun.mock.calls[0][0]).toMatchObject({ai_budget_usd:'25.00',auto_approve_ai:true,cloud_input_strategy:'automatic'})
+})
+
+it('explains an incomplete assessment and keeps starting disabled', async()=>{
+  getRemediationImpact.mockImplementation(async (_id,policy)=>({...result(policy || undefined),integrity:{complete:false}}))
+  const onRun=vi.fn()
+  const {container}=await mount({onRun,requireAnswers:true})
+  expect(container.textContent).toContain('The assessment preview is incomplete. Refresh or reassess the selected documents.')
+  expect(onRun).not.toHaveBeenCalled()
+})
+
 
 it.each(['Local models'])('clears document-wide consent when choosing %s', async label => {
   const initial = { rule_based: 2, ai: 1, ai_zone: 'any', ai_budget_usd: '1.00', document_wide_ai: true, document_wide_input_mode: 'native_pdf', document_wide_model_profile: 'native-pdf-quality.v1' }

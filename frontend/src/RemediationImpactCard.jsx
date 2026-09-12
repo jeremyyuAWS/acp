@@ -124,7 +124,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const reviewDefault = data?.capabilities?.ai_review?.review_supported === true
     && basePolicy.ai > 0 && basePolicy.ai_zone !== 'local' && basePolicy.ai_review === undefined
   const selected = {
-    ...(data?.capabilities?.ai_budget === true ? { ai_budget_usd: '0.00' } : {}),
+    ...(data?.capabilities?.ai_budget === true && basePolicy.cloud_input_strategy !== 'automatic' ? { ai_budget_usd: '0.00' } : {}),
     ...basePolicy,
     ...(reviewDefault ? { ai_review: { enabled: true, mode: 'review_all', minimum_reliability: null,
       max_review_attempts: 1, review_model: 'strong', permitted_families: [], evaluation_versions: {} } } : {}),
@@ -145,7 +145,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     if (previousRelease.current && !automaticRelease) setPolicy(current => ({ ...(current || selected), ...beforeRelease.current, auto_approve_ai: false }))
     previousRelease.current = automaticRelease
   }, [automaticRelease, runId])
-  const releasePolicy = automaticRelease ? { ...selected, rule_based: 2, auto_approve_ai: selected.ai === 1, ai_review: { enabled: false } } : selected
+  const releasePolicy = automaticRelease ? { ...selected, rule_based: 2, auto_approve_ai: selected.ai === 1, ai_review: { ...selected.ai_review, enabled: false } } : selected
   const releasePolicyPending = !!data && automaticRelease && JSON.stringify(releasePolicy) !== JSON.stringify(selected)
   useEffect(() => {
     if (releasePolicyPending) setPolicy(releasePolicy)
@@ -161,6 +161,10 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   })
   const budgetValid = validBudget(selected)
   const questionsComplete = !requireAnswers || (budgetValid && answers.rule_based && answers.tools && releaseAnswered)
+  const unavailableReason = chainProblem || (!data ? 'The assessment preview has not loaded yet.'
+    : estimateResponse?.key !== estimateKey || releasePolicyPending || automaticDefault ? 'Waiting for a preview of your current selections.'
+      : data.integrity?.complete !== true ? 'The assessment preview is incomplete. Refresh or reassess the selected documents.'
+        : 'The current preview could not be confirmed. Try refreshing the plan.')
   const change = (key, value) => {
     setAnswers(current => ({ ...current, [key]: true, ...(['ai', 'ai_mode'].includes(key) ? { tools: true } : {}) }))
     if (key === 'document_wide_ai' && value === true) {
@@ -286,7 +290,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       reviewAdministratorFloor={data?.capabilities?.ai_review?.administrator_floor ?? null} />
     <div hidden={requireAnswers && step !== 2}>
     {releaseOption}
-    {requireAnswers && (loading || error || !ready) && <p role="status">{loading ? 'Updating plan…' : error ? `Preview unavailable. ${error}` : 'Plan unavailable. Check your selections.'}</p>}
+    {requireAnswers && (loading || error || !ready) && <p role="status">{loading ? 'Updating plan…' : error ? `Preview unavailable. ${error}` : `Plan unavailable. ${unavailableReason}`}</p>}
     {requireAnswers && !budgetValid && <p role="alert">AI configuration is unavailable. Check application settings.</p>}
     {!questionsComplete && <p role="status">Answer the changes, tools, and publishing questions to start.</p>}
     {!requireAnswers && <RemediationEstimateDisclosure estimate={estimateResponse?.key === estimateKey ? estimateResponse.value : null}

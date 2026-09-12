@@ -396,6 +396,16 @@ def assign_person_role(email: str, body: dict, request: Request):
     tenant = _tenant()
     target = (email or "").strip().lower()
     role_id = (body.get("role_id") or "").strip()
+    platform_role = body.get('platform_role') if 'platform_role' in body else None
+    if 'platform_role' in body:
+        if platform_role not in ('user', 'admin'):
+            raise HTTPException(422, 'platform_role must be user or admin')
+        from routes.system import _require_owner
+        _require_owner(request)
+        if target == core.OWNER_EMAIL:
+            raise HTTPException(409, 'the owner cannot be changed')
+        if platform_role == 'user' and target in core.ADMIN_EMAILS:
+            raise HTTPException(409, 'deployment-configured platform administration cannot be removed here')
     if not target or "@" not in target:
         raise HTTPException(400, "a valid email is required")
 
@@ -424,8 +434,18 @@ def assign_person_role(email: str, body: dict, request: Request):
                 raise HTTPException(403, "you cannot assign a role holding permissions you do not "
                                          "hold yourself: " + ", ".join(excess))
 
-    _guard_last_role_manager(tenant, target, role_id)
-    wr.assign_role(core.store, email=target, role_id=role_id or None, actor=actor or "admin")
+    with core.store.transaction():
+        _guard_last_role_manager(tenant, target, role_id)
+        wr.assign_role(core.store, email=target, role_id=role_id or None, actor=actor or "admin")
+        if platform_role is not None:
+            current = core.person_with_access(target)
+            admins = [email for email in core.store.get_admins() if email != target]
+            if platform_role == 'admin' and current.get('status') != 'suspended':
+                admins.append(target)
+            core.store.set_admins(admins)
+            core.store.upsert_person({'email': target, 'role': platform_role})
+            core.store.log_decision(actor or 'admin', 'settings.person.platform_role',
+                                    detail=f'{target} · {platform_role}')
     # After `wr.assign_role` the record exists whether or not it did before, so this reads the
     # table directly — it is the row that was just written, not a membership question.
     return {"person": next(p for p in core.store.get_people() if p["email"] == target),

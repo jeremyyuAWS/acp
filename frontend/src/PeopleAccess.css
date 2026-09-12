@@ -1,0 +1,10 @@
+.people-row.people-unified-role,
+.people-head.people-unified-role {
+  grid-template-columns: minmax(150px, 1.2fr) 104px minmax(190px, 1fr) 178px;
+}
+.people-unified-role .people-role-cell small { display: block; margin-top: 5px; }
+@media (max-width: 700px) {
+  .people-row.people-unified-role { grid-template-columns: minmax(0, 1fr) auto; }
+  .people-head.people-unified-role { display: none; }
+  .people-unified-role .people-row-actions { justify-content: flex-end; }
+}

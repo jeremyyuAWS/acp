@@ -485,14 +485,13 @@ it('Release reconnect resumes the exact saved authorization without publishing o
  expect(button(c,'Reconnect Google Drive and resume')).toBeUndefined()
 })
 
- it('keeps assessment details secondary to the one-click publishing path', async () => {
+ it('retires redundant assessment details from the publishing path', async () => {
   const c = await mount({ run: { id: 'simpler-release', status: 'completed' }, files: [verified('ready.pdf', { corrected_sha256: 'current' })] })
   const details = [...c.querySelectorAll('details')].find(el => el.querySelector(':scope > summary')?.textContent === 'Assessment findings and saved changes (optional)')
-  expect(details.open).toBe(false)
-  expect(details.querySelector('.remediation-live-documents')).not.toBeNull()
+  expect(details).toBeUndefined()
+  expect(c.querySelector('.remediation-live-documents')).toBeNull()
   const publish = button(c, 'Publish ready files (1)')
   expect(publish.closest('details')).toBeNull()
-  expect(publish.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   await click(publish)
   expect(publishAllFiles).toHaveBeenCalledTimes(1)
   expect(c.querySelector('.release-confirm')).toBeNull()

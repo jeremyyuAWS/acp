@@ -125,14 +125,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
         </label>)}
         {!files.length && <p>No files are selected in this scope.</p>}
       </div>
-      {!allDelivered && files.some(file => !readyNames.has(file.file)) && <details className="release-unavailable-files">
-        <summary>{files.filter(file => !readyNames.has(file.file)).length} other files · publishing requirements</summary>
-        <p>These files are outside the current selection. Their publishing requirements are separate from accessibility findings.</p>
-        {files.filter(file => !readyNames.has(file.file)).map(file => <div className={`release-quick-file${fileStates[file.file]?.status === 'released' ? ' release-quick-file--delivered' : ''}`} key={file.file}>
-          <span>{file.file}</span><small>{fileStates[file.file]?.label || 'Not available for a new publish'}</small>
-          <span className="release-quick-file-reason">{fileStates[file.file]?.reason || 'No publishable copy is available yet.'}</span>
-        </div>)}
-      </details>}
+
     </section>
     <section className="release-quick-step" aria-labelledby={`${reasonId}-destination`}>
       <h4 id={`${reasonId}-destination`}><span className="release-step-number">2</span> {allDelivered ? 'Published folder' : 'Confirm destination'}</h4>
@@ -191,4 +184,16 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     </div>}
     {error && <p role="alert">{error} <button className="linklike" onClick={() => setRefresh(n => n + 1)}>Refresh eligibility and status</button></p>}
   </section>
+}
+
+// Retired from the publish picker; per-file outcomes remain in Release completion details.
+export function RetiredReleaseUnavailableFiles({files = [], readyNames = new Set(), fileStates = {}, allDelivered = false}) {
+  return (!allDelivered && files.some(file => !readyNames.has(file.file)) && <details className="release-unavailable-files">
+        <summary>{files.filter(file => !readyNames.has(file.file)).length} other files · publishing requirements</summary>
+        <p>These files are outside the current selection. Their publishing requirements are separate from accessibility findings.</p>
+        {files.filter(file => !readyNames.has(file.file)).map(file => <div className={`release-quick-file${fileStates[file.file]?.status === 'released' ? ' release-quick-file--delivered' : ''}`} key={file.file}>
+          <span>{file.file}</span><small>{fileStates[file.file]?.label || 'Not available for a new publish'}</small>
+          <span className="release-quick-file-reason">{fileStates[file.file]?.reason || 'No publishable copy is available yet.'}</span>
+        </div>)}
+      </details>)
 }

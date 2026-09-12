@@ -1,11 +1,15 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import './PeopleAccess.css'
 import { addPerson, getPeople, removePerson, updatePerson, getWorkspaceRoles, assignWorkspaceRole, roleImpact } from './api.js'
 
 // LABELS ONLY. The colours moved to `.people-badge.is-<status>` in styles.css so they can be the
 // app's semantic tokens (--success-*/--warn-*/--info-*/--error-*) rather than hex literals. Those
 // tokens exist for exactly these states, and `failed` was already reaching for one while the rest
 // were hardcoded — which is what a table looks like after it has drifted rather than been chosen.
+const isPlatformAdminRole = role => role?.id === 'platform-admin' && role?.is_system === true
+const workspaceRoleLabel = role => role?.name === 'Platform Admin' && !isPlatformAdminRole(role) ? 'Platform Admin (custom role)' : role?.name
+
 const statusCopy = {
   active: 'Active',
   access_ready: 'Access ready',
@@ -95,7 +99,7 @@ const Overlay = ({ children }) =>
  * after a real assignment every person object IS new and the row re-renders, which is correct —
  * that is the truth arriving.
  */
-const PersonRow = memo(function PersonRow({ person, roles, canManage, onChange, onChangeRole, onRemove }) {
+const RetiredPersonRow = memo(function RetiredPersonRow({ person, roles, canManage, onChange, onChangeRole, onRemove }) {
   return <div className={roles.length > 0 ? 'people-row has-role-column' : 'people-row'}>
     <div><b className="people-email">{person.email}</b><div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{person.provider === 'microsoft' ? 'Microsoft · SharePoint / OneDrive' : person.provider === 'google' ? 'Google · Drive' : person.role === 'owner' ? 'Workspace owner' : 'Provider not recorded'}</div></div>
     <Badge status={person.status} />
@@ -128,6 +132,40 @@ const PersonRow = memo(function PersonRow({ person, roles, canManage, onChange, 
   </div>
 })
 
+// The previous two-column row remains above for reversibility; this is the live row.
+const PersonRow = memo(function PersonRow({ person, roles, canManage, onChange, onChangeRole, onRemove }) {
+  const platformRole = roles.find(isPlatformAdminRole)
+  const assignedRole = roles.find(role=>role.id===person.workspace_role_id)
+  const admin = person.platform_role_admin === true || person.role === 'admin'
+  const mixed = admin && !isPlatformAdminRole(assignedRole)
+  const selected = roles.length ? mixed ? `current-admin:${person.workspace_role_id || ''}` : person.workspace_role_id || '' : person.role || 'user'
+  return <div className="people-row people-unified-role">
+    <div><b className="people-email">{person.email}</b><div className="muted" style={{fontSize:12,marginTop:3}}>{person.provider === 'microsoft' ? 'Microsoft · SharePoint / OneDrive' : person.provider === 'google' ? 'Google · Drive' : person.protected ? 'Workspace owner' : 'Provider not recorded'}</div></div>
+    <Badge status={person.status} />
+    <div className="people-role-cell">
+      {person.protected ? <span style={{fontSize:12}}>Owner — full access</span> : (canManage || roles.length > 0) ?
+        <select className={`people-select${!person.workspace_role_id && !admin ? ' is-unassigned' : ''}`}
+          aria-label={`Workspace role for ${person.email}`} value={selected}
+          onChange={event => roles.length ? onChangeRole(person,event.target.value) : onChange(person,{role:event.target.value})}>
+          {roles.length ? <>
+            <option value="">No role</option>
+            {platformRole && <option value="platform-admin" disabled={!canManage}>Platform Admin</option>}
+            {mixed && <option value={selected}>Platform Admin + {workspaceRoleLabel(assignedRole) || (person.workspace_role_id ? 'assigned workspace role' : 'No role')}</option>}
+            {roles.filter(r=>!isPlatformAdminRole(r)).map(r=><option key={r.id} value={r.id}>{workspaceRoleLabel(r)}</option>)}
+            {!mixed && person.workspace_role_id && !roles.some(r=>r.id===person.workspace_role_id) && <option value={person.workspace_role_id}>Assigned role unavailable</option>}
+          </> : <><option value="user">User</option><option value="admin">Platform Admin</option></>}
+        </select> : <span style={{fontSize:12}}>{person.role === 'admin' ? 'Platform Admin' : 'User'}</span>}
+      {!roles.length && person.workspace_role_id && !person.protected && <small className="muted">Assigned workspace role: {person.workspace_role_id}. The role catalog is unavailable.</small>}
+      {mixed && !person.protected && <small className="muted">{person.platform_role_locked ? 'Platform administration is configured by the deployment and remains enabled.' : 'Platform administration and the shown workspace role are both assigned.'}</small>}
+    </div>
+    <div className="people-row-actions">
+      {person.status === 'setup_required' && <a href="https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserManagementMenuBlade/~/GuestUsers" target="_blank" rel="noreferrer">Invite in Entra ↗</a>}
+      {person.failure && <span title={person.failure} style={{fontSize:12,color:'var(--error-fg-strong)'}}>Invitation needs attention</span>}
+      {canManage && !person.protected && <><button className="ghost small" onClick={()=>onChange(person,{status:person.status==='suspended'?'access_ready':'suspended'})}>{person.status==='suspended'?'Restore':'Suspend'}</button><button className="ghost small" onClick={()=>onRemove(person)}>Remove</button></>}
+    </div>
+  </div>
+})
+
 export default function PeopleAccess() {
   const [data, setData] = useState({ people: [], domains: [], invite_enabled: false, can_manage: false })
   const [open, setOpen] = useState(false)
@@ -142,6 +180,10 @@ export default function PeopleAccess() {
   const addButtonRef = useRef(null)
 
   const [roles, setRoles] = useState([])
+  const ownerCanManage = useRef(false)
+  ownerCanManage.current = data.can_manage === true
+  const roleCatalog = useRef(roles)
+  roleCatalog.current = roles
   // The rollout rung, which GET /admin/roles has always returned and this screen has
   // always thrown away. See the note it feeds, below the heading.
   const [enforced, setEnforced] = useState(true)
@@ -198,10 +240,14 @@ export default function PeopleAccess() {
   const showRole = useCallback((email, roleId) => showPerson(email, { workspace_role_id: roleId || null }), [showPerson])
 
   const changeRole = useCallback((person, roleId) => {
+    if (person.protected || roleId.startsWith('current-admin:')) return
     const previousRoleId = person.workspace_role_id || ''
-    if (roleId === previousRoleId) return
-    setError('')
-    showRole(person.email, roleId)
+    const previousPlatformRole = person.platform_role_admin === true || person.role === 'admin' ? 'admin' : 'user'
+    const platformRole = ownerCanManage.current && !person.platform_role_locked ? roleCatalog.current.some(role=>role.id===roleId && isPlatformAdminRole(role)) ? 'admin' : 'user' : previousPlatformRole
+    const changesPlatform = platformRole !== previousPlatformRole
+    if (roleId === previousRoleId && !changesPlatform) return
+    setError(''); setRoleToast(null)
+    showPerson(person.email, {workspace_role_id:roleId || null, ...(changesPlatform ? {role:platformRole, platform_role_admin:platformRole === 'admin'} : {})})
     // THE IMPACT IS ASKED FOR BEFORE THE ASSIGNMENT LANDS, and the order is load-bearing: it is
     // the difference between the role they hold NOW and the one they are moving to. Asked
     // afterwards, the server would be comparing the new role with itself and would answer
@@ -211,20 +257,20 @@ export default function PeopleAccess() {
     // A failed preview still must not block the write: the assignment is the operation, the
     // impact is commentary. `.catch(() => null)` degrades it to "could not be previewed".
     roleImpact(person.email, roleId).catch(() => null)
-      .then((impact) => assignWorkspaceRole(person.email, roleId).then(() => impact))
-      .then((impact) => { setRoleToast({ at: Date.now(), person, roleId, previousRoleId, impact }); load() })
+      .then((impact) => (changesPlatform ? assignWorkspaceRole(person.email, roleId, platformRole) : assignWorkspaceRole(person.email, roleId)).then(() => impact))
+      .then((impact) => { setRoleToast({ at: Date.now(), person, roleId, previousRoleId, previousPlatformRole, platformRole, changesPlatform, impact }); load() })
       // load() on failure too — the optimistic paint above has to be undone by the truth rather
       // than by guessing what the server kept.
       .catch((e) => { setRoleToast(null); setError(e.message || 'Could not change this role.'); load() })
-  }, [showRole, load])
+  }, [showPerson, load])
 
   const undoRoleChange = () => {
     if (!roleToast) return
-    const { person, previousRoleId } = roleToast
+    const { person, previousRoleId, previousPlatformRole, changesPlatform } = roleToast
     setRoleToast(null)
     setError('')
-    showRole(person.email, previousRoleId)
-    assignWorkspaceRole(person.email, previousRoleId)
+    showPerson(person.email, {workspace_role_id:previousRoleId || null, ...(changesPlatform ? {role:previousPlatformRole,platform_role_admin:previousPlatformRole === 'admin'} : {})})
+    ;(changesPlatform ? assignWorkspaceRole(person.email, previousRoleId, previousPlatformRole) : assignWorkspaceRole(person.email, previousRoleId))
       .then(() => load())
       .catch((e) => { setError(e.message || 'Could not undo this change.'); load() })
   }
@@ -302,6 +348,7 @@ export default function PeopleAccess() {
       <div><h3 id="people-title" style={{ margin: 0 }}>People</h3><div className="muted" style={{ fontSize: 13, marginTop: 3 }}>{active} with access{pending ? ` · ${pending} need attention` : ''}</div></div>
       {data.can_manage && <button ref={addButtonRef} onClick={() => setOpen(true)}>+ Add people</button>}
     </div>
+    {data.can_manage && roles.length > 0 && <p className="muted" style={{fontSize:12}}>Platform Admin includes platform administration. Other roles use their configured workspace permissions.</p>}
     {data.domains?.length > 0 && <div role="note" className="people-domain-note">
       <b>Domain-wide access is on.</b> Anyone at {data.domains.map((d) => `@${d}`).join(', ')} can sign in even if they are not listed here.
     </div>}
@@ -343,11 +390,10 @@ export default function PeopleAccess() {
 
           Only when there are people: headings over an empty state label nothing. */}
       {data.people.length > 0 && (
-        <div className={roles.length > 0 ? 'people-head has-role-column' : 'people-head'} aria-hidden="true">
+        <div className="people-head people-unified-role" aria-hidden="true">
           <span>Person</span>
           <span>Status</span>
-          <span>Access level</span>
-          {roles.length > 0 && <span>Workspace role</span>}
+          <span>Workspace role</span>
           <span />
         </div>
       )}
@@ -379,8 +425,9 @@ export default function PeopleAccess() {
                   onClick={() => setRoleToast(null)}>×</button>
         </div>
         <p className="people-toast-line">
-          {roleToast.person.email} is now <b>{roles.find((r) => r.id === roleToast.roleId)?.name || 'unassigned'}</b>.
+          {roleToast.person.email} is now <b>{roles.find((r) => r.id === roleToast.roleId)?.name || (roleToast.roleId === 'platform-admin' ? 'Platform Admin' : 'No role')}</b>.
         </p>
+        {roleToast.changesPlatform && <p className="people-toast-line">Platform administration {roleToast.platformRole === 'admin' ? 'enabled' : 'removed'}.</p>}
         {/* PAST TENSE, and that is not a nicety. The dialog said "they will lose"; by the time
             this is on screen they already have. Copy that still reads as a forecast invites an
             administrator to think there is something left to approve. */}

@@ -171,9 +171,9 @@ it('replaces the empty publish action with completion and the recorded folder li
   expect(v.button('All files published').disabled).toBe(true)
   expect(v.props.onReady).not.toHaveBeenCalled()
 })
-it('mutes only delivered files and keeps unfinished files selectable', async () => {
+it('keeps delivered copies in the receipt and ready copies selectable', async () => {
   const v = await mount({ files: [{ file: 'ready.pdf' }, { file: 'sent.pdf' }], fileStates: { 'sent.pdf': { status: 'released', label: 'Delivered' } }, providerLabel: 'Google Drive' })
-  expect(v.container.querySelectorAll('.release-quick-file--delivered')).toHaveLength(1)
+  expect(v.container.querySelectorAll('.release-quick-file--delivered')).toHaveLength(0)
   expect(v.container.textContent).toContain('1 file is already published.')
   expect(v.container.querySelector('.release-published-message a')).toBeNull()
   expect(v.container.textContent).toContain('folder link is not available yet')
@@ -201,12 +201,12 @@ it('reconnects Drive and resumes the saved manual authorization without approvin
  expect(api.authorizeReleaseContinuation).not.toHaveBeenCalled()
 })
 
- it('shows ready copies first and keeps requirements and extra approvals collapsed', async () => {
+ it('shows ready copies without the retired requirements section', async () => {
   const v = await mount({ fileStates: { 'manual.pdf': { label: 'No saved copy', reason: 'No saved corrected copy is available.' } } })
   expect([...v.container.querySelectorAll('[aria-label="Files to publish"] input')].map(input => input.getAttribute('aria-label'))).toEqual(['Publish ready.pdf'])
   const requirements = v.container.querySelector('.release-unavailable-files')
-  expect(requirements.open).toBe(false)
-  expect(requirements.textContent).toContain('No saved corrected copy is available.')
+  expect(requirements).toBeNull()
+  expect(v.container.textContent).not.toContain('other files · publishing requirements')
   const publish = v.button('Publish ready files')
   const approve = v.button('Approve eligible changes')
   expect(publish.closest('details')).toBeNull()

@@ -118,6 +118,9 @@ const EXPECTED_UNMOUNTED = [
   // Retired 2026-09-04: the oversized Found → Proposed → Verified tiles were replaced by the
   // readable Current / Proposed rows and a collapsed definition list. Kept per retirement policy.
   'RemediationTransform',
+  // Retired 2026-09-12: the owner removed the duplicate assessment section from Release.
+  // Kept for restoration; Assess and Remediate still show assessment details.
+  'RetiredReleaseAssessmentDetails',
   // Retired by explicit, frozen batch selection; historical live-view approval is unreachable.
   'RetiredVisibleBulkApproval',
   'RiskScore',
