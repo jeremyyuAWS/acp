@@ -242,3 +242,11 @@ it('shows admitted automatic checking as Processing while retaining manual human
  expect(container.querySelector('[aria-label="Review queues"]').textContent).toContain('Needs review2')
  expect(container.querySelector('[aria-label="Review queues"]').textContent).toContain('Completed0')
 })
+it('does not claim review decisions or verified fixes when only automatic checks are queued', async () => {
+ const policy={enabled:true,supported:true,run_id:'run',source_revision:'source'}
+ const proposal={...CONTRAST_APPLY,status:'pending',proposals:[{proposed_value:'#767676',source:'AI'}],_raw:{finding_count:1,proposal_snapshot_ids:['snapshot'],source_revision:'source',decision_version:0,auto_approval_status:'checking',auto_approval_run_id:'run',auto_approval_source_revision:'source'}}
+ await renderInbox({queue:[proposal],autoApprove:true,automaticApprovalPolicy:policy,initialTab:'review'})
+ expect(container.textContent).toContain('Automatic checks are queued.')
+ expect(container.textContent).not.toContain('Review decisions saved')
+ expect(container.textContent).not.toContain('All review items are complete')
+})

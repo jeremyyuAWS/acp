@@ -10,6 +10,10 @@ Word table-header repair recognizes explicitly disabled header flags. PowerPoint
 
 Both normal release and delivery-only retry verify destination bytes before treating an upload as successful. A delivery retry does not run remediation or verification again and does not replace the customer's original file.
 
+Before a new publication or corrected-copy package is prepared, ACP assesses the saved corrected candidate through the same canonical whole-file assessment path used by remediation. The candidate must match its authorized corrected SHA-256 and current record both before and after assessment. Approved but unwritten changes remain blockers. The original Assess baseline is not overwritten: release-specific evidence records the candidate hash, selected scope, remaining findings, skipped checks and any uncertainty.
+
+Strict publishing rejects remaining findings or an assessment that could not establish a trustworthy result. Explicit publishing with remaining issues preserves that fresh evidence and does not claim full verification. A malformed corrected copy is not an acceptable remaining-issues delivery. Successful delivery still verifies the provider's bytes against the assessed artifact identity. Native Office/PDF checker success and full WCAG compliance are not established by selected automated checks alone.
+
 Automatic Excel image-description writes preserve the actual drawing element name and namespace spelling, rather than writing the regex used to locate it. Authored XML-escaped title, caption and name values are decoded once before being written as descriptions. Real saved-workbook regression fixtures preserve the original source, cells, formulas and images and run the accessibility detectors on the corrected copy.
 
 ## Read-only saved-copy audit

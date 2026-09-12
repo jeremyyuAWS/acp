@@ -1,5 +1,6 @@
 """An isolated reproduction: filename reuse must not skip a newer corrected artifact."""
 import hashlib
+import pytest
 from test_synchronous_release_stage import _RouteStore, _request
 
 
@@ -324,3 +325,12 @@ def test_sharepoint_reuse_rechecks_approval_after_source_read(monkeypatch):
     result = scans.publish_files(SID, _request({"x-sp-token": "fixture"}), {"files": [FILE]})
     assert result["published"][0]["status"] == "failed"
     assert "Approval" in result["published"][0]["explanation"]
+
+
+@pytest.fixture(autouse=True)
+def _candidate_assessment_for_delivery_fixture(monkeypatch):
+    # These delivery fixtures use sentinel bytes, not Office/PDF documents. Real
+    # saved-byte scanner gates are exercised in test_release_candidate_assessment.
+    import release_candidate_assessment
+    monkeypatch.setattr(release_candidate_assessment, 'assess_candidate',
+                        lambda *args, **kwargs: {'fixture_assessment': True})

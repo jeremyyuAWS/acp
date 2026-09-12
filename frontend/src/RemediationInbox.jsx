@@ -867,8 +867,9 @@ export default function RemediationInbox({
   const matchingFindings = selected ? matchingOf(selected) : []
   const queueComplete = queue.length > 0 && queue.every((f) => isResolved(f, decisions))
   const automaticCheckingCount = queue.filter(row => row.automaticQueued).length
+  const automaticChecksOnly = automaticCheckingCount > 0 && !(counts['needs-review'] || counts.manual || counts.blocked)
   const reviewCompletion = automaticCheckingCount > 0 ? <><b style={{color:'var(--ink)'}}>Automatic checks are queued.</b><p>{automaticCheckingCount} awaiting automatic checks · {counts.completed || 0} completed. No fix is marked verified by this queue state.</p></> : counts['awaiting-validation'] > 0 ? <><b style={{color:'var(--ink)'}}>Review decisions saved. Changes are still processing.</b><p>{counts['awaiting-validation']} applying or awaiting verification · {counts.completed || 0} completed</p></> : <><b style={{color:'var(--ink)'}}>All review items are complete.</b><p>{prog.resolved} reviewed · {counts.completed || 0} completed</p></>
-  const emptyReviewState = queue.length === 0 || queueComplete
+  const emptyReviewState = queue.length === 0 || queueComplete || automaticChecksOnly
     ? <div>{reviewCompletion}</div>
     : <p style={{ marginTop: 8 }}>No items are available in {WORKFLOW_LABELS[tab] || 'Review'}. Choose another status from the inbox.</p>
 
@@ -1147,7 +1148,7 @@ export default function RemediationInbox({
           <CompletionDrain queue={queue} decisions={decisions} scanId={scanId} active={tab !== 'completed' && tab !== 'all'} />
           {visible.length === 0 ? (
             <div className="muted" style={{ padding: 16, fontSize: 13 }}>
-              {queue.length === 0 || queueComplete
+              {queue.length === 0 || queueComplete || automaticChecksOnly
                 ? <>{reviewCompletion}</>
                 : search.trim()
                 ? <>No findings match “{displayText(search.trim())}”. <button className="linklike" onClick={() => setSearch('')}>Clear search</button></>
@@ -1218,7 +1219,7 @@ export default function RemediationInbox({
         <button type="button" className="ghost" disabled={savingId != null}
                 onClick={() => { setBulkPreviewOpen(false); focusReviewRef.current = true; setNarrowPane('detail') }}>Return to individual review</button>
         <BatchReviewSelection
-          visible={batchScopeIds ? queue.filter(f => batchScopeIds.includes(f.id)) : queue}
+          visible={(batchScopeIds ? queue.filter(f => batchScopeIds.includes(f.id)) : queue).filter(row => !row.automaticQueued)}
           decisions={decisions} drafts={drafts}
           confirmRequest={confirmRunRequest} onConfirmRequestHandled={() => setConfirmRunRequest(0)} preparingProposals={preparingProposals} onOpenPlan={onOpenPlan}
           applyRequest={applyRunRequest} onApplyRequestHandled={() => setApplyRunRequest(0)}
