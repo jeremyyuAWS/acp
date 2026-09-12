@@ -1,3 +1,4 @@
+import { automaticReviewQueue } from './automaticReviewQueue.js'
 import { useMemo, useState, useEffect, useRef } from 'react'
 import {
   rowModel, laneOf, sortQueue, groupByDocument, nextUnresolvedId, progress, railColorOf,
@@ -166,7 +167,7 @@ function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
               In review
             </span>
           )}
-          <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{WORKFLOW_LABELS[workflowStatusOf(f, decisions)]}</span>
+          <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>{f.automaticQueued ? f.automaticQueueLabel || 'Queued for automatic checks' : WORKFLOW_LABELS[workflowStatusOf(f, decisions)]}</span>
         </span>
       </span>
     </button>
@@ -671,7 +672,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 }
 
 export default function RemediationInbox({
-  queue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false, legacyApprovalControls = false, autoApprove = null, onAutoApproveChange, autoApproveSaving = false, autoApproveError = null,
+  queue: suppliedQueue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false, legacyApprovalControls = false, autoApprove = null, automaticApprovalPolicy, onAutoApproveChange, autoApproveSaving = false, autoApproveError = null,
   initialSort = 'priority', initialTab = 'review', initialGroup = 'document', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
@@ -683,6 +684,7 @@ export default function RemediationInbox({
   // an empty selection means rather than this component guessing on its behalf.
   renderDetailExtra = null,
 }) {
+  const queue = useMemo(() => automaticReviewQueue(suppliedQueue, automaticApprovalPolicy, decisions), [suppliedQueue, automaticApprovalPolicy, decisions])
   const [selectedId, setSelectedId] = useState(null)
   const [tab, setTab] = useState(initialTab)
   const [sort, setSort] = useState(initialSort)
@@ -864,7 +866,8 @@ export default function RemediationInbox({
   }
   const matchingFindings = selected ? matchingOf(selected) : []
   const queueComplete = queue.length > 0 && queue.every((f) => isResolved(f, decisions))
-  const reviewCompletion = counts['awaiting-validation'] > 0 ? <><b style={{color:'var(--ink)'}}>Review decisions saved. Changes are still processing.</b><p>{counts['awaiting-validation']} applying or awaiting verification · {counts.completed || 0} completed</p></> : <><b style={{color:'var(--ink)'}}>All review items are complete.</b><p>{prog.resolved} reviewed · {counts.completed || 0} completed</p></>
+  const automaticCheckingCount = queue.filter(row => row.automaticQueued).length
+  const reviewCompletion = automaticCheckingCount > 0 ? <><b style={{color:'var(--ink)'}}>Automatic checks are queued.</b><p>{automaticCheckingCount} awaiting automatic checks · {counts.completed || 0} completed. No fix is marked verified by this queue state.</p></> : counts['awaiting-validation'] > 0 ? <><b style={{color:'var(--ink)'}}>Review decisions saved. Changes are still processing.</b><p>{counts['awaiting-validation']} applying or awaiting verification · {counts.completed || 0} completed</p></> : <><b style={{color:'var(--ink)'}}>All review items are complete.</b><p>{prog.resolved} reviewed · {counts.completed || 0} completed</p></>
   const emptyReviewState = queue.length === 0 || queueComplete
     ? <div>{reviewCompletion}</div>
     : <p style={{ marginTop: 8 }}>No items are available in {WORKFLOW_LABELS[tab] || 'Review'}. Choose another status from the inbox.</p>
@@ -969,6 +972,7 @@ export default function RemediationInbox({
           </button>
         )}
         <span style={{ fontSize: 13, fontWeight: 700 }}>Guided remediation</span>
+        {selected?.automaticQueued && <p className="automatic-review-queued" role="status">Queued for automatic checks. No individual approval is needed while these checks run. This is not yet an applied or verified fix.</p>}
       </span>
     </div>
   )

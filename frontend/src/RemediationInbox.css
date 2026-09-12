@@ -105,3 +105,4 @@
 .run-auto-approve-switch:has(input:disabled) { opacity:.65;cursor:default; }
 .run-auto-approve-error { width:100%;margin:0;color:#a52929; }
 @media(prefers-reduced-motion:reduce) { .run-auto-approve-switch__track,.run-auto-approve-switch__track > span { transition:none; } }
+.automatic-review-queued { margin:8px 0; padding:9px 12px; border-radius:8px; background:var(--info-bg); color:var(--info-fg); font-family:var(--font-ui); font-size:13px; line-height:1.5; }

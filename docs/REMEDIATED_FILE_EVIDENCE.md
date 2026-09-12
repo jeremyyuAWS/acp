@@ -10,6 +10,16 @@ Word table-header repair recognizes explicitly disabled header flags. PowerPoint
 
 Both normal release and delivery-only retry verify destination bytes before treating an upload as successful. A delivery retry does not run remediation or verification again and does not replace the customer's original file.
 
+Automatic Excel image-description writes preserve the actual drawing element name and namespace spelling, rather than writing the regex used to locate it. Authored XML-escaped title, caption and name values are decoded once before being written as descriptions. Real saved-workbook regression fixtures preserve the original source, cells, formulas and images and run the accessibility detectors on the corrected copy.
+
+## Read-only saved-copy audit
+
+`python scripts/audit_remediated_copy.py original.docx corrected.docx --expected expected.json --output audit.json`
+
+This local audit accepts Word, Excel, PowerPoint and PDF files. It checks readability and exact corrected-byte identity, inventories Office drawing accessibility properties and checks explicitly supplied property expectations. `expected.json` may contain `corrected_sha256` and `images`; each image expectation must identify its exact `part`, expanded XML `tag` and string `id`, and provide the expected `description`, `title` or `decorative` property. The audit never guesses an ambiguous or missing object identity.
+
+Exit zero means the supplied claims passed against readable files. Missing expectations, hash mismatches, invalid XML and ambiguous identities cannot pass. A matching hash alone establishes file identity, not every recorded repair. Full change coverage and Office/PDF Accessibility Checker success remain explicitly unestablished; those require the appropriate assessment and semantic review. The audit reads local bytes without credentials, provider writes, run-state changes or approval changes. It does not establish that a source file on SharePoint is unchanged: use the production canary bundle for provider identity, original-byte, placement and permission evidence.
+
 This evidence work does not add general Word Track Changes, PowerPoint revision tracking, or PDF heading/tag-tree, complex-table and reading-order repair. Those require additional format-specific writers and preservation tests. A successful upload or changed screenshot does not establish accessibility compliance.
 
 AI-assisted expansion: document-wide review includes extracted document context and exact supported image evidence for Word, Excel and PowerPoint. It does not upload the original Office archive. Approved OCR transcripts replace simple Word inline body pictures and simple Excel drawing pictures with editable text; grouped, shared, cropped or rotated images remain unresolved. PDF language-of-parts proposals target existing text-bearing tagged leaves with their own `/ActualText`; approved writes change only `/Lang` and preserve page content. Untagged PDFs and ambiguous structures remain unsupported. These changes still require review of meaning and the saved-file verification path.

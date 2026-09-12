@@ -1281,7 +1281,7 @@ function QueueRoleCapacity({ load }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
       <b>Who can claim this work</b>
       <span className="muted" style={{ fontSize: 12 }}>
-        {load.totalQueued} waiting{load.rows.length ? ` · ${load.rows.length} stage${load.rows.length === 1 ? '' : 's'}` : ''}
+        {load.totalQueued} waiting{load.rows.length ? ` · ${load.rows.length} worker pool${load.rows.length === 1 ? '' : 's'}` : ''}
       </span>
     </div>
     {load.rows.length === 0
@@ -1305,7 +1305,7 @@ function QueueRoleCapacity({ load }) {
                 <span aria-hidden="true" style={{ color: row.over ? TONE.warn : row.unknown ? 'var(--muted)' : TONE.ok }}>
                   {row.over ? '▲' : row.unknown ? '?' : '●'}
                 </span>
-                <b style={{ textTransform: 'capitalize' }}>{row.stage}</b>
+                <b style={{ textTransform: 'capitalize' }}>{row.label || row.stage}</b>
               </span>
               <span>{row.unknown
                 ? <span className="muted">{row.queued} waiting · slots {NOT_REPORTED}</span>

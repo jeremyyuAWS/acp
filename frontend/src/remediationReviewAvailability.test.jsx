@@ -18,7 +18,7 @@ it('does not offer the screenshot’s 80 assessment placeholders as AI suggestio
   expect(laneOf(findings[0])).toBe(LANES.manual)
   const source = readFileSync('src/Remediate.jsx', 'utf8')
   expect(source).not.toContain('autoPopulateHitlQueue(')
-  expect(source).toContain('const inboxQueue = reviewableRemediationItems(')
+  expect(source).toContain('const reviewQueue = reviewableRemediationItems(')
   expect(source).toContain('No fixes to review yet.')
 })
 

@@ -889,3 +889,20 @@ describe('A scan job and a durable service do not look alike', () => {
     expect(source).toContain('<b style={{ color: \'var(--ink)\' }}>DATA</b>')
   })
 })
+
+
+describe('shared Release worker infrastructure', () => {
+  it('shows one Remediate & Release service and includes release job records', () => {
+    const summary = { worker_roles: { remediate: { alive: true, pool_size: 10 } },
+      by_stage: { remediate: { running: 2 }, release: { running: 3 } } }
+    const services = workerServiceRows(summary)
+    expect(services).toHaveLength(1)
+    expect(services[0].jobs_in_flight).toBe(5)
+    expect(services[0].active).toBeNull()
+    const graph = buildTrafficGraph({ summary, runs: [] }, services)
+    const worker = graph.nodes.find(node => node.id === 'stage:remediate')
+    expect(worker.data.label).toBe('Remediate & Release workers')
+    expect(worker.ariaLabel).toContain('Remediate & Release workers')
+    expect(graph.nodes.some(node => node.id === 'stage:release')).toBe(false)
+  })
+})

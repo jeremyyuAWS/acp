@@ -23,6 +23,8 @@ const STAGE = {
   release: { label: 'Release', color: '#A66A16' },
 }
 
+const workerLabel = (stage) => stage === 'remediate' ? 'Remediate & Release' : (STAGE[stage]?.label || stage)
+
 // Colours are TOKENS, not literals, so the high-contrast toggle reaches them. Every consumer
 // below puts these in a CSS property context — `color`, and a `border-left` shorthand — where
 // `var()` resolves; none passes them to a canvas or an SVG presentation attribute, which would
@@ -172,7 +174,8 @@ export function workerServiceRows(summary = {}) {
         recent_lifecycle_events: measured.recent_lifecycle_events || [],
         freshness_threshold_seconds: measured.freshness_threshold_seconds,
       } : {
-        jobs_in_flight: Number(load[stage]?.running || 0),
+        jobs_in_flight: Number(load[stage]?.running || 0)
+          + (stage === 'remediate' ? Number(load.release?.running || 0) : 0),
         utilization_pct: null,
         capacity_source: heartbeat.alive ? 'legacy_role_heartbeat' : 'unavailable',
         measured_at: heartbeat.heartbeat_at || null,
@@ -846,7 +849,7 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
     // which is how this was first written and what the announcement test caught.
     nodes.push({ id: `stage:${stage}`, type: 'infra',
       position: { x: 720, y: WORKER_LANE_TOP + index * WORKER_LANE_GAP },
-      ariaLabel: `${STAGE[stage].label} workers, ${service.status || (service.alive ? 'online' : 'standby')}, `
+      ariaLabel: `${workerLabel(stage)} workers, ${service.status || (service.alive ? 'online' : 'standby')}, `
         + (service.capacity_source === 'worker_instances'
           ? `${service.active} busy of ${service.slots} slots. `
           : `slot utilization unavailable. ${service.jobs_in_flight || 0} jobs recorded in flight. `)
@@ -856,7 +859,7 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
           ? `${service.jobs_in_flight} jobs recorded in flight. ` : ''}`
         + 'Select for details.',
       data: { kind: 'worker',
-      label: `${STAGE[stage].label} workers`, status: service.status || (service.alive ? 'online' : 'standby'),
+      label: `${workerLabel(stage)} workers`, status: service.status || (service.alive ? 'online' : 'standby'),
       detail: service.capacity_source === 'worker_instances' ? `${service.active} / ${service.slots} slots busy`
         + `${service.healthy_replicas != null ? ` · ${service.healthy_replicas} healthy replicas` : ''}`
         + `${service.jobs_in_flight != null ? ` · ${service.jobs_in_flight} jobs recorded in flight` : ''}`
@@ -1175,7 +1178,7 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
       {services.map((service) => <div key={service.role} style={{ display: 'grid',
         gridTemplateColumns: 'minmax(110px,1fr) minmax(180px,2fr) minmax(130px,1fr)', gap: 12,
         alignItems: 'center', padding: '8px 12px', borderTop: '1px solid var(--line)', fontSize: 12 }}>
-        <span><b>{STAGE[service.stage]?.label || service.role}</b><br />
+        <span><b>{workerLabel(service.stage) || service.role}</b><br />
           <span style={{ color: service.alive ? PRESSURE.healthy.color : PRESSURE.stalled.color }}>
             ● {service.alive ? 'Online' : 'Offline'}
           </span>

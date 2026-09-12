@@ -279,6 +279,7 @@ export function workflowStatusOf(f, decisions = {}) {
   // to count as both awaiting-validation AND resolved.)
   if (d && (d.state === 'assigned' || d.state === 'deferred')) return 'manual'
   if (lane.key === 'manual' || lane.key === 'handoff') return 'manual'
+  if (f?.automaticQueued === true) return 'awaiting-validation'
   // Awaiting a human decision: an AI draft to approve/reject, or an auto-fix to confirm.
   return 'needs-review'
 }

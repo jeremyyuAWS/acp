@@ -226,3 +226,19 @@ it('unifies applying, publishing, and a real green automatic approval switch', a
   await click(control)
   expect(changes).toEqual([false])
 })
+it('shows admitted automatic checking as Processing while retaining manual human input', async () => {
+ const policy={enabled:true,supported:true,run_id:'run',source_revision:'source'}
+ const proposal={...CONTRAST_APPLY,status:'pending',proposals:[{proposed_value:'#767676',source:'AI'}],_raw:{finding_count:1,proposal_snapshot_ids:['snapshot'],source_revision:'source',decision_version:0,auto_approval_status:'checking',auto_approval_run_id:'run',auto_approval_source_revision:'source'}}
+ const manual={id:'manual',file:'manual.docx',title:'Needs manual fix',status:'pending',hasProposal:false}
+ await renderInbox({queue:[proposal,manual],autoApprove:true,automaticApprovalPolicy:policy})
+ const queues=container.querySelector('[aria-label="Review queues"]')
+ expect(queues.textContent).toContain('Needs review1')
+ expect(queues.textContent).toContain('Processing1')
+ expect(queues.textContent).toContain('Completed0')
+ await click([...queues.querySelectorAll('button')].find(button=>button.textContent.startsWith('Processing')))
+ expect(container.textContent).toContain('Queued for automatic checks')
+ expect(container.textContent).toContain('not yet an applied or verified fix')
+ await renderInbox({queue:[{...proposal,status:'verification_failed'},manual],autoApprove:true,automaticApprovalPolicy:policy})
+ expect(container.querySelector('[aria-label="Review queues"]').textContent).toContain('Needs review2')
+ expect(container.querySelector('[aria-label="Review queues"]').textContent).toContain('Completed0')
+})
