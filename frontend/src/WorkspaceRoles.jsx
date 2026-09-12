@@ -46,7 +46,10 @@ export default function WorkspaceRoles() {
     .finally(() => setLoaded(true))
   useEffect(() => { load() }, [])
 
-  const afterWrite = (note) => { setMessage(note); setError(''); setEditing(null); load() }
+  const afterWrite = (note) => {
+    setMessage(note); setError(''); setEditing(null); load()
+    window.dispatchEvent(new Event('acp-access-changed'))
+  }
   const fail = (e) => setError(e.message || 'That change could not be saved.')
 
   const changeEnforcement = async () => {

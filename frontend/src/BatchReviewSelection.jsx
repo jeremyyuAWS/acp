@@ -125,8 +125,10 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
   const uncertain = attemptResults.filter(r => r.state === 'uncertain').length
   return <section className="batch-review" aria-label="Select findings for approval">
     <h3 ref={heading} tabIndex={-1}>{busy ? 'Approving proposals' : confirming ? 'Confirm approval' : activeAttempt ? 'Approval results' : eligible.length ? 'Ready to approve' : preparingProposals ? 'Preparing proposals' : 'No proposals ready'}</h3>
-    <p><b>Scope: {scopeLabel}</b></p>
-    <p>Approve the ready proposals together, or inspect them and choose a subset. Writing and verification follow approval.</p>
+    {(eligible.length > 0 || entries.length > 0 || activeAttempt) && <>
+      <p><b>Scope: {scopeLabel}</b></p>
+      <p>Approve the suggested fixes. ACP then saves the changes and checks the result.</p>
+    </>}
     <p className="batch-sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</p>
     {summary && <div className="batch-approval-summary" aria-label="Approval summary">
       <p><b>{summary.findings} findings · {summary.items} review item{summary.items === 1 ? '' : 's'} · {summary.proposals} proposal{summary.proposals === 1 ? '' : 's'} · {summary.files} file{summary.files === 1 ? '' : 's'}</b></p>
@@ -157,24 +159,27 @@ export default function BatchReviewSelection({ visible = [], decisions = {}, dra
           ? 'These changes are already applied or approved. View their results and verification status; another proposal approval is not needed.'
           : Object.keys(exclusions).every(reason => reason === 'Manual work')
             ? 'These issues need your input in the source document. Open individual review for the required edits and instructions.'
-            : 'Open individual review to inspect these issues and their available actions. See the status reasons below.'
+            : 'ACP does not have approval-ready fixes for these items. Open the remediation plan to generate new suggestions, or review the document instructions yourself.'
         : 'There are no pending proposals in this scope. Choose another category to see completed changes, verification, or manual work.'}</p>
       {/* Every reason, always, and summing to the scope. This used to name two of the eight
           reasons in prose and hide the rest in a collapsed disclosure, so a screen reading
           "0 ready" explained a fraction of the items and the visible numbers did not
           reconcile: the count above this panel is the whole RUN, these are the current
           SCOPE, and nothing said so. */}
-      {!preparingProposals && excludedTotal > 0 && <div className="batch-review-why">
+      {!preparingProposals && excludedTotal > 0 && <details className="batch-review-why">
+        <summary>Why these items are not ready ({excludedTotal})</summary>
         <p><b>Why nothing can be approved here</b> — all {excludedTotal} review {excludedTotal === 1 ? 'item' : 'items'} in {scopeLabel.toLowerCase()}:</p>
         <ul>{Object.entries(exclusions).sort((a, b) => b[1] - a[1]).map(([reason, count]) =>
           <li key={reason}><b>{count}</b> {reason.toLowerCase()}{EXCLUSION_HELP[reason] ? ` — ${EXCLUSION_HELP[reason]}` : ''}</li>)}</ul>
         {(exclusions['Missing proposal'] || exclusions['Version unavailable — review individually']) > 0
           && <p>Bulk approval requires valid proposals with recorded versions. Generating fresh proposals requires a separately approved run.</p>}
         <p>Counts above this panel cover the whole run, so they will be larger than this scope.</p>
-      </div>}
+      </details>}
       {readyOutsideScope > 0 && onShowAllReady && <button type="button" className="primary" onClick={onShowAllReady}>Show all ready in this scan ({readyOutsideScope})</button>}
-      {!preparingProposals && (exclusions['Version unavailable — review individually'] || exclusions['Missing proposal']) && onOpenPlan && <button type="button" onClick={onOpenPlan}>Open remediation plan</button>}
-      {!preparingProposals && onReviewExcluded && <button type="button" onClick={onReviewExcluded}>Open individual review</button>}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+        {!preparingProposals && (exclusions['Version unavailable — review individually'] || exclusions['Missing proposal']) && onOpenPlan && <button type="button" className="primary" onClick={onOpenPlan}>Open remediation plan</button>}
+        {!preparingProposals && onReviewExcluded && <button type="button" className="ghost" onClick={onReviewExcluded}>Open individual review</button>}
+      </div>
     </div>}
     {(eligible.length > 0 || entries.length > 0) && <details className="batch-review-accounting">
       <summary>Approval details</summary>

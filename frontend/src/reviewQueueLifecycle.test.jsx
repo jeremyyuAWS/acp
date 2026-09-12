@@ -18,7 +18,7 @@ it('moves approval out of Needs review, advances selection, and keeps it out of 
     return <RemediationInbox queue={rows} decisions={decisions} initialSort="document" onDecide={async (row, decision) => setDecisions(d => ({ ...d, [row.id]: decision }))} />
   }
   await act(async () => root.render(<Workspace />))
-  await click([...container.querySelectorAll('button')].find(b => b.textContent.includes('Save and continue')))
+  await click([...container.querySelectorAll('button')].find(b => b.textContent.includes('Yes, apply fix')))
   const tabs = () => [...container.querySelectorAll('.review-queue-tabs button')]
   expect(tabs()[0].querySelector('strong').textContent).toBe('1')
   expect(tabs()[1].querySelector('strong').textContent).toBe('1')
@@ -49,7 +49,7 @@ it('returns failed applications to Needs review even if a prior write was record
   expect(matchesWorkflow(row, 'awaiting-validation')).toBe(false)
 })
 
-it('places one full-width queue control after document progress and above both review panels', async () => {
+it('places one compact queue control after document progress and above both review panels', async () => {
   const { root, container } = createTestRoot()
   await act(async () => root.render(<RemediationInbox queue={rows} decisions={{}} onDecide={async () => true} />))
   const pills = container.querySelector('.review-queue-tabs')

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { getAutomaticRelease } from './api.js'
 import { releasePlanKey } from './releasePlanIntent.js'
 import InfoTip from './InfoTip.jsx'
+import { readWithRetry } from './readWithRetry.js'
 import './remediation-auto-release.css'
 
 export default function RemediationReleasePlan({ scanId, files, intent, onChange, disabled = false, read = getAutomaticRelease, requireChoice = false, compact = false, onAnswered }) {
@@ -17,7 +18,7 @@ export default function RemediationReleasePlan({ scanId, files, intent, onChange
     const controller = new AbortController()
     setPreview(null); setError(''); onChange(null); onAnswered?.(false)
     if (!scanId || !files.length) return () => { live = false; controller.abort() }
-    read(scanId, files, { signal: controller.signal }).then(result => {
+    readWithRetry(() => read(scanId, files, { signal: controller.signal }), { signal: controller.signal }).then(result => {
       if (!live) return
       const planning = { key, ...(result?.planning || { available: false, reason: 'Automatic publishing requires a connected destination.' }) }
       setPreview(planning)
@@ -42,9 +43,9 @@ export default function RemediationReleasePlan({ scanId, files, intent, onChange
     <p>Automatic publishing applies available fixes and AI suggestions within your selected criteria and spending limit. Failed fixes and items needing human input remain in the follow-up checklist.</p>
     <p><b>Destination:</b> {preview?.destination_label ? `${preview.destination_label} / Remediated / Timestamp + user email` : (preview || error ? 'Not available' : 'Checking destination…')}</p>
     {preview?.reason && <p>{preview.reason}</p>}
-    {preview?.blocked_files?.length > 0 && <ul aria-label="Files blocking automatic publishing">
+    {preview?.blocked_files?.length > 0 && <details><summary>Show publishing requirements</summary><ul aria-label="Files blocking automatic publishing">
       {preview.blocked_files.map(({file, reason}) => <li key={file}><b>{file}</b> — {reason}</li>)}
-    </ul>}
+    </ul></details>}
     {preview && !ready && <p>You can still run remediation. Resolve the issue above, then <button type="button" className="linklike" disabled={disabled} onClick={() => setReload(n => n + 1)}>Refresh publishing readiness</button>.</p>}
     {error && <p role="alert">{error} <button className="linklike" type="button" disabled={disabled} onClick={() => setReload(n => n + 1)}>Refresh destination</button></p>}
   </section>
