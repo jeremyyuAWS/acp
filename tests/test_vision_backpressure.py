@@ -187,3 +187,32 @@ def test_provider_timeout_classification_is_not_collapsed_into_transport_error()
     reason, detail = providers._classify(ReadTimeout("GPU overloaded"))
     assert reason == providers.REASON_TIMEOUT
     assert "GPU overloaded" in detail
+
+
+def test_enabled_cloud_escalation_is_not_blocked_by_local_gpu_load(monkeypatch):
+    _runtime(monkeypatch, limit=1, wait=0.01)
+    monkeypatch.setattr(ai, '_CLOUD_VISION_GATE', threading.BoundedSemaphore(1))
+    class CloudProvider:
+        name = 'anthropic'
+        def generate(self, *args, **kwargs):
+            return {'ok': True, 'text': 'A grounded cloud draft'}
+    assert ai._VISION_GATE.acquire(blocking=False)
+    try:
+        assert ai._bounded_vision_generate(CloudProvider(), 'describe', b'image')['ok']
+        assert ai.vision_runtime_health()['active'] == 0
+    finally:
+        ai._VISION_GATE.release()
+
+
+def test_cloud_requests_still_have_bounded_admission(monkeypatch):
+    _runtime(monkeypatch, limit=1, wait=0.01)
+    monkeypatch.setattr(ai, '_CLOUD_VISION_GATE', threading.BoundedSemaphore(1))
+    class CloudProvider:
+        name = 'openai'
+        def generate(self, *args, **kwargs):
+            raise AssertionError('busy API slot must not dispatch')
+    assert ai._CLOUD_VISION_GATE.acquire(blocking=False)
+    try:
+        assert ai._bounded_vision_generate(CloudProvider(), 'describe', b'image')['reason'] == 'capacity_busy'
+    finally:
+        ai._CLOUD_VISION_GATE.release()

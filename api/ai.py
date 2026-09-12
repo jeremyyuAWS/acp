@@ -86,6 +86,8 @@ _VISION_CIRCUITS: dict[tuple[str, str, str], dict] = {}
 _VISION_CIRCUIT_LOCK = threading.Lock()
 _MISSING_VISION_MODELS_WARNED: set[tuple[str, str]] = set()
 _VISION_GATE = threading.BoundedSemaphore(VISION_MAX_CONCURRENCY)
+# Remote APIs do not consume local GPU slots. Keep their admission bounded separately.
+_CLOUD_VISION_GATE = threading.BoundedSemaphore(max(1, int(_envf("ACP_CLOUD_VISION_MAX_CONCURRENCY", 2))))
 _VISION_RUNTIME_LOCK = threading.Lock()
 _VISION_RUNTIME = {
     "active": 0, "peak_active": 0, "admitted": 0, "backpressured": 0,
@@ -132,14 +134,16 @@ def _leave_vision_capacity() -> None:
 
 
 def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs) -> dict:
-    """Run one provider request inside the shared GPU admission limit."""
+    """Bound local GPU and remote API requests independently; keep authorization unchanged."""
     from llm_waterfall_provider import managed_context, defer_managed
     _run = managed_context()
     from providers import OllamaVisionProvider
     if _run is not None and not (isinstance(provider, OllamaVisionProvider) and (getattr(_run, 'enabled', False) or (getattr(_run, 'local_drafting', False) and provider.zone == 'local'))):
         defer_managed('legacy_ai_path_not_budgeted', kind='_bounded_vision_generate')
         return {'ok': False, 'text': None, 'reason': 'vision_pricing_not_verified', 'model': 'not-dispatched'}
-    if not _enter_vision_capacity():
+    cloud_api = getattr(provider, 'name', '') in {'openai', 'anthropic', 'azure_openai', 'gemini', 'bedrock'}
+    admitted = _CLOUD_VISION_GATE.acquire(timeout=VISION_QUEUE_TIMEOUT) if cloud_api else _enter_vision_capacity()
+    if not admitted:
         return {
             "ok": False, "reason": "capacity_busy",
             "provider": getattr(provider, "name", "unknown"),
@@ -154,7 +158,10 @@ def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs
                 _vision_metric("timeouts")
         return result
     finally:
-        _leave_vision_capacity()
+        if cloud_api:
+            _CLOUD_VISION_GATE.release()
+        else:
+            _leave_vision_capacity()
 
 
 def reset_vision_circuits() -> None:

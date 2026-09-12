@@ -4,6 +4,8 @@ No finding counts are inferred from calls, queue cards or proposal versions. Exi
 post-write events identify a call and queue item, not a proposal digest; they remain
 recorded evidence rather than proof that this exact saved version was fixed.
 """
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from decimal import Decimal
 from hashlib import sha256
@@ -35,6 +37,40 @@ def _ctx(ctx, key):
     return ctx.get(key) if isinstance(ctx, dict) else getattr(ctx, key, None)
 
 
+_PROPOSAL_CONTEXT = ContextVar('authenticated_proposal_context', default=None)
+
+
+@contextmanager
+def proposal_context(store, payload, job):
+    """Retain draft versions without granting a legacy job managed AI permission."""
+    context = None
+    if job.get('id'):
+        with store._db.cursor() as cur:
+            store._db.execute(cur, """SELECT j.payload,j.scan_id,j.batch_id,j.type,
+                s.owner_email,e.owner_email AS execution_owner,e.stage,e.is_current,
+                e.cancel_requested_at,e.state FROM jobs j
+                JOIN scan_runs s ON s.id=j.scan_id
+                JOIN stage_executions e ON e.execution_id=j.batch_id AND e.scan_id=j.scan_id
+                WHERE j.id=%s""", (job['id'],))
+            row = store._db.fetchone(cur)
+        if row:
+            durable = json.loads(row['payload']) if isinstance(row['payload'], str) else row['payload']
+            if (row['type'] == 'remediate_file' and row['stage'] == 'remediate'
+                    and row['is_current'] and not row['cancel_requested_at']
+                    and row['state'] in {'accepted', 'queued', 'processing'}
+                    and row['owner_email'] == row['execution_owner'] == durable.get('owner') == payload.get('owner')
+                    and row['scan_id'] == durable.get('scan_id') == payload.get('scan_id')
+                    and row['batch_id'] == durable.get('stage_execution_id')
+                    and durable.get('file') == payload.get('file')):
+                context = dict(owner_id=row['owner_email'], run_id=row['batch_id'],
+                               scan_id=row['scan_id'], file=durable['file'], authenticated_producer=True)
+    token = _PROPOSAL_CONTEXT.set(context)
+    try:
+        yield context
+    finally:
+        _PROPOSAL_CONTEXT.reset(token)
+
+
 def capture_proposals(db, cur, ctx, *, scan_id, file, rule_id, item_id, proposals):
     """Called within enqueue's transaction. Replays retain the original snapshot.
 
@@ -42,6 +78,7 @@ def capture_proposals(db, cur, ctx, *, scan_id, file, rule_id, item_id, proposal
     The before-value digest is labelled an excerpt digest, never a document revision.
     Unlinked legacy proposals remain inspectable without guessed model lineage.
     """
+    ctx = ctx if ctx is not None else _PROPOSAL_CONTEXT.get()
     owner, run_id = _ctx(ctx, 'owner_id'), _ctx(ctx, 'run_id')
     if not owner or not run_id or _ctx(ctx, 'scan_id') != scan_id or _ctx(ctx, 'file') != file:
         return []
@@ -49,6 +86,10 @@ def capture_proposals(db, cur, ctx, *, scan_id, file, rule_id, item_id, proposal
                (run_id, owner, scan_id, 'remediate'))
     if db.fetchone(cur) is None:
         return []
+    if _ctx(ctx, 'authenticated_producer'):
+        db.execute(cur, "SELECT execution_id FROM stage_executions WHERE execution_id=%s AND is_current=1 AND cancel_requested_at IS NULL AND state IN ('accepted','queued','processing')", (run_id,))
+        if db.fetchone(cur) is None:
+            return []
     if not isinstance(proposals, (list, tuple)):
         return []
     captured = []

@@ -174,11 +174,15 @@ def planning_preview(store, sid, owner, files):
             else:
                 continue
             blocked.append(dict(file=file, reason=reason))
-        if blocked:
+        blocked_names = {entry['file'] for entry in blocked}
+        ready_files = [file for file in files if file not in blocked_names]
+        if not ready_files:
             result.update(blocked_files=blocked, reason=f'{len(blocked)} of {len(files)} selected files need attention before automatic publishing.')
             return result
-        destination = destination_for(store, sid, owner, source, records, files)
-        result.update(available=True, files=sorted(files), source_revision=store.remediation_source_revision(sid),
+        destination = destination_for(store, sid, owner, source, records, ready_files)
+        result.update(available=True, files=sorted(ready_files), blocked_files=blocked,
+                      reason=(f'{len(ready_files)} files can publish automatically. {len(blocked)} files will be skipped and remain in the follow-up checklist.' if blocked else None),
+                      source_revision=store.remediation_source_revision(sid),
                       destination=destination, destination_label=destination_label(destination))
     except ValueError as exc:
         result['reason'] = str(exc)
