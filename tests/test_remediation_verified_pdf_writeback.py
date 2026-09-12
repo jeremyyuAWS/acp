@@ -51,7 +51,7 @@ sys.path.insert(0, str(ACP / "api"))
 # tests/test_capability_assisted_contract.py, which derives the applier registry from
 # these declarations instead of a hand-written list. A literal set, so it can be read
 # without importing this module.
-PROVES_LANES = {("pdf", "1.1.1"), ("pdf", "4.1.2")}
+PROVES_LANES = {("pdf", "1.1.1"), ("pdf", "4.1.2"), ("pdf", "3.1.2")}
 sys.path.insert(0, str(ACP / "tests"))
 
 pytest.importorskip("reportlab")
@@ -306,3 +306,17 @@ def test_a_pdf_whose_fields_are_already_named_is_left_alone(store, monkeypatch):
     _seed_field(store, {})
     _run_lane(monkeypatch, store, blob)
     assert blob.data == named and not blob.uploads
+
+
+def test_exact_tagged_language_approval_saved_and_verified(store, monkeypatch):
+    from test_pdf_structural_language import fixture as language_pdf, targets
+    data = language_pdf()
+    target = targets(data)[0]
+    assert "3.1.2" in _assess(data)
+    blob = _Blob(data)
+    _seed(store, sc="3.1.2", rule_name="Language of Parts", rule_id="PDF_PART_LANGUAGE", values={target.locator: "fr-FR"})
+    _run_lane(monkeypatch, store, blob)
+    assert blob.uploads
+    assert targets(blob.data)[0].current_language == "fr-FR"
+    assert "3.1.2" not in _assess(blob.data)
+    assert store.count_unapplied_approved_values(SID, FILE) == 0

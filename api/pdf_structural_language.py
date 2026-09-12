@@ -109,7 +109,7 @@ def deficient_language_targets(pdf):
 def language_parts_checks(path):
     try:
         with pikepdf.open(path) as pdf:
-            return [{'wcag': '3.1.2', 'location': t.locator,
+            return [{'ruleId': 'PDF_PART_LANGUAGE', 'wcag': '3.1.2', 'location': t.locator,
                 'description': 'Tagged passage lacks the matching language mark.',
                 'message': 'Tagged passage lacks the matching language mark.',
                 'severity': 'moderate'} for t in deficient_language_targets(pdf)]

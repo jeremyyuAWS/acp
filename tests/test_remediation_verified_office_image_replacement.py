@@ -164,7 +164,10 @@ def test_approved_values_reach_saved_bytes_through_production_handler(ext, monke
     monkeypatch.setattr(lane, 'FILE', 'benefits.' + ext)
     blob = lane._Blob(document(ext))
     lane._seed(store, {'image 1': TEXT})
-    lane._run_lane(monkeypatch, store, blob)
+    import core, handlers, sys
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setitem(sys.modules, "blob", blob)
+    handlers._apply_approved_values({"scan_id": lane.SID, "file": lane.FILE}, {})
     assert blob.uploads, 'The handler must persist the corrected Office bytes'
     assert not any('/media/' in p for p in members(blob.data))
     assert store.count_unapplied_approved_values(lane.SID, lane.FILE) == 0
@@ -176,7 +179,10 @@ def test_unreplaceable_word_picture_gets_no_upload_or_credit(monkeypatch, store)
     original = document('docx', shared=True)
     blob = lane._Blob(original)
     lane._seed(store, {'image 1': TEXT})
-    lane._run_lane(monkeypatch, store, blob)
+    import core, handlers, sys
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setitem(sys.modules, "blob", blob)
+    handlers._apply_approved_values({"scan_id": lane.SID, "file": lane.FILE}, {})
     assert not blob.uploads
     assert blob.data == original
     assert store.count_unapplied_approved_values(lane.SID, lane.FILE) > 0
