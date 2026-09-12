@@ -23,6 +23,8 @@ def sha256_hex(data: bytes) -> str:
 class DocumentFormat(str, Enum):
     PDF = "pdf"
     DOCX = "docx"
+    PPTX = "pptx"
+    XLSX = "xlsx"
 
 
 class EvidenceKind(str, Enum):

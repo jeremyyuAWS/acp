@@ -10,6 +10,7 @@ from experiments.document_wide_ai.application.allowlist import (
     SET_OFFICE_IMAGE_ALT_TEXT,
     SET_PDF_FIELD_ACCESSIBLE_NAME,
     SET_PDF_FIGURE_ALT_TEXT,
+    SET_PDF_STRUCTURE_LANGUAGE,
     allowed_operations_for_manifest,
 )
 from experiments.document_wide_ai.contracts.v1 import (
@@ -53,6 +54,20 @@ def build_pdf_manifest(
     packaged = package_pdf(source_bytes, max_text_chars=limits.max_text_chars)
 
     findings = []
+    language_context = ''
+    if '3.1.2' in selected_criteria:
+        import json
+        import pikepdf
+        from io import BytesIO
+        from dataclasses import asdict
+        from pdf_structural_language import deficient_language_targets
+        with pikepdf.Pdf.open(BytesIO(source_bytes)) as pdf:
+            targets = deficient_language_targets(pdf)
+        language_context = '\n[Exact text-bearing language targets]\n' + json.dumps([asdict(t) for t in targets], sort_keys=True, ensure_ascii=False)
+        for i, target in enumerate(targets):
+            findings.append(Finding(f'pdf-language-{i}', 'pdf.language-of-parts', '3.1.2',
+                Locator(DocumentFormat.PDF, target.page_index, None, target.locator, fingerprint_value(target.current_language)),
+                target.text))
     if "4.1.2" in selected_criteria:
         for i, fld in enumerate(packaged.form_fields):
             if fld.current_tu:
@@ -83,7 +98,7 @@ def build_pdf_manifest(
                     evidence_text="Existing tagged Figure; semantic accuracy requires review."))
 
     check_limits(
-        text_chars=len(packaged.text_context),
+        text_chars=len(packaged.text_context + language_context),
         page_count=packaged.page_count,
         image_count=0,
         finding_count=len(findings),
@@ -104,8 +119,9 @@ def build_pdf_manifest(
             op for op in allowed_operations_for_manifest()
             if (op.op == SET_PDF_FIELD_ACCESSIBLE_NAME and "4.1.2" in selected_criteria)
             or (op.op == SET_PDF_FIGURE_ALT_TEXT and "1.1.1" in selected_criteria)
+            or (op.op == SET_PDF_STRUCTURE_LANGUAGE and "3.1.2" in selected_criteria)
         ),
-        text_context=packaged.text_context,
+        text_context=packaged.text_context + language_context,
         extraction_issues=packaged.extraction_issues,
     )
 
@@ -157,7 +173,7 @@ def build_docx_manifest(
         selected_criteria=selected_criteria,
         findings=tuple(findings),
         allowed_operations=tuple(
-            op for op in allowed_operations_for_manifest() if op.op == SET_OFFICE_IMAGE_ALT_TEXT
+            op for op in allowed_operations_for_manifest() if op.op == SET_OFFICE_IMAGE_ALT_TEXT and op.format == DocumentFormat.DOCX
         ),
         text_context=packaged.text_context,
         extraction_issues=packaged.extraction_issues,

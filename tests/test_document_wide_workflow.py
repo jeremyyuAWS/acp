@@ -56,7 +56,9 @@ def setup(monkeypatch, *, status='pending', stale=False, sc='4.1.2'):
 def test_default_and_unsupported_are_off():
     assert not workflow.enabled(None,'file.pdf')
     assert not workflow.enabled(SimpleNamespace(policy={}),'file.pdf')
-    assert not workflow.enabled(SimpleNamespace(policy={'document_wide_ai':True}),'file.xlsx')
+    assert not workflow.enabled(SimpleNamespace(policy={'document_wide_ai':True}),'file.txt')
+    assert workflow.enabled(SimpleNamespace(policy={'document_wide_ai':True}),'file.xlsx')
+    assert workflow.enabled(SimpleNamespace(policy={'document_wide_ai':True}),'file.pptx')
 
 
 def test_local_or_zero_budget_never_calls_provider(monkeypatch):
@@ -205,7 +207,7 @@ def test_pdf_figure_proposal_reaches_existing_review_lane(monkeypatch):
     assert args[3][0]['locator'] == 'pdf:fig:0:0'
     assert args[3][0]['requires_semantic_review'] is True
     assert kwargs['validated'] is False
-    assert workflow.suppressed_criteria(ctx, 'file.pdf') == {'1.1.1', '4.1.2'}
+    assert workflow.suppressed_criteria(ctx, 'file.pdf') == {'1.1.1', '4.1.2', '3.1.2'}
     assert workflow.suppressed_criteria(ctx, 'file.docx') == {'1.1.1'}
 
 
