@@ -18,11 +18,24 @@ So the full prompt is kept for models that handle it (and write better alt text 
 retry covers the compact ones.
 """
 import sys
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 import ai as _ai  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def isolated_vision_transport_state():
+    # These tests replace _vision_generate, including its per-call failure reset.
+    # Preserve the caller context while preventing a prior timeout/circuit flag
+    # from being mistaken for this mocked empty response.
+    token = _ai._VISION_FAILURE.set(None)
+    try:
+        yield
+    finally:
+        _ai._VISION_FAILURE.reset(token)
 
 
 def test_describe_image_retries_bare_when_the_model_returns_nothing(monkeypatch):
