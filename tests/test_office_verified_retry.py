@@ -264,7 +264,7 @@ def test_ordinary_filename_containing_retry_word_reads_canonical(monkeypatch):
     assert blob.download_remediated('owner','scan',filename)==data
 
 
-@pytest.mark.parametrize('mutation', ['none','delete_review','revoke_consent','missing_contribution'])
+@pytest.mark.parametrize('mutation', ['none','delete_review','revoke_consent','missing_contribution','no_next_model','rejected_replacement','unknown_usage','budget_conflict'])
 def test_live_adapter_uses_restored_frozen_run_and_only_next_settled_model(isolated_store, monkeypatch, mutation):
     import time
     import core, blob, release_artifacts, llm_waterfall_provider as transport
@@ -278,13 +278,16 @@ def test_live_adapter_uses_restored_frozen_run_and_only_next_settled_model(isola
     monkeypatch.setattr(core,'get_scan_tokens',lambda sid:{'sp':'fixture-token'})
     monkeypatch.setattr(release_artifacts,'require_current_source',lambda *a,**kw:None)
     monkeypatch.setattr(blob,'download_remediated',lambda *a:original)
-    archive=[]
+    archive=[];canonical=[]
+    monkeypatch.setattr(blob,'upload_remediated',lambda *args:canonical.append(args[3]) or 'canonical-fixture')
     monkeypatch.setattr(blob,'upload_immutable_retry',lambda *args:archive.append(args[3]) or 'immutable:' + sha256(args[3]).hexdigest())
     names=('gpt-4.1-mini-2025-04-14','gpt-4.1-2025-04-14','gpt-4.1-nano-2025-04-14')
     specs=tuple(transport.TextModelSpec('openai',name,'fixture-price-v1','1','2',32768,128,int(time.time())+3600) for name in names)
     calls=[];selected={}
     def post(*a,**kw):
         calls.append(kw);model=kw['json']['model']
+        if model==names[1] and mutation=='unknown_usage':
+            raise RuntimeError('fixture ambiguous request outcome')
         if model==names[1] and mutation=='delete_review':
             with store._db.cursor() as cur:
                 store._db.execute(cur,'DELETE FROM hitl_queue WHERE id=%s',(selected['item_id'],))
@@ -292,7 +295,7 @@ def test_live_adapter_uses_restored_frozen_run_and_only_next_settled_model(isola
             from ai_run_approval_override import read,save
             current=read(store,'owner','scan',selected['run_id'])
             save(store,'owner','scan',selected['run_id'],False,current['revision'],current['source_revision'])
-        return Response(result(model=model,text=BAD if model==names[0] else GOOD))
+        return Response(result(model=model,text=BAD if model==names[0] or mutation=='rejected_replacement' else GOOD))
     generator=transport.StrictTextGenerator(specs,provider_module=FakeProviders,post=post)
     monkeypatch.setattr(transport,'configured_generator',lambda:generator)
     steps=[{'step_id':step,'position':i,'provider':'openai','model':name,'enabled':True,'capabilities':['text']}
@@ -307,7 +310,7 @@ def test_live_adapter_uses_restored_frozen_run_and_only_next_settled_model(isola
         first=transport.managed_generate_attempts('First caption',ctx,generator,purpose='review',tier_indices=(1,),operation_id='first-caption')
         call=store.record_ai_call(surface='synthetic',provider='openai',model=names[0],zone='cloud',latency_ms=0,ok=True,scan_id='scan',file='file.docx')
         history=AttemptHistory(store._db);history.bind_trace('owner','scan',ctx.run_id,'first-caption',call,file='file.docx')
-        item_id=store.enqueue_proposals('scan','file.docx','1.1.1',[{'locator':LOC,'before':'','proposed_value':BAD,'source':'AI synthetic','model':names[0],'model_call_id':call,'requires_semantic_review':True}])
+        item_id=store.enqueue_proposals('scan','file.docx','1.1.1',[{'locator':LOC,'before':'','proposed_value':BAD,'source':'AI synthetic','model':names[0],'model_call_id':call,'requires_semantic_review':mutation not in {'no_next_model','rejected_replacement','unknown_usage','budget_conflict'}}])
         approve_file(store,ctx)
     item=store.get_hitl_item(item_id)
     assert item['status']=='approved' and optional_current_run_context() is None
@@ -340,12 +343,42 @@ def test_live_adapter_uses_restored_frozen_run_and_only_next_settled_model(isola
             store._db.execute(cur,'DELETE FROM remediation_contribution_proposals WHERE proposal_id=%s',(ticket['proposal_id'],))
         assert attempt(store,**kwargs) is None and len(calls)==1 and not archive
         return
-    if mutation=='none':
+    if mutation in {'none','no_next_model','rejected_replacement','unknown_usage','budget_conflict'}:
+        if mutation=='no_next_model':
+            generator.models=generator.models[:1]
+        if mutation=='budget_conflict':
+            import ai_run_policy
+            from ai_spending_budget import AttemptConflict
+            def conflicting_context(*a,**kw):
+                raise AttemptConflict('fixture immutable policy conflict')
+            monkeypatch.setattr(ai_run_policy,'run_context',conflicting_context)
         import handlers
         monkeypatch.setattr(handlers,'_verify_residual',lambda data,file,**kw:verify_residual(data,file))
         # Storage is a local receipt fixture; actual writer, rescan, SQL CAS and credits run.
         handlers._apply_approved_values(payload,{})
         record=store.get_file_record('scan','file.docx')
+        if mutation!='none':
+            from unverified_changes import pending_records
+            assert not canonical and not record['compliant'] and not release_artifacts.release_ready(record)
+            assert record['corrected_sha256']==digest and not store.get_hitl_item(item_id)['applied']
+            assert not store.get_remediation_diffs('scan','file.docx')
+            with store._db.cursor() as cur:
+                store._db.execute(cur,"SELECT detail FROM decision_log WHERE action='apply.caption_rejected'")
+                rejected=json.loads(store._db.fetchone(cur)['detail'])
+            assert rejected['previous_copy_retained'] and rejected['manual_review_required']
+            assert rejected['previous_artifact_sha256']==digest and rejected['failed_artifact_sha256']!=digest
+            if archive:
+                assert rejected['failed_artifact_sha256'] in {sha256(data).hexdigest() for data in archive}
+            with store._db.cursor() as cur:
+                store._db.execute(cur,"SELECT outcome FROM ai_validation_outcomes WHERE item_id=%s",(item_id,))
+                outcomes=[row['outcome'] for row in store._db.fetchall(cur)]
+            assert 'verified_cleared' not in outcomes and 'could_not_verify' in outcomes
+            assert read_contribution(store,'owner','scan',batch['batch_id'])['outcomes']['fixed']==0
+            expected_calls=1 if mutation in {'no_next_model','budget_conflict'} else 2
+            assert len(calls)==expected_calls
+            handlers._apply_approved_values(payload,{})
+            assert len(calls)==expected_calls and store.get_file_record('scan','file.docx')['corrected_sha256']==digest
+            return
         assert record['corrected_sha256']!=digest and record['compliant']==1
         assert release_artifacts.release_ready(record)
         assert release_artifacts.require_current_record(store,'scan','file.docx',record['corrected_sha256'],

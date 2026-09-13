@@ -5298,16 +5298,31 @@ def _apply_one_value_kind(
     baseline = (residual_state or {}).get("verification")
     regressions = (sorted(verification.residual - baseline.residual)
                    if verification.ok and baseline is not None and baseline.ok else None)
+    # Independent semantic rejection remains a gate when consent/model/usage blocks retry.
+    # Legacy proposals may omit the semantic-review flag; presence cannot override pixels.
+    caption_contradictions = []
+    if filename.rsplit('.', 1)[-1].lower() in _OFFICE_ALT_MIME and '1.1.1' in scs_to_clear:
+        from office_verified_retry import contradicted_captions
+        caption_contradictions = contradicted_captions(fixed, values)
+        if caption_contradictions:
+            semantic_review = True
+            semantic_review_revision = (semantic_review_revision or
+                core.store.remediation_source_revision(scan_id))
+            core.store.log_decision('system', 'apply.caption_contradicted', scan_id=scan_id,
+                file=filename, rule_id='1.1.1',
+                detail='Written caption contradicts independently checked visible pixels; verification credit withheld.')
     # A presence-only 1.1.1 pass is not caption accuracy. A single exact Office
     # contradiction can try only the next already-consented tier under standing approval.
-    if (residual_state or {}).get('office_retry_allowed') and baseline is not None and not unresolved:
+    if (caption_contradictions and (residual_state or {}).get('office_retry_allowed')
+            and baseline is not None and not unresolved):
         from office_verified_retry import attempt as retry_office_caption
+        from ai_spending_budget import BudgetError
         try:
             retry = retry_office_caption(core.store, scan_id=scan_id, filename=filename,
                 original=working, failed=fixed, values=values, applied=applied,
                 baseline=baseline, failed_check=verification, tickets=exact_tickets,
                 verify=lambda candidate: _verify_residual(candidate, filename, scan_id=scan_id))
-        except ValueError:
+        except (ValueError, BudgetError):
             retry = None  # Missing/frozen/replayed authority never opens another paid attempt.
         if retry:
             retry_bytes, retry_check, retry_changes, retry_proof = retry
@@ -5336,6 +5351,21 @@ def _apply_one_value_kind(
                         'original_outcome': 'superseded_not_verified'}, sort_keys=True))
             pending_credits.append(commit_retry)
             return retry_bytes, True
+
+    if caption_contradictions:
+        # Disproven text is different from an unknown draft. Keep the previous copy;
+        # allowing remaining issues must never publish a caption known to be false.
+        reason = 'Written caption contradicts independently checked visible pixels; previous copy retained. Manual review required.'
+        _model_outcome('could_not_verify', reason, regressions=regressions)
+        import json
+        core.store.log_decision('system', 'apply.caption_rejected', scan_id=scan_id,
+            file=filename, rule_id='1.1.1', detail=json.dumps({
+                'reason': 'pixel_caption_contradiction_no_verified_alternative',
+                'previous_artifact_sha256': _proof_sha256(working).hexdigest(),
+                'failed_artifact_sha256': _proof_sha256(fixed).hexdigest(),
+                'locators': caption_contradictions, 'manual_review_required': True,
+                'previous_copy_retained': True}, sort_keys=True))
+        return working, False
 
     def preserve_unverified(outcome, reason):
         if not (residual_state or {}).get('retain_unverified') or regressions:

@@ -450,3 +450,21 @@ def persist_replacement_approval(store, proof):
             'item_id': proof['item_id'], 'proposal_id': identity, 'approval_event_id': event,
             'model_call_id': call, 'source_revision': proof['source_revision'],
             'approved_value_sha256': value_hash, 'actual_source_sha256': proof['failed_artifact_sha256']}
+
+
+def contradicted_captions(data, actual_values):
+    """Independent rejection is a verification gate even when no retry is authorized."""
+    from caption_validation import validate_caption
+    rejected = []
+    for locator, caption in actual_values.items():
+        try:
+            target = image_target(data, locator)
+        except (ValueError, KeyError, zipfile.BadZipFile, UnicodeError):
+            continue
+        if not target or target[0] != caption:
+            continue
+        verdict = validate_caption(caption, target[1])
+        if (verdict.get('status') == 'rejected'
+                and 'pixel_shape_or_color_contradiction' in verdict.get('reason_codes', [])):
+            rejected.append(locator)
+    return rejected
