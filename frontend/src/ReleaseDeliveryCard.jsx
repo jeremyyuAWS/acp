@@ -4,7 +4,7 @@ import './ReleaseDeliveryCard.css'
 export default function ReleaseDeliveryCard({ ready = [], scopeCount = 0, publishedCount = 0,
   deliveringCount = 0, failedCount = 0, publishing = false, loading = false, readOnly = false,
   allowRemainingIssues = false, onRemainingIssuesChange, onPublish, onOpenDetails,
-  destinationLabel, announcement, error, folders = [], children }) {
+  destinationLabel, announcement, error, folders = [], children, automaticRelease = null, readyCount = ready.length }) {
   const headingId = useId()
   const unavailable = readOnly || loading || publishing
   return <section className="panel release-delivery-card" aria-labelledby={headingId}>
@@ -14,13 +14,20 @@ export default function ReleaseDeliveryCard({ ready = [], scopeCount = 0, publis
       {onOpenDetails && <button className="ghost" type="button" onClick={onOpenDetails}>Release details</button>}
     </div>
     <div className="release-delivery-card__counts" aria-label="Delivery progress">
-      <span><strong>{ready.length}</strong> ready</span>
+      <span><strong>{readyCount}</strong> ready</span>
       <span><strong>{deliveringCount}</strong> delivering</span>
       <span><strong>{publishedCount}</strong> published</span>
       {failedCount > 0 && <span><strong>{failedCount}</strong> delivery failed</span>}
     </div>
     {destinationLabel && <p className="release-delivery-card__destination">Destination: {destinationLabel}</p>}
-    {onRemainingIssuesChange && <label className="release-delivery-card__option">
+    {automaticRelease && <div role="status">
+      <strong>Automatic publishing is on</strong>
+      <p>{automaticRelease.needs_attention
+        ? automaticRelease.attention_reason || 'Automatic delivery needs attention. Open Release details to see what is blocking it.'
+        : 'Q3 already approved publication. Covered copies publish in the background after processing and release checks; no extra click is needed.'}</p>
+      {ready.length > 0 && <p>{ready.length} ready {ready.length === 1 ? 'copy is' : 'copies are'} outside the saved automatic plan. Start a new plan to include them in automatic publishing.</p>}
+    </div>}
+    {!automaticRelease && onRemainingIssuesChange && <label className="release-delivery-card__option">
       <input type="checkbox" checked={allowRemainingIssues} disabled={unavailable}
         onChange={event => onRemainingIssuesChange(event.target.checked)} />
       Include saved copies with remaining work
@@ -28,12 +35,12 @@ export default function ReleaseDeliveryCard({ ready = [], scopeCount = 0, publis
     <p className="muted">{allowRemainingIssues
       ? 'Unresolved work stays in the checklist. Unapproved suggestions are not applied.'
       : 'Only copies that pass release checks are included. You can include remaining work above.'}</p>
-    <button className="primary" type="button" disabled={unavailable || !ready.length || !onPublish}
+    {(!automaticRelease || ready.length > 0) && <button className="primary" type="button" disabled={unavailable || !ready.length || !onPublish}
       onClick={() => onPublish?.(ready.map(file => file.file))}>
       {publishing ? 'Publishing copies…' : loading ? 'Checking release…'
         : `Publish ${ready.length} saved ${ready.length === 1 ? 'copy' : 'copies'}`}
-    </button>
-    {!loading && !publishing && !ready.length && !deliveringCount && !publishedCount &&
+    </button>}
+    {!automaticRelease && !loading && !publishing && !ready.length && !deliveringCount && !publishedCount &&
       <p>{scopeCount ? 'Copies appear here after remediation saves them and release eligibility is confirmed.' : 'Choose documents to remediate first.'}</p>}
     {readOnly && <p>Publishing is unavailable in this view.</p>}
     {(announcement || deliveringCount > 0) && <p role="status">{announcement || 'Delivery continues in the background. The receipt appears here when confirmed.'}</p>}

@@ -39,6 +39,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   // the restriction; this filter enforces it for selection, delivery, packaging and set status.
   const releaseFiles = documentsInSelection(files, triage)
   const [automaticAuthorization, setAutomaticAuthorization] = useState(null)
+  const [automaticStatusPending, setAutomaticStatusPending] = useState(true)
   const [outcomeFilter, setOutcomeFilter] = useState('all')
   const [progressQueue, setProgressQueue] = useState(null)
   const [releaseTab, setReleaseTab] = useState('manage')
@@ -120,8 +121,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     const controller = new AbortController()
     partialChoice.current = null
     setAutomaticAuthorization(null)
+    setAutomaticStatusPending(true)
     setAllowRemainingIssues(false)
-    if (!run?.id || !releaseFiles.length || readOnly) return () => controller.abort()
+    if (!run?.id || !releaseFiles.length || readOnly) { setAutomaticStatusPending(false); return () => controller.abort() }
     let timer
     const refresh = async () => {
       try {
@@ -129,16 +131,17 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         if (!live) return
         const saved = result?.authorization
         setAutomaticAuthorization(saved)
+        setAutomaticStatusPending(false)
         if (partialChoice.current !== releaseScopeKey && saved?.allow_remaining_issues === true
-          && ['active', 'waiting', 'publishing', 'blocked', 'completed'].includes(saved.status)
+          && ['active', 'waiting', 'processing', 'publishing', 'blocked', 'completed'].includes(saved.status)
           && releaseFiles.every(file => saved.files?.includes(file.file))) setAllowRemainingIssues(true)
-        if (saved && (['active','waiting','publishing','blocked'].includes(saved.status)
+        if (saved && (['active','waiting','processing','publishing','blocked'].includes(saved.status)
           || (saved.package && !['done','dead','cancelled'].includes(saved.package.status)))) timer = window.setTimeout(refresh, 5000)
-      } catch { /* Manual choice remains available if saved authorization cannot be read. */ }
+      } catch { if (live) timer = window.setTimeout(refresh, 5000) }
     }
     refresh()
     return () => { live = false; window.clearTimeout(timer); controller.abort() }
-  }, [releaseScopeKey, readOnly])
+  }, [releaseScopeKey, releaseOwner, readOnly])
   useEffect(() => {
     if (!run?.id) { setPackageJob(null); return }
     let stored = null
@@ -770,13 +773,17 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const driveReconnect = (automaticAuthorization?.requires_reconnect === true || automaticAuthorization?.can_resume === true) && automaticAuthorization.resumable !== false && ['active', 'waiting', 'processing', 'publishing', 'blocked'].includes(automaticAuthorization.status) && <DriveReleaseReconnect
         key={`${run?.id}:${automaticAuthorization.id}`} scanId={run?.id} authorizationId={automaticAuthorization.id} requiresReconnect={automaticAuthorization.requires_reconnect === true} readOnly={readOnly}
         onResume={async () => { await resumeAutomaticRelease(run.id, automaticAuthorization.id); setAutomaticAuthorization(previous => previous?.id === automaticAuthorization.id ? {...previous, requires_reconnect:false, can_resume:false} : previous) }} />
-  if (embedded) return <ReleaseDeliveryCard ready={publishableReady} scopeCount={releaseFiles.length}
+  const automaticDelivery = !readOnly && ['active', 'waiting', 'processing', 'publishing', 'blocked'].includes(automaticAuthorization?.status)
+    ? automaticAuthorization : null
+  const manualReady = automaticDelivery
+    ? publishableReady.filter(file => !automaticDelivery.files?.includes(file.file)) : publishableReady
+  if (embedded) return <ReleaseDeliveryCard ready={manualReady} readyCount={publishableReady.length} automaticRelease={automaticDelivery} scopeCount={releaseFiles.length}
     publishedCount={publishedCount} deliveringCount={deliveringCount} failedCount={failedCount}
-    publishing={publishing} loading={destinationPending || (settingsPending && !destinationLocked)} readOnly={readOnly}
+    publishing={publishing} loading={automaticStatusPending || destinationPending || (settingsPending && !destinationLocked)} readOnly={readOnly}
     allowRemainingIssues={allowRemainingIssues} onRemainingIssuesChange={changeRemainingIssues}
     onPublish={names => publishAll(names, releaseFolderName, true)} onOpenDetails={onOpenDetails}
-    destinationLabel={releaseDestination ? `${releaseDestination.folder_name} / Remediated / ${releaseFolder?.name || releaseFolderName || 'Timestamp + user email'}` : releaseProvider === 'drive' ? 'Google Drive / Remediated / Timestamp + user email' : releaseProvider === 'sharepoint' ? 'SharePoint source library / Remediated / Timestamp + user email' : 'ACP managed storage'}
-    announcement={releaseAnnouncement} error={releaseError}
+    destinationLabel={automaticDelivery?.destination_label || (releaseDestination ? `${releaseDestination.folder_name} / Remediated / ${releaseFolder?.name || releaseFolderName || 'Timestamp + user email'}` : releaseProvider === 'drive' ? 'Google Drive / Remediated / Timestamp + user email' : releaseProvider === 'sharepoint' ? 'SharePoint source library / Remediated / Timestamp + user email' : 'ACP managed storage')}
+    announcement={releaseAnnouncement} error={automaticDelivery && !manualReady.length && releaseError?.summary === 'Saved release destination restored' ? null : releaseError}
     folders={releaseFolders.length ? releaseFolders : releaseFolder?.url ? [releaseFolder] : []}>
     {driveReconnect}
     {(releaseId || publishedList.length > 0) && <ReleaseReports scanId={run?.id} publishedCount={publishedCount} readOnly={readOnly} />}
