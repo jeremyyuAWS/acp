@@ -233,7 +233,7 @@ def test_the_route_reads_through_the_helper_not_the_dict(two_replicas):
     above while quietly reinstating the affinity requirement."""
     src = (Path(__file__).resolve().parent.parent / "api" / "routes" / "scans.py").read_text()
     body = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
-    assert "core.get_job_state(job_id)" in body
+    assert "_scan_job_state(job_id)" in body
     assert "core.JOBS.get(" not in body
     assert "core.JOBS[job_id]" not in body
 
@@ -442,3 +442,18 @@ def test_durable_active_status_clears_a_stale_terminal_error_mirror(monkeypatch)
         assert state['phase'] == ('complete' if status == 'done' else status)
         assert state['done'] is (status == 'done')
         assert state['result'] == {'saved': True}
+
+
+def test_progress_only_read_does_not_consult_sql_or_invent_stale_terminal(two_replicas, monkeypatch):
+    import core
+    monkeypatch.setattr(core, 'REDIS_URL', 'redis://configured')
+    core.set_job('progress-only', {'scan_id': 'scan', 'phase': 'remediating', 'done': False})
+    core._JOB_REDIS_DIRTY.add('progress-only')
+    sql_reads = []
+    def forbidden_store():
+        sql_reads.append(True)
+        raise AssertionError('progress-only read must not consult SQL')
+    monkeypatch.setattr(core, 'get_store', forbidden_store)
+    state = core.get_job_state('progress-only', reconcile_durable=False)
+    assert state['phase'] == 'remediating' and state['done'] is False
+    assert sql_reads == []
