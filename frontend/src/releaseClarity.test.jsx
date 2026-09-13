@@ -618,6 +618,8 @@ it('bounds an unresponsive initial automatic publication check and offers an exp
  await act(async()=>vi.advanceTimersByTimeAsync(20000))
  expect(container.textContent).not.toContain('Checking automatic publication…')
  expect(button(container,'Refresh automatic publication status')).toBeTruthy()
+ expect(button(container,'Publish batch (1)')).toBeUndefined()
+ expect(container.querySelector('.release-workspace')).toBeNull()
  expect(publishAllFiles).not.toHaveBeenCalled()
  getAutomaticRelease.mockResolvedValue({authorization:null})
  await act(async()=>button(container,'Refresh automatic publication status').click())

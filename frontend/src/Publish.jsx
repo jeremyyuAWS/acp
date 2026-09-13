@@ -67,6 +67,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [manifestError, setManifestError] = useState('')
   const [publishing, setPublishing] = useState(false)
   const publishLock = useRef(false)
+  const automaticAdmission = useRef({pending:true,error:true,covered:[]})
   const [downloading, setDownloading] = useState(false)
   const [builderStep, setBuilderStep] = useState(1)
   const [deliveryMethod, setDeliveryMethod] = useState('publish')
@@ -252,6 +253,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     && automaticAuthorization.destination?.provider === releaseProvider
     && (!releaseDestination || ['provider', 'folder_id', 'drive_id', 'site_id'].every(key => (releaseDestination[key] || null) === (automaticAuthorization.destination?.[key] || null)))
       ? automaticAuthorization.files || [] : []
+  automaticAdmission.current = {pending:automaticStatusPending,error:!!automaticStatusError,covered:automaticCoveredFiles}
   const sourceProduct = releaseProvider === 'sharepoint' ? 'SharePoint'
     : releaseProvider === 'drive' ? 'Google Drive' : run?.sourceName || 'connected source'
   const anyDrive = releaseProvider === 'drive' && ready.some((f) => f.drive_file_id)
@@ -539,7 +541,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     ? publishAllFiles(run?.id, fileNames, folderName, { destination: releaseDestination, ...partialReleaseOptions(fileNames) })
     : folderName ? publishAllFiles(run?.id, fileNames, folderName) : publishAllFiles(run?.id, fileNames)
   const publish = async (file) => {
-    if (readOnly || done[file] || automaticStatusPending || automaticStatusError || automaticCoveredFiles.includes(file)) return
+    if (readOnly || done[file] || automaticAdmission.current.pending || automaticAdmission.current.error || automaticAdmission.current.covered.includes(file)) return
     const context = releaseContext.current
     try {
       const res = allowRemainingIssues ? await publishSelectedFiles([file]) : releaseDestination
@@ -600,14 +602,14 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     return true
   }
   const publishAll = async (fileNames = null, preferredFolderName = '', exact = false) => {
-    if (publishLock.current || publishing || readOnly || automaticStatusError || automaticStatusPending || destinationPending || (settingsPending && !destinationLocked)) return
+    if (publishLock.current || publishing || readOnly || automaticAdmission.current.error || automaticAdmission.current.pending || destinationPending || (settingsPending && !destinationLocked)) return
     const operation = { scanId: run?.id, context: releaseContext.current }
     publishLock.current = operation
     setPublishing(true)
     setReleaseError(null)
     setReleaseAnnouncement('Publishing your selected copies. Please wait for confirmation.')
     const requested = fileNames ? new Set(fileNames) : null
-    const pending = selectableReady.filter((f) => !done[f.file] && !automaticCoveredFiles.includes(f.file) && (!requested || requested.has(f.file))).map((f) => f.file)
+    const pending = selectableReady.filter((f) => !done[f.file] && !automaticAdmission.current.covered.includes(f.file) && (!requested || requested.has(f.file))).map((f) => f.file)
     if (!pending.length) { publishLock.current = false; setPublishing(false); return }
     try {
       const res = exact
@@ -939,7 +941,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       </section>
 
       {automaticStatusError && <p role="status">{automaticStatusError} <button className="linklike" onClick={() => setAutomaticStatusRefresh(n => n + 1)}>Refresh automatic publication status</button></p>}
-      <ReleaseQuickActions automaticStatusPending={automaticStatusPending} automaticNeedsReconnect={automaticAuthorization?.requires_reconnect === true} automaticNeedsAttention={automaticAuthorization?.status === 'blocked'} automaticCoveredFiles={automaticCoveredFiles} runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
+      <ReleaseQuickActions automaticStatusError={automaticStatusError} automaticStatusPending={automaticStatusPending} automaticNeedsReconnect={automaticAuthorization?.requires_reconnect === true} automaticNeedsAttention={automaticAuthorization?.status === 'blocked'} automaticCoveredFiles={automaticCoveredFiles} runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
         folderName={releaseFolderName} readOnly={readOnly} publishing={publishing} destinationLocked={destinationLocked} destinationPending={destinationPending || (settingsPending && !destinationLocked)}
         announcement={releaseError ? 'Publishing needs attention. See the message below.' : releaseAnnouncement}
         allowRemainingIssues={allowRemainingIssues}
