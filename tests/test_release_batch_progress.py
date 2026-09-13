@@ -116,7 +116,7 @@ def test_unconfirmed_receipts_or_unrelated_identity_never_inflate_delivered_scop
             store._db.execute(cur, 'UPDATE stage_executions SET is_current=0 WHERE execution_id=%s', (authorization['run_id'],))
     batch = progress_evidence.read(store, execution, owner='owner')['release_batch_progress']
     if mutation in {'unrelated_authorization', 'replaced_run'}:
-        assert batch == {'available': False}
+        assert batch == {'available': False, 'scope': 'automatic'}
     else:
         assert batch['total'] == 12 and batch['delivered'] == 0 and batch['remaining'] == 12
 
@@ -134,3 +134,25 @@ def test_completed_files_do_not_complete_pending_report_package(isolated_store):
     with store._db.cursor() as cur:
         store._db.execute(cur, "UPDATE jobs SET status='done' WHERE id=%s", (job,))
     assert progress_evidence.read(store, execution, owner='owner')['release_batch_progress']['status'] == 'completed'
+
+
+def test_unavailable_delivery_projection_is_not_mistaken_for_manual_scope(isolated_store, monkeypatch):
+    import release_batch_progress
+    store = isolated_store
+    execution, _, _, _ = setup(store, scope=3)
+    stage = store.get_stage_execution(execution, owner='owner')
+    def unavailable(*args, **kwargs):
+        raise RuntimeError('synthetic lookup unavailable')
+    monkeypatch.setattr(store, 'release_for_scan', unavailable)
+    assert release_batch_progress.read(store, stage) == {'available': False, 'scope': 'unknown'}
+
+
+def test_only_request_payloads_without_automatic_identity_prove_manual_scope(isolated_store):
+    import release_batch_progress
+    store = isolated_store
+    seed(store)
+    execution = store.enqueue_stage_batch('scan', 'release', 'publish_file',
+        [{'owner': 'owner', 'scan_id': 'scan', 'file': 'manual.pdf'}],
+        snapshot_id='corrected', request_fingerprint='manual')['batch_id']
+    assert release_batch_progress.read(store, store.get_stage_execution(execution, owner='owner')) == {
+        'available': False, 'scope': 'manual'}

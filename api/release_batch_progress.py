@@ -7,7 +7,7 @@ def read(store, execution):
         return _read(store, execution)
     except Exception:
         # Optional presentation must never weaken or replace canonical accounting.
-        return {'available': False}
+        return {'available': False, 'scope': 'unknown'}
 
 
 def _read(store, execution):
@@ -21,30 +21,34 @@ def _read(store, execution):
             'WHERE w.execution_id=%s', (execution['execution_id'],))
         jobs = store._db.fetchall(cur)
     identities = set()
+    if not jobs:
+        return {'available': False, 'scope': 'unknown'}
     for job in jobs:
         payload = json.loads(job['payload']) if isinstance(job['payload'], str) else job['payload']
         identity = payload.get('automatic_release_id')
-        if not identity or payload.get('owner') != owner or payload.get('scan_id') != scan:
-            return {'available': False}
+        if payload.get('owner') != owner or payload.get('scan_id') != scan:
+            return {'available': False, 'scope': 'unknown'}
         identities.add(identity)
-    if len(identities) != 1:
-        return {'available': False}
+    if identities == {None}:
+        return {'available': False, 'scope': 'manual'}
+    if len(identities) != 1 or not next(iter(identities)):
+        return {'available': False, 'scope': 'unknown'}
     row = get(store, next(iter(identities)), owner)
     if not row or row['scan_id'] != scan:
-        return {'available': False}
+        return {'available': False, 'scope': 'automatic'}
     parent = store.get_stage_execution(row['run_id'], owner=owner)
     if (not parent or parent.get('stage') != 'remediate' or parent.get('scan_id') != scan
             or not parent.get('is_current')
             or parent.get('workflow_id') != execution.get('workflow_id')
             or parent.get('workflow_revision') != execution.get('workflow_revision')):
-        return {'available': False}
+        return {'available': False, 'scope': 'automatic'}
     files = row['intent'].get('files')
     if isinstance(files, dict):
         files = list(files)  # Current authorizations freeze per-file source identities.
     if not isinstance(files, list) or not files or any(not isinstance(f, str) or not f for f in files):
-        return {'available': False}
+        return {'available': False, 'scope': 'automatic'}
     if len(set(files)) != len(files):
-        return {'available': False}
+        return {'available': False, 'scope': 'automatic'}
     release = store.release_for_scan(scan, owner) or {}
     destination_matches = (release.get('parent_folder_id') == row['intent'].get('release_parent_id')
                            and release.get('folder_name') == row['intent'].get('release_folder_name'))

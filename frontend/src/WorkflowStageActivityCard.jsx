@@ -61,7 +61,9 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
     <p className="workflow-sse-card__outcome">{batch ? <b>{batch.summary}</b> : findingAccounting
       ? <><b>{shown(total)} assessed findings</b> · Outcome breakdown</>
       : <><b>{shown(done)} of {shown(total)}</b> {domain?.unit || model.unit}</>}</p>
-    {batch && <p className="workflow-sse-card__notice">{shown(batch.remaining)} authorized files awaiting confirmed delivery. Latest delivery request: {shown(done)} of {shown(total)} requested documents accounted for. Request completion does not mean the entire batch is delivered.</p>}
+    {batch && <p className="workflow-sse-card__notice">{batch.available === false
+      ? 'The approved batch could not be confirmed. '
+      : `${shown(batch.remaining)} authorized files awaiting confirmed delivery. `}Latest delivery request: {shown(done)} of {shown(total)} requested documents accounted for. Request completion does not mean the entire batch is delivered.</p>}
     {findingAccounting && <p className="workflow-sse-card__notice">{live ? 'Verified totals update as document work progresses.' : 'Automatic document work has stopped; remaining findings still need review or remediation.'} Outcomes show what happened to the findings. Document categories show how they can be remediated; individual bucket counts can differ.</p>}
     {model.stage === 'remediate' && progressHostId && <div id={progressHostId} data-scan-id={progressScanId} data-batch-id={model.executionId} aria-label="Document progress summary" />}
     {['remediate', 'release'].includes(model.stage) ? <>

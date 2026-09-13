@@ -24,12 +24,27 @@ it('shows cumulative authorized delivery without claiming the latest finished re
 })
 
 it('never treats the overall scan population as approved scope for a manual or ambiguous request', () => {
-  expect(releaseBatchProgress(snapshot({available:false,total:147}))).toBeNull()
-  expect(releaseBatchProgress(snapshot({...batch,total:2}))).toBeNull()
+  expect(releaseBatchProgress(snapshot({available:false,scope:'manual'}))).toBeNull()
+  expect(releaseBatchProgress(snapshot({...batch,total:2}))).toMatchObject({available:false,state:'failed'})
   container=document.createElement('div');document.body.appendChild(container);root=createRoot(container)
   act(() => root.render(<WorkflowStageStack lineage={{scan_id:'scan',workflow_revision:1,stages:[snapshot(null)]}}/>))
   expect(container.querySelector('.workflow-stage-stack__summary').textContent).toContain('1 of 1 requested documents')
   expect(container.textContent).not.toContain('147')
+})
+it.each(['automatic','unknown'])('never shows Complete when %s batch delivery cannot be confirmed', scope => {
+  container=document.createElement('div');document.body.appendChild(container);root=createRoot(container)
+  act(() => root.render(<WorkflowStageStack lineage={{scan_id:'scan',workflow_revision:1,
+    stages:[snapshot({available:false,scope})]}}/>))
+  expect(container.querySelector('.workflow-stage-stack__summary').textContent).toContain('Delivery confirmation unavailable')
+  expect(container.querySelector('.workflow-stage-stack__summary').textContent).not.toContain('Complete')
+  expect(container.textContent).not.toContain('undefined')
+})
+it('retains completion of the approved request when manual scope is positively established', () => {
+  container=document.createElement('div');document.body.appendChild(container);root=createRoot(container)
+  act(() => root.render(<WorkflowStageStack lineage={{scan_id:'scan',workflow_revision:1,
+    stages:[snapshot({available:false,scope:'manual'})]}}/>))
+  expect(container.querySelector('.workflow-stage-stack__summary').textContent).toContain('Complete')
+  expect(container.querySelector('.workflow-stage-stack__summary').textContent).toContain('1 of 1 requested documents')
 })
 
 it('keeps stopped delivery visible instead of reviving automatic publication', () => {
