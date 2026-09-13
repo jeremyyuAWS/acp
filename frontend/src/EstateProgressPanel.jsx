@@ -17,34 +17,32 @@ const pctLabel = (a, b) => `${pct(a, b)}%`
 // ── 1. Horizontal estate progress funnel ─────────────────────────────────────
 
 const STAGE_COLOR = ['var(--plum)', 'var(--focus-ring)', 'var(--info-fg)', '#067647']
-const STAGE_LIGHT = ['#f3eef6', '#ede7f6', '#eff8ff', '#ecfdf3']
 const STAGE_FG    = ['var(--plum)', '#4B3460', '#0B3A7A', '#074D31']
 
-function FunnelStage({ label, count, ofDiscovered, pending, pendingLabel, color, lightColor, fgColor, onClick, isLast }) {
+function FunnelStage({ label, count, ofDiscovered, pending, pendingLabel, color, fgColor, onClick, isLast }) {
   const pctNum = pct(count, ofDiscovered)
-  const width = Math.max(52, pctNum)   // never collapse below readable width
+  const width = Math.max(0, Math.min(100, pctNum))
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 0, flex: 1, minWidth: 0 }}>
       {/* Stage box */}
       <div style={{ flex: 1, minWidth: 0 }}>
         <button
           onClick={onClick}
-          style={{ width: '100%', background: lightColor, border: `2px solid ${color}`, borderRadius: 12,
-                   padding: '14px 16px', cursor: onClick ? 'pointer' : 'default', textAlign: 'left',
+          style={{ width: '100%', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12,
+                   padding: '12px 14px', cursor: onClick ? 'pointer' : 'default', textAlign: 'left',
                    transition: 'filter .15s' }}
           onMouseEnter={(e) => onClick && (e.currentTarget.style.filter = 'brightness(0.95)')}
           onMouseLeave={(e) => (e.currentTarget.style.filter = '')}
         >
-          <div style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em',
-                        color: fgColor, marginBottom: 6 }}>{label}</div>
-          <div style={{ fontSize: 28, fontWeight: 700, color: fgColor, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
+          <div style={{ fontSize: 11.5, lineHeight: 1.35, color: 'var(--muted)', marginBottom: 5 }}>{label}</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: fgColor, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
             {count == null ? '—' : nf.format(count)}
           </div>
-          <div style={{ fontSize: 12.5, color: fgColor, opacity: 0.75, marginTop: 4 }}>
+          <div style={{ fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.45, marginTop: 5 }}>
             {count != null && ofDiscovered ? pctLabel(count, ofDiscovered) + ' of estate' : ''}
           </div>
           {/* Progress bar showing proportion of discovered */}
-          <div style={{ marginTop: 10, height: 4, borderRadius: 2, background: `${color}33` }}>
+          <div style={{ marginTop: 10, height: 4, borderRadius: 2, background: `color-mix(in srgb, ${color} 18%, var(--surface))` }}>
             <div style={{ width: `${width}%`, height: '100%', borderRadius: 2, background: color,
                           transition: 'width .6s cubic-bezier(.4,0,.2,1)' }} />
           </div>
@@ -307,7 +305,7 @@ export default function EstateProgressPanel({
             ofDiscovered={discovered}
             pending={eligPending}
             pendingLabel="not eligible"
-            color={STAGE_COLOR[0]} lightColor={STAGE_LIGHT[0]} fgColor={STAGE_FG[0]}
+            color={STAGE_COLOR[0]} fgColor={STAGE_FG[0]}
             onClick={() => onGo?.('discover')}
           />
           <FunnelStage
@@ -316,7 +314,7 @@ export default function EstateProgressPanel({
             ofDiscovered={discovered}
             pending={assPending}
             pendingLabel="awaiting assessment"
-            color={STAGE_COLOR[1]} lightColor={STAGE_LIGHT[1]} fgColor={STAGE_FG[1]}
+            color={STAGE_COLOR[1]} fgColor={STAGE_FG[1]}
             onClick={() => onGo?.('assess')}
           />
           <FunnelStage
@@ -325,7 +323,7 @@ export default function EstateProgressPanel({
             ofDiscovered={discovered}
             pending={remPending}
             pendingLabel="with findings"
-            color={STAGE_COLOR[2]} lightColor={STAGE_LIGHT[2]} fgColor={STAGE_FG[2]}
+            color={STAGE_COLOR[2]} fgColor={STAGE_FG[2]}
             onClick={() => onGo?.('remediate')}
           />
           <FunnelStage
@@ -334,7 +332,7 @@ export default function EstateProgressPanel({
             ofDiscovered={discovered}
             pending={relPending != null && relPending > 0 ? relPending : null}
             pendingLabel="pending release"
-            color={STAGE_COLOR[3]} lightColor={STAGE_LIGHT[3]} fgColor={STAGE_FG[3]}
+            color={STAGE_COLOR[3]} fgColor={STAGE_FG[3]}
             isLast
             onClick={() => onGo?.('monitor')}
           />

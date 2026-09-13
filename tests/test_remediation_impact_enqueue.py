@@ -131,3 +131,22 @@ def test_incomplete_assessment_cannot_execute_partial_forecast(route, monkeypatc
         "remediation_policy": {"rule_based": 2, "ai": 0}})
     assert response.status_code == 409
     assert captured == []
+
+
+def test_frozen_assess_review_choice_overrides_browser_automatic_policy(route, monkeypatch):
+    client, captured, store = route
+    snapshot = store.get_scan('scan')
+    choice = {'mode': 'custom', 'review_scs': ['3.1.1']}
+    snapshot['run']['scope'] = {'fix_approval_policy': choice}
+    monkeypatch.setattr(store, 'get_scan', lambda *args, **kwargs: deepcopy(snapshot))
+    response = client.post('/scans/scan/remediate', json={'remediation_policy': {
+        'rule_based': 2, 'ai': 1,
+        'fix_approval_policy': {'mode': 'automatic', 'review_scs': []},
+    }})
+    assert response.status_code == 200, response.text
+    job = captured[0]['payloads'][0]
+    assert job['remediation_impact_policy']['fix_approval_policy'] == choice
+    assert job['remediation_impact_allowed_rules'] == []
+    forecast = remediation_impact.build_run_impact(store, 'scan', OWNER, {'rule_based': 2, 'ai': 1})
+    assert forecast['policy']['fix_approval_policy'] == choice
+    assert forecast['lanes']['automatic']['findings'] == 0

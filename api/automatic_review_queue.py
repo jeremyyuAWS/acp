@@ -9,8 +9,9 @@ def _key(owner, run_id, item_id):
 
 from release_continuation import PDF_STRUCTURE_MANUAL, PDF_STRUCTURE_REVIEW
 from sensory_rewrite_output import NON_ANSWER_REASON
+from fix_approval_policy import REVIEW_REQUIRED
 
-HUMAN_REASONS = {'Manual work or no supported proposal writer', PDF_STRUCTURE_MANUAL, PDF_STRUCTURE_REVIEW, NON_ANSWER_REASON, 'This change requires individual review', 'The draft contradicts visible image evidence; individual review is required', 'Proposal requires individual judgment or has no exact AI provenance'}
+HUMAN_REASONS = {REVIEW_REQUIRED, 'Manual work or no supported proposal writer', PDF_STRUCTURE_MANUAL, PDF_STRUCTURE_REVIEW, NON_ANSWER_REASON, 'This change requires individual review', 'The draft contradicts visible image evidence; individual review is required', 'Proposal requires individual judgment or has no exact AI provenance'}
 
 
 def record(store, owner, sid, run_id, source_revision, item, state, reason):

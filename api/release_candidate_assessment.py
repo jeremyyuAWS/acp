@@ -30,16 +30,42 @@ def assess_candidate(store, scan_id, filename, owner, digest, remediated_at, *,
         from remediated_copy_audit import inspect
         readable = inspect(data, extension)
         structurally_readable = readable['readable']
-    from proposals import verify_residual
-    verification = verify_residual(data, filename, scan_id=scan_id)
+    from proposals import Verification, verify_residual
+    from verification_identity import evaluator_identity, scope_identity
+    scope = store.get_scan_scope(scan_id, refresh=True)
+    scope = store.scope_for_file(scan_id, filename, scope)
+    selected_scope = scope_identity(scope)
+    evaluator = evaluator_identity()
+    previous = (saved_assessment(store, scan_id, owner, filename, digest, release_id=release_id)
+                if extension == 'pdf' and evaluator and release_id else None)
+    reused = bool(previous and previous.get('assessment_ok') is True
+                  and previous.get('assessment_status') == 'analysed'
+                  and isinstance(previous.get('remaining_issues'), list)
+                  and isinstance(previous.get('remaining_criteria'), list)
+                  and previous.get('remediated_at') == remediated_at
+                  and previous.get('assessment_scope') == selected_scope
+                  and previous.get('evaluator_identity') == evaluator)
+    if reused:
+        verification = Verification(True, previous['remaining_criteria'], assessment={
+            'status': 'analysed', 'issues': previous['remaining_issues'],
+            'errors': previous.get('errors'), 'skipped_rules': previous.get('skipped_rules')},
+            artifact_sha256=digest)
+    else:
+        verification = verify_residual(data, filename, scan_id=scan_id)
+    if verification.artifact_sha256 and verification.artifact_sha256 != digest:
+        raise ReleaseArtifactError('Verification checked a different corrected copy.')
     assessment = verification.assessment or {}
     assessment_ok = (verification.ok and assessment.get('status') == 'analysed'
                      and isinstance(assessment.get('issues'), list))
-    scope = store.get_scan_scope(scan_id, refresh=True)
-    scope = store.scope_for_file(scan_id, filename, scope)
+    final_scope = store.scope_for_file(scan_id, filename,
+                                      store.get_scan_scope(scan_id, refresh=True))
+    if scope_identity(final_scope) != selected_scope:
+        raise ReleaseArtifactError('The assessment scope changed while checking this copy.')
+    if evaluator and evaluator_identity() != evaluator:
+        raise ReleaseArtifactError('The assessment engine changed while checking this copy.')
     evidence = {'artifact_sha256': digest, 'remediated_at': remediated_at,
-                'release_id': release_id, 'assessment_scope':
-                    {code: sorted(formats) for code, formats in scope.items()} if scope else None,
+                'release_id': release_id, 'assessment_scope': selected_scope,
+                'evaluator_identity': evaluator, 'assessment_reused': reused,
                 'assessment_ok': assessment_ok,
                 'assessment_status': assessment.get('status') or 'unavailable',
                 'remaining_criteria': sorted(verification.residual),

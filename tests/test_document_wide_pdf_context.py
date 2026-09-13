@@ -96,7 +96,7 @@ def test_unsupported_selected_findings_are_advisory_not_write_targets(isolated_s
     rows = setup_manifest(isolated_store, monkeypatch, data, 'a.pdf', '1.1.1', ['pdf:fig:1:0', 'unsupported-location'])
     manifest = build_manifest(isolated_store, 'scan', 'a.pdf', data)
     assert manifest.finding_ids() == {rows[0]['finding_id']}
-    assert rows[1]['finding_id'] in manifest.text_context
+    assert rows[1]['finding_id'] not in manifest.text_context
     assert 'no write authorization' in manifest.text_context
     assert rows[1]['finding_id'] not in manifest.finding_ids()
 

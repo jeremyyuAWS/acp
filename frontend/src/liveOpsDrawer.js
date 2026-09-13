@@ -1,3 +1,4 @@
+import { verificationFailureLabel } from './remediationEventFeed.js'
 /**
  * Live Operations detail drawer — every derivation the drawer draws from, kept out of the
  * component so each one is testable without a DOM (PRD "Visual, Real-Time Live Operations
@@ -1413,12 +1414,12 @@ const REMEDIATION_EVENT_TEXT = {
   'remediate.accepted': (d) => `Remediation accepted${d.documents == null ? '' : ` for ${d.documents} documents`}`,
   'remediate.fix_applied': (d) => `${d.fixes ?? 'Approved'} fix${d.fixes === 1 ? '' : 'es'} applied`,
   'remediate.verified': (d) => `${d.fixes ?? 'Applied'} fix${d.fixes === 1 ? '' : 'es'} verified by re-scan`,
-  'remediate.verification_failed': (d) => `${d.fixes ?? 'Applied'} fix${d.fixes === 1 ? '' : 'es'} failed re-scan`,
+  'remediate.verification_failed': (d) => verificationFailureLabel(d) || `${d.fixes ?? 'Applied'} fix${d.fixes === 1 ? '' : 'es'} failed re-scan`,
   'remediate.delivered': () => 'Corrected copy delivered to the source provider',
   'remediate.delivery_failed': (d) => d.delivery_status === 'saved_in_acp'
     ? 'Corrected copy saved in ACP; source delivery pending'
     : 'Corrected copy retained in ACP; provider delivery failed',
-  'remediate.review_requested': (d) => `Manual review requested${d.criterion ? ` for WCAG ${d.criterion}` : ''}`,
+  'remediate.review_requested': (d) => d.reason_code === 'pdf_structure_tagging_required' ? 'WCAG 1.3.1: Add PDF accessibility tags in a document editor' : `Manual review requested${d.criterion ? ` for WCAG ${d.criterion}` : ''}`,
   'remediate.document_completed': () => 'Document remediation completed',
 }
 

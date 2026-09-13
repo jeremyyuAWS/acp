@@ -56,3 +56,16 @@ it('discloses the optimized PDF models only for the frozen native profile', () =
   expect(render({ policy })).toContain('optimized profile not recorded')
   expect(render({ policy: { ...policy, document_wide_input_mode: 'extracted', document_wide_model_profile: 'native-pdf-quality.v1' } })).not.toContain(names)
 })
+
+it('honors frozen review choices despite an old automatic approval flag', () => {
+  const html = render({ policy: { ai: 1, rule_based: 2, auto_approve_ai: true, fix_approval_policy: { mode: 'review', review_scs: [] } } })
+  expect(html).toContain('Review before applying supported fixes')
+  expect(html).not.toContain('Apply supported suggestions automatically')
+  expect(html).not.toContain('Apply supported rule-based fixes automatically')
+})
+it('shows automatic application and custom review exceptions together', () => {
+  const html = render({ policy: { ai: 1, auto_approve_ai: true, fix_approval_policy: { mode: 'custom', review_scs: ['1.3.1'] } } })
+  expect(html).toContain('Automatic except criteria selected for review')
+  expect(html).toContain('Criteria requiring review')
+  expect(html).toContain('1.3.1')
+})

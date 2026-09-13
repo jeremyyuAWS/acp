@@ -5,6 +5,27 @@ import { remainingWorkStatus } from './remainingWorkStatus.js'
 import { addRemediationEvent } from './remediationEventFeed.js'
 const event = (id, kind, reasonCode) => ({id:String(id),key:String(id),kind,documentKey:'private-ref',reasonCode})
 describe('remaining work responsibility', () => {
+  it('reports rejected generated output without a false spending or permission blocker', () => {
+    const [row] = addRemediationEvent([], {kind:'remediate.vision_retry_blocked', document:'report.docx', document_ref:'private-ref', detail:{reason_code:'vision_generated_output_unusable', output:'private provider text'}}, 7)
+    expect(row.reasonCode).toBe('vision_generated_output_unusable')
+    expect(row.line).toContain('automatic generation attempts stopped')
+    expect(JSON.stringify(row)).not.toContain('private provider text')
+    const result = remainingWorkStatus({events:[row], rows:[{id:1,file:'report.docx',rule_id:'1.1.1',aiDraftable:true,status:'pending',hasProposal:false}]})
+    expect(result.notices[0].label).toBe('AI response could not be used')
+    expect(result.notices[0].responsibility).not.toMatch(/permission|spending limit/)
+    expect(result.counts['blocked-ai']).toBe(0)
+    expect(result.counts['missing-proposals']).toBe(1)
+  })
+  it('separates missing drafts, failed checks and genuine decisions instead of merging them as human review', () => {
+    const result=remainingWorkStatus({rows:[
+      {id:1,file:'a.docx',rule_id:'1.1.1',aiDraftable:true,status:'pending',hasProposal:false},
+      {id:2,file:'b.pdf',rule_id:'2.4.2',status:'verification_failed',hasProposal:true,after:'Title'},
+      {id:3,file:'c.docx',rule_id:'1.3.3',status:'pending',hasProposal:true,after:'Use button A'},
+    ]})
+    expect(result.notices.find(n=>n.key==='missing-proposals')?.count).toBe(1)
+    expect(result.notices.find(n=>n.key==='failed-checks')?.count).toBe(1)
+    expect(result.notices.find(n=>n.key==='review')?.count).toBe(1)
+  })
   it('replay order cannot resurrect recovered waits', () => {
     expect(remainingWorkStatus({events:[event(4,'remediate.vision_retry_pending'),event(9,'remediate.vision_retry_recovered'),event(7,'remediate.vision_retry_blocked','vision_spending_reconciliation_required')]}).notices).toEqual([])
   })
@@ -39,7 +60,7 @@ describe('remaining work responsibility', () => {
     expect(recent.notices.some(n=>n.key==='review')).toBe(false)
     const old=remainingWorkStatus({events:[e],rows,snapshot:{generated_at:'2026-09-13T20:45:00Z'}})
     expect(old.notices[0].label).toBe('AI usage confirmation needs attention')
-    expect(old.notices.some(n=>n.key==='manual')).toBe(true)
+    expect(old.notices.find(n=>n.key==='blocked-ai')?.count).toBe(1)
   })
   it('a spending pause never hides manual crop or sensory review in the same document', () => {
     const e={...event(1,'remediate.vision_retry_blocked','vision_spending_reconciliation_required'),documentName:'a.docx',occurredAt:'2026-09-13T20:00:00Z'}

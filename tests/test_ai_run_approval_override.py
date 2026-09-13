@@ -6,6 +6,32 @@ from ai_standing_approval import approve_file, check_application
 from ai_run_approval_override import read, save, process_pending
 
 
+def test_review_every_fix_exposes_effective_off_and_cannot_be_bypassed_by_run_toggle(isolated_store,monkeypatch):
+    store=isolated_store;job=seed(store,monkeypatch,fix_policy={'mode':'review','review_scs':[]})
+    with run_context(store,job['payload'],job) as ctx:
+        state=read(store,OWNER,SID,ctx.run_id)
+        assert state['supported'] is True
+        assert state['enabled'] is False and state['can_change'] is False
+        assert state['fix_approval_policy'] == {'mode':'review','review_scs':[]}
+        with pytest.raises(ValueError,match='cannot bypass'):
+            save(store,OWNER,SID,ctx.run_id,True,0,state['source_revision'])
+
+
+def test_custom_policy_exposes_exceptions_and_disabled_toggle_cannot_remove_them(isolated_store,monkeypatch):
+    store=isolated_store;job=seed(store,monkeypatch,fix_policy={'mode':'custom','review_scs':['2.4.6']})
+    with run_context(store,job['payload'],job) as ctx:
+        state=read(store,OWNER,SID,ctx.run_id)
+        assert state['enabled'] is True and state['can_change'] is True
+        assert state['fix_approval_policy']['review_scs'] == ['2.4.6']
+        updated=save(store,OWNER,SID,ctx.run_id,False,0,state['source_revision'])
+        save(store,OWNER,SID,ctx.run_id,True,updated['revision'],state['source_revision'])
+        item=store.enqueue_proposals(SID,FILE,'2.4.6',[proposal(store)])
+        approve_file(store,ctx)
+        assert store.get_hitl_item(item)['status'] == 'pending'
+        from automatic_review_queue import annotate
+        assert annotate(store,[store.get_hitl_item(item)],OWNER)[0]['automatic_approval']['responsibility'] == 'human'
+
+
 def test_switch_on_approves_existing_exact_run_proposal_then_off_preserves_approved_writer(isolated_store, monkeypatch):
     store=isolated_store
     job=seed(store, monkeypatch, enabled=False)

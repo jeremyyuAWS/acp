@@ -34,6 +34,9 @@ def _route(row, policy):
         return 'manual', 'accessibility_judgment'
     if row.get('evidence_complete') is False:
         return 'blocked', 'missing_evidence'
+    from fix_approval_policy import requires_review
+    if requires_review(policy, row.get('criterion') or criterion(row.get('rule_id'))):
+        return 'review', 'criterion_approval_required'
     if row.get('origin') == 'rule_based':
         if policy['rule_based'] == 0:
             return 'review', 'approval_required'
@@ -214,9 +217,13 @@ def build_run_impact(store, scan_id, owner, policy=None, scope=None):
         selected_names = set(scope)
         rows = [r for r in rows if r['file'] in selected_names]
         files = [f for f in files if f['file'] in selected_names]
-    selected = policy or active
     scan = store.get_scan(scan_id, owner=owner)
     run = scan.get('run') or {}
+    selected = policy or active
+    scan_approval = (run.get('scope') or {}).get('fix_approval_policy')
+    if scan_approval is not None:
+        selected = {**selected, 'fix_approval_policy': scan_approval}
+        active = {**active, 'fix_approval_policy': scan_approval}
     # Partial traces during a running assessment are not a complete population.
     assessed = bool(run.get('assessed_at'))
     result = build_impact_preview(rows, selected, files=files, active_policy=active,

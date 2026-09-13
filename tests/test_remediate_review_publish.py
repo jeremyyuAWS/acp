@@ -71,6 +71,22 @@ def test_stuck_auto_finding_still_reaches_review(store):
     assert {p["rule_id"] for p in store.list_hitl_queue(scan_id="s1")} == {"1.4.3", "2.4.4"}
 
 
+def test_custom_protected_contrast_survives_writer_filter_as_manual_actionable_task(store):
+    from remediation_impact_execution import execution_controls
+    from release_continuation import eligibility
+    _seed_pptx(store)
+    policy={'rule_based':2,'ai':1,'fix_approval_policy':{'mode':'custom','review_scs':['1.4.3']}}
+    controls=execution_controls({'remediation_impact_policy':policy,'remediation_impact_allowed_rules':['1.4.3']},True)
+    assert not controls['allowed_rules']
+    review=_residual_review_rules(store,'s1','deck.pptx',cleared=set())
+    store.queue_hitl_review_for_file('s1','deck.pptx',review)
+    contrast=next(row for row in store.list_hitl_queue(scan_id='s1') if row['rule_id']=='1.4.3')
+    assert contrast['status']=='pending'
+    assert contrast['finding_count'] > 0
+    assert eligibility(contrast,'deck.pptx') == 'Manual work or no supported proposal writer'
+    assert not store.mark_file_compliant_if_reviewed('s1','deck.pptx')
+
+
 def test_compliant_flips_only_when_every_item_approved(store):
     _seed_pptx(store)
     review = _residual_review_rules(store, "s1", "deck.pptx", cleared={"1.4.3"})

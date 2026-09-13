@@ -38,8 +38,14 @@ def read(store, owner, sid, run_id):
     if saved and saved.get('source_revision') != source:
         raise ValueError('Automatic approval override source revision changed')
     supported = policy.get('ai') == 1
+    from fix_approval_policy import normalize
+    choice = normalize(policy['fix_approval_policy']) if 'fix_approval_policy' in policy else None
+    review_all = choice is not None and choice['mode'] == 'review'
     return {'supported': supported, 'reason': None if supported else 'This run did not authorize AI suggestions. Enable AI in a new remediation plan.', 'run_id': run_id, 'source_revision': source, 'revision': saved.get('revision', 0),
-            'enabled': supported and saved.get('enabled', policy.get('auto_approve_ai') is True),
+            'enabled': supported and not review_all and saved.get('enabled', policy.get('auto_approve_ai') is True),
+            'can_change': supported and not review_all,
+            'fix_approval_policy': choice,
+            'explanation': 'The saved run requires review before every supported fix. Automatic approval cannot bypass this choice.' if review_all else 'Automatic approval applies only to eligible suggestions outside the criteria selected for human review.' if choice and choice['mode'] == 'custom' else None,
             'granted_ever': policy.get('auto_approve_ai') is True or saved.get('granted_ever') is True}
 
 
@@ -50,6 +56,8 @@ def save(store, owner, sid, run_id, enabled, expected_revision, expected_source_
         current = read(store, owner, sid, run_id)
         if not current['supported']:
             raise ValueError(current['reason'])
+        if not current['can_change']:
+            raise ValueError(current['explanation'])
         if current['source_revision'] != expected_source_revision:
             raise ValueError('Remediation source revision changed')
         if current['revision'] != expected_revision:

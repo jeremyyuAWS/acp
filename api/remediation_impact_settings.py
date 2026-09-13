@@ -33,6 +33,9 @@ def normalize_policy(policy):
         policy = {**policy, 'ai_budget_usd': policy.get('ai_budget_usd', RECOMMENDED_RUN_BUDGET_USD),
                   'document_wide_ai': True}
     result = {}
+    if 'fix_approval_policy' in policy:
+        from fix_approval_policy import normalize
+        result['fix_approval_policy'] = normalize(policy['fix_approval_policy'])
     for key, maximum in (("rule_based", 2), ("ai", 3)):
         value = policy.get(key)
         if type(value) is not int or not 0 <= value <= maximum:

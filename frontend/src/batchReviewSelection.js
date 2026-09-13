@@ -1,4 +1,4 @@
-import { isPdfStructuralRow, pdfStructuralSummary, proposalsFor } from './pdfStructuralProposal.js'
+import { isPdfStructuralRow, pdfStructuralSummary, proposalsFor, requiresPdfSourceEditing } from './pdfStructuralProposal.js'
 import { isResolved, laneOf } from './remediationInboxModel.js'
 
 export function proposalValues(f) {
@@ -7,6 +7,7 @@ export function proposalValues(f) {
 }
 export function exclusionReason(f, decisions = {}, drafts = {}) {
   if (isResolved(f, decisions)) return 'Already reviewed'
+  if (requiresPdfSourceEditing(f)) return 'Manual PDF tagging — use a source or PDF accessibility editor'
   if (f.stale || f.superseded || f._raw?.superseded) return 'Stale — refresh and review'
   if (isPdfStructuralRow(f) && !proposalsFor(f).every(pdfStructuralSummary)) return 'Invalid structural proposal — refresh suggestions'
   const lane = laneOf(f).key

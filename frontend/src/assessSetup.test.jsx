@@ -294,10 +294,22 @@ describe('the run carries exactly what was decided here', () => {
     expect(onRun.mock.calls[0][0]).toMatchObject({
       scope, criteria: 17, documents: 22, checks: 374, level: 'AA',
       includeLifecycleFlagged: false,
+      fix_approval_policy: {mode:'automatic',review_scs:[]},
     })
   })
 })
 
+
+it('carries approval choice without changing saved assessment scope', async () => {
+  const onRun=vi.fn()
+  const {c}=await render({onRun})
+  await click(c.querySelector('input[value="review"]'))
+  await click(ackBox(c))
+  await click(runBtn(c))
+  expect(onRun.mock.calls[0][0].fix_approval_policy).toEqual({mode:'review',review_scs:[]})
+  const scope=JSON.parse(api.putAssessmentScope.mock.calls.at(-1)[1].scan_scope)
+  expect(Object.keys(scope).sort()).toEqual(CODESET.map(row=>row.code).sort())
+})
 
 // ── SOURCE LANE — the absences, which no rendered output can distinguish from an oversight ─────
 describe('what this board removed stays removed', () => {

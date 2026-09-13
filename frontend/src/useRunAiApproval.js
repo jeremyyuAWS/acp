@@ -34,11 +34,16 @@ export default function useRunAiApproval(scanId, runId) {
   }
   useEffect(() => {
     const version = ++generation.current
-    setSetting(null); setSaving(false); setError(''); setNotice(null); writing.current = false
+    // A failed refresh cannot turn a last-confirmed On value into Off. Never
+    // carry that value across account, scan, or run boundaries.
+    setSetting(previous => previous?.identity === identity ? previous : null)
+    setSaving(false); setError(''); setNotice(null); writing.current = false
     if (scanId && runId) bounded(signal => getRunAiApproval(scanId, runId, { signal })).then(result => {
       if (currentScope(identity, epoch, version)) setSetting({ ...result, identity })
-    }).catch(() => {
-      if (currentScope(identity, epoch, version)) setError('Automatic approval setting is unavailable. Refresh the setting to try again.')
+    }).catch(failure => {
+      if (currentScope(identity, epoch, version)) setError([401,403].includes(failure?.status)
+        ? 'Automatic approval setting is unavailable for this session. Sign in again to check the saved setting; this does not mean automatic approval was switched off.'
+        : 'Automatic approval setting is unavailable because its saved value could not be loaded. The last confirmed value is retained; this does not mean approval was switched off. Refresh the setting to try again.')
     })
     return () => {
       generation.current += 1
@@ -46,7 +51,7 @@ export default function useRunAiApproval(scanId, runId) {
     }
   }, [identity, reload])
   const current = setting?.identity === identity && authEpoch() === epoch ? setting : null
-  const change = current && current.supported !== false ? async enabled => {
+  const change = current && current.supported !== false && current.can_change !== false ? async enabled => {
     if (writing.current || authEpoch() !== epoch) return
     const version = generation.current
     writing.current = true; setSaving(true); setError(''); setNotice(null)
@@ -70,6 +75,6 @@ export default function useRunAiApproval(scanId, runId) {
       if (currentScope(identity, epoch, version)) { writing.current = false; setSaving(false) }
     }
   } : undefined
-  return { notice: notice?.identity === identity && authEpoch() === epoch ? notice : null, dismissNotice: () => setNotice(null), policy: current, enabled: current?.enabled ?? null, saving, error: error || (current?.supported === false ? current.reason : ''), change,
+  return { notice: notice?.identity === identity && authEpoch() === epoch ? notice : null, dismissNotice: () => setNotice(null), policy: current, enabled: current?.enabled ?? null, saving, explanation: current?.explanation || '', error: error || (current?.supported === false ? current.reason : ''), change,
     retry: () => { if (!writing.current) setReload(value => value + 1) } }
 }

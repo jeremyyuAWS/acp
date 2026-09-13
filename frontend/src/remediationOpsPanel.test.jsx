@@ -731,3 +731,8 @@ it('shows a yellow retry only for a recorded retry, not for a failed verificatio
   expect(doc.querySelector('.remops-activity details li .remops-delivery-tag')?.textContent).toBe('source delivery is unavailable')
   expect(doc.querySelector('.remops-activity details li')?.textContent).toContain('Corrected copy of demo.pdf saved in ACP')
  })
+
+ it('uses a saved document icon for corrected copies instead of the neutral dot', () => {
+  const html=render({snapshot:SNAP,streamlined:true,events:[{key:'saved-copy',kind:'remediate.delivery_failed',tone:'neutral',line:'Corrected copy of demo.pdf saved in ACP',documentKey:'demo'}]})
+  expect(html).toContain('data-activity-icon="saved-copy"')
+ })

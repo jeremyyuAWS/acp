@@ -93,6 +93,7 @@ export const SCOPE_UNIVERSE = [
   { sc: "2.4.2", name: "Page Titled", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "2.4.3", name: "Focus Order", level: "A", formats: ["pdf", "pptx"] },
   { sc: "2.4.4", name: "Link Purpose (In Context)", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "2.4.5", name: "Multiple Ways", level: "AA", formats: ["pdf"] },
   { sc: "2.4.6", name: "Headings and Labels", level: "AA", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "2.4.9", name: "Link Purpose (Link Only)", level: "AAA", formats: ["docx", "pptx"] },
   { sc: "2.4.10", name: "Section Headings", level: "AAA", formats: ["docx"] },

@@ -1,5 +1,5 @@
 import { matchesAutomaticReview, automaticReviewResponsibility } from './automaticReviewResponsibility.js'
-import { isPdfStructuralRow, pdfStructuralSummary, proposalsFor } from './pdfStructuralProposal.js'
+import { isPdfStructuralRow, pdfStructuralSummary, proposalsFor, requiresPdfSourceEditing } from './pdfStructuralProposal.js'
 import { automaticReviewQueue } from './automaticReviewQueue.js'
 import { useMemo, useState, useEffect, useRef } from 'react'
 import {
@@ -335,6 +335,7 @@ function taskLineOf(f, lane, automaticMode = false, decisions = {}) {
     if (responsibility === 'acp') return 'ACP is handling the admitted automatic work. No individual approval or human confirmation is needed now.'
     if (responsibility === 'check') return 'Automatic admission or verification is not confirmed yet. Check the recorded status; this is not a request to approve the fix again.'
   }
+  if (requiresPdfSourceEditing(f) && !f.applied) return 'This PDF needs tagging in the source document or a PDF accessibility editor. The suggested outline is guidance; approving it does not write a PDF structure tree.'
   if (isPdfStructuralRow(f)) return 'ACP can write this change into the saved PDF after approval. Apply ready fixes together; individual inspection is optional. The corrected copy will be assessed before publication.'
   if (f.autoApplied) return 'This change is already applied. Inspect it if you want, or flag a problem.'
   const contrast = isContrastFinding(f)
@@ -358,7 +359,7 @@ function taskLineOf(f, lane, automaticMode = false, decisions = {}) {
   }
 }
 
-function DetailPane({ f, decisions, automaticMode = false, onDecide, onOpenWord, onRecheck, matchingFindings = [], matchingReadyCount = 0, legacyApprovalControls = false, onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
+function DetailPane({ f, decisions, readOnly = false, automaticMode = false, onDecide, onOpenWord, onRecheck, matchingFindings = [], matchingReadyCount = 0, legacyApprovalControls = false, onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
   const [matchingPreviewOpen, setMatchingPreviewOpen] = useState(false)
   const [copiedValue, setCopiedValue] = useState('')
   const draftRef = useRef(null)
@@ -381,7 +382,7 @@ function DetailPane({ f, decisions, automaticMode = false, onDecide, onOpenWord,
   // "Mark as assigned" action — so it shares the manual detail treatment.
   const isHandoff = lane.key === 'handoff'
   const responsibility = automaticMode ? automaticReviewResponsibility(f, decisions) : null
-  const isManual = (lane.key === 'manual' || isHandoff) && (!automaticMode || responsibility === 'human')
+  const isManual = requiresPdfSourceEditing(f) && !f.applied || (lane.key === 'manual' || isHandoff) && (!automaticMode || responsibility === 'human')
   // A deterministic fix ACP already applied. Its decision is a plain approve / "this looks wrong",
   // not an edit-and-apply — the change is already written, so we don't offer an editable draft.
   const isAutoFix = lane.key === 'review'
@@ -454,7 +455,7 @@ function DetailPane({ f, decisions, automaticMode = false, onDecide, onOpenWord,
                 Select from this item and {matchingCount} similar finding{matchingCount === 1 ? '' : 's'}
                 {' '}across {new Set([f.file, ...matchingFindings.map((x) => x.file)]).size} files.
               </span>
-              <button type="button" className="primary" disabled={saving}
+              <button type="button" className="primary" disabled={readOnly || saving}
                       onClick={() => onApplyToMatching?.(f)}
                       style={{ flex: '0 0 auto', fontWeight: 750, padding: '9px 14px' }}>
                 {`Select matching proposals (${matchingCount + 1})`}
@@ -489,12 +490,12 @@ function DetailPane({ f, decisions, automaticMode = false, onDecide, onOpenWord,
             </span>
           ) : isManual ? (
             <>
-              {onOpenWord && <button className="primary" disabled={saving} onClick={() => onOpenWord(f)}>Open in Word</button>}
-              {onRecheck && <button className="ghost" disabled={saving} onClick={() => onRecheck(f)}>Upload &amp; recheck</button>}
-              {legacyApprovalControls && <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>}
+              {onOpenWord && <button className="primary" disabled={readOnly || saving} onClick={() => onOpenWord(f)}>Open in Word</button>}
+              {onRecheck && <button className="ghost" disabled={readOnly || saving} onClick={() => onRecheck(f)}>Upload &amp; recheck</button>}
+              {legacyApprovalControls && <button className="ghost" disabled={readOnly || saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>}
               {/* Out of scope — this criterion doesn't apply to the document. Resolves the finding and
                   takes it out of the coverage denominator (persisted as an out_of_scope resolution). */}
-              {legacyApprovalControls && <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>}
+              {legacyApprovalControls && <button className="ghost" disabled={readOnly || saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>}
             </>
           ) : isAutoFix ? (
             /* An auto-applied fix: the change is already written, so the decision is a clear approve or
@@ -502,28 +503,28 @@ function DetailPane({ f, decisions, automaticMode = false, onDecide, onOpenWord,
                back for a person; it does NOT auto-revert the applied change (no backend undo exists —
                see PR body), so it is labelled as a flag, not a "reject & revert". */
             <>
-              <button className="primary" disabled={saving || f.automaticQueued} onClick={() => { if (!f.automaticQueued) onDecide?.(f, { state: 'accepted' }) }}>
+              <button className="primary" disabled={readOnly || saving || f.automaticQueued} onClick={() => { if (!f.automaticQueued) onDecide?.(f, { state: 'accepted' }) }}>
                 {f.automaticQueued ? automaticLabel : saving ? 'Saving…' : f.autoApplied ? 'Mark inspected →' : legacyApprovalControls ? 'Yes, apply fix' : 'Apply this fix'}
               </button>
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
-              {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
-              {legacyApprovalControls && <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>}
+              <button className="ghost" disabled={readOnly || saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
+              {onOpenWord && <button className="ghost" disabled={readOnly || saving} onClick={() => onOpenWord(f)}>Open source document</button>}
+              {legacyApprovalControls && <button className="ghost" disabled={readOnly || saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>}
             </>
           ) : (
             <>
-              <button className="primary" disabled={saving || !structuralReady || f.automaticQueued}
+              <button className="primary" disabled={readOnly || saving || !structuralReady || f.automaticQueued}
                       onClick={() => { if (!f.automaticQueued) onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined }) }}>
                 {f.automaticQueued ? automaticLabel : saving ? 'Saving…' : legacyApprovalControls ? 'Yes, apply fix' : f.automaticReason ? 'Review and apply' : 'Apply this fix'}
               </button>
               {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
                   person (the handoff lane), so the label names that outcome rather than leaving the
                   reviewer to guess what "Reject" does. */}
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>{legacyApprovalControls ? 'No, needs manual work' : 'Needs manual work'}</button>
+              <button className="ghost" disabled={readOnly || saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>{legacyApprovalControls ? 'No, needs manual work' : 'Needs manual work'}</button>
               <details><summary>More options</summary>
-              {canEdit && <button className="ghost" disabled={saving} onClick={() => draftRef.current?.focus()}>Edit proposed fix</button>}
-              {legacyApprovalControls && <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>}
-              {legacyApprovalControls && <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>}
-              {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
+              {canEdit && <button className="ghost" disabled={readOnly || saving} onClick={() => draftRef.current?.focus()}>Edit proposed fix</button>}
+              {legacyApprovalControls && <button className="ghost" disabled={readOnly || saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>}
+              {legacyApprovalControls && <button className="ghost" disabled={readOnly || saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>}
+              {onOpenWord && <button className="ghost" disabled={readOnly || saving} onClick={() => onOpenWord(f)}>Open source document</button>}
               </details>
             </>
           )}
@@ -694,7 +695,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 }
 
 export default function RemediationInbox({
-  queue: suppliedQueue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false, legacyApprovalControls = false, autoApprove = null, automaticApprovalPolicy, onAutoApproveChange, autoApproveSaving = false, autoApproveError = null, onAutoApproveRetry, autoApproveNotice = null, onDismissAutoApproveNotice,
+  queue: suppliedQueue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false, legacyApprovalControls = false, autoApprove = null, automaticApprovalPolicy, onAutoApproveChange, autoApproveSaving = false, autoApproveError = null, approvalExplanation = null, afterRelease = false, onAutoApproveRetry, autoApproveNotice = null, onDismissAutoApproveNotice,
   initialSort = 'priority', initialTab = 'review', initialGroup = 'document', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
@@ -709,6 +710,8 @@ export default function RemediationInbox({
   const queue = useMemo(() => automaticReviewQueue(suppliedQueue, automaticApprovalPolicy, decisions), [suppliedQueue, automaticApprovalPolicy, decisions])
   const currentQueueRef = useRef(queue)
   currentQueueRef.current = queue
+  const readOnlyRef = useRef(readOnly)
+  readOnlyRef.current = readOnly
   const [selectedId, setSelectedId] = useState(null)
   const [tab, setTab] = useState(initialTab)
   const [sort, setSort] = useState(initialSort)
@@ -907,7 +910,7 @@ export default function RemediationInbox({
   // Now the save is awaited — on failure the item stays selected, the error is stated inline next to
   // the buttons that failed, and nothing advances.
   async function act(f, decision) {
-    if (!f || savingId != null) return
+    if (readOnlyRef.current || !f || savingId != null) return
     // Recheck the current server-projected row: an old pane callback must not
     // manually approve a proposal admitted automatically since it rendered.
     if (decision?.state === 'accepted' && currentQueueRef.current.find(row => row.id === f.id)?.automaticQueued) return
@@ -939,7 +942,7 @@ export default function RemediationInbox({
   }
 
   function applyToMatching(f) {
-    if (!f || savingId != null) return
+    if (readOnlyRef.current || !f || savingId != null) return
     setBatchScopeIds([f.id, ...matchingOf(f).map(item => item.id)])
     setBulkPreviewOpen(true)
   }
@@ -1006,7 +1009,7 @@ export default function RemediationInbox({
   )
   const guidedBody = (
     <>
-      <DetailPane f={selected} decisions={decisions} automaticMode={autoApprove === true} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
+      <DetailPane f={selected} decisions={decisions} readOnly={readOnly} automaticMode={autoApprove === true} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
                   headingRef={reviewHeadingRef}
                   saving={savingId != null && savingId === selected?.id}
                   error={saveError && selected && saveError.id === selected.id ? saveError : null}
@@ -1047,6 +1050,8 @@ export default function RemediationInbox({
       </div>
       {(!bulkPreviewOpen || readyAcrossScan.length > 0) && <section className="run-approval-summary" aria-label="Whole-run approval">
         <div><strong>Review and verify changes</strong>
+          {approvalExplanation && <p role="status">{approvalExplanation}</p>}
+          {afterRelease && <p role="status">Outstanding review decisions remain available after publication. A newly saved change requires a fresh check and a new publication authorization; previously delivered copies remain recorded. {onPublish && <button type="button" className="linklike" onClick={onPublish}>Open Release for updated copies</button>}</p>}
           {/* Keep approval readiness separate from verification and completed counts. */}
           {legacyApprovalControls ? <p>{runCounts.ready} ready review items · {runCounts.individual} need proposal information or individual review · {runCounts.inspection} applied changes available to inspect · {runCounts.manual} manual review items</p> : <p>{runCounts.ready} ready to apply · {runCounts.individual} still need a valid proposal or individual review · {runCounts.manual} need manual work</p>}
           <p>{autoApprove === true ? 'Auto-apply is on. ACP automatically applies eligible AI suggestions. Items needing your judgment remain below.' : runCounts.ready ? 'Approve the ready fixes together. ACP will save the changes and check the results.' : preparingProposals ? 'Please wait for remediation to finish preparing suggestions.' : 'No fixes are ready to apply. Ready AI fixes will apply automatically when auto-apply is on.'}</p>

@@ -121,6 +121,12 @@ def normalize_run_policy(snapshot):
         result['auto_approve_ai'] = normalize(snapshot['auto_approve_ai'])
         if result['auto_approve_ai'] and ai != 1:
             raise BudgetError('Standing approval requires AI enabled')
+    if 'fix_approval_policy' in snapshot:
+        from fix_approval_policy import normalize
+        try:
+            result['fix_approval_policy'] = normalize(snapshot['fix_approval_policy'])
+        except ValueError as exc:
+            raise BudgetError(str(exc)) from exc
     if 'generation_chain' in snapshot:
         from ai_generation_chain import normalize_chain
         result['generation_chain'] = normalize_chain(snapshot['generation_chain'])

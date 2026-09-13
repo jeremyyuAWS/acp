@@ -22,7 +22,7 @@ IDS = [r["id"] for r in RULES]
 
 REQUIRED = ["id", "title", "description", "wcag", "wcag_sc", "wcag_display",
             "wcag_level", "severity", "fix_mode", "source"]
-SEVERITIES = {"CRITICAL", "SERIOUS", "MODERATE", "MINOR"}
+SEVERITIES = {"CRITICAL", "SERIOUS", "MODERATE", "MINOR", "REVIEW"}
 FIX_MODES = {"auto", "ai-assisted", "human-only"}
 LEVELS = {"A", "AA"}
 DOC_SECTIONS = ["## What it checks", "## Why it matters", "## Unit test recipe",

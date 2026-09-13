@@ -1,3 +1,4 @@
+import { savedApprovalLabel } from './assessApprovalPolicy.js'
 import RemediationPlanImpact from './RemediationPlanImpact.jsx'
 import RemediationFileItems from './RemediationFileItems.jsx'
 import useForecastDeltas from './useForecastDeltas.js'
@@ -29,7 +30,7 @@ const number = value => Number.isFinite(value) ? value.toLocaleString() : 'Not y
 const delta = value => Number.isFinite(value) ? `${value > 0 ? '+' : ''}${value.toLocaleString()}` : 'Not yet available'
 const validPolicy = p => Number.isInteger(p?.rule_based) && p.rule_based >= 0 && p.rule_based <= 2 && Number.isInteger(p?.ai) && p.ai >= 0 && p.ai <= 3
 const validBudget = p => p?.ai_budget_usd === undefined || (/^\d{1,7}(?:\.\d{1,2})?$/.test(p.ai_budget_usd) && Number(p.ai_budget_usd) <= 1000000)
-const policyName = p => validPolicy(p) ? `${RULE_STOPS[p.rule_based][0]} · AI: ${p.ai > 0 && p.ai_zone === 'local' ? 'Ollama local only' : AI_STOPS[p.ai][0]}${p.auto_approve_ai ? ' · Auto-approval on' : ''}` : 'Not yet available'
+const policyName = p => validPolicy(p) ? `${p.fix_approval_policy?.mode === 'review' ? 'Rule-based application requires review or document editing' : RULE_STOPS[p.rule_based][0]} · AI: ${p.ai > 0 && p.ai_zone === 'local' ? 'Ollama local only' : AI_STOPS[p.ai][0]} · ${savedApprovalLabel(p)}` : 'Not yet available'
 const reasonText = reason => typeof reason === 'string' ? reason.replaceAll('_', ' ') : 'Reason not available'
 const fileType = file => {
   const match = String(file || '').trim().match(/\.([^.\/]+)$/)
@@ -154,7 +155,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const ready = !releasePolicyPending && !automaticDefault && !chainProblem && !!data && estimateResponse?.key === estimateKey && !loading && !error && data.integrity?.complete === true
   const countDeltas = useForecastDeltas({
     identity: JSON.stringify([runId, scopeKey]), ready,
-    policyKey: JSON.stringify([data?.policy?.rule_based, data?.policy?.ai, data?.policy?.ai_budget_usd, data?.policy?.ai_review, data?.policy?.generation_chain, data?.policy?.auto_approve_ai]),
+    policyKey: JSON.stringify([data?.policy?.rule_based, data?.policy?.ai, data?.policy?.ai_budget_usd, data?.policy?.ai_review, data?.policy?.generation_chain, data?.policy?.auto_approve_ai, data?.policy?.fix_approval_policy]),
     automatic: data?.lanes?.automatic?.findings,
     human: Number.isFinite(data?.lanes?.review?.findings) && Number.isFinite(data?.lanes?.manual?.findings)
       ? data.lanes.review.findings + data.lanes.manual.findings : undefined,
@@ -271,7 +272,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       <div className="remediation-impact__start-summary">
         <strong>{ready ? `${number(data.open?.findings)} findings · ${number(data.open?.files)} files` : 'Preview not ready'}</strong>
         <span>{ready ? `${number(data.lanes?.automatic?.findings)} automatic · ${number(data.lanes?.review?.findings)} to approve · ${number(data.lanes?.manual?.findings)} manual · ${number(data.lanes?.blocked?.findings)} blocked` : 'Review the current preview before starting.'}</span>
-        <span>{selected.ai > 0 && selected.ai_zone === 'local' ? `Ollama only · ${selected.auto_approve_ai ? 'Automatic application' : 'Human review'} · No cloud AI charges` : selected.ai > 0 ? `${selected.auto_approve_ai ? 'Auto-approval on · Manual exceptions only' : 'AI drafts need approval'} · Up to ${generationSteps(selected, data?.capabilities?.generation_chain).length || 2} models` : 'Rules only · No new AI suggestions'}</span>
+        <span>{selected.ai > 0 && selected.ai_zone === 'local' ? `Ollama only · ${savedApprovalLabel(data?.policy || selected)} · No cloud AI charges` : selected.ai > 0 ? `${savedApprovalLabel(data?.policy || selected)} · Up to ${generationSteps(selected, data?.capabilities?.generation_chain).length || 2} models` : 'Rules only · No new AI suggestions'}</span>
       </div>
       {!requireAnswers && startButton}
     </div>

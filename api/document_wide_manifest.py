@@ -130,11 +130,11 @@ def build_manifest(store, scan_id, filename, data):
     advisory = []
     for row in rows:
         if row['finding_id'] not in matched:
-            advisory.append({key: row[key] for key in ('finding_id', 'rule_id', 'instance_key', 'message', 'evidence') if key in row})
+            advisory.append({key: row[key] for key in ('rule_id', 'instance_key', 'message', 'evidence') if key in row})
             issues.append(ExtractionIssue('finding_not_packaged', 'No unambiguous supported target remains in this saved document.', (row['finding_id'],)))
     context = packaged.text_context
     if advisory:
-        context += '\n[Advisory selected findings: no write authorization; do not include these IDs in the edit-response envelope]\n' + json.dumps(advisory, sort_keys=True)
+        context += '\n[Advisory selected findings: no write authorization; context only, never include advisory items in edits or unresolved]\n' + json.dumps(advisory, sort_keys=True)
     if len(context) > LIMITS.max_text_chars:
         raise ValueError('document_extraction_incomplete')
     manifest = replace(packaged, findings=tuple(findings), extraction_issues=tuple(issues), text_context=context)

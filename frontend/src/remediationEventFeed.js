@@ -29,6 +29,15 @@ const file = (event) => event?.document || event?.detail?.file
 export const eventDocumentKey = (event) => event?.document_ref || event?.document
   || event?.detail?.file || null
 
+// Only named server reason codes are projected; raw detector errors may contain content.
+export function verificationFailureLabel(detail = {}) {
+  const labels = {criterion_still_failing: 'still fails on the corrected copy',
+    verification_unavailable: 're-scan unavailable; check the saved copy before retrying'}
+  const rows = Array.isArray(detail.failed_criteria) ? detail.failed_criteria : []
+  return rows.filter(row => /^\d+\.\d+\.\d+$/.test(row?.criterion || '') && labels[row?.reason_code])
+    .slice(0, 20).map(row => `WCAG ${row.criterion}: ${labels[row.reason_code]}`).join('; ')
+}
+
 export function remediationEventLine(event) {
   const detail = event?.detail || {}
   switch (event?.kind) {
@@ -39,7 +48,8 @@ export function remediationEventLine(event) {
     case 'remediate.verified':
       return `${n(detail.fixes, 'fix')} independently verified for ${file(event)}`
     case 'remediate.verification_failed':
-      return `${n(detail.fixes, 'fix')} did not pass re-scan for ${file(event)}`
+      return verificationFailureLabel(detail) ? `${file(event)} · ${verificationFailureLabel(detail)}`
+        : `${n(detail.fixes, 'fix')} did not pass re-scan for ${file(event)}`
     case 'remediate.delivered':
       return `Corrected copy of ${file(event)} saved to the source provider`
     case 'remediate.delivery_failed':
@@ -48,6 +58,7 @@ export function remediationEventLine(event) {
       if (detail.reason === 'write_permission_required') return `Corrected copy of ${file(event)} retained in ACP · provider write permission required`
       return `Corrected copy of ${file(event)} retained in ACP; provider delivery failed`
     case 'remediate.review_requested':
+      if (detail.reason_code === 'pdf_structure_tagging_required') return `${file(event)} · WCAG 1.3.1: Add PDF accessibility tags in a document editor; automatic metadata fixes cannot create the structure tree`
       return `Manual review requested for ${file(event)}${detail.criterion ? ` · WCAG ${detail.criterion}` : ''}`
     case 'remediate.document_completed':
       return `${file(event)} remediation finished`
@@ -60,6 +71,7 @@ export function remediationEventLine(event) {
     case 'remediate.vision_retry_blocked':
       if (detail.reason_code === 'vision_spending_reconciliation_required') return `Image description for ${file(event)} paused · awaiting confirmation of previous AI usage before another paid request`
       if (detail.reason_code === 'vision_permission_or_budget_blocked') return `Image description for ${file(event)} paused · saved AI permission or spending limit needs attention`
+      if (detail.reason_code === 'vision_generated_output_unusable') return `AI response for ${file(event)} could not be used · automatic generation attempts stopped; check AI activity for the validation reason`
       return `Image description for ${file(event)} still needs individual review`
     case 'scan.retrying':
       return `A processing attempt failed and was scheduled to retry${event?.attempt ? ` · attempt ${event.attempt}` : ''}`
@@ -108,7 +120,7 @@ export function addRemediationEvent(previous, event, id, limit = MAX_VISIBLE_REM
             // added. Absent (an older server, or a replayed row) reads as unknown — which is
             // neither true nor false, and is why this is `?? null` rather than `|| false`.
             material: event.material == null ? null : !!event.material,
-            reasonCode: ['vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked'].includes(event.detail?.reason_code) ? event.detail.reason_code : null,
+            reasonCode: ['vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked', 'vision_generated_output_unusable'].includes(event.detail?.reason_code) ? event.detail.reason_code : null,
             attempt: event.attempt == null ? null : Number(event.attempt),
             phase: event.phase || null,
             correlationId: event.correlation_id || null }, ...previous]

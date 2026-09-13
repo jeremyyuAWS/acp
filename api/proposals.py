@@ -232,14 +232,16 @@ class Verification:
     credit has to go through `cleared()`, which cannot be fooled by an empty residual that
     came from a scan which never ran."""
 
-    __slots__ = ("ok", "residual", "reason", "_assessment")
+    __slots__ = ("ok", "residual", "reason", "_assessment", "artifact_sha256")
 
-    def __init__(self, ok: bool, residual=frozenset(), reason: str = "", assessment=None):
+    def __init__(self, ok: bool, residual=frozenset(), reason: str = "", assessment=None,
+                 artifact_sha256=None):
         object.__setattr__(self, "ok", bool(ok))
         object.__setattr__(self, "residual", frozenset(residual))
         object.__setattr__(self, "reason", reason)
         from copy import deepcopy
         object.__setattr__(self, "_assessment", deepcopy(assessment))
+        object.__setattr__(self, "artifact_sha256", artifact_sha256)
 
     @property
     def assessment(self):
@@ -274,6 +276,8 @@ def verify_residual(fixed_bytes: bytes, filename: str, *, scan_id: str | None = 
     up. Single source of truth for the residual re-scan: api/handlers.py delegates here rather
     than re-implementing it, so there is exactly one whole-file re-scan path (never a second,
     per-element one)."""
+    from hashlib import sha256
+    digest = sha256(fixed_bytes).hexdigest()
     try:
         import tempfile
         from pathlib import Path as _P
@@ -286,10 +290,10 @@ def verify_residual(fixed_bytes: bytes, filename: str, *, scan_id: str | None = 
                                       **({"scan_id": scan_id} if scan_id else {}))
     except Exception as exc:
         # A raise here is the re-scan failing, not the document passing.
-        return Verification(False, reason=f"rescan raised {type(exc).__name__}")
+        return Verification(False, reason=f"rescan raised {type(exc).__name__}", artifact_sha256=digest)
     if not fd:
         # Unsupported extension, or no result at all: nothing was verified.
-        return Verification(False, reason="no scan result")
+        return Verification(False, reason="no scan result", artifact_sha256=digest)
     status = str(fd.get("status") or "")
     residual = {sc for i in fd.get("issues", []) if (sc := _extract_sc(i.get("wcag", "")))}
     if status != "analysed":
@@ -300,8 +304,9 @@ def verify_residual(fixed_bytes: bytes, filename: str, *, scan_id: str | None = 
         skipped = fd.get("skipped_rules")
         return Verification(False, residual,
                             reason=f"scan status {status or 'missing'!r}"
-                                   + (f", {skipped} rule(s) skipped" if skipped else ""), assessment=fd)
-    return Verification(True, residual, assessment=fd)
+                                   + (f", {skipped} rule(s) skipped" if skipped else ""), assessment=fd,
+                            artifact_sha256=digest)
+    return Verification(True, residual, assessment=fd, artifact_sha256=digest)
 
 
 def verify_residual_scs(fixed_bytes: bytes, filename: str):

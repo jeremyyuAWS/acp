@@ -670,3 +670,34 @@ it('admitted automatic fixes do not request human confirmation when no recheck c
  expect(container.textContent).toContain('No individual approval or human confirmation is needed now')
  expect(container.textContent).not.toContain('Human confirmation required')
 })
+
+describe('historical review controls', () => {
+  it('disables application rather than offering an action that cannot save', async () => {
+    const onDecide = () => { throw new Error('Historical decisions must not run') }
+    await render({ queue: [QUEUE[1]], decisions: {}, readOnly: true, onDecide })
+    const button = btnByText('Yes, apply fix')
+    expect(button).toBeTruthy()
+    expect(button.disabled).toBe(true)
+  })
+})
+
+it('keeps a current-run review actionable after publication and explains the new version boundary', async () => {
+  const calls = []
+  await render({ queue: [QUEUE[1]], decisions: {}, afterRelease: true, readOnly: false,
+    onDecide: async (finding, decision) => { calls.push([finding.id, decision.state]) },
+  })
+  expect(container.textContent).toContain('a new publication authorization')
+  const button = btnByText('Yes, apply fix')
+  expect(button.disabled).toBe(false)
+  await click(button)
+  expect(calls).toEqual([[2, 'accepted']])
+})
+
+it('shows a prose PDF tagging outline as manual guidance rather than an executable approval', async () => {
+  await render({ queue: [{ id: 81, file: 'untagged.pdf', rule_id: '1.3.1', title: 'Info and Relationships',
+    hasProposal: true, before: 'untagged PDF', after: 'Heading 1: Introduction; Heading 2: Details',
+  }], decisions: {}, initialTab: 'manual' })
+  expect(btnByText('Yes, apply fix')).toBeFalsy()
+  expect(container.textContent).toContain('PDF accessibility editor')
+  expect(container.textContent).toContain('approving it does not write a PDF structure tree')
+})

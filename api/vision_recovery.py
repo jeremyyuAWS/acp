@@ -40,7 +40,7 @@ def _decision(store, sid, file, state, **detail):
                        file=file, detail=_encoded(detail))
     safe = {key: detail[key] for key in ('retry', 'run_after', 'drafts') if key in detail}
     if state == 'blocked':
-        safe['reason_code'] = detail.get('reason_code') if detail.get('reason_code') in {'vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked'} else 'vision_recovery_unresolved'
+        safe['reason_code'] = detail.get('reason_code') if detail.get('reason_code') in {'vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked', 'vision_generated_output_unusable'} else 'vision_recovery_unresolved'
     store.append_scan_event(sid, 'remediate.vision_retry_' + state,
         phase='remediate', document=file, correlation_id=detail.get('run_id'),
         detail=safe or None)
@@ -72,15 +72,24 @@ def _recovery_block(context):
     if reasons & {'provider_usage_unknown', 'existing_draft_attempt_requires_reconciliation',
                   'budget_settlement_failed_or_breached', 'budget_release_failed'}:
         return 'vision_spending_reconciliation_required'
-    if any(reason not in TRANSIENT for reason in reasons):
-        return 'vision_permission_or_budget_blocked'
     if context.enabled:
         snapshot = context.ledger.snapshot(context.owner_id, context.run_id)
         if snapshot['blocked']:
             return 'vision_spending_reconciliation_required'
         if snapshot['available_units'] <= 0:
             return 'vision_permission_or_budget_blocked'
+    # Settled, rejected output is not evidence of missing consent or funds.
+    if 'attempts_exhausted' in reasons:
+        return 'vision_generated_output_unusable'
+    if any(reason not in TRANSIENT for reason in reasons):
+        return 'vision_permission_or_budget_blocked'
     return None
+
+
+def _block_description(reason_code):
+    if reason_code == 'vision_generated_output_unusable':
+        return 'Generated AI output could not be used; automatic attempts have stopped.'
+    return 'AI spending or permission is unresolved; automatic vision retry is paused.'
 
 
 def schedule(store, context, job, misses, *, inspect_pending=False):
@@ -118,7 +127,7 @@ def schedule(store, context, job, misses, *, inspect_pending=False):
     blocked = _recovery_block(context)
     if blocked:
         _decision(store, sid, file, 'blocked', run_id=context.run_id,
-                  reason_code=blocked, reason='AI spending or permission is unresolved; automatic vision retry is paused.')
+                  reason_code=blocked, reason=_block_description(blocked))
         if blocked == 'vision_spending_reconciliation_required':
             _enqueue(store, dict(payload, waiting_spending=True, wait_check=1))
         return
@@ -218,7 +227,7 @@ def process(store, payload):
             blocked = _recovery_block(context)
             if blocked:
                 _decision(store, sid, file, 'blocked', run_id=context.run_id, reason_code=blocked,
-                          reason='The saved spending or permission needs reconciliation before recovery.')
+                          reason=_block_description(blocked))
                 if (payload.get('waiting_spending') and payload['wait_check'] < 8
                         and blocked == 'vision_spending_reconciliation_required'):
                     _enqueue(store, dict(payload, wait_check=payload['wait_check'] + 1))

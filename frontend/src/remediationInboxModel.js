@@ -1,4 +1,4 @@
-import { isPdfStructuralRow } from './pdfStructuralProposal.js'
+import { isPdfStructuralRow, requiresPdfSourceEditing } from './pdfStructuralProposal.js'
 // The pure model behind the master/detail Remediation inbox.
 //
 // Remediation is queue work: select an item, understand it, act, move to the next. This module
@@ -109,6 +109,7 @@ export function laneOf(f) {
   // A rejected AI fix routed back for human handling (the handoff lane). Wins over the
   // remediation-shape checks below — the AI's proposal was declined, so it is no longer offered.
   if (f?.rejectedFix) return LANES.handoff
+  if (requiresPdfSourceEditing(f) && !f?.autoApplied && !f?.applied) return {...LANES.manual, didLine: 'PDF tagging requires editing the source document or a PDF accessibility editor'}
   // A deterministic fix ACP already wrote: the reviewer confirms it (the green lane).
   if (f?.autoApplied || f?.applied || f?.rec?.action === 'auto') return LANES.review
   // ACP drafted a value for a person to approve (the blue lane).

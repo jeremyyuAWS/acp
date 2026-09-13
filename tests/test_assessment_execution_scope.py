@@ -69,7 +69,7 @@ def test_pdf_allowlist_skips_unselected_engine_checks(tmp_path, monkeypatch):
     with selection({'2.4.2'}):
         result=scanner._analyse_pdf(p)
     assert result['succeeded'], result
-    assert called and set(called) <= {'pdf.document-title','pdf.display-doc-title','pdf.missing-bookmarks'}
+    assert called and set(called) <= {'pdf.document-title','pdf.display-doc-title'}
 
 
 def test_vision_review_obeys_selection():

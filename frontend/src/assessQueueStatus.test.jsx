@@ -152,3 +152,16 @@ describe('real queue status while nothing has scored yet', () => {
     expect(realErrors()).toEqual([])
   })
 })
+
+it('passes the approval choice separately through the registered assessment start', async () => {
+  let start
+  ;({ container, root } = createTestRoot())
+  assessScan.mockResolvedValue({ deferred: true, job_id: 'approval-job', workers: 0, worker_tier_alive: false })
+  await act(async () => root.render(createElement(AssessRunner, {
+    files: NOTHING_SCORED.files, runId: 's1', controlled: true, onReady: callback => { start = callback },
+  })))
+  const choice = { mode: 'custom', review_scs: ['1.1.1'] }
+  await act(async () => { start({ level: 'AA', includeLifecycleFlagged: false, fix_approval_policy: choice }) })
+  await settle()
+  expect(assessScan).toHaveBeenCalledWith('s1', 'AA', false, choice)
+})

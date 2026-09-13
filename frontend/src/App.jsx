@@ -2400,6 +2400,7 @@ export default function App() {
                 than invent" contract — so the `|| null` this used to carry is redundant. */}
             {!busy && assessPhase === 'idle' && !assessed && !priorResults.assess && (
               <AssessSetup scanId={run.id} discoveredAt={fmtStamp(run?.completed_at)} busy={busy}
+                           approvalPolicy={run?.scope?.fix_approval_policy || null} capability={cap}
                            onSaved={(scope) => adoptScopeConfig({ scope: { name: 'Selected criteria', criteria: scope } })}
                            onRun={startAssessment} />
             )}

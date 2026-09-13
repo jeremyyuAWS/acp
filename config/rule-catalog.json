@@ -745,13 +745,13 @@
     {
       "id": "pdf.missing-bookmarks",
       "title": "No navigation bookmarks",
-      "description": "Multi-page documents should have an Outlines (bookmarks) tree so users can jump to sections without reading every page.",
-      "wcag": "SC_2_4_2",
-      "wcag_sc": "2.4.2",
-      "wcag_display": "Page Titled",
-      "wcag_level": "A",
-      "severity": "MINOR",
-      "fix_mode": "auto",
+      "description": "Navigation advisory: PDFs with at least 10 pages benefit from an Outlines (bookmarks) tree. Missing bookmarks alone do not establish a WCAG failure.",
+      "wcag": "SC_2_4_5",
+      "wcag_sc": "2.4.5",
+      "wcag_display": "Multiple Ways",
+      "wcag_level": "AA",
+      "severity": "REVIEW",
+      "fix_mode": "human-only",
       "source": "engine/pdf-analyser/analysers/rules/pdf/bookmarks.py"
     },
     {

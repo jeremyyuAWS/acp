@@ -1070,10 +1070,11 @@ export const putAssessmentScope = (scanId, body) => (SIM
       method: 'PUT', headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }).then(j))
-export const assessScan = (scanId, level = 'AA', includeLifecycleFlagged = false) => (SIM
+export const assessScan = (scanId, level = 'AA', includeLifecycleFlagged = false, fixApprovalPolicy = null) => (SIM
   ? sim({ ok: true })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/assess?level=${encodeURIComponent(level)}&include_lifecycle_flagged=${includeLifecycleFlagged ? 'true' : 'false'}`,
-          { method: 'POST', headers: headers() }).then(j))
+          { method: 'POST', headers: fixApprovalPolicy ? { ...headers(), 'Content-Type': 'application/json' } : headers(),
+            ...(fixApprovalPolicy ? { body: JSON.stringify({ fix_approval_policy: fixApprovalPolicy }) } : {}) }).then(j))
 // Live remediation progress: in-flight jobs + latest fixed file (drives the Remediate bar).
 export const getRemediationStatus = (scanId) => {
   if (SIM) {

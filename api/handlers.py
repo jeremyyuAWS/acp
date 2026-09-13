@@ -1887,9 +1887,18 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
         if verified_diffs:
             _rem_event(scan_id, "remediate.verified", job, filename,
                        fixes=len(verified_diffs))
-        if _unverified > 0:
+        from verification_event_detail import verification_event_detail
+        _event_detail = verification_event_detail(verification, rem_diffs, fixed_bytes, filename)
+        _manual_ids = {_row['criterion'] for _row in _event_detail['manual_criteria']}
+        _automatic_unverified = [d for d in rem_diffs
+                                 if not verification.cleared({d.get('rule_id')})
+                                 and d.get('rule_id') not in _manual_ids]
+        if _automatic_unverified:
             _rem_event(scan_id, "remediate.verification_failed", job, filename,
-                       fixes=_unverified)
+                       fixes=len(_automatic_unverified), failed_criteria=_event_detail['failed_criteria'])
+        for _manual in _event_detail['manual_criteria']:
+            _rem_event(scan_id, "remediate.review_requested", job, filename,
+                       criterion=_manual['criterion'], reason_code=_manual['reason_code'])
     except Exception:
         swallowed("_remediate_file: recording the verified remediation diffs failed", scan_id)
     from unverified_changes import record_verification
