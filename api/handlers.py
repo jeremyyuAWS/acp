@@ -21,7 +21,7 @@ import os as _os
 
 import core
 import provenance
-from worker import handler, FatalJobError, JobCancelledError, check_cancel
+from worker import handler, FatalJobError, JobCancelledError, ReservationRetryError, check_cancel
 from swallowed import swallowed
 from scanner import run_scan
 
@@ -981,14 +981,16 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
     target_file_id = None
     reconcile_only = False
 
+    class PublicationReservationRetry(ReservationRetryError, RuntimeError):
+        """Preserve the publication error contract while requesting a lease-aware retry."""
+
     def reservation_retry(message):
-        from worker import ReservationRetryError
         from datetime import datetime, timezone
         remaining = 300
         if (reservation or {}).get("lease_expires_at"):
             expires = datetime.fromisoformat(reservation["lease_expires_at"].replace("Z", "+00:00"))
             remaining = max(1, (expires - datetime.now(timezone.utc)).total_seconds() + 1)
-        return ReservationRetryError(message, retry_after_seconds=remaining)
+        return PublicationReservationRetry(message, retry_after_seconds=remaining)
 
     def log_provider_failure(exc):
         from routes.scans import _log_release_provider_error
@@ -1088,9 +1090,7 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
                                "filename": saved_receipt.get("filename") or planned_name,
                                "verified": bool(saved_receipt.get("verified", True))}
             elif not reservation.get("acquired"):
-                if source == "drive":
-                    raise reservation_retry("Google Drive delivery is reserved by another attempt; waiting for its lease.")
-                raise RuntimeError(f"{provider} publication is owned by another worker attempt")
+                raise reservation_retry(f"{provider} publication is owned by another worker attempt; waiting for its lease.")
             else:
                 # A reclaimed reservation may represent a predecessor that wrote and died before
                 # finalizing. The publisher verifies matching destination bytes before deciding
@@ -1190,7 +1190,7 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
                           if source == "drive" else
                           "SharePoint refused the write. Reconnect after an administrator grants Files.ReadWrite.All and Sites.ReadWrite.All."))
         raise FatalJobError(f"{provider} write permission denied — reconnect with write access")
-    except FatalJobError:
+    except (FatalJobError, ReservationRetryError):
         raise
     except Exception as exc:
         if source in {"drive", "sharepoint"}:
@@ -1209,8 +1209,8 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
         # attempt, settle the document into an actionable durable state instead of leaving it
         # looking queued forever after the job dead-letters.
         if int((job or {}).get("attempts") or 1) < int((job or {}).get("max_attempts") or 5):
-            if source == "drive" and reservation:
-                raise reservation_retry("Google Drive delivery is unconfirmed; waiting to verify the reserved copy.") from exc
+            if reservation:
+                raise reservation_retry(f"{provider} delivery is unconfirmed; waiting to verify the reserved copy.") from exc
             raise
         _release_failure(release_id, owner, filename, record,
                          "provider_write_failed",
