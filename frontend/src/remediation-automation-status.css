@@ -1,0 +1,6 @@
+.remediation-automation-status {display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:12px 0;font-family:var(--font-ui);}
+.remediation-automation-status > div {background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;}
+.remediation-automation-status__label {font-size:11.5px;color:var(--muted);line-height:1.35;}
+.remediation-automation-status h2 {font-size:15px;margin:5px 0;font-weight:650;}
+.remediation-automation-status strong {display:block;font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:5px;line-height:1;}
+.remediation-automation-status p {font-size:11.5px;color:var(--muted);line-height:1.45;margin:5px 0 9px;}

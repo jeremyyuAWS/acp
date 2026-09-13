@@ -65,7 +65,7 @@ const verified = (file, over = {}) => ({ file, compliant: true, remediated_at: '
 const held = (file, over = {}) => ({ file, compliant: false, score: 40, issues: [{ wcag: 'SC_1_1_1' }], department: 'D', sourceName: 'S', ...over })
 const run = { id: 'scan1', files: 3, certifiable: 2 }
 
-it('mounts compact scan and matching per-file report downloads in the real supporting reports tab', async()=>{
+it('mounts compact scan and matching per-file report downloads beside the default publication documents', async()=>{
  getReleaseStatus.mockResolvedValue({release_id:'receipt',documents:[{
    file:'a.pdf',status:'published',artifact_digest:'sha256:current',published_at:'2026-09-12T00:00:00Z',released_document_url:'https://example.test/copy'}]})
  getReleaseReports.mockResolvedValue({status:'completed',scan_id:'scan1',release_id:'receipt',bundle_id:'bundle',reports:[
@@ -73,8 +73,7 @@ it('mounts compact scan and matching per-file report downloads in the real suppo
    {name:'a-checklist.pdf',report_kind:'checklist',file:'a.pdf',artifact_digest:'sha256:current',download_url:'/download/1'},
  ]})
  const c=await mount({run,files:[verified('a.pdf')]})
- await click(c.querySelector('#release-tab-reports'))
- const panel=c.querySelector('#release-panel-reports')
+ const panel=c.querySelector('#release-panel-manage')
  expect(panel.hidden).toBe(false)
  const outcomes=panel.querySelector('[aria-label="Publication outcomes"]')
  expect(outcomes.textContent).not.toContain('Saved copies, verification, remaining work')
@@ -536,9 +535,9 @@ it('defaults to Manage publication and keeps reports in a separate keyboard acce
   expect(c.querySelector('#release-panel-manage').textContent).toContain('Publish your documents')
   await click(reports)
   expect(c.querySelector('#release-panel-manage').hidden).toBe(true)
-  expect(c.querySelector('#release-panel-reports [aria-label="Publication outcomes"]')).toBeTruthy()
-  expect(c.querySelector('#release-panel-reports').textContent).toContain('Search filenames')
-  expect(c.querySelectorAll('#release-panel-reports [aria-label="Release reports"]')).toHaveLength(1)
+  expect(c.querySelector('#release-panel-reports [aria-label="Publication outcomes"]')).toBeNull()
+  expect(c.querySelector('#release-panel-manage').textContent).toContain('Search filenames')
+  expect(c.querySelectorAll('#release-panel-manage [aria-label="Release reports"]')).toHaveLength(1)
   expect(c.querySelector('#release-panel-reports').textContent).not.toContain('Scan summary and per-file checklists')
   expect(c.querySelector('#release-panel-reports').textContent).toContain('Assessment reports')
   await click(manage)
@@ -551,42 +550,49 @@ it('shows approved unapplied changes as Processing without another approval barr
   expect(row(c,'a.pdf').textContent).toContain('No further approval needed')
   expect(c.querySelector('[aria-label="Release status overview"]').textContent).not.toContain('1 Needs attention')
 })
-it('opens Release document queues in a right drawer without changing publication selection or the underlying list', async () => {
+it('retires duplicate document-stage tiles and filters the default document list without changing selection', async () => {
  const c=await mount({run,files:[verified('ready.pdf',{corrected_sha256:'exact'}),held('remaining.pdf')]})
+ expect(c.querySelector('.remediation-progress-summary')).toBeNull()
+ expect(c.querySelector('.progress-ready')).toBeNull()
  const before=[...c.querySelectorAll('input[type="checkbox"]')].map(input=>input.checked)
- const tile=c.querySelector('.progress-ready');tile.focus()
- expect(tile.getAttribute('aria-haspopup')).toBe('dialog')
- await act(async()=>tile.click())
- const drawer=c.querySelector('[role="dialog"]')
- expect(drawer.querySelectorAll('.progress-queue-file')).toHaveLength(1)
- expect(drawer.textContent).toContain('ready.pdf')
- expect(drawer.textContent).not.toContain('remaining.pdf')
+ const documents=c.querySelector('#release-panel-manage [aria-label="Publication outcomes"]')
+ expect(documents.querySelectorAll('tbody tr')).toHaveLength(2)
+ const search=documents.querySelector('input[type="search"]')
+ const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set
+ await act(async()=>{setter.call(search,'ready');search.dispatchEvent(new Event('input',{bubbles:true}))})
+ expect(documents.querySelectorAll('tbody tr')).toHaveLength(1)
  expect([...c.querySelectorAll('input[type="checkbox"]')].map(input=>input.checked)).toEqual(before)
- await act(async()=>drawer.querySelector('[aria-label="Close queue"]').click())
- expect(document.activeElement).toBe(tile)
- await act(async()=>c.querySelector('.remediation-progress-summary-heading button').click())
- expect(c.querySelectorAll('.progress-queue-file')).toHaveLength(2)
+ expect(c.querySelector('[role="dialog"]')).toBeNull()
+ await click(button(documents,'Clear filters'))
+ expect(documents.querySelectorAll('tbody tr')).toHaveLength(2)
 })
-it('opens an honest empty Release queue', async () => {
+it('shows an honest empty filtered document list without restoring retired stage tiles', async () => {
  const c=await mount({run,files:[held('remaining.pdf')]})
- await act(async()=>c.querySelector('.progress-processing').click())
- expect(c.querySelector('[role="dialog"]').textContent).toContain('No files are currently in this queue.')
+ const documents=c.querySelector('#release-panel-manage [aria-label="Publication outcomes"]')
+ const search=documents.querySelector('input[type="search"]')
+ const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set
+ await act(async()=>{setter.call(search,'no-such-file');search.dispatchEvent(new Event('input',{bubbles:true}))})
+ expect(documents.textContent).toContain('No documents match these filters.')
+ expect(documents.textContent).toContain('0 of 1 documents shown')
+ expect(c.querySelector('.progress-processing')).toBeNull()
  expect(c.querySelector('.progress-attention')).toBeNull()
 })
 it('restores current durable automatic publication on reload and prevents a duplicate manual batch', async () => {
  getSettings.mockResolvedValue({drive_mirror_enabled:false,drive_mirror_folder:'Remediated'})
  getAutomaticRelease.mockResolvedValue({run_id:'batch-a',authorization:{id:'accepted',run_id:'batch-a',status:'active',destination:{provider:'local'},files:['one.pdf'],allow_remaining_issues:true}})
  const c = await mount({run:{...run,source:'local'},files:[held('one.pdf',{remediated_at:'2026-09-09',corrected_sha256:'digest'})]})
- expect(button(c,'Publish batch with remaining issues (1)').disabled).toBe(true)
+ expect(button(c,'Publish batch with remaining issues (1)')).toBeUndefined()
  expect(c.textContent).toContain('Automatic publishing is on')
- await click(button(c,'Publish batch with remaining issues (1)'))
+ expect(c.querySelector('.release-advanced')).toBeNull()
  expect(publishAllFiles).not.toHaveBeenCalled()
 })
-it.each(['completed','stopped','expired'])('leaves manual publication available for an inactive %s intent', async status => {
+it.each(['completed','stopped','expired','failed'])('keeps covered copies out of generic manual publication for a saved %s plan', async status => {
  getSettings.mockResolvedValue({drive_mirror_enabled:false,drive_mirror_folder:'Remediated'})
- getAutomaticRelease.mockResolvedValue({run_id:'batch-a',authorization:{id:'old',run_id:'batch-a',status,destination:{provider:'local'},files:['one.pdf'],allow_remaining_issues:true}})
- const c = await mount({run:{...run,source:'local'},files:[verified('one.pdf',{corrected_sha256:'digest'})]})
- expect([...c.querySelectorAll('button')].find(b=>b.textContent.startsWith('Publish batch') && !b.closest('[hidden]')).disabled).toBe(false)
+ getAutomaticRelease.mockResolvedValue({run_id:'batch-a',authorization:{id:'accepted',run_id:'batch-a',status,destination:{provider:'local'},files:['one.pdf'],allow_remaining_issues:true}})
+ const c=await mount({run:{...run,source:'local'},files:[verified('one.pdf',{corrected_sha256:'digest'})]})
+ expect([...c.querySelectorAll('button')].filter(b=>b.textContent.startsWith('Publish batch')&&!b.closest('[hidden]'))).toHaveLength(0)
+ expect(c.querySelector('.release-advanced')).toBeNull()
+ expect(publishAllFiles).not.toHaveBeenCalled()
 })
 it('does not let an old remediation batch disable manual publishing', async () => {
  getSettings.mockResolvedValue({drive_mirror_enabled:false,drive_mirror_folder:'Remediated'})
@@ -594,16 +600,12 @@ it('does not let an old remediation batch disable manual publishing', async () =
  const c = await mount({run:{...run,source:'local'},files:[held('one.pdf',{remediated_at:'2026-09-09',corrected_sha256:'digest'})]})
  expect(button(c,'Publish batch with remaining issues (1)').disabled).toBe(false)
 })
-it.each(['expired-time','other-destination'])('does not block manual publication from a %s authorization', async kind => {
- getSettings.mockResolvedValue({drive_mirror_enabled:false,drive_mirror_folder:'Remediated'})
- getAutomaticRelease.mockResolvedValue({run_id:'batch-a',authorization:{id:'accepted',run_id:'batch-a',status:'active',expires_at:kind==='expired-time'?'2000-01-01T00:00:00Z':undefined,destination:{provider:'local',folder_id:kind==='other-destination'?'old-parent':undefined},files:['one.pdf'],allow_remaining_issues:true}})
- const c = await mount({run:{...run,source:'local'},files:[verified('one.pdf',{corrected_sha256:'digest'})]})
- if(kind==='other-destination') {
-  // Choosing a different provider is an explicit destination change.
-  const select=c.querySelector('[aria-label="Publishing destination"]')
-  await act(async()=>{select.value='drive';select.dispatchEvent(new Event('change',{bubbles:true}))});await flush()
- }
- expect(button(c,'Publish batch with remaining issues (1)').disabled).toBe(false)
+it('does not expose duplicate publication when the saved permission has expired', async () => {
+ getAutomaticRelease.mockResolvedValue({run_id:'batch-a',authorization:{id:'accepted',run_id:'batch-a',status:'active',expires_at:'2000-01-01T00:00:00Z',destination:{provider:'local'},files:['one.pdf'],allow_remaining_issues:true}})
+ const c=await mount({run:{...run,source:'local'},files:[verified('one.pdf',{corrected_sha256:'digest'})]})
+ expect(button(c,'Publish batch with remaining issues (1)')).toBeUndefined()
+ expect(c.querySelector('.release-advanced')).toBeNull()
+ expect(publishAllFiles).not.toHaveBeenCalled()
 })
 it('bounds an unresponsive initial automatic publication check and offers an explicit refresh', async () => {
  vi.useFakeTimers()
@@ -611,7 +613,7 @@ it('bounds an unresponsive initial automatic publication check and offers an exp
  getAutomaticRelease.mockImplementation(()=>new Promise(()=>{}))
  const {root,container}=createTestRoot()
  await act(async()=>root.render(createElement(Publish,{run:{...run,source:'local'},files:[verified('one.pdf',{corrected_sha256:'digest'})]})))
- expect(button(container,'Publish batch (1)').disabled).toBe(true)
+ expect(button(container,'Publish batch (1)')).toBeUndefined()
  expect(container.textContent).toContain('Checking automatic publication…')
  await act(async()=>vi.advanceTimersByTimeAsync(20000))
  expect(container.textContent).not.toContain('Checking automatic publication…')
@@ -715,4 +717,14 @@ it('does not dispatch a delayed GET after account change or unmount',async()=>{
  await act(async()=>vi.advanceTimersByTimeAsync(120000))
  expect(getAutomaticRelease).toHaveBeenCalledOnce()
  getAutomaticRelease.mockResolvedValue({authorization:null})
+})
+
+it('keeps explicit manual publication for copies outside the saved automatic plan', async () => {
+ getAutomaticRelease.mockResolvedValue({run_id:'batch-a',authorization:{id:'accepted',run_id:'batch-a',status:'active',destination:{provider:'local'},files:['automatic.pdf'],allow_remaining_issues:true}})
+ const c=await mount({run:{...run,source:'local'},files:[verified('automatic.pdf',{corrected_sha256:'auto'}),verified('manual.pdf',{corrected_sha256:'manual'})]})
+ expect(c.querySelector('.release-advanced')).toBeTruthy()
+ const publish=button(c,'Publish batch (1)')
+ expect(publish.disabled).toBe(false)
+ await click(publish)
+ expect(publishAllFiles.mock.calls.at(-1)[1]).toEqual(['manual.pdf'])
 })
