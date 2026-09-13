@@ -621,3 +621,30 @@ it('bounds an unresponsive initial automatic publication check and offers an exp
  expect(button(container,'Publish batch (1)').disabled).toBe(false)
  vi.useRealTimers()
 })
+
+it('keeps uncertainty honest after fresh same-revision status and reload without another delivery request',async()=>{
+ const saved={id:'unconfirmed-auth',run_id:'accepted-run',revision:7,status:'blocked',can_resume:true,
+   requires_reconnect:false,files:['one.pdf'],allow_remaining_issues:true,
+   destination:{provider:'drive',folder_id:'folder'}}
+ // The resume request failed before any accepted job was observed; subsequent durable
+ // GETs still report the identical blocked revision. That cannot establish delivery.
+ getAutomaticRelease.mockResolvedValue({run_id:'accepted-run',authorization:saved})
+ resumeAutomaticRelease.mockRejectedValueOnce(new Error('Connection lost before confirmation'))
+ const props={run:{...run,source:'drive',owner_email:'owner'},files:[held('one.pdf')]}
+ await mount(props)
+ expect(resumeAutomaticRelease).toHaveBeenCalledOnce()
+ const firstGets=getAutomaticRelease.mock.calls.length
+ expect(document.querySelector('.release-recovery-banner').textContent).toContain('Delivery recovery is unconfirmed')
+ await click(document.querySelector('.release-recovery-banner button'))
+ await flush()
+ expect(getAutomaticRelease.mock.calls.length).toBeGreaterThan(firstGets)
+ expect(resumeAutomaticRelease).toHaveBeenCalledOnce()
+ expect(document.querySelector('.release-recovery-banner').textContent).not.toContain('sign-in is required')
+ await unmountAll()
+ const { _resetRecoveryAttempts }=await import('./useAutomaticDeliveryRecovery.js')
+ _resetRecoveryAttempts() // Simulate a freshly loaded page retaining session storage.
+ await mount(props)
+ expect(resumeAutomaticRelease).toHaveBeenCalledOnce()
+ expect(document.querySelector('.release-recovery-banner button').textContent).toBe('Check delivery status')
+ expect(publishAllFiles).not.toHaveBeenCalled()
+})

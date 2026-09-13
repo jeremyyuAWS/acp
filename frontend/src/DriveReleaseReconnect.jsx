@@ -24,7 +24,7 @@ export default function DriveReleaseReconnect({ scanId, authorizationId, authori
     return <ManualReleaseReconnect {...{ scanId, authorizationId, onResume, readOnly, microsoft }} />
   return <ReleaseRecoveryBanner status={enabled ? recovery.status : 'idle'}
     providerName={microsoft ? 'SharePoint' : 'Google Drive'} error={recovery.error}
-    onReconnect={recovery.reconnect} disabled={readOnly} />
+    onReconnect={recovery.reconnect} onCheckStatus={recovery.checkStatus} disabled={readOnly} />
 }
 
 // Compatibility for the existing explicit manual continuation. Only its button can

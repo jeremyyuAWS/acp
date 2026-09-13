@@ -130,9 +130,9 @@ it('a provider request failure shows checking rather than asking for an unnecess
  refreshSPToken.mockResolvedValue('microsoft-token')
  const resume=vi.fn().mockRejectedValue(new Error('Network interrupted'))
  await mount({provider:'sharepoint',onResume:resume})
- expect(banner().textContent).toContain('Checking saved delivery status')
+ expect(banner().textContent).toContain('Delivery recovery is unconfirmed')
  expect(banner().textContent).not.toContain('sign-in is required')
- expect(banner().querySelector('button')).toBeNull()
+ expect(banner().querySelector('button').textContent).toBe('Check delivery status')
 })
 
 it('preserves the manual continuation explicit reconnect contract without automatic authority',async()=>{
@@ -142,4 +142,24 @@ it('preserves the manual continuation explicit reconnect contract without automa
  expect(banner()).toBeNull()
  await act(async()=>v.container.querySelector('button').click())
  expect(setDriveToken).toHaveBeenCalledWith('explicit-grant');expect(v.props.onResume).toHaveBeenCalledOnce()
+})
+
+it('same-revision reload exposes honest uncertainty and GET-only checking without another POST',async()=>{
+ const resume=vi.fn().mockRejectedValue(new Error('Unknown request outcome'))
+ await mount({requiresReconnect:false,onResume:resume});await unmountAll();_resetRecoveryAttempts()
+ const v=await mount({requiresReconnect:false,onResume:resume})
+ expect(banner().textContent).toContain('Delivery recovery is unconfirmed')
+ expect(banner().textContent).not.toContain('sign-in is required')
+ await v.click();expect(v.props.onRefresh).toHaveBeenCalledOnce();expect(resume).toHaveBeenCalledOnce()
+ await v.rerender({});expect(resume).toHaveBeenCalledOnce()
+})
+it('silent renewal timeout before POST does not pretend delivery is running or ask for unnecessary sign-in',async()=>{
+ vi.useFakeTimers();refreshSPToken.mockImplementation(()=>new Promise(()=>{}))
+ const v=await mount({provider:'sharepoint'})
+ await act(async()=>vi.advanceTimersByTime(20001))
+ expect(v.props.onResume).not.toHaveBeenCalled()
+ expect(banner().textContent).toContain('Delivery recovery is unconfirmed')
+ expect(banner().textContent).not.toContain('sign-in is required')
+ await v.click();expect(v.props.onRefresh).toHaveBeenCalledOnce()
+ expect(refreshSPToken).toHaveBeenCalledOnce();expect(v.props.onResume).not.toHaveBeenCalled()
 })
