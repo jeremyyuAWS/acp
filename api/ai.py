@@ -1005,7 +1005,11 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     reason = res.get("reason") or _providers.REASON_TRANSPORT
     circuit_reason = circuit_res.get("reason") or _providers.REASON_TRANSPORT
     with _VISION_CIRCUIT_LOCK:
-        if circuit_res.get("ok"):
+        if circuit_res.get("ok") or circuit_reason in (
+                _providers.REASON_EMPTY, _providers.REASON_UNUSABLE):
+            # A completed but unusable model reply proves dependency recovery,
+            # never accessibility success. Leaving a half-open probe claimed here
+            # would block every later call despite the endpoint answering.
             _VISION_CIRCUITS.pop(circuit_key, None)
         elif circuit_enabled and circuit_reason not in (
                 _providers.REASON_EMPTY, _providers.REASON_UNUSABLE, "capacity_busy", "shared_capacity_busy", "shared_coordination_unavailable", "assessment_vision_budget_exhausted"):

@@ -23,3 +23,25 @@ def test_admission_rejection_releases_half_open_probe_for_later_recovery(monkeyp
     assert not ai._VISION_CIRCUITS[key]['probing']
     assert ai._vision_generate('Describe', b'IMG', scan_id='scan') == 'A useful chart description'
     assert key not in ai._VISION_CIRCUITS
+
+
+@pytest.mark.parametrize('reason', [providers.REASON_EMPTY, providers.REASON_UNUSABLE])
+def test_healthy_unusable_response_does_not_strand_half_open_probe(monkeypatch, reason):
+    provider = _Provider([])
+    monkeypatch.setattr('llm_waterfall_provider.managed_context', lambda: None)
+    monkeypatch.setattr(providers, 'active_vision_provider', lambda: provider)
+    monkeypatch.setattr(ai, '_trace_ai', lambda *a, **kw: None)
+    key = (provider.name, provider.base_url, provider.model)
+    monkeypatch.setattr(ai, '_VISION_CIRCUITS', {key: {
+        'opened_at': ai.time.monotonic() - ai.VISION_CIRCUIT_COOLDOWN - 1,
+        'reason': providers.REASON_TIMEOUT, 'failures': 1}})
+    calls = []
+    def response(*args, **kwargs):
+        calls.append('provider reached')
+        return (_result(reason=reason) if len(calls) == 1 else
+                _result(ok=True, reason=providers.REASON_OK, text='A useful figure description'))
+    monkeypatch.setattr(ai, '_bounded_vision_generate', response)
+    assert ai._vision_generate('Describe', b'IMG', scan_id='scan') is None
+    assert ai._vision_generate('Describe', b'IMG', scan_id='scan') == 'A useful figure description'
+    assert calls == ['provider reached', 'provider reached']
+    assert key not in ai._VISION_CIRCUITS
