@@ -4,7 +4,7 @@ import { getStageProgressQueue } from './api.js'
 import { useEffect, useState } from 'react'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import { canonicalStageCardModel, alignRemediationAssessment } from './canonicalStageCard.js'
-import { releaseBatchProgress } from './releaseBatchProgress.js'
+import { releaseBatchProgress, releaseBatchDomain } from './releaseBatchProgress.js'
 
 const terminal = (state) => ['processing_complete', 'succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed'].includes(state)
 const shown = (value) => value == null ? '—' : Number(value).toLocaleString()
@@ -17,7 +17,9 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
   const executionId = model?.executionId
   const queue = selection?.executionId === executionId ? selection.key : null
   const queueIdentity = queue ? `${executionId}:${queue}` : null
-  const queueModel = outcomeTileModel(model?.stage, snapshot?.domain_reconciliation)
+  const batchDomain = releaseBatchDomain(releaseBatchProgress(snapshot))
+  const primaryDomain = model?.stage === 'release' && releaseBatchProgress(snapshot) ? batchDomain : snapshot?.domain_reconciliation
+  const queueModel = outcomeTileModel(model?.stage, primaryDomain)
   const tile = queueModel?.tiles.find(item => item.key === queue)
   const expected = tile?.value
   useEffect(() => { setSelection(null) }, [executionId])
@@ -61,14 +63,16 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
     <p className="workflow-sse-card__outcome">{batch ? <b>{batch.summary}</b> : findingAccounting
       ? <><b>{shown(total)} assessed findings</b> · Outcome breakdown</>
       : <><b>{shown(done)} of {shown(total)}</b> {domain?.unit || model.unit}</>}</p>
-    {batch && <p className="workflow-sse-card__notice">{batch.available === false
+    {batch && <details className="workflow-sse-card__outcome-details"><summary>Latest delivery request</summary><p className="workflow-sse-card__notice">{batch.available === false
       ? 'The approved batch could not be confirmed. '
-      : `${shown(batch.remaining)} authorized files awaiting confirmed delivery. `}Latest delivery request: {shown(done)} of {shown(total)} requested documents accounted for. Request completion does not mean the entire batch is delivered.</p>}
+      : `${shown(batch.remaining)} authorized files awaiting confirmed delivery. `}Latest delivery request: {shown(done)} of {shown(total)} requested documents accounted for. Request completion does not mean the entire batch is delivered.</p></details>}
     {findingAccounting && <p className="workflow-sse-card__notice">{live ? 'Verified totals update as document work progresses.' : 'Automatic document work has stopped; remaining findings still need review or remediation.'} Outcomes show what happened to the findings. Document categories show how they can be remediated; individual bucket counts can differ.</p>}
     {model.stage === 'remediate' && progressHostId && <div id={progressHostId} data-scan-id={progressScanId} data-batch-id={model.executionId} aria-label="Document progress summary" />}
     {['remediate', 'release'].includes(model.stage) ? <>
-      <WorkflowOutcomeTiles queueMode stage={model.stage} domain={snapshot.domain_reconciliation}
-        baseline={snapshot.progress_baseline} executionId={model.executionId} onFilter={bucket => { setSelection({ key: bucket, executionId }); onOutcomeFilter?.(bucket) }} />
+      {(!batch || batchDomain) && <WorkflowOutcomeTiles queueMode={!batch} stage={model.stage} domain={primaryDomain}
+        scopeLabel={batch ? `${shown(batch.total)} authorized files · entire saved plan` : undefined}
+        baseline={batch ? null : snapshot.progress_baseline} executionId={batch?.scope_id || model.executionId} onFilter={batch ? (onOutcomeFilter ? bucket => onOutcomeFilter(bucket) : undefined) : bucket => { setSelection({ key: bucket, executionId }); onOutcomeFilter?.(bucket) }} />}
+      {batch && !batchDomain && <p className="workflow-sse-card__notice" role="status">Delivery classifications are unavailable. Confirmed deliveries remain visible above; outstanding copies are not assumed to be queued.</p>}
       <details className="workflow-sse-card__outcome-details">
         <summary>Outcome details</summary>
         {domain?.buckets?.length > 0 && <dl className="workflow-sse-card__metrics">

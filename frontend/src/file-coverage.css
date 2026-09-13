@@ -1,0 +1,19 @@
+/* Compact file measures use the same Metric typography and surface as Assess. */
+.file-coverage--compact { margin:16px 0; padding-bottom:16px; border-bottom:1px solid var(--line); }
+.file-coverage--compact h3 { font-size:15px; margin:0 0 12px; }
+.file-coverage-compact-counts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.file-coverage-cell { position:relative; min-width:0; }
+.file-coverage-metric { display:flex; flex-direction:column; width:100%; height:100%; text-align:left; padding:12px 14px; border:1px solid var(--line); border-radius:12px; color:var(--ink); background:var(--surface); font-family:inherit; }
+.file-coverage-metric > span:first-child { padding-right:26px; font-size:11.5px; color:var(--muted); line-height:1.35; }
+.file-coverage-metric strong { margin-top:5px; font-size:26px; font-weight:700; line-height:1; font-variant-numeric:tabular-nums; }
+.file-coverage-metric .kpi-counter { display:inline-flex; gap:6px; flex-wrap:wrap; align-items:baseline; }
+.file-coverage-metric small { font-size:11.5px; line-height:1.45; color:var(--muted); margin-top:5px; }
+.file-coverage-cell > .info-tip { position:absolute; top:9px; right:10px; z-index:2; }
+.file-coverage-metric:is([aria-pressed=true],[aria-expanded=true]) { outline:2px solid var(--muted); outline-offset:2px; }
+.file-coverage-bar { width:100%; height:8px; display:block; margin-top:12px; accent-color:#2F7D32; }
+.file-coverage-copy { color:var(--muted); font-size:11.5px; line-height:1.45; margin:8px 0 0; }
+@media(max-width:600px) { .file-coverage-compact-counts { grid-template-columns:1fr; } }
+@media(prefers-reduced-motion:reduce) { .file-coverage--compact .kpi-update-delta { animation:none; } }
+.file-coverage-cell > .info-tip .info-tip__text { left:auto; right:0; }
+.file-coverage-cell:has(.kpi-update-delta--warning) .kpi-counter-value--activity { color:#8a5a00; animation:none; }
+.file-coverage-cell:has(.kpi-update-delta--neutral) .kpi-counter-value--activity { color:var(--muted); animation:none; }

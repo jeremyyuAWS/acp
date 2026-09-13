@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { matchesWorkflow } from './remediationInboxModel.js'
 
-const TABS = [['review', 'Needs review'], ['awaiting-validation', 'Processing'], ['completed', 'Completed']]
+const TABS = [['review', 'Needs review'], ['awaiting-validation', 'Processing'], ['completed', 'Results']]
 
 export default function ReviewQueueTabs({ queue, decisions, scanId, value, onChange, disabled }) {
   const counts = TABS.map(([key]) => queue.filter(row => matchesWorkflow(row, key, decisions)).length)
@@ -21,8 +21,8 @@ export default function ReviewQueueTabs({ queue, decisions, scanId, value, onCha
   return <div className="review-queue-tabs" role="group" aria-label="Review queues">
     {TABS.map(([key, label], i) => {
       const delta = change?.scanId === scanId ? change.deltas[i] : 0
-      const positive = (key === 'review' && delta < 0) || (key === 'completed' && delta > 0)
-      return <button key={key} className={`review-queue-pill review-queue-pill--${key}`} type="button" aria-pressed={selected === key} disabled={disabled} onClick={() => onChange(key)}>
+      const positive = (key === 'review' && delta < 0)
+      return <button key={key} className={`review-queue-pill review-queue-pill--${key === 'completed' ? 'results' : key}`} type="button" aria-pressed={selected === key} disabled={disabled} onClick={() => onChange(key)}>
         <span className="review-queue-label">{label}</span><span className="review-queue-selected" aria-hidden="true">{selected === key ? '✓' : ''}</span><strong>{counts[i]}</strong>
         {!!delta && <span key={`${signature}:${i}`} className={`review-queue-delta${positive ? ' positive' : ''}`} aria-hidden="true">{delta > 0 ? '+' : '−'}{Math.abs(delta)}</span>}
       </button>

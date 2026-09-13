@@ -17,6 +17,7 @@ def setup(store, scope=147):
         preferred_folder_name='Authorized batch')
     authorization = automatic_release_store.create(store, 'owner', 'scan', run, 'batch',
         {'files': {file: {'checksum': 'frozen-source'} for file in files},
+         'destination': {'provider': 'local', 'folder_id': 'root', 'folder_name': 'Download package'},
          'release_parent_id': None, 'release_folder_name': release['folder_name']})
     entries = {file: {'state': 'waiting'} for file in files}
     for file in files[:9]:
@@ -37,7 +38,7 @@ def test_incremental_request_retains_its_ledger_and_shows_only_approved_cumulati
     snapshot = store.stage_execution_snapshot(execution, owner='owner')
     assert snapshot['domain_reconciliation']['total'] == 1
     batch = progress_evidence.read(store, execution, owner='owner')['release_batch_progress']
-    assert batch == {'available': True, 'authorization_id': authorization['id'], 'run_id': authorization['run_id'],
+    assert {k: v for k, v in batch.items() if k not in {'scope_id', 'buckets', 'file_membership'}} == {'available': True, 'authorization_id': authorization['id'], 'run_id': authorization['run_id'],
                      'total': 147, 'delivered': 9, 'remaining': 138, 'status': 'waiting', 'revision': 1}
     assert progress_evidence.read(store, execution, owner='intruder')['file_processing']['available'] is False
 
@@ -95,6 +96,7 @@ def test_actual_authorize_contract_and_settled_sharepoint_receipts(isolated_stor
     assert batch['available'] is True
     assert (batch['total'], batch['delivered'], batch['remaining']) == (3, 2, 1)
     assert batch['authorization_id'] == authorization['id'] and batch['run_id'] == run
+    assert automatic_release.public(authorization, store)['batch_progress'] == batch
 
 
 @pytest.mark.parametrize('mutation', ['digest', 'current_artifact', 'destination', 'progress_only', 'unrelated_authorization', 'replaced_run'])
@@ -156,3 +158,42 @@ def test_only_request_payloads_without_automatic_identity_prove_manual_scope(iso
         snapshot_id='corrected', request_fingerprint='manual')['batch_id']
     assert release_batch_progress.read(store, store.get_stage_execution(execution, owner='owner')) == {
         'available': False, 'scope': 'manual'}
+
+
+def test_saved_plan_partition_uses_exact_receipts_and_keeps_unknown_states_visible(isolated_store):
+    store = isolated_store
+    execution, authorization, _, files = setup(store, scope=12)
+    current = automatic_release_store.get(store, authorization['id'], 'owner')
+    entries = current['progress']['files']
+    entries[files[9]] = {'state': 'publishing'}
+    entries[files[10]] = {'state': 'blocked'}
+    entries[files[11]] = {'state': 'published'}
+    automatic_release_store.save(store, current, status='waiting', progress={'files': entries})
+    batch = progress_evidence.read(store, execution, owner='owner')['release_batch_progress']
+    assert batch['scope_id'] == authorization['id']
+    assert batch['buckets'] == dict(waiting=0, processing=1, published=9, failed=1, skipped=0, unclassified=1)
+    assert sum(batch['buckets'].values()) == batch['total']
+    assert batch['file_membership'][files[11]] == 'unclassified'
+    assert batch['revision'] == 2
+
+
+def test_same_parent_and_folder_receipts_from_other_provider_do_not_count(isolated_store):
+    store = isolated_store
+    execution, authorization, release, _ = setup(store, scope=3)
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "UPDATE release_executions SET source='drive' WHERE id=%s", (release['id'],))
+    batch = progress_evidence.read(store, execution, owner='owner')['release_batch_progress']
+    assert batch['delivered'] == 0
+    assert batch['remaining'] == 3
+    assert automatic_release.receipt(store, authorization, 'file-0.pdf', 'a' * 64) is None
+
+
+@pytest.mark.parametrize('destination', [None, 'legacy-default', {'provider': 'unknown'}, {}])
+def test_missing_legacy_destination_identity_is_explicitly_unavailable(isolated_store, destination):
+    import release_batch_progress
+    store = isolated_store
+    _, authorization, _, _ = setup(store, scope=3)
+    authorization['intent']['destination'] = destination
+    assert release_batch_progress.read_authorization(store, authorization) == {
+        'available': False, 'scope': 'automatic', 'reason': 'destination_identity_unavailable'}
+    assert automatic_release.receipt(store, authorization, 'file-0.pdf', 'a' * 64) is None

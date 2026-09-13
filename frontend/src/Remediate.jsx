@@ -1,3 +1,5 @@
+import RemediationAutomationStatus from './RemediationAutomationStatus.jsx'
+import AutomaticPublicationStatus from './AutomaticPublicationStatus.jsx'
 import useAutomaticReleaseStatus from './useAutomaticReleaseStatus.js'
 import AutomaticReleasePackage from './AutomaticReleasePackage.jsx'
 import { remediationWorkRunning } from './remediationWorkRunning.js'
@@ -1887,6 +1889,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   return (
     <>
+      {planAccepted && <>
+        <RemediationAutomationStatus policy={runAiApproval.policy} error={runAiApproval.error} saving={runAiApproval.saving}
+          reviewCount={reviewCounts.pendingItems} onOpenReview={() => setWorkspaceRequest({ mode: 'review' })} onRetry={runAiApproval.retry}/>
+        <AutomaticPublicationStatus authorization={acceptedAuthorization} pending={acceptedAuthorization === undefined && !automaticReleaseState?.error} error={automaticReleaseState?.error} compact
+          destinationLabel={acceptedAuthorization?.destination?.provider} />
+      </>}
       <RemediationWorkspaceTabs
         assessmentReady={!readOnly && !assessRunning && files.length > 0 && !!assessedAt}
         assessmentIdentity={runId && assessedAt ? `${runId}:${assessedAt}` : runId}

@@ -17,7 +17,7 @@ async function mount(extra = {}) {
 }
 it('has Live, Review and AI waterfall tabs and defaults to Live', async () => {
   const { container } = await mount()
-  expect([...container.querySelectorAll('[role=tab]')].map(n => n.textContent)).toEqual(['Live', 'Review', 'AI waterfall'])
+  expect([...container.querySelectorAll('[role=tab]')].map(n => n.textContent)).toEqual(['Live activity', 'Needs your review', 'AI activity'])
   expect(container.querySelector('#rem-panel-live').hidden).toBe(false)
   expect(container.querySelector('dialog').open).toBe(false)
 })
@@ -64,7 +64,7 @@ it('supports keyboard wraparound and browser history', async () => {
 })
 it('does not display a review badge for another run', async () => {
   const { container } = await mount({ reviewCount: 19, snapshot: { run_id: 'other', batch_id: 'batch' } })
-  expect(container.querySelector('#rem-mode-review').textContent).toBe('Review')
+  expect(container.querySelector('#rem-mode-review').textContent).toBe('Needs your review')
 })
 
 it('returns to Review after closing the plan without starting', async () => {
@@ -87,7 +87,7 @@ it('does not let a delayed header focus move focus after subsequent keyboard nav
 it('keeps review available but optional for automatic publication', async () => {
   const { container } = await mount({ reviewOptional: true })
   const tab = container.querySelector('#rem-mode-review')
-  expect(tab.textContent).toContain('Review suggestions · Optional')
+  expect(tab.textContent).toContain('Needs your review')
   await act(async () => tab.click())
   expect(container.querySelector('#rem-panel-review').hidden).toBe(false)
   expect(container.querySelector('#rem-panel-review').textContent).toContain('Suggestions requiring approval stay unapplied')

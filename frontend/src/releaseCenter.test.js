@@ -229,7 +229,7 @@ describe('Release builder', () => {
   it('allows released files to be selected for download without republishing them', () => {
     const s = pub()
     expect(s).toMatch(/const selectableReady = ready\.filter\(\(f\) => canSelectRelease\(stateOf\(f\)\)\)/)
-    expect(s).toMatch(/const selectedPublishable = selectedReady\.filter\(\(f\) => !done\[f\.file\]\)/)
+    expect(s).toMatch(/const selectedPublishable = selectedReady\.filter\(\(f\) => !done\[f\.file\] && !automaticCoveredFiles\.includes\(f\.file\)\)/)
     expect(s).toMatch(/if \(!selectedPublishable\.length\) setDeliveryMethod\('download'\)/)
     expect(s).toMatch(/Every selected file is already published/)
     expect(s).toMatch(/Already released files are excluded/)

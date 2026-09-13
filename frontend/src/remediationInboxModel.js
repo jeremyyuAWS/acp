@@ -234,7 +234,7 @@ export function tabCounts(list, decisions = {}) {
 export const WORKFLOW_TABS = ['needs-review', 'manual', 'awaiting-validation', 'blocked', 'completed']
 export const WORKFLOW_LABELS = {
   'needs-review': 'Approve AI suggestions', manual: 'Fix manually',
-  'awaiting-validation': 'Awaiting verification', blocked: 'Blocked', completed: 'Completed',
+  'awaiting-validation': 'Awaiting verification', blocked: 'Blocked', completed: 'Results',
 }
 
 /** The pipeline stage a finding sits in, for the workflow top tabs. */
@@ -245,6 +245,9 @@ export function workflowStatusOf(f, decisions = {}) {
   const lane = laneOf(f)
   if (['failed', 'apply_failed', 'verification_failed'].includes(st)) return 'blocked'
   if (st === 'verified' || st === 'resolved_verified' || f?.verified === true || (f?.validated && (f?.autoApplied || f?.applied || st === 'resolved'))) return 'completed'
+  // Only automaticReviewQueue's exact-scope projection can supply this state.
+  // A jobless approval is a recovery blocker, not ongoing processing.
+  if (f?.automaticDisposition?.state === 'blocked') return 'blocked'
   if ((f?.autoApplied || f?.applied) && !['blocked', 'rejected', 'skipped'].includes(st)
       && !f?.rejectedFix && !['assigned', 'deferred', 'rejected', 'not_applicable'].includes(d?.state)) return 'awaiting-validation'
 

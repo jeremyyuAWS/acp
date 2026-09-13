@@ -17,7 +17,8 @@ it('puts workspace tabs first and current activity at the start of the default L
  const container = document.createElement('div')
  container.innerHTML = renderToString(<Remediate run={{ id: 'current', status: 'completed' }} files={[]}
    runStream={{ snapshot: { scan_id: 'current', run_id: 'current', batch_id: 'batch', state: 'processing', terminal: false }, events: [{key:'saved',file:'file.pdf',line:'Saved corrected copy',tone:'success'}], connected: true, receivedAt: Date.now() }} />)
- expect(container.firstElementChild.getAttribute('role')).toBe('tablist')
+ expect(container.firstElementChild.getAttribute('aria-label')).toBe('Remediation automation')
+ expect(container.querySelector('[role=tablist]')).not.toBeNull()
  const live = container.querySelector('#rem-panel-live')
  expect(live.hidden).toBe(false)
  expect(live.children[1].getAttribute('aria-label')).toBe('Remediation live activity')

@@ -27,7 +27,7 @@ beforeEach(()=>{vi.useFakeTimers();list.mockReset().mockResolvedValue([proposal,
 afterEach(async()=>{await unmountAll();vi.useRealTimers();_resetAuthEpoch()})
 const render=props=>act(async()=>{root.render(<View {...props}/>);await Promise.resolve()})
 const text=()=>container.textContent.replace(/\s+/g,' ')
-it('drains eligible review into Processing then Completed using server rows, while manual work remains',async()=>{
+it('drains eligible review into Processing then Results using server rows, while manual work remains',async()=>{
  await render()
  expect(text()).toContain('Needs review')
  expect(queued).toHaveLength(2)
@@ -35,11 +35,11 @@ it('drains eligible review into Processing then Completed using server rows, whi
  await act(async()=>container.querySelector('[role=switch]').click())
  expect(queued[0]._raw.automatic_approval.state).toBe('checking')
  expect(text()).toMatch(/Processing\s*1/)
- expect(text()).toMatch(/Completed\s*0/)
+ expect(text()).toMatch(/Results\s*0/)
  list.mockResolvedValue([{...proposal,status:'approved',validated:true},manual])
  await render({revision:2})
  await act(async()=>vi.advanceTimersByTimeAsync(800))
- expect(text()).toMatch(/Completed\s*1/)
+ expect(text()).toMatch(/Results\s*1/)
  expect(queued.find(r=>r.id==='manual')).toEqual(manual)
  expect(save).toHaveBeenCalledTimes(1)
 })

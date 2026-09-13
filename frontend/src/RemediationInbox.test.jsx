@@ -355,7 +355,7 @@ describe('RemediationInbox — workflow-status queue', () => {
   it('an approved finding moves to Awaiting validation; a rejected one to Completed', async () => {
     await render({ queue: QUEUE, decisions: { 2: { state: 'accepted' }, 3: { state: 'rejected' } } })
     expect(container.textContent).toContain('Awaiting verification 1')
-    expect(container.textContent).toContain('Completed 1')           // id3 (rejected → terminal)
+    expect(container.textContent).toContain('Results 1')           // id3 (rejected → terminal)
     expect(container.textContent).toContain('2 of 3 reviewed')       // id2 + id3 reviewed (id1 auto-fix still needs review)
   })
 
@@ -603,7 +603,7 @@ describe('RemediationInbox — workflow-status queue', () => {
 
   it('distinguishes an empty queue from a filtered view with no matches', async () => {
     await render({ queue: [], decisions: {} })
-    expect(container.textContent).toContain('All review items are complete')
+    expect(container.textContent).toContain('All review items have recorded outcomes')
     await unmountAll(); ({ container, root } = createTestRoot())
     await render({ queue: QUEUE, decisions: {} })
     const input = container.querySelector('input[type=search]')
@@ -625,4 +625,15 @@ it('shows unavailable and a retry after a failed approval check without claiming
   expect(toggle.disabled).toBe(true)
   await click([...container.querySelectorAll('button')].find(button => button.textContent === 'Retry AI approval check'))
   expect(retries).toBe(1)
+})
+
+it('explains individual judgment with auto-apply on and preserves its manual action', async () => {
+ const policy={enabled:true,supported:true,run_id:'run',source_revision:'source'}
+ const row={...QUEUE[1],id:2,status:'pending',_raw:{automatic_approval:{state:'review_required',owner:'You',reason:'Diagram content requires your judgment.',run_id:'run',source_revision:'source'}}}
+ await render({queue:[row],automaticApprovalPolicy:policy,autoApprove:true,legacyApprovalControls:false})
+ expect(container.textContent).toContain('Diagram content requires your judgment.')
+ expect(container.textContent).toContain('ACP automatically applies eligible AI suggestions')
+ const apply=[...container.querySelectorAll('button')].find(button=>button.textContent === 'Review and apply')
+ expect(apply).toBeTruthy()
+ expect(apply.disabled).toBe(false)
 })

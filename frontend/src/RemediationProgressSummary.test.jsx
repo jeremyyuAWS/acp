@@ -39,3 +39,9 @@ it('hides only Release document attention while retaining Remediate attention', 
  await act(async()=>root.render(<RemediationProgressSummary documents={documents} onSelect={()=>{}}/>))
  expect(container.querySelector('.progress-attention').textContent).toContain('Needs attention')
 })
+it('deliberately retires duplicate document-stage tiles in compact workflow presentation', async () => {
+ await mount({compact:true,documents:[{file:'a',progressState:'verified'}],onSelect:vi.fn()})
+ expect(container.querySelector('.remediation-progress-summary-counts')).toBeNull()
+ expect(container.textContent).not.toContain('Before:')
+ expect(container.textContent).toContain('Show all 1 document')
+})

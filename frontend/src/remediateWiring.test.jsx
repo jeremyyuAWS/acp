@@ -232,7 +232,7 @@ describe('R15 (board 10) — undo an applied fix, mounted only for an auto-appli
 
 it('keeps initial planning and retires repeated Live release controls in favor of saved run details', () => {
   const source = code('Remediate.jsx')
-  expect(source.slice(source.indexOf('plan={<>'), source.indexOf('reviewCount={reviewCounts'))).toContain('releaseOption={<RemediationReleasePlan')
+  expect(source.slice(source.indexOf('plan={<>'), source.indexOf('reviewCount={reviewCounts', source.indexOf('plan={<>')))).toContain('releaseOption={<RemediationReleasePlan')
   expect(source.slice(source.indexOf('live={<>'))).not.toMatch(/<RemediationAutoRelease(?! statusOnly)/)
   expect(source).not.toContain('<RemediationAutoRelease'); expect(source).toContain('useAutomaticReleaseStatus(runId, impactScope, setAutomaticReleaseState)')
   expect(source).toContain('<RemediationOpsPanel streamlined')

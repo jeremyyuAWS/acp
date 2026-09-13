@@ -108,7 +108,7 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
         id={`rem-mode-${value}`} aria-controls={`rem-panel-${value}`} aria-selected={mode === value}
         tabIndex={mode === value ? 0 : -1} onKeyDown={(event) => onKeyDown(event, index)}
         onClick={() => select(value)}>
-        {value === 'live' ? 'Live' : value === 'waterfall' ? 'AI waterfall' : reviewOptional ? 'Review suggestions · Optional' : 'Review'}
+        {value === 'live' ? 'Live activity' : value === 'waterfall' ? 'AI activity' : 'Needs your review'}
         {value === 'review' && snapshot?.batch_id && (snapshot.scan_id || snapshot.run_id) === runId && <span>{reviewCount.toLocaleString()}</span>}
         {value === 'live' && activeWork && <span className="rem-mode-live-dot" aria-label="active">●</span>}
       </button>)}

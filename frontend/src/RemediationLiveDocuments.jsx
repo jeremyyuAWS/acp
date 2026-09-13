@@ -19,7 +19,7 @@ import { changeCategory, categoryLabel } from './remediationCategories.js'
 const OUTCOME_SHORT_LABELS = { automatic:'Auto', approval:'Approve', suggestion:'AI', manual:'Manual', unsupported:'No ACP', blocked:'Blocked', applied:'Pending', ai_applied:'AI applied', verified:'Verified', remaining:'Remaining', excluded:'Excluded', superseded:'Superseded', approved:'Approved · awaiting application' }
 const OUTCOME_EXPLANATIONS = { remaining:'Findings without a verified fix that still need follow-up.', excluded:'Findings deliberately excluded from remediation.', superseded:'Older finding records replaced by a later recorded outcome.', approved:'Approved changes awaiting application. Approval alone does not mean the finding is fixed.' }
 
-export default function RemediationLiveDocuments({ scanId, files, cap, assessment, fixes: suppliedFixes, fixTotal: suppliedTotal, refreshKey, snapshot, events = [], connected, progressDocuments, progressHostId = null, onShowDocuments }) {
+export default function RemediationLiveDocuments({ scanId, files, cap, assessment, fixes: suppliedFixes, fixTotal: suppliedTotal, refreshKey, snapshot, events = [], connected, progressDocuments, progressHostId = null, onShowDocuments, showDocumentStages = false }) {
   const search = useSearchFilter()
   const facets = [{ key: 'type', label: 'file type', get: row => row.file.split('.').pop().toUpperCase() }]
   const [progressHost, setProgressHost] = useState(null)
@@ -153,7 +153,7 @@ export default function RemediationLiveDocuments({ scanId, files, cap, assessmen
     return {file:row.file,status:row.assessmentBlocked ? 'blocked' : queueSelection?.kind === 'coverage' && queueSelection.key === 'processed' ? 'processed' : state,
       label:row.assessmentBlocked ? 'Blocked' : queueSelection?.kind === 'coverage' && queueSelection.key === 'processed' ? 'Processed' : PROGRESS_STATES.find(([key]) => key === state)?.[1], reason:row.assessmentBlocked?.reason, findingCount:row.totalFindings}
   })
-  const progressSummary = <RemediationProgressSummary key={snapshot?.batch_id || scanId} animate={liveMode} documents={effectiveProgress} queueMode
+  const progressSummary = <RemediationProgressSummary compact={!showDocumentStages} key={snapshot?.batch_id || scanId} animate={liveMode} documents={effectiveProgress} queueMode
     selected={queueSelection?.kind === 'document' ? queueSelection.key : undefined}
     coverage={coverageEvidence || { available: false }} selectedCoverage={queueSelection?.kind === 'coverage' ? queueSelection.key : undefined} baselineDocumentCounts={snapshot?.progress_baseline?.documents} startedAt={snapshot?.progress_baseline?.started_at}
     onCoverageSelect={selection => setQueueSelection({kind:'coverage',key:selection})}

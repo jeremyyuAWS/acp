@@ -17,7 +17,7 @@ it('opens the exact finding queue grouped by file and does not navigate', async(
   getStageProgressQueue.mockResolvedValue({execution_id:'run',bucket:'verified',available:true,count:3,
     files:[{file:'a.docx',status:'verified',label:'Verified fixes',findingCount:3}]})
   await render(snapshot())
-  const button=host.querySelector('.finding-outcome-kpis__verified')
+  const button=host.querySelector('.finding-outcome-kpis__verified > button')
   button.focus()
   await act(async()=>button.click())
   expect(getStageProgressQueue).toHaveBeenCalledWith('run','verified')
@@ -33,7 +33,7 @@ it('opens the publication scope and discards a stale response when the run chang
   let resolve
   getStageProgressQueue.mockImplementation(()=>new Promise(r=>resolve=r))
   await render(snapshot('release'))
-  await act(async()=>host.querySelector('.workflow-outcome-tiles__tile.tone-green').click())
+  await act(async()=>host.querySelector('.tone-green > .workflow-outcome-tiles__tile').click())
   expect(document.querySelector('[role="dialog"]').textContent).toContain('this release')
   await render(snapshot('release','next'))
   await act(async()=>resolve({execution_id:'run',bucket:'published',available:true,count:1,files:[{file:'old.pdf'}]}))
@@ -43,7 +43,7 @@ it('opens the publication scope and discards a stale response when the run chang
 it('does not substitute a different population when membership disagrees with the tile', async()=> {
   getStageProgressQueue.mockResolvedValue({execution_id:'run',bucket:'verified',available:true,count:99,files:[{file:'other.docx'}]})
   await render(snapshot())
-  await act(async()=>host.querySelector('.finding-outcome-kpis__verified').click())
+  await act(async()=>host.querySelector('.finding-outcome-kpis__verified > button').click())
   expect(document.querySelector('[role="dialog"]').textContent).toContain('queue changed')
   expect(document.querySelector('[role="dialog"]').textContent).not.toContain('other.docx')
 })

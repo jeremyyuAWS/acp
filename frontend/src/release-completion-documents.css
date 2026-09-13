@@ -8,7 +8,7 @@
 .release-report-actions p { margin:4px 0; color:var(--muted); }
 .release-report-actions ul { display:flex; flex-wrap:wrap; gap:8px 20px; padding-left:16px; margin:8px 0; }
 .release-report-actions li small { display:block; }
-.release-documents-scroll { max-width:100%; max-height:32rem; overflow:auto; scrollbar-gutter:stable; border:1px solid var(--line); border-radius:8px; }
+.release-documents-scroll { max-width:100%; max-height:32rem; overflow:auto; scrollbar-gutter:stable; border:1px solid var(--line); border-radius:12px; }
 .release-completion-documents .release-documents-scroll table { min-width:760px; }
 .release-documents-scroll thead th { position:sticky; top:0; z-index:1; background:var(--surface,#fff); box-shadow:0 1px var(--line); }
 .release-completion-documents :focus-visible { outline:2px solid var(--focus-ring,var(--plum)); outline-offset:3px; }
@@ -18,3 +18,6 @@
 .release-completion-documents tbody th { max-width:280px; }
 .release-file-reports { display:grid; gap:6px; padding-left:16px; margin:10px 0 0; font-size:12px; }
 .release-file-reports button { font:inherit; }
+
+.release-completion-documents {font-family:var(--font-ui);}
+.release-completion-documents tbody th {font-family:var(--font-mono,ui-monospace);font-size:12px;font-weight:500;}

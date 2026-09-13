@@ -11,7 +11,7 @@ export default function CompletionDrain({ queue, decisions, scanId, active }) {
       ? queue.filter(row => ['completed', 'awaiting-validation'].includes(statuses.get(row.id))
         && previous.current.statuses.has(row.id) && previous.current.statuses.get(row.id) !== statuses.get(row.id)) : []
     previous.current = { scanId, statuses }
-    if (changed.length) setMoved(changed.map(row => ({ ...row, destination: statuses.get(row.id) === 'completed' ? 'Completed' : 'Processing' })))
+    if (changed.length) setMoved(changed.map(row => ({ ...row, destination: statuses.get(row.id) === 'completed' ? 'Results' : 'Processing' })))
   }, [queue, decisions, scanId])
   useEffect(() => {
     if (!moved.length) return undefined
@@ -20,6 +20,6 @@ export default function CompletionDrain({ queue, decisions, scanId, active }) {
   }, [moved])
   if (!active || !moved.length) return null
   return <div className="rinbox-completion-drain" role="status" aria-live="polite">
-    {moved.length === 1 ? `${issueLabel(moved[0])} moved to ${moved[0].destination}` : `${moved.length} items moved to Processing or Completed`}
+    {moved.length === 1 ? `${issueLabel(moved[0])} moved to ${moved[0].destination}` : `${moved.length} items moved to Processing or Results`}
   </div>
 }

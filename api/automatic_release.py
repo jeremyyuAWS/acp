@@ -151,7 +151,9 @@ def public(row, store=None):
         package = dict(job_id=row['progress']['_package_job_id'], status=job.get('status', 'queued'))
         if status == 'completed' and package['status'] != 'done':
             status = 'failed' if package['status'] in {'dead', 'cancelled'} else 'publishing'
-    return dict(id=row['id'], status=status, package=package, run_id=row['run_id'], files=list(files),
+    from release_batch_progress import read_authorization
+    batch_progress = read_authorization(store, row) if store is not None else {'available': False, 'scope': 'automatic'}
+    return dict(id=row['id'], status=status, package=package, batch_progress=batch_progress, run_id=row['run_id'], files=list(files),
                 request_id=row['request_id'], source_revision=row['intent']['source_revision'],
                 destination_label=destination_label(row['intent']['destination']), destination=row['intent']['destination'],
                 progress=counts, file_progress=details, stopped_at=row.get('stopped_at'),
@@ -330,8 +332,12 @@ def ready(store, row, file):
 
 
 def receipt(store, row, file, digest):
+    destination = row['intent'].get('destination')
+    provider = destination.get('provider') if isinstance(destination, dict) else None
+    if provider not in {'drive', 'sharepoint', 'local'}:
+        return None
     release = store.release_for_scan(row['scan_id'], row['owner_email'])
-    if not release or release.get('parent_folder_id') != row['intent']['release_parent_id'] or release.get('folder_name') != row['intent']['release_folder_name']:
+    if not release or release.get('source') != provider or release.get('parent_folder_id') != row['intent']['release_parent_id'] or release.get('folder_name') != row['intent']['release_folder_name']:
         return None
     saved = store.get_release_document(release['id'], file, row['owner_email'])
     return saved if saved and saved.get('status') == 'published' and saved.get('artifact_digest') == artifact_tag(digest) else None
