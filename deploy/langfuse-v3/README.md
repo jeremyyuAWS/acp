@@ -88,3 +88,20 @@ az containerapp delete -g mdk-accessibility -n acp-langfuse --yes
   `/opt/langfuse/.env`; the project keys + admin password come from the operator's environment.
 - Traces carry no document content or raw filenames — see `docs/audit-langfuse-phi.md` and
   `api/lf.py` (redacted labels, structured-only payloads).
+
+## Retained telemetry capacity alerts
+
+Policy confirmed September 12, 2026: **keep existing telemetry**. No retention purge or S3
+lifecycle expiration is enabled by this change. The existing data disk was expanded to 256 GiB.
+
+Install the read-only checker on the existing VM by copying `storage_check.py` and
+`install-storage-alerts.sh` together, then running the installer as root. It checks the actual
+MinIO filesystem every five minutes: warning below 10% available bytes **or** file entries,
+critical below 5%. Missing mounts and unreadable capacity are critical. Checks do not inspect
+objects, record document contents, or delete data. No additional Azure resource is provisioned.
+
+Operator alerts are recorded in the system journal; warning/critical checks also mark the service
+failed. Inspect using `journalctl -u acp-telemetry-storage.service` and
+`systemctl list-timers acp-telemetry-storage.timer`. These are local operator alerts, with no
+email or Slack notification configured. After an alert, investigate capacity before changing
+retention or expanding storage. Any destructive retention policy requires a separate decision.

@@ -42,6 +42,7 @@ az vm open-port -g "$RG" -n "$VM" --port 443 --priority 901 -o none
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 sed "s/\${LF_FQDN}/$FQDN/g" "$HERE/Caddyfile.tmpl" > "$TMP/Caddyfile"
 cp "$HERE/docker-compose.yml" "$TMP/docker-compose.yml"
+cp "$HERE/storage_check.py" "$HERE/install-storage-alerts.sh" "$TMP/"
 
 cat > "$TMP/setup.sh" <<SETUP
 #!/bin/bash
@@ -80,7 +81,7 @@ echo "▸ uploading compose + Caddyfile + setup, launching on the VM"
 LAUNCH="$TMP/launcher.sh"
 {
   echo '#!/bin/bash'; echo 'mkdir -p /opt/langfuse'
-  for f in docker-compose.yml Caddyfile; do
+  for f in docker-compose.yml Caddyfile storage_check.py install-storage-alerts.sh; do
     echo "base64 -d > /opt/langfuse/$f <<'B64_$f'"; base64 -i "$TMP/$f"; echo "B64_$f"
   done
   echo "base64 -d > /opt/lf3-setup.sh <<'B64_SETUP'"; base64 -i "$TMP/setup.sh"; echo 'B64_SETUP'
@@ -93,7 +94,14 @@ az vm run-command invoke -g "$RG" -n "$VM" --command-id RunShellScript --scripts
 echo "▸ waiting for https://$FQDN/api/public/health (Docker install + image pulls + CH migrations)…"
 for i in $(seq 1 60); do
   code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://$FQDN/api/public/health" || true)
-  [ "$code" = "200" ] && { echo "✓ v3 up: https://$FQDN"; exit 0; }
+  if [ "$code" = "200" ]; then
+    storage_result=$(az vm run-command invoke -g "$RG" -n "$VM" --command-id RunShellScript \
+      --scripts 'bash /opt/langfuse/install-storage-alerts.sh && echo ACP_STORAGE_ALERTS_READY' \
+      --query "value[0].message" -o tsv)
+    [[ "$storage_result" == *ACP_STORAGE_ALERTS_READY* ]] || { echo "✗ storage checks did not install successfully"; exit 1; }
+    echo "✓ v3 up with storage checks: https://$FQDN"
+    exit 0
+  fi
   sleep 15
 done
 echo "✗ not up after ~15min — check: az vm run-command invoke -g $RG -n $VM --command-id RunShellScript --scripts 'cd /opt/langfuse && docker compose ps && docker compose logs --tail 40 langfuse-web'"

@@ -233,8 +233,24 @@ function ActivityLine({ line = '' }) {
   return match ? <>{match[1]} <span className="remops-delivery-tag">{match[2]}</span></> : line
 }
 
-function Activity({ events = [], status = 'ready', terminal = false, compact = false }) {
-  return <section className="remops-activity">{!compact && <h3>Live activity</h3>}{events.length ? <ol aria-label="Recent remediation activity">{activityGroups(events.slice(0, 10)).map((group) => { const event = group.lead; const retry = ['scan.retrying', 'scan.interrupted', 'remediate.delivery_retry_requested'].includes(event.kind); return <li key={`${group.key}:${event.key}`} className={`remops-activity-${event.tone}${retry ? ' remops-activity-retry' : ''}`}><div className="remops-activity-event"><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{retry ? '↻' : event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span><ActivityLine line={event.line} /></span></div>{group.rows.length > 1 && <details><summary>{group.rows.length - 1} other updates for this document</summary><ul>{group.rows.filter(row => row !== event).map(row => <li key={row.key}><ActivityLine line={row.line} /></li>)}</ul></details>}</li> })}</ol> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
+export function Activity({ events = [], status = 'ready', terminal = false, compact = false }) {
+  const seen = useRef(events.length || status !== 'loading' ? new Set(events.map(event => event.key)) : null)
+  const [fresh, setFresh] = useState(new Set())
+  const timer = useRef(null)
+  useEffect(() => {
+    if (!seen.current) {
+      if (events.length || status === 'ready') seen.current = new Set(events.map(event => event.key))
+      return
+    }
+    const added = events.filter(event => !seen.current.has(event.key)).map(event => event.key)
+    events.forEach(event => seen.current.add(event.key))
+    if (!added.length) return
+    clearTimeout(timer.current)
+    setFresh(new Set(added))
+    timer.current = setTimeout(() => setFresh(new Set()), 1500)
+  }, [events, status])
+  useEffect(() => () => clearTimeout(timer.current), [])
+  return <section className="remops-activity">{!compact && <h3>Live activity</h3>}{events.length ? <ol aria-label="Recent remediation activity">{activityGroups(events.slice(0, 10)).map((group) => { const event = group.lead; const retry = ['scan.retrying', 'scan.interrupted', 'remediate.delivery_retry_requested'].includes(event.kind); return <li key={group.key} className={`remops-activity-${event.tone}${retry ? ' remops-activity-retry' : ''}${fresh.has(event.key) ? ' remops-activity-fresh' : ''}`}><div className="remops-activity-event"><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{retry ? '↻' : event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span><ActivityLine line={event.line} /></span></div>{group.rows.length > 1 && <details><summary>{group.rows.length - 1} other updates for this document</summary><ul>{group.rows.filter(row => row !== event).map(row => <li key={row.key}><ActivityLine line={row.line} /></li>)}</ul></details>}</li> })}</ol> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
 }
 
 // The stub this replaces summed four numbers into "Needs attention · N" and offered nothing to do
@@ -286,7 +302,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
     {['failed', 'cancelled', 'paused', 'stalled'].includes(snapshot.state) && <p role="status" className="remops-error">{line}{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>View in Monitor →</button>}</p>}
     <RemediationWaterfallCard key={`${snapshot.scan_id || snapshot.run_id}:${snapshot.batch_id || "legacy"}`} snapshot={snapshot} paused={hidden} assessmentContext={assessmentContext} streamlined />
     {!hideActivity && <><div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /></div>
-    <Activity events={events} status={activityStatus} terminal={snapshot.terminal} /></>}
+    <Activity key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot.terminal} /></>}
     <p aria-live="polite" className="sr-only" data-testid="rem-ops-announce">{line}</p>
   </section>
   return <section className={`panel remops${paused || hidden ? ' remops-motion-paused' : ''}`} aria-label="Remediation run status">
@@ -308,7 +324,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
         run that is going well, and a heading that only appears once something is wrong is one
         nobody has learned where to look for. The Disclosure's summary is this region's name, so
         the region itself renders no second heading under it. */}
-    <div className={`remops-bottom${events.length ? '' : ' remops-bottom-empty'}`}><Disclosure title="Live activity" compact={compact}><Activity events={events} status={activityStatus} terminal={snapshot.terminal} compact={compact} /></Disclosure><Disclosure title={`Needs attention${exceptionTotal ? ` · ${exceptionTotal}` : ''}`} compact={compact}><RemediationExceptions view={exceptionState.view} error={exceptionState.error} onReload={exceptionState.reload} runId={snapshot.run_id} onAnnounce={setAnnouncement} heading={null} /></Disclosure></div>
+    <div className={`remops-bottom${events.length ? '' : ' remops-bottom-empty'}`}><Disclosure title="Live activity" compact={compact}><Activity key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot.terminal} compact={compact} /></Disclosure><Disclosure title={`Needs attention${exceptionTotal ? ` · ${exceptionTotal}` : ''}`} compact={compact}><RemediationExceptions view={exceptionState.view} error={exceptionState.error} onReload={exceptionState.reload} runId={snapshot.run_id} onAnnounce={setAnnouncement} heading={null} /></Disclosure></div>
     <p aria-live="polite" className="sr-only" data-testid="rem-ops-announce">{announcement || line}</p>
   </section>
 }
@@ -318,6 +334,6 @@ export function RemediationActivityPanel({ snapshot, events = [], connected = fa
   const fresh = freshness({snapshot, connected, receivedAt})
   return <section className="panel remops" aria-label="Remediation live activity">
     <div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /></div>
-    <Activity events={events} status={activityStatus} terminal={snapshot?.terminal} />
+    <Activity key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot?.terminal} />
   </section>
 }
