@@ -139,6 +139,9 @@ const EXPECTED_UNMOUNTED = [
   'ScopeRules',
   'ScreenReaderDemo',
   'Upload',
+  // Retired 2026-09-13: CloudAIActivity mounts the shared named chart pieces directly so
+  // five cards form balanced rows. The old three-card wrapper is retained for restoration.
+  'WaterfallDrawerCharts',
   // Retired 2026-09-02: removed from Overview (PRD simplification). Kept per retired-feature policy.
   'WordCloud',
 ]
@@ -158,6 +161,14 @@ describe('the set of unmounted components is exactly what we say it is', () => {
 })
 
 describe('named-export modules are not orphans', () => {
+  it('retains the retired chart wrapper while its individual charts remain live', () => {
+    expect(unmounted()).toContain('WaterfallDrawerCharts')
+    const activity = code('CloudAIActivity.jsx')
+    for (const chart of ['ContributionBars', 'ProcessingPace', 'ActivityTrend', 'SettledSpend']) {
+      expect(activity).toMatch(new RegExp(`<${chart}[\\s/>]`))
+    }
+    expect(read('WaterfallDrawerCharts.jsx')).toContain('export default function WaterfallDrawerCharts')
+  })
   it('Transparency and charts are excluded because they have no default export to mount', () => {
     // Guards the rule itself: if either grows a default export, it enters the sweep and the exact-set
     // test above will say so rather than silently re-flagging them.

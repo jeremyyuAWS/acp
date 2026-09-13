@@ -27,6 +27,15 @@ def settle(store, job, scan_id, filename, original, corrected, verification):
     parts = sorted(n for n in old_parts if chart_data._CHART_PART.match(n))
     if not parts or any(old_parts[n] != new_parts.get(n) for n in parts):
         return []
+    # Charts may store only references into worksheet cells. Identical chart XML
+    # does not establish that the plotted categories/values remained unchanged.
+    # Compare the fully resolved original/current dataset before accepting the
+    # already-written description as the repair for the assessed source.
+    for part in parts:
+        old_chart = chart_data.parse_chart_part(old_parts[part], old_parts, part)
+        new_chart = chart_data.parse_chart_part(new_parts[part], new_parts, part)
+        if old_chart is None or old_chart != new_chart:
+            return []
     # Match against the exact proposer output for the assessed bytes; source labels
     # alone are insufficient authorization for a deterministic close-out.
     with tempfile.TemporaryDirectory() as directory:

@@ -83,3 +83,26 @@ def test_actual_mixed_chart_image_proposals_keep_the_full_review_count(isolated_
     assert settle(s,job,SID,FILE,original,corrected,Verification(True,set())) == []
     assert s.get_hitl_item(item)['finding_count']==2
     assert s.get_hitl_item(item)['status']=='pending'
+
+
+def test_changed_referenced_cells_cannot_settle_against_identical_chart_xml(tmp_path):
+    import openpyxl, re
+    from openpyxl.chart import LineChart, Reference
+    wb=openpyxl.Workbook(); ws=wb.active
+    ws.append(['Category','Value']); ws.append(['A',10]); ws.append(['B',20]); ws.append(['C',30])
+    chart=LineChart(); chart.add_data(Reference(ws,min_col=2,min_row=1,max_row=4),titles_from_data=True)
+    chart.set_categories(Reference(ws,min_col=1,min_row=2,max_row=4));ws.add_chart(chart,'D2')
+    path=tmp_path/'cells.xlsx';wb.save(path);original=path.read_bytes()
+    with zipfile.ZipFile(io.BytesIO(original)) as z: old={n:z.read(n) for n in z.namelist()}
+    changed=dict(old)
+    changed['xl/worksheets/sheet1.xml']=changed['xl/worksheets/sheet1.xml'].replace(b'<v>20</v>',b'<v>999</v>')
+    assert changed['xl/worksheets/sheet1.xml'] != old['xl/worksheets/sheet1.xml']
+    edits=chart_data.chart_descr_edits(changed,'.xlsx')
+    current={**changed,**{n:value[0] for n,value in edits.items()}}
+    chart_part=next(n for n in old if chart_data._CHART_PART.match(n))
+    assert old[chart_part] == current[chart_part]
+    assert chart_data.has_exact_chart_data_alt(current,'.xlsx',chart_part)
+    assert '999' in chart_data.exact_numeric_chart_description(chart_data.parse_chart_part(current[chart_part],current,chart_part))
+    # Refuse before any database writes despite a currently exact caption on the
+    # changed data; that is not the repair for the originally assessed dataset.
+    assert settle(object(),{'id':'job'},SID,'cells.xlsx',original,rezip(current),Verification(True,set())) == []

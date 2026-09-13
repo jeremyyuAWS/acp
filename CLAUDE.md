@@ -675,7 +675,10 @@ not on that list; components that are supposed to be live are.
 `EstateCoverage`, `EstateTreemap`, `FileTypeConfig`, `Insight`, `LifecycleOverrideControl`, `LiveAssessment`, `PiiPanel`,
 `ProcessingDetails`, `RemediationApprovals`, `RemediationAutoRelease`, `RemediationDocProgress`, `RemediationPreview`, `RemediationReleaseAccess`, `RemediationRunDetails`, `RemediationRunProgress`, `RemediationTransform`, `RetiredReleaseAssessmentDetails`, `RetiredVisibleBulkApproval`, `RiskScore`, `RolePrivilege`, `Rubric`, `ScanScope`,
 `ScanScopeChip`, `ScanSetup`, `ScopeFunnel`, `ScopeRules`, `ScreenReaderDemo`, `Upload`,
-`WordCloud`.
+`WaterfallDrawerCharts`, `WordCloud`.
+
+The retired three-card chart wrapper remains available; AI activity now mounts its individual
+shared charts directly to balance five cards across rows. The charts themselves remain live.
 
 Do not delete these, and do not "wire them back in" because they look unfinished — several were
 removed on purpose, and one (`RemediationFixPreview`, since deleted) shipped live in exactly that
