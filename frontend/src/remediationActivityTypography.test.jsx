@@ -3,12 +3,32 @@ import { afterEach, beforeEach, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import { Activity, RemediationActivityPanel } from './RemediationOpsPanel.jsx'
+import RemediationCategoryPill from './RemediationCategoryPill.jsx'
 let previousActEnvironment
 beforeEach(()=>{previousActEnvironment=globalThis.IS_REACT_ACT_ENVIRONMENT;globalThis.IS_REACT_ACT_ENVIRONMENT=true})
 afterEach(async()=>{await unmountAll();globalThis.IS_REACT_ACT_ENVIRONMENT=previousActEnvironment})
 const name='Very_long_document_name_with_no_spaces_and_a_repeated_identifier_123456789012345678901234567890.docx'
 const events=[{key:'latest',documentKey:'doc',tone:'success',occurredAt:'2026-09-13T12:00:00Z',line:`2 fixes independently verified for ${name}`},
   {key:'previous',documentKey:'doc',tone:'attention',occurredAt:'2026-09-13T12:00:00Z',line:`Corrected copy of ${name} saved in ACP · source delivery is unavailable`}]
+it('uses a queue icon for acceptance without suggesting verification', async () => {
+  const {root,container}=createTestRoot()
+  await act(async()=>root.render(<Activity events={[{key:'accepted',kind:'remediate.accepted',tone:'info',line:'Remediation accepted for 4 documents'}]} />))
+  const icon=container.querySelector('[data-activity-icon="accepted"]')
+  expect(icon.tagName.toLowerCase()).toBe('svg')
+  expect(icon.parentElement.getAttribute('aria-hidden')).toBe('true')
+  expect(container.textContent).toContain('Remediation accepted for 4 documents')
+  expect(container.querySelector('.remops-activity-success')).toBeNull()
+})
+it('gives Remaining its own compact pill and honest finding-count label', async () => {
+  const {root,container}=createTestRoot()
+  await act(async()=>root.render(<RemediationCategoryPill category="remaining" count={1} />))
+  const pill=container.querySelector('.remediation-category-pill--remaining')
+  expect(pill.getAttribute('aria-label')).toBe('Remaining: 1 findings')
+  expect(pill.textContent).toBe('Remaining 1')
+  expect(pill.title).toContain('without a verified fix')
+  expect(readFileSync('src/remediation-category-pills.css','utf8')).toMatch(/--remaining\s*\{[^}]*#78295f[^}]*#f8e5f3/)
+  expect(readFileSync('src/RemediationLiveDocuments.jsx','utf8')).toContain("category === 'remaining' ? <RemediationCategoryPill")
+})
 it('uses the same shared mono entry selectors for standalone and run activity with preserved document history', async () => {
   const {root,container}=createTestRoot()
   await act(async()=>root.render(<><Activity events={events}/><RemediationActivityPanel snapshot={{scan_id:'scan',batch_id:'batch',state:'processing'}} events={events}/></>))

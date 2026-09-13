@@ -1,7 +1,8 @@
 import { REMEDIATION_CATEGORIES, categoryLabel } from './remediationCategories.js'
 import './remediation-category-pills.css'
-export const CATEGORY_SHORT_LABELS = { automatic: 'Auto', approval: 'Approve', suggestion: 'AI', manual: 'Manual', unsupported: 'No ACP', blocked: 'Blocked', applied: 'Pending', ai_applied: 'AI applied', verified: 'Verified' }
+export const CATEGORY_SHORT_LABELS = { automatic: 'Auto', approval: 'Approve', suggestion: 'AI', manual: 'Manual', unsupported: 'No ACP', blocked: 'Blocked', applied: 'Pending', ai_applied: 'AI applied', verified: 'Verified', remaining: 'Remaining' }
 const EXPLANATIONS = {
+  remaining: 'Findings without a verified fix that still need follow-up. This is not a count of completed fixes.',
   automatic: 'ACP has a supported rule-based fix that can run under your remediation plan without an AI suggestion or individual approval. It is counted as verified only after the fix passes its checks.',
   approval: 'A proposed fix is available, but approval is required before ACP applies it. Applying the proposal saves the change and starts verification.',
   suggestion: 'An AI-generated suggestion is needed for this finding. Your remediation plan determines whether a usable suggestion is applied automatically or sent for review.',
@@ -14,8 +15,9 @@ const EXPLANATIONS = {
 }
 export const categoryExplanation = category => EXPLANATIONS[category] || EXPLANATIONS.blocked
 export default function RemediationCategoryPill({ category, count, unit = 'findings', fullLabel = false }) {
-  return <span className={`remediation-category-pill remediation-category-pill--${category}`} title={categoryExplanation(category)} aria-label={`${categoryLabel(category)}${count == null ? '' : `: ${count} ${unit}`}`}>
-    {fullLabel ? categoryLabel(category) : CATEGORY_SHORT_LABELS[category]}{count != null && <> <strong className="remediation-category-pill__count">{count}</strong>{unit === 'records' && ' records'}</>}
+  const label = category === 'remaining' ? 'Remaining' : categoryLabel(category)
+  return <span className={`remediation-category-pill remediation-category-pill--${category}`} title={categoryExplanation(category)} aria-label={`${label}${count == null ? '' : `: ${count} ${unit}`}`}>
+    {fullLabel ? label : CATEGORY_SHORT_LABELS[category]}{count != null && <> <strong className="remediation-category-pill__count">{count}</strong>{unit === 'records' && ' records'}</>}
   </span>
 }
 export function RemediationCategoryLegend() {
