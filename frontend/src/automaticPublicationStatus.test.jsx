@@ -28,3 +28,18 @@ it('explains pending authorization and stopped publication without claiming deli
  expect(container.textContent).toContain('Automatic publishing is stopped')
  expect(container.textContent).not.toContain('All authorized copies are confirmed')
 })
+it('keeps remediation publication collapsed across polling without hiding publication progress elsewhere',async()=>{
+ const {root,container}=createTestRoot()
+ const auth={id:'plan',status:'publishing',batch_progress:batch,destination_label:'SharePoint / Saved'}
+ await act(async()=>root.render(<Status authorization={auth} collapsed />))
+ const disclosure=container.querySelector('details')
+ expect(disclosure.open).toBe(false)
+ expect(disclosure.querySelector('summary').textContent).toContain('1 of 3 delivered')
+ expect(container.querySelector('[aria-label="Publication progress"]') || container.querySelector('.workflow-outcome-tiles')).not.toBeNull()
+ disclosure.open=true
+ await act(async()=>root.render(<Status authorization={{...auth,batch_progress:{...batch,revision:3}}} collapsed />))
+ expect(container.querySelector('details').open).toBe(true)
+ disclosure.open=false
+ await act(async()=>root.render(<Status authorization={auth} collapsed />))
+ expect(container.querySelector('details').open).toBe(false)
+})

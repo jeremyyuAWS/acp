@@ -371,10 +371,14 @@ def publish_job(store, payload, job, callback):
     from worker import FatalJobError
     tag = payload.get('artifact_digest') or ''
     try:
-        publish_admission(store, payload['automatic_release_id'], payload['owner'], payload['scan_id'], payload['file'], tag.removeprefix('sha256:'), queued=True)
+        admitted = publish_admission(store, payload['automatic_release_id'], payload['owner'], payload['scan_id'], payload['file'], tag.removeprefix('sha256:'), queued=True)
     except ValueError as exc:
         raise FatalJobError(str(exc)) from exc
-    return callback(payload, job)
+    # The barrier just proved these exact admitted bytes against the current
+    # source/approval state. A metadata-only timestamp refresh must not send the
+    # handler back to the stale queue-time timestamp. Never replace its digest.
+    current = admitted['progress']['files'][payload['file']]
+    return callback({**payload, 'remediated_at': current['remediated_at']}, job)
 
 
 def delivery_watch(progress, pending_jobs):

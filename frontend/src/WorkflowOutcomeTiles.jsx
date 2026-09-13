@@ -54,7 +54,7 @@ const descriptions = {
 
 const positiveDirections = { queued: 'decrease', processing: 'neutral', attention: 'decrease', verified: 'increase', published: 'increase', excluded: 'neutral', skipped: 'neutral' }
 
-export default function WorkflowOutcomeTiles({ stage, domain, baseline = null, executionId, onFilter, queueMode = false, scopeLabel = null }) {
+export default function WorkflowOutcomeTiles({ stage, domain, baseline = null, executionId, onFilter, queueMode = false, scopeLabel = null, reviewHostId = null, reviewScanId = null, reviewWorkspace = null }) {
   const model = outcomeTileModel(stage, domain)
   if (!model) return null
   const beforeValues = baseline?.available === true && baseline.run_id === executionId
@@ -87,6 +87,8 @@ export default function WorkflowOutcomeTiles({ stage, domain, baseline = null, e
           <InfoTip label={tile.label}>{descriptions[stage][tile.key][1]}</InfoTip>
         </div>
       })}
+      {index === 1 && reviewWorkspace}
+      {index === 1 && stage === 'remediate' && reviewHostId && <div id={reviewHostId} data-scan-id={reviewScanId} data-batch-id={executionId} className="workflow-outcome-tiles__cell" aria-label="Review workspace" />}
       </div>
     </div>)}
     <p className="workflow-outcome-tiles__note">{!model.balanced ? 'Updating: outcome totals are being reconciled.' : stage === 'remediate'

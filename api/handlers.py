@@ -1849,6 +1849,11 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
     with _joblog.stage("remediate.verify", doc=_joblog.doc_id(filename),
                        scan_id=scan_id, ext=ext):
         verification = _verify_residual(fixed_bytes, filename, scan_id=scan_id)
+    try:
+        from native_chart_review_settlement import settle as settle_native_chart_reviews
+        settle_native_chart_reviews(core.store, job, scan_id, filename, data, fixed_bytes, verification)
+    except Exception:
+        swallowed("_remediate_file: settling exact verified native-chart reviews failed", scan_id)
     # Enqueue the inline AI proposals (2.4.4 link text …) now that the re-scan has run, so a
     # deterministic fix that verifiably cleared carries validated=True (confidence.js reads
     # it as a High, one-click confirm) while a fix still failing / a model draft stays

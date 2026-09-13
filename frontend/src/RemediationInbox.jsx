@@ -1,3 +1,4 @@
+import { matchesAutomaticReview, automaticReviewResponsibility } from './automaticReviewResponsibility.js'
 import { isPdfStructuralRow, pdfStructuralSummary, proposalsFor } from './pdfStructuralProposal.js'
 import { automaticReviewQueue } from './automaticReviewQueue.js'
 import { useMemo, useState, useEffect, useRef } from 'react'
@@ -20,6 +21,7 @@ import MatchingReviewPreview from './MatchingReviewPreview.jsx'
 import BatchReviewSelection from './BatchReviewSelection.jsx'
 import { remediationReviewCounts } from './remediationCountSummary.js'
 import { exclusionReason } from './batchReviewSelection.js'
+import { reviewQueueAction, reviewQueueActions } from './reviewQueueAction.js'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is a TWO-column split: a 35% work queue on the left to find and
@@ -110,7 +112,8 @@ function ChangedValue({ from, to }) {
 // `showFile` is false for rows sitting under a document group header (the header already names the
 // file) and true for a standalone single-finding row (no header, so the row carries the filename).
 // Either way the filename appears exactly once on screen for a given finding.
-function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
+function QueueRow({ f, decisions, selected, onSelect, showFile = true, automatic = false }) {
+  const action = reviewQueueAction(f, decisions, automatic)
   const r = rowModel(f, decisions)
   const railed = railColorOf(r.lane)
   const subline = showFile ? `${r.file}${r.location ? ` · ${r.location}` : ''}` : r.location
@@ -161,7 +164,7 @@ function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
           )}
           {r.laneShort && <span className="muted" style={{ fontSize: 11 }}>{r.laneShort}</span>}
           {r.effort !== '—' && <span className="muted" style={{ fontSize: 11 }}>{r.effort}</span>}
-          {r.severity && <span className={`revcard-sev sev-${String(r.severity).toLowerCase()}`} style={{ fontSize: 10 }}>{r.severity}</span>}
+          <span className={`rinbox-action-chip rinbox-action-chip--${action.key}`}>{action.label}</span>
           {f?.status === 'in_review' && !r.resolved && (
             <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '.04em',
                            background: 'var(--accent-subtle,#e8f0fe)', color: 'var(--accent,#3b6fd6)',
@@ -201,10 +204,11 @@ function severityLine(severities) {
   return parts.join(' · ')
 }
 
-function ClusterRow({ row, shown, decisions, selectedId, onSelect, expanded, onToggle }) {
+function ClusterRow({ row, shown, decisions, selectedId, onSelect, expanded, onToggle, automatic = false }) {
+  const actions = reviewQueueActions(row.items, decisions, automatic)
   const r = rowModel(shown, decisions)
   const railed = railColorOf(row.lane)
-  const sevLine = severityLine(row.severities)
+
   const remaining = row.unresolved.length
   const listId = `rinbox-cluster-${row.key.replace(/[^\w-]/g, '_')}`
   // When collapsed the header IS the selected member's row, so it carries the selection. When
@@ -252,10 +256,9 @@ function ClusterRow({ row, shown, decisions, selectedId, onSelect, expanded, onT
               )}
               <span className="muted" style={{ fontSize: 11 }}>{formatList(row.formats)}</span>
               {row.lane?.short && <span className="muted" style={{ fontSize: 11 }}>{row.lane.short}</span>}
-              {/* The severity MIX, stated rather than hidden: severity is not part of the cluster key
-                  (it would fragment every large group), so the reviewer must be able to see that a
-                  batch spans a critical and a minor finding before they decide it. */}
-              {sevLine && <span className="muted" style={{ fontSize: 11 }}>{sevLine}</span>}
+              {/* Show the action mix for this group; severity remains available in priority filters
+                  and the selected group detail, independently of who owns the next step. */}
+              {actions.map(action => <span key={action.key} className={`rinbox-action-chip rinbox-action-chip--${action.key}`}>{actions.length > 1 ? `${action.count} ` : ''}{action.label}</span>)}
               {row.resolvedCount > 0 && (
                 <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>
                   {row.resolvedCount} of {row.count} decided
@@ -280,7 +283,7 @@ function ClusterRow({ row, shown, decisions, selectedId, onSelect, expanded, onT
       {expanded && (
         <div id={listId} style={{ background: 'var(--surface-2,#faf9fb)' }}>
           {row.items.map((f) => (
-            <QueueRow key={f.id} f={f} decisions={decisions} selected={f.id === selectedId}
+            <QueueRow key={f.id} f={f} decisions={decisions} automatic={automatic} selected={f.id === selectedId}
                       onSelect={onSelect} showFile />
           ))}
         </div>
@@ -325,7 +328,13 @@ function ManualSteps({ f }) {
 // The plain, imperative "Your task" line — what a normal reviewer is expected to DO, framed as a
 // remediation task rather than an engineering evidence record. Criterion- and lane-aware so a contrast
 // fix reads like a contrast decision, not a generic "review the change".
-function taskLineOf(f, lane) {
+function taskLineOf(f, lane, automaticMode = false, decisions = {}) {
+  if (f.applied && !f.validated) return 'This change is already applied. Recorded verification is incomplete; another approval is not needed.'
+  if (automaticMode) {
+    const responsibility = automaticReviewResponsibility(f, decisions)
+    if (responsibility === 'acp') return 'ACP is handling the admitted automatic work. No individual approval or human confirmation is needed now.'
+    if (responsibility === 'check') return 'Automatic admission or verification is not confirmed yet. Check the recorded status; this is not a request to approve the fix again.'
+  }
   if (isPdfStructuralRow(f)) return 'ACP can write this change into the saved PDF after approval. Apply ready fixes together; individual inspection is optional. The corrected copy will be assessed before publication.'
   if (f.autoApplied) return 'This change is already applied. Inspect it if you want, or flag a problem.'
   const contrast = isContrastFinding(f)
@@ -349,7 +358,7 @@ function taskLineOf(f, lane) {
   }
 }
 
-function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFindings = [], matchingReadyCount = 0, legacyApprovalControls = false, onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
+function DetailPane({ f, decisions, automaticMode = false, onDecide, onOpenWord, onRecheck, matchingFindings = [], matchingReadyCount = 0, legacyApprovalControls = false, onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
   const [matchingPreviewOpen, setMatchingPreviewOpen] = useState(false)
   const [copiedValue, setCopiedValue] = useState('')
   const draftRef = useRef(null)
@@ -371,14 +380,15 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
   // Handoff (a rejected AI fix, W2) is worked by hand like a manual finding — guided steps + the
   // "Mark as assigned" action — so it shares the manual detail treatment.
   const isHandoff = lane.key === 'handoff'
-  const isManual = lane.key === 'manual' || isHandoff
+  const responsibility = automaticMode ? automaticReviewResponsibility(f, decisions) : null
+  const isManual = (lane.key === 'manual' || isHandoff) && (!automaticMode || responsibility === 'human')
   // A deterministic fix ACP already applied. Its decision is a plain approve / "this looks wrong",
   // not an edit-and-apply — the change is already written, so we don't offer an editable draft.
   const isAutoFix = lane.key === 'review'
   const resolved = isResolved(f, decisions)
   const inspectionOnly = optionalInspectionOf(f)
   const reviewDecision = recordedReviewDecision(f, decisions)
-  const eyebrow = inspectionOnly ? 'Saved changes · optional inspection' : isHandoff ? 'Needs manual handling' : lane.key === 'manual' ? 'Manual remediation' : 'Review'
+  const eyebrow = automaticMode && responsibility === 'check' ? (f.applied && !f.validated ? 'Applied · verification incomplete' : 'Status check') : automaticMode && responsibility === 'acp' ? 'ACP processing' : inspectionOnly ? 'Saved changes · optional inspection' : isHandoff ? 'Needs manual handling' : lane.key === 'manual' ? 'Manual remediation' : 'Review'
   // A drafted AI value the reviewer can adjust before applying. `draft` falls back to the finding's
   // proposed value until the reviewer types; `edited` flips the primary action to "Save edited fix".
   const structuralRow = isPdfStructuralRow(f)
@@ -557,7 +567,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
         {/* Your task — the imperative, so the reviewer is never left guessing what to do here. Hidden
             once the finding is resolved (the verification line below then speaks instead). */}
         {!resolved && (
-          <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: '10px 0 0' }}><b>Your task:</b> {taskLineOf(f, lane)}</p>
+          <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: '10px 0 0' }}><b>Your task:</b> {taskLineOf(f, lane, automaticMode, decisions)}</p>
         )}
 
         {inspectionOnly ? <section className="remediation-saved-changes" aria-label="Saved automatic changes"><h3>Saved automatic changes</h3><p>The automatic remediation change has been recorded. Browse the saved change evidence below; no approval or inspection is required.</p><p>Verification: {f.validated ? 'Recorded checks passed.' : 'This inspection record does not confirm verification. See the recorded run results.'}</p></section> : isManual ? (
@@ -599,9 +609,12 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
         )}
 
         {!isManual && <p className="muted" style={{ fontSize: 13, lineHeight: 1.45, margin: '14px 0 0' }}>
-          {f.autoApplied ? 'Inspecting this applied change does not approve or apply another change.'
+          {f.applied && !f.validated ? 'This change is applied, but verification is incomplete. No additional approval is needed and it is not counted as verified.'
+            : automaticMode && responsibility === 'acp' ? 'ACP is handling this admitted work automatically. No human confirmation is required now.'
+            : automaticMode && responsibility === 'check' ? 'Automatic admission or verification needs a status check. The absence of a verification action does not imply that human approval is required.'
+            : f.autoApplied ? 'Inspecting this applied change does not approve or apply another change.'
             : onRecheck ? 'After approval, ACP will create a corrected copy and verify this criterion again.'
-                     : 'This change requires human confirmation; ACP cannot verify its meaning automatically.'}
+                     : 'Verification is not recorded here. Check the saved result; approval and verification are separate.'}
         </p>}
         <section aria-labelledby="why-this-matters" style={{ marginTop: 18 }}>
           <h4 id="why-this-matters" style={{ margin: '0 0 5px', fontSize: 14 }}>Why this matters</h4>
@@ -617,7 +630,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             <dl className="remediation-details-list">
               <div><dt>How ACP detected this</dt><dd>{displayText(f.detectionMethod || f.proposalSource || 'Automated document analysis')}</dd></div>
               <div><dt>Observed value</dt><dd>{currentValue}</dd></div>
-              <div><dt>Verification</dt><dd>{onRecheck ? `The corrected copy will be rescanned for WCAG ${scKeyOf(f) || 'compliance'}.` : 'Human confirmation required.'}</dd></div>
+              <div><dt>Verification</dt><dd>{f.applied && !f.validated ? 'Applied, verification incomplete. Independent verification is not recorded yet.' : automaticMode && responsibility === 'acp' ? 'ACP handles the admitted application and verification work.' : automaticMode && responsibility === 'check' ? 'Automatic admission or verification has not been confirmed.' : onRecheck ? `The corrected copy will be rescanned for WCAG ${scKeyOf(f) || 'compliance'}.` : 'Verification capability is not recorded here; check the saved outcome.'}</dd></div>
               <div><dt>Current verification state</dt><dd>{resolved ? 'Awaiting verification' : 'Awaiting approval'}</dd></div>
             </dl>
           </details>
@@ -756,7 +769,7 @@ export default function RemediationInbox({
   // measured size, so jsdom's zero-size rects leave the value untouched (keyboard drives the tests).
   const dragLeft = (x) => { const r = rowRef.current?.getBoundingClientRect(); if (r?.width) setLeftW(clamp(((x - r.left) / r.width) * 100, 28, 40)) }
 
-  const runCounts = remediationReviewCounts(queue, decisions, drafts)
+  const runCounts = remediationReviewCounts(queue, decisions, drafts, autoApprove === true)
   // Bulk approval offers exactly what the Needs-review tab holds. The queue now also carries rows
   // that already carry a decision (approved / rejected / skipped, read back from hitl_queue), and
   // `exclusionReason` alone would let a deferred row with a usable proposal into a run-wide
@@ -778,12 +791,12 @@ export default function RemediationInbox({
     () => (myEmail ? queue.filter(assignedToMe).length : 0),
     [queue, assignees, myEmail]) // eslint-disable-line react-hooks/exhaustive-deps
   const aiDraftCount = useMemo(
-    () => queue.filter((f) => (tab === 'all' || matchesWorkflow(f, tab, decisions)) && isAiAssistedDraft(f)).length,
+    () => queue.filter((f) => (tab === 'all' || matchesAutomaticReview(f, tab, decisions, autoApprove === true)) && isAiAssistedDraft(f)).length,
     [queue, tab, decisions])
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
-    const filtered = queue.filter((f) => (tab === 'all' || matchesWorkflow(f, tab, decisions)) &&
+    const filtered = queue.filter((f) => (tab === 'all' || matchesAutomaticReview(f, tab, decisions, autoApprove === true)) &&
       (!assignedOnly || assignedToMe(f)) &&
       (priorityFilter === 'all' || String(f.severity || 'unrated').toLowerCase() === priorityFilter) &&
       (formatFilter === 'all' || fmtOf(f.file) === formatFilter) &&
@@ -792,7 +805,7 @@ export default function RemediationInbox({
     const sorted = sortQueue(filtered, sort)
     const order = { 'needs-review': 0, manual: 0, blocked: 1, 'awaiting-validation': 2, completed: 3 }
     return tab === 'all' || tab === 'active' ? sorted.sort((a, b) => order[workflowStatusOf(a, decisions)] - order[workflowStatusOf(b, decisions)]) : sorted
-  }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail, priorityFilter, formatFilter, sourceFilter]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail, priorityFilter, formatFilter, sourceFilter, autoApprove]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep a valid selection: default to the first unresolved visible row.
   useEffect(() => {
@@ -987,13 +1000,13 @@ export default function RemediationInbox({
           </button>
         )}
         <span style={{ fontSize: 13, fontWeight: 700 }}>Guided remediation</span>
-        {(selected?.automaticReason || selected?.automaticQueued) && <p className="automatic-review-queued" role="status"><b>{selected.automaticQueued ? 'ACP' : selected.automaticDisposition?.owner || 'You'}: </b>{selected.automaticReason || 'Automatic eligibility checks are queued.'}{selected.automaticQueued && <> This is not yet an applied or verified fix.</>}</p>}
+        {(selected?.automaticReason || selected?.automaticQueued) && <p className="automatic-review-queued" role="status"><b>{autoApprove === true ? (automaticReviewResponsibility(selected, decisions) === 'human' ? 'You' : selected.automaticQueued ? 'ACP' : 'Status check') : selected.automaticQueued ? 'ACP' : selected.automaticDisposition?.owner || 'You'}: </b>{selected.automaticReason || 'Automatic eligibility checks are queued.'}{selected.automaticQueued && <> This is not yet an applied or verified fix.</>}</p>}
       </span>
     </div>
   )
   const guidedBody = (
     <>
-      <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
+      <DetailPane f={selected} decisions={decisions} automaticMode={autoApprove === true} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
                   headingRef={reviewHeadingRef}
                   saving={savingId != null && savingId === selected?.id}
                   error={saveError && selected && saveError.id === selected.id ? saveError : null}
@@ -1025,8 +1038,9 @@ export default function RemediationInbox({
         <span style={{ flex: 1, fontSize: 12 }}>{queue.length} items · {counts['awaiting-validation'] || 0} awaiting verification · {counts.completed || 0} recorded results</span>
         <select aria-label="Filter by status" value={tab} disabled={savingId != null}
           onChange={event => { setBulkPreviewOpen(false); setBatchScopeIds(null); setTab(event.target.value) }}>
-          <option value="review">Needs review ({(counts['needs-review'] || 0) + (counts.manual || 0) + (counts.blocked || 0)})</option>
+          <option value="review">{autoApprove === true ? `Needs your input (${queue.filter(row => automaticReviewResponsibility(row, decisions) === 'human').length})` : `Needs review (${(counts['needs-review'] || 0) + (counts.manual || 0) + (counts.blocked || 0)})`}</option>
           <option value="active">Remaining ({queue.length - (counts.completed || 0)})</option>
+          {autoApprove === true && <option value="status-check">{autoApprove === true ? `ACP status checks (${queue.filter(row => automaticReviewResponsibility(row, decisions) === 'check').length})` : 'Status checks'}</option>}
           <option value="all">All statuses ({queue.length})</option>
           {WORKFLOW_TABS.map(status => <option key={status} value={status}>{WORKFLOW_LABELS[status]} {counts[status] || 0}</option>)}
         </select>
@@ -1059,7 +1073,8 @@ export default function RemediationInbox({
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       {!bulkPreviewOpen && <>
         <p className="remediation-category-help">{{
-          review: 'Approve a suggestion to move it to Processing. Results contain verified fixes and remaining work; approval alone does not verify a fix.',
+          'status-check': 'These items have no confirmed automatic admission yet. ACP status or recovery needs checking; they are not verified fixes.',
+          review: autoApprove === true ? 'Only changes needing your judgment or manual editing appear here. Eligible automatic work and status checks remain available in their own views.' : 'Approve a suggestion to move it to Processing. Results contain verified fixes and remaining work; approval alone does not verify a fix.',
           active: 'Verified fixes move to Results automatically. Changes awaiting verification remain Pending.',
           all: 'Select an item to approve a proposal, make a manual correction, or check its result. Items awaiting automatic verification do not need another approval.',
           'needs-review': 'AI suggestions have proposed changes you can approve. Already-applied changes are available for individual review.',
@@ -1069,7 +1084,7 @@ export default function RemediationInbox({
           completed: 'Results include verified fixes and remaining work. Select an item to inspect its recorded outcome.',
         }[tab]}</p>
         <WorkspaceProgress queue={queue} decisions={decisions} selected={selected} />
-        <ReviewQueueTabs queue={queue} decisions={decisions} scanId={scanId} value={tab} disabled={savingId != null}
+        <ReviewQueueTabs automatic={autoApprove === true} queue={queue} decisions={decisions} scanId={scanId} value={tab} disabled={savingId != null}
           onChange={value => { setBulkPreviewOpen(false); setBatchScopeIds(null); setTab(value) }} />
       </>}
       <div className="rinbox" data-layout="two-column" data-narrow={narrow ? narrowPane : undefined} ref={rowRef} style={{ display: bulkPreviewOpen ? 'none' : 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: '0 0 12px 12px', overflow: 'hidden', minHeight: 480 }}>
@@ -1175,9 +1190,9 @@ export default function RemediationInbox({
             </div>
           ) : group === 'issue' ? clusters.map((row) => (
             row.type === 'single'
-              ? <QueueRow key={row.key} f={row.finding} decisions={decisions}
+              ? <QueueRow key={row.key} f={row.finding} decisions={decisions} automatic={autoApprove === true}
                           selected={row.finding.id === selectedId} onSelect={selectRow} showFile />
-              : <ClusterRow key={row.key} row={row} shown={shownOf(row)} decisions={decisions}
+              : <ClusterRow key={row.key} row={row} shown={shownOf(row)} decisions={decisions} automatic={autoApprove === true}
                             selectedId={selectedId} onSelect={selectRow}
                             expanded={!!expandedClusters[row.key]} onToggle={toggleCluster} />
           )) : groups.map((g) => (
@@ -1185,7 +1200,7 @@ export default function RemediationInbox({
             // names the file. Only multi-finding documents get the collapsible 📄 header, so the file
             // is stated once either way.
             g.items.length === 1 ? (
-              <QueueRow key={g.items[0].id} f={g.items[0]} decisions={decisions}
+              <QueueRow key={g.items[0].id} f={g.items[0]} decisions={decisions} automatic={autoApprove === true}
                         selected={g.items[0].id === selectedId} onSelect={selectRow} showFile />
             ) : (
               <div key={g.file}>
@@ -1197,7 +1212,7 @@ export default function RemediationInbox({
                   <span className="muted" style={{ fontWeight: 400 }}>{g.items.length}</span>
                 </button>
                 {!documentCollapsed(g.file) && g.items.map((f) => (
-                  <QueueRow key={f.id} f={f} decisions={decisions} selected={f.id === selectedId} onSelect={selectRow} showFile={false} />
+                  <QueueRow key={f.id} f={f} decisions={decisions} automatic={autoApprove === true} selected={f.id === selectedId} onSelect={selectRow} showFile={false} />
                 ))}
               </div>
             )

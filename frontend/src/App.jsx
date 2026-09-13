@@ -1,3 +1,4 @@
+import ReleaseReviewWorkspace from './ReleaseReviewWorkspace.jsx'
 import { reviewBadgeTitle } from './remediationCountSummary.js'
 import { prepareWorkflowEntry } from './workflowEntry.js'
 import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
@@ -2271,7 +2272,9 @@ export default function App() {
         onViewPrevious={(scanId) => { switchScan(scanId); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
         onLiveOps={() => { goToView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
       />
-      <WorkflowStageStack lineage={canonicalRun.lineage} receivedAt={canonicalRun.receivedAt} progressHostId={remediationProgressHostId}
+      <WorkflowStageStack releaseReviewWorkspace={<ReleaseReviewWorkspace scanId={canonicalRun.lineage?.scan_id} remediationRunId={remediationStage?.execution_id} refreshRevision={remRun.snapshot?.revision}
+        onOpenReview={() => { const url=new URL(window.location.href);url.searchParams.set('tab','remediate');url.searchParams.set('mode','review');history.replaceState({},'',url);goToView('remediate') }} />}
+        lineage={canonicalRun.lineage} receivedAt={canonicalRun.receivedAt} progressHostId={remediationProgressHostId}
         assessmentActivity={assessmentActivity}
         discoveryScope={{scanId: run?.id, scope: run?.scope}}
         assessmentFindings={assessed && resultsReady ? { scanId: run?.id, rows: assessNavRows, total: assessNavRows.reduce((sum, row) => sum + row.totalFindings, 0) } : null}

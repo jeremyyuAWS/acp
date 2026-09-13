@@ -9,7 +9,7 @@ import { releaseBatchProgress, releaseBatchDomain } from './releaseBatchProgress
 const terminal = (state) => ['processing_complete', 'succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed'].includes(state)
 const shown = (value) => value == null ? '—' : Number(value).toLocaleString()
 
-export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen, progressHostId = null, progressScanId, onOutcomeFilter }) {
+export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen, progressHostId = null, progressScanId, onOutcomeFilter, reviewWorkspace = null }) {
   snapshot = alignRemediationAssessment(snapshot, null)
   const model = canonicalStageCardModel(snapshot)
   const [selection, setSelection] = useState(null)
@@ -71,8 +71,11 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
     {['remediate', 'release'].includes(model.stage) ? <>
       {(!batch || batchDomain) && <WorkflowOutcomeTiles queueMode={!batch} stage={model.stage} domain={primaryDomain}
         scopeLabel={batch ? `${shown(batch.total)} authorized files · entire saved plan` : undefined}
+        reviewWorkspace={model.stage === 'release' ? reviewWorkspace : null}
+        reviewHostId={model.stage === 'remediate' && progressHostId ? `${progressHostId}-review` : null} reviewScanId={progressScanId}
         baseline={batch ? null : snapshot.progress_baseline} executionId={batch?.scope_id || model.executionId} onFilter={batch ? (onOutcomeFilter ? bucket => onOutcomeFilter(bucket) : undefined) : bucket => { setSelection({ key: bucket, executionId }); onOutcomeFilter?.(bucket) }} />}
       {batch && !batchDomain && <p className="workflow-sse-card__notice" role="status">Delivery classifications are unavailable. Confirmed deliveries remain visible above; outstanding copies are not assumed to be queued.</p>}
+      {model.stage === 'remediate' && progressHostId && <div id={`${progressHostId}-automation`} data-scan-id={progressScanId} data-batch-id={model.executionId} />}
       <details className="workflow-sse-card__outcome-details">
         <summary>Outcome details</summary>
         {domain?.buckets?.length > 0 && <dl className="workflow-sse-card__metrics">

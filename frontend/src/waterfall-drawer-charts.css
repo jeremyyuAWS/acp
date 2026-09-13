@@ -25,12 +25,18 @@
 .wd-spend-list i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; }
 
 .wd-chart-axis { font-family:var(--font-mono,ui-monospace,monospace); font-size:12px; font-variant-numeric:tabular-nums; margin-left:5%; }
-.wd-ai-dashboard { grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); margin:14px 0 20px; }
-.wd-ai-dashboard .wd-chart { background:var(--surface,#fff); padding:12px 14px; }
-.wd-model-details { grid-column:1/-1; }
+.wd-ai-dashboard { display:flex; flex-wrap:wrap; gap:12px; margin:12px 0 16px; font-family:var(--font-ui); }
+/* Three cards per row at most; the final two share the whole next row. At
+   narrower widths this becomes two plus two plus one full-width card. */
+.wd-ai-dashboard > .wd-chart { flex:1 1 calc(33.333% - 8px); min-width:min(100%,260px); box-sizing:border-box; background:var(--surface,#fff); padding:12px; }
+.wd-ai-dashboard > .wd-model-details { flex-basis:100%; width:100%; }
+.wd-ai-dashboard .wd-chart h3,.wf-card .wd-ai-dashboard .wd-chart h3 { font-family:var(--font-ui); font-size:13px; font-weight:600; line-height:1.4; margin:0 0 8px!important; }
+.wd-ai-dashboard .wd-chart p,.wf-card .wd-ai-dashboard .wd-chart p { font-size:12px; line-height:1.5; margin:6px 0; }
+.wd-ai-usage > h3,.wf-card section.wd-ai-usage > h3 { font-family:var(--font-ui); font-size:14px; font-weight:600; line-height:1.4; }
+.wd-ai-usage > p,.wf-card section.wd-ai-usage > p { font-size:12px; line-height:1.5; }
+.wd-ai-dashboard .wd-pace-number { font-size:26px; }
 .wd-model-scroll { max-height:320px; overflow:auto; scrollbar-gutter:stable; }
 .wd-model-scroll table { min-width:760px; table-layout:auto; }
 .wd-model-scroll th { position:sticky; top:0; background:var(--surface,#fff); }
 .wd-model-scroll tbody th { position:static; font-family:var(--font-mono,ui-monospace,monospace); }
 .wd-model-scroll:focus-visible { outline:2px solid #3966bf; outline-offset:2px; }
-.wd-ai-dashboard > .wd-charts { display:contents; }

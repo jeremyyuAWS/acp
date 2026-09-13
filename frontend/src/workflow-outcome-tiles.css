@@ -27,3 +27,6 @@
 .workflow-outcome-tiles__cell:has(.kpi-update-delta--warning) .kpi-counter-value--activity { color:#8a5a00; animation:none; }
 .workflow-outcome-tiles__cell:has(.kpi-update-delta--neutral) .kpi-counter-value--activity { color:var(--muted); animation:none; }
 .workflow-outcome-tiles__cell > .info-tip .info-tip__text { left:auto; right:0; }
+.workflow-outcome-tiles__grid--separate:has(.remediation-review-workspace), .workflow-outcome-tiles__grid--separate:has([aria-label="Review workspace"]) {grid-template-columns:repeat(3,minmax(0,1fr));}
+.remediation-review-workspace {height:100%;}
+@media(max-width:600px) {.workflow-outcome-tiles__grid--separate:has(.remediation-review-workspace), .workflow-outcome-tiles__grid--separate:has([aria-label="Review workspace"]) {grid-template-columns:1fr;}}

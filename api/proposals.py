@@ -1649,11 +1649,15 @@ def _chart_block_values(block: str, tag: str) -> list[str]:
 
 def _num(s: str) -> str:
     """Trim a chart's numeric string for display: '1.0'→'1', '1.50'→'1.5', leave text as-is."""
+    from decimal import Decimal, InvalidOperation
     try:
-        f = float(s)
-    except (TypeError, ValueError):
+        value = Decimal(str(s))
+        if not value.is_finite() or abs(value.as_tuple().exponent) > 100:
+            return s
+        text = format(value, 'f')
+        return text.rstrip('0').rstrip('.') if '.' in text else text
+    except (InvalidOperation, TypeError, ValueError):
         return s
-    return str(int(f)) if f == int(f) else f"{f:g}"
 
 
 def _describe_chart(xml: str) -> dict | None:
@@ -1668,14 +1672,14 @@ def _describe_chart(xml: str) -> dict | None:
     ctype = _CHART_TYPE_NAME.get(ctm.group(1), "Chart") if ctm else "Chart"
     categories: list[str] = []
     series: list[dict] = []
-    for block in sers[:_CHART_SERIES_CAP]:
+    for block in sers:
         name = " ".join(_chart_block_values(block, "tx")).strip()
         values = _chart_block_values(block, "val")
         if not values:
             continue
         if not categories:
             categories = _chart_block_values(block, "cat")
-        series.append({"name": name, "values": values})
+        series.append({"name": name, "values": values, "categories": _chart_block_values(block, "cat")})
     if not series:
         return None
     return {"title": title, "type": ctype, "series": series, "categories": categories}
@@ -1700,13 +1704,14 @@ def _describe_chart_via_chart_data(raw: bytes, entries: dict, part_name: str | N
     if not c:
         return None
     series, categories = [], []
-    for s in c.get("series", [])[:_CHART_SERIES_CAP]:
+    for s in c.get("series", []):
         pts = s.get("points") or []
         if not pts:
             continue
         if not categories:
             categories = [cat for cat, _ in pts]
-        series.append({"name": s.get("name") or "", "values": [val for _, val in pts]})
+        series.append({"name": s.get("name") or "", "values": [val for _, val in pts],
+                       "categories": [cat for cat, _ in pts], "complete": s.get("complete")})
     if not series:
         return None
     return {"title": c.get("title") or "", "type": c.get("type") or "Chart",
@@ -1719,16 +1724,29 @@ def _chart_alt_and_sheet(desc: dict) -> tuple[str, str]:
     title = desc["title"]
     names = [s["name"] for s in desc["series"] if s["name"]]
     named = f" comparing {', '.join(names)}" if names else ""
-    cats = desc["categories"][:_CHART_CAT_CAP]
+    cats = desc["categories"]
     span = f" across {cats[0]}–{cats[-1]}" if len(cats) >= 2 else ""
     titled = f" titled “{title}”" if title else ""
     alt = f"{desc['type']}{titled}{named}{span}.".strip()
+    # The old summary named only the first 24 categories and no values. Use the
+    # exact single-series data alternative when all values/categories are safe;
+    # do not invent a cross-series or mixed-unit comparison.
+    import chart_data
+    points = []
+    if len(desc['series']) == 1 and len(cats) == len(desc['series'][0]['values']):
+        points = list(zip(cats, desc['series'][0]['values']))
+    grounded = chart_data.exact_numeric_chart_description({
+        'type': desc['type'], 'title': title,
+        'series': [{'name': names[0] if names else '', 'points': points, 'complete': desc['series'][0].get('complete')}]}) if points else None
+    if grounded:
+        alt = grounded
     # Datasheet: one line per series, category:value pairs (the reader's real data alternative).
     lines: list[str] = []
     for s in desc["series"]:
-        vals = s["values"][:_CHART_CAT_CAP]
-        if cats and len(cats) == len(vals):
-            pairs = ", ".join(f"{c} {_num(v)}" for c, v in zip(cats, vals))
+        vals = s["values"]
+        series_cats = s.get("categories", cats)
+        if series_cats and len(series_cats) == len(vals):
+            pairs = ", ".join(f"{c} {_num(v)}" for c, v in zip(series_cats, vals))
         else:
             pairs = ", ".join(_num(v) for v in vals)
         lead = f"{s['name']}: " if s["name"] else ""
@@ -1749,17 +1767,23 @@ def propose_chart_datasheet(path, ext: str) -> list[dict]:
     try:
         with zipfile.ZipFile(path) as zf:
             parts = sorted(n for n in zf.namelist() if _CHART_PART.search(n))
-            entries = None
+            entries = {n: zf.read(n) for n in zf.namelist()}
             for i, name in enumerate(parts):
+                import chart_data
+                if chart_data.has_exact_chart_data_alt(entries, '.' + (ext or '').lower().lstrip('.'), name):
+                    continue  # Exact deterministic repair is already present in this saved file.
                 raw = zf.read(name)
-                try:
-                    desc = _describe_chart(raw.decode("utf-8", "ignore"))
-                except Exception:
-                    desc = None
-                if not desc:                               # cell-referenced / default-namespace chart
-                    if entries is None:                    # read the package once, only if needed
-                        entries = {n: zf.read(n) for n in zf.namelist()}
-                    desc = _describe_chart_via_chart_data(raw, entries, name)
+                # Use the namespace-aware parser first so cache extent/completeness
+                # and each series' own categories remain attached to exact data.
+                desc = _describe_chart_via_chart_data(raw, entries, name)
+                if not desc:
+                    try:
+                        desc = _describe_chart(raw.decode("utf-8", "ignore"))
+                        if desc:
+                            for series in desc['series']:
+                                series['complete'] = False  # Legacy fallback is review evidence only.
+                    except Exception:
+                        desc = None
                 if not desc:
                     continue
                 alt, sheet = _chart_alt_and_sheet(desc)

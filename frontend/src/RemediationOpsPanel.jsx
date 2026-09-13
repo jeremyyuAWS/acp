@@ -1,3 +1,4 @@
+import useRemediationFreshness from './useRemediationFreshness.js'
 import { useEffect, useRef, useState } from 'react'
 import useConfirmedRemediationActivity from './useConfirmedRemediationActivity.js'
 import LiveCounter from './LiveCounter.jsx'
@@ -251,7 +252,7 @@ export function Activity({ events = [], status = 'ready', terminal = false, comp
     timer.current = setTimeout(() => setFresh(new Set()), 1500)
   }, [events, status])
   useEffect(() => () => clearTimeout(timer.current), [])
-  return <section className="remops-activity">{!compact && <h3>Live activity</h3>}{events.length ? <ol aria-label="Recent remediation activity">{activityGroups(events.slice(0, 10)).map((group) => { const event = group.lead; const retry = ['scan.retrying', 'scan.interrupted', 'remediate.delivery_retry_requested', 'remediate.vision_retry_pending'].includes(event.kind); return <li key={group.key} className={`remops-activity-${event.tone}${retry ? ' remops-activity-retry' : ''}${fresh.has(event.key) ? ' remops-activity-fresh' : ''}`}><div className="remops-activity-event"><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{retry ? '↻' : event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span><ActivityLine line={event.line} /></span></div>{group.rows.length > 1 && <details><summary>{group.rows.length - 1} other updates for this document</summary><ul>{group.rows.filter(row => row !== event).map(row => <li key={row.key}><ActivityLine line={row.line} /></li>)}</ul></details>}</li> })}</ol> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
+  return <section className="remops-activity">{!compact && <h3>Live activity</h3>}{events.length ? <ol aria-label="Recent remediation activity">{activityGroups(events.slice(0, 10)).map((group) => { const event = group.lead; const retry = ['scan.retrying', 'scan.interrupted', 'remediate.delivery_retry_requested', 'remediate.vision_retry_pending'].includes(event.kind); return <li key={group.key} className={`remops-activity-${event.tone}${retry ? ' remops-activity-retry' : ''}${fresh.has(event.key) ? ' remops-activity-fresh' : ''}`}><div className="remops-activity-event"><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{event.kind === 'remediate.accepted' ? <svg data-activity-icon="accepted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3h10M7 7h10M4 11h5l2 3h2l2-3h5v9H4z" /></svg> : retry ? '↻' : event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span><ActivityLine line={event.line} /></span></div>{group.rows.length > 1 && <details><summary>{group.rows.length - 1} other updates for this document</summary><ul>{group.rows.filter(row => row !== event).map(row => <li key={row.key}><ActivityLine line={row.line} /></li>)}</ul></details>}</li> })}</ol> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
 }
 
 // The stub this replaces summed four numbers into "Needs attention · N" and offered nothing to do
@@ -261,6 +262,7 @@ export function Activity({ events = [], status = 'ready', terminal = false, comp
 // them ACP may act on. See RemediationExceptions.jsx.
 
 export default function RemediationOpsPanel({ snapshot = null, connected = false, receivedAt = null, events = [], activityStatus = 'ready', updateMode = 'idle', onViewMonitor = null, compactLayout = null, exceptions = null, assessmentContext = null, streamlined = false, hideActivity = false }) {
+  const fresh = useRemediationFreshness({ snapshot, connected, receivedAt })
   const activityConfirmed = useConfirmedRemediationActivity(snapshot)
   const [paused, setPaused] = useState(false)
   const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.hidden)
@@ -290,7 +292,6 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   const line = headline(snapshot)
   useEffect(() => { setAnnouncement('') }, [line])
   if (!snapshot || snapshot.state === 'draft') return assessmentContext?.scanId ? <PlannedRemediationWaterfall /> : null
-  const fresh = freshness({ snapshot, connected, receivedAt })
   const suspect = snapshot.integrity?.ok === false
   const documentCountsSuspect = integrityAffects(snapshot, 'documents')
   // The count comes from the exception ENDPOINT, which groups by response and knows which rows
@@ -332,8 +333,8 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
 }
 
 export function RemediationActivityPanel({ snapshot, rows = [], decisions = {}, events = [], connected = false, receivedAt = null, activityStatus = 'ready', updateMode = 'idle' }) {
+  const fresh = useRemediationFreshness({snapshot, connected, receivedAt})
   if (!snapshot?.batch_id && !events.length) return null
-  const fresh = freshness({snapshot, connected, receivedAt})
   return <section className="panel remops" aria-label="Remediation live activity">
     <div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /></div>
     <RemainingWorkStatus snapshot={snapshot} events={events} rows={rows} decisions={decisions} />

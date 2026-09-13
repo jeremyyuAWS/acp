@@ -41,3 +41,9 @@ it('routes exact-bound jobless approvals to Blocked while retaining terminal and
  const active={...blocked,_raw:{...blocked._raw,automatic_approval:{...blocked._raw.automatic_approval,state:'queued'}}}
  expect(workflowCounts(automaticReviewQueue([active],policy))).toMatchObject({blocked:0,'awaiting-validation':1})
 })
+it('rejects responsibility from another scan or missing bound snapshot manifest',()=>{
+ const marker={state:'review_required',responsibility:'human',run_id:'run',source_revision:'source',scan_id:'other',proposal_snapshot_ids:['snapshot']}
+ const r={...row,scanId:'scan',_raw:{...row._raw,scan_id:'scan',automatic_approval:marker}}
+ expect(automaticReviewQueue([r],policy)[0].automaticDisposition).toBeNull()
+ expect(automaticReviewQueue([{...r,_raw:{...r._raw,automatic_approval:{...marker,scan_id:'scan',proposal_snapshot_ids:undefined}}}],policy)[0].automaticDisposition).toBeNull()
+})

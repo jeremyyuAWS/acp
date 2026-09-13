@@ -7,9 +7,12 @@ def _key(owner, run_id, item_id):
     return 'ai-item-disposition:' + hashlib.sha256(json.dumps([owner, run_id, item_id]).encode()).hexdigest()
 
 
+HUMAN_REASONS = {'Manual work or no supported proposal writer', 'This change requires individual review', 'The draft contradicts visible image evidence; individual review is required', 'Proposal requires individual judgment or has no exact AI provenance'}
+
+
 def record(store, owner, sid, run_id, source_revision, item, state, reason):
     """Display evidence only. Never authorizes a decision or a write."""
-    value = dict(state=state, reason=reason, owner='ACP' if state in {'checking', 'queued', 'applying', 'verifying'} else 'You', scan_id=sid, run_id=run_id, source_revision=source_revision, proposal_snapshot_ids=item.get('proposal_snapshot_ids') or [])
+    value = dict(state=state, responsibility='human' if reason in HUMAN_REASONS else 'check' if state in {'review_required','blocked'} else 'acp', reason=reason, owner='ACP' if state in {'checking', 'queued', 'applying', 'verifying'} else 'You', scan_id=sid, run_id=run_id, source_revision=source_revision, proposal_snapshot_ids=item.get('proposal_snapshot_ids') or [])
     store.set_setting(_key(owner, run_id, item['id']), json.dumps(value, sort_keys=True))
     return value
 
@@ -26,7 +29,7 @@ def annotate(store, rows, owner):
     writer_jobs = {}
     for item in rows:
         item = {key: value for key, value in item.items() if not key.startswith('auto_approval_') and key != 'automatic_approval'}
-        if item.get('status') not in {'pending', 'approved'} or not item.get('proposals'):
+        if item.get('status') not in {'pending', 'approved'}:
             result.append(item)
             continue
         sid = item.get('scan_id')
@@ -80,9 +83,9 @@ def annotate(store, rows, owner):
                         state = 'verifying' if item.get('applied') else 'applying' if any(status in {'running','processing'} for status in active) else 'queued'
                         saved = {**saved, 'state': state, 'owner': 'ACP', 'reason': 'Approved changes await independent verification.' if item.get('applied') else 'An authorized writer job is active for this suggestion.'}
                     else:
-                        saved = {**saved, 'state': 'blocked', 'owner': 'You', 'reason': 'No active application or verification job is recorded. Check the saved result before retrying.'}
+                        saved = {**saved, 'state': 'blocked', 'owner': 'ACP', 'responsibility': 'check', 'reason': 'Applied, verification incomplete. No active verification job is recorded; another approval is not needed.' if item.get('applied') else 'Approved, application pending. No active writer job is recorded; another approval is not needed.'}
                 elif not setting and saved.get('state') in {'checking', 'queued'}:
-                    saved = {**saved, 'state': 'blocked', 'owner': 'You', 'reason': 'Automatic checks ended without admission. Review this suggestion or refresh its result.'}
+                    saved = {**saved, 'state': 'blocked', 'owner': 'ACP', 'responsibility': 'check', 'reason': 'Automatic checks ended without admission. Review this suggestion or refresh its result.'}
                 item = {**item, 'automatic_approval': saved}
 
         if setting and item.get('status') == 'pending' and item.get('proposals'):
@@ -90,8 +93,13 @@ def annotate(store, rows, owner):
                 # Database/proposal checks only. Provider freshness and saved bytes are
                 # checked by the queued coordinator, never by this polling read.
                 eligible_item(store, owner, sid, setting['run_id'], item)
-            except ValueError:
-                pass
+            except ValueError as exc:
+                # A failed check does not mean AI has accepted this item. Only
+                # explicit authoring/judgment failures assign work to a person.
+                reason = str(exc)
+                human = reason in HUMAN_REASONS
+                item = {**item, 'automatic_approval': dict(state='blocked', responsibility='human' if human else 'check', reason=reason, scan_id=sid, run_id=setting['run_id'], source_revision=setting['source_revision'], proposal_snapshot_ids=item.get('proposal_snapshot_ids') or [])}
+
             else:
                 item = {**item, 'auto_approval_status': 'checking',
                         'auto_approval_run_id': setting['run_id'],

@@ -1,4 +1,5 @@
 import { workflowStatusOf } from './remediationInboxModel.js'
+import { automaticReviewResponsibility } from './automaticReviewResponsibility.js'
 import { exclusionReason } from './batchReviewSelection.js'
 
 // How many FINDINGS a review item covers. A hitl_queue row is one (document, criterion) pair and
@@ -10,8 +11,8 @@ const findingsIn = (row) => {
   return Number.isFinite(count) && count > 0 ? count : 1
 }
 
-export function remediationReviewCounts(rows = [], decisions = {}, drafts = {}) {
-  const pending = rows.filter(row => !row.autoApplied && ['needs-review', 'manual', 'blocked'].includes(workflowStatusOf(row, decisions)))
+export function remediationReviewCounts(rows = [], decisions = {}, drafts = {}, automatic = false) {
+  const pending = rows.filter(row => (!automatic || automaticReviewResponsibility(row, decisions) === 'human') && !row.autoApplied && ['needs-review', 'manual', 'blocked'].includes(workflowStatusOf(row, decisions)))
   const ready = pending.filter(row => !exclusionReason(row, decisions, drafts))
   const manual = pending.filter(row => workflowStatusOf(row, decisions) === 'manual')
   const individual = pending.filter(row => workflowStatusOf(row, decisions) === 'needs-review' && exclusionReason(row, decisions, drafts))

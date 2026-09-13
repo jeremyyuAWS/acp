@@ -11,6 +11,7 @@
    meaning ("AI applied · not verified" / "AI applied"); color is a secondary cue only. */
 .remediation-category-pill--ai_applied { color: #3730a3; background: #e0e7ff; }
 .remediation-category-pill--verified { color: #006353; background: #d8f5eb; }
+.remediation-category-pill--remaining { color: #78295f; background: #f8e5f3; }
 .remediation-category-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 12px 0; font-size: 12px; }
 .col-category { vertical-align: middle; }
 .remediation-category-filter { display:inline-flex; align-items:center; gap:5px; min-height:36px; border:1px solid currentColor; padding:7px 12px; border-radius:999px; font-family:var(--font-ui); font-size:13px; line-height:1.3; white-space:nowrap; }

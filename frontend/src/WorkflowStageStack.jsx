@@ -31,7 +31,7 @@ function primaryOutcome(model) {
 /** The sole outer shell for all four workflow stages. Detail nodes stay mounted under `hidden`
  * so disclosure changes do not end live subscriptions or reset rolling heartbeat history. */
 export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = null,
-  stageDetails = {}, stageAfter = {}, progressHostId = null, activeStage = null, assessmentActivity = null, assessmentFindings = null, discoveryScope = null }) {
+  stageDetails = {}, stageAfter = {}, progressHostId = null, activeStage = null, assessmentActivity = null, assessmentFindings = null, discoveryScope = null, releaseReviewWorkspace = null }) {
   const snapshots = useMemo(() => canonicalWorkflowStages(lineage), [lineage])
   const current = useMemo(() => currentCanonicalStage(lineage), [lineage])
   const key = storageKey(lineage)
@@ -105,7 +105,7 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
                         source={snapshot?.source || null} scope={snapshot?.scope || null}
                         freshness="live"
                         onReview={onNavigate ? () => onNavigate(destination[stage]) : null} />
-                  : <WorkflowStageActivityCard snapshot={snapshot} receivedAt={receivedAt}
+                  : <WorkflowStageActivityCard snapshot={snapshot} receivedAt={receivedAt} reviewWorkspace={stage === 'release' ? releaseReviewWorkspace : null}
                       progressHostId={stage === 'remediate' ? progressHostId : null} progressScanId={lineage?.scan_id}
                       onOpen={onNavigate ? () => onNavigate(destination[stage]) : null} />}
             </div>

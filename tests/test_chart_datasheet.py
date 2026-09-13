@@ -131,3 +131,65 @@ def test_wiring():
     assert "propose_chart_datasheet" in src
     # chart datasheets ride the same 1.1.1 card as the per-image alt drafts (one enqueue).
     assert "(chart_sheets or []) + (img_props or [])" in src
+
+
+def test_complete_numeric_summary_and_table_retain_points_beyond_old_cap(tmp_path):
+    from test_chart_data import _native_chart_pptx
+    categories = [str(i) for i in range(30)]
+    values = [i + 1 for i in range(30)]
+    values[-1] = 841
+    path = tmp_path / 'long.pptx'
+    path.write_bytes(_native_chart_pptx(categories, values))
+    proposal = proposals.propose_chart_datasheet(path, '.pptx')[0]
+    assert '0–29' in proposal['proposed_value']
+    assert '30 categories' in proposal['proposed_value']
+    assert '29 at 841' in proposal['proposed_value']
+    assert '29 841' in proposal['rationale']
+
+
+def test_actual_corrected_chart_alt_removes_only_redundant_chart_review(tmp_path):
+    import io, zipfile, chart_data
+    from test_chart_data import _native_chart_pptx
+    original = _native_chart_pptx(['North', 'South', 'East'], [120, 70, 150])
+    with zipfile.ZipFile(io.BytesIO(original)) as z:
+        entries = {name: z.read(name) for name in z.namelist()}
+    chart_part = next(name for name in entries if chart_data._CHART_PART.match(name))
+    path = tmp_path / 'chart.pptx'; path.write_bytes(original)
+    assert len(proposals.propose_chart_datasheet(path, '.pptx')) == 1
+    edits = chart_data.chart_descr_edits(entries, '.pptx')
+    assert edits
+    fixed = {**entries, **{name: value[0] for name, value in edits.items()}}
+    assert fixed[chart_part] == entries[chart_part]
+    assert chart_data.has_exact_chart_data_alt(fixed, '.pptx', chart_part)
+    path.write_bytes(rezip(fixed))
+    assert proposals.propose_chart_datasheet(path, '.pptx') == []
+    # Changed current chart numbers invalidate the old deterministic description.
+    changed = dict(fixed)
+    changed[chart_part] = changed[chart_part].replace(b'<c:v>150</c:v>', b'<c:v>999</c:v>')
+    assert changed[chart_part] != fixed[chart_part]
+    path.write_bytes(rezip(changed))
+    assert len(proposals.propose_chart_datasheet(path, '.pptx')) == 1
+
+
+def test_datasheet_preserves_each_series_categories_and_exact_decimal_values():
+    desc = {'title':'Two series', 'type':'Chart', 'categories':['A','B'], 'series':[
+        {'name':'First', 'categories':['A','B'], 'values':['1.0000000000000000001','2']},
+        {'name':'Second', 'categories':['X','Y'], 'values':['9007199254740993.123456789','4']}]}
+    _, sheet = proposals._chart_alt_and_sheet(desc)
+    assert 'A 1.0000000000000000001' in sheet
+    assert 'X 9007199254740993.123456789' in sheet
+    assert 'A 9007199254740993' not in sheet
+
+
+def test_cell_referenced_chart_resolves_more_than_64_points_completely(tmp_path):
+    import openpyxl
+    from openpyxl.chart import LineChart, Reference
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(['Category','Value'])
+    for i in range(80): ws.append([f'C{i}', i+1])
+    chart = LineChart(); chart.add_data(Reference(ws,min_col=2,min_row=1,max_row=81),titles_from_data=True)
+    chart.set_categories(Reference(ws,min_col=1,min_row=2,max_row=81)); ws.add_chart(chart,'D2')
+    path=tmp_path/'long.xlsx'; wb.save(path)
+    proposal=proposals.propose_chart_datasheet(path,'.xlsx')[0]
+    assert 'C0–C79 (80 categories)' in proposal['proposed_value']
+    assert 'C79 80' in proposal['rationale']
