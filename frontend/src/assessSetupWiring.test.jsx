@@ -181,7 +181,7 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // The window has to clear the explanatory comment that sits between the guard and the mount.
     // The quantifier is LAZY, so this still matches the nearest AssessSetup after the guard — it
     // proves the guard immediately precedes the mount, not merely that both exist in the file.
-    expect(app()).toMatch(/assessPhase === 'idle' && !assessed && \([\s\S]{0,600}?<AssessSetup/)
+    expect(app()).toMatch(/assessPhase === 'idle' && !assessed && !priorResults\.assess && \([\s\S]{0,600}?<AssessSetup/)
   })
 
   it('shows the results for a scan assessed in an EARLIER session, not only after a run this session', () => {
@@ -258,7 +258,7 @@ describe('App composes the Assess tab the way the board specifies', () => {
     const s = app()
     expect(s).toMatch(/import \{[^}]*remediateScan[^}]*\} from '\.\/api'/)
     expect(s).toMatch(/const handleBulkFix = useCallback\(async \(scanId, rows\) => \{/)
-    expect(s).toMatch(/<AssessWorklist[\s\S]{0,200}?onBulkFix=\{\(rows\) => handleBulkFix\(run\.id, rows\)\}/)
+    expect(s).toMatch(/<AssessWorklist[\s\S]{0,250}?onBulkFix=\{priorResults\.assess \? undefined : \(rows\) => handleBulkFix\(run\.id, rows\)\}/)
   })
 
   it('state 4 · feeds the not-started count from the backend so the partial banner can name it', () => {

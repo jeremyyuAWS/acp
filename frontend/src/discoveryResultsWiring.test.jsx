@@ -54,7 +54,8 @@ describe('source — Discover is the caller, and it passes the real discovery da
     expect(discover).not.toMatch(/onAcknowledge=\{handleAcknowledge\}/)
     // Lifecycle rules #8 — a real handler, not a stub: wired to the same reload path every other
     // scan_inventory mutation would need, so the recorded override actually reaches this screen.
-    expect(discover).toMatch(/onOverrideRecommendation=\{overrideRecommendation\}/)
+    expect(discover).toMatch(/onOverrideRecommendation=\{resultsOnly \? undefined : overrideRecommendation\}/)
+    expect(discover).toContain('if (!scanId || resultsOnlyRef.current) return false')
     // Raw scan data for support/debugging (2026-08-28) — both already loaded for other reasons
     // (scope for the header/breakdowns, errLog for the "could not be read" reasons), so passing
     // them through costs no extra request.
