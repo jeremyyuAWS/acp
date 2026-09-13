@@ -17,7 +17,7 @@ from test_remediation_source_cache_key import _FakeService
 OWNER, SID, FILE = 'pdf-owner@example.test', 'managed-exact-pdf', 'figure.pdf'
 
 
-def seed(store, monkeypatch, tmp_path):
+def seed(store, monkeypatch, tmp_path, *, document_wide=False):
     monkeypatch.setattr(core, 'store', store)
     monkeypatch.setattr(core, 'get_scan_tokens', lambda sid: {})
     monkeypatch.setattr(blob, '_ENABLED', True)
@@ -42,21 +42,24 @@ def seed(store, monkeypatch, tmp_path):
         'scan_id': SID, 'file': FILE, 'owner': OWNER, 'source': 'local', 'checksum': checksum,
         'remediation_impact_allowed_rules': [],
         'remediation_impact_policy': {'rule_based': 0, 'ai': 1, 'ai_budget_usd': '1.00',
-            'ai_zone': 'local', 'auto_approve_ai': True}}],
+            'ai_zone': 'any' if document_wide else 'local', 'auto_approve_ai': True,
+            'document_wide_ai': document_wide}}],
         snapshot_id=store.remediation_source_revision(SID), request_fingerprint='managed-exact')
     return store.get_job(batch['job_ids'][0]), source, service
 
 
-def test_managed_run_generates_once_and_standing_approval_rechecks_exact_artifact(isolated_store, monkeypatch, tmp_path):
+@pytest.mark.parametrize('document_wide', [False, True])
+def test_managed_run_generates_once_and_standing_approval_rechecks_exact_artifact(isolated_store, monkeypatch, tmp_path, document_wide):
     from ai_standing_approval import check_application
     from formats.pdf.detectors import non_text_content
     import remediate_pdf
     s = isolated_store
-    job, source, transport = seed(s, monkeypatch, tmp_path)
+    job, source, transport = seed(s, monkeypatch, tmp_path, document_wide=document_wide)
     calls = []
     def describe(png, **kw):
         ctx = optional_current_run_context()
-        assert ctx and ctx.local_drafting and ctx.policy['auto_approve_ai'] is True
+        assert ctx and ctx.policy['auto_approve_ai'] is True
+        assert ctx.policy.get('document_wide_ai') is document_wide
         pixels = Image.open(io.BytesIO(png))
         assert pixels.size == (32, 32) and pixels.getpixel((0, 0)) == (255, 0, 0)
         calls.append(png)
@@ -64,6 +67,9 @@ def test_managed_run_generates_once_and_standing_approval_rechecks_exact_artifac
             zone='local', latency_ms=0, ok=True, scan_id=SID, file=FILE)
         return {'alt': 'A solid red image.', 'grounded': False, 'model': 'fixture-local', 'ai_call_id': call_id}
     monkeypatch.setattr(ai, 'describe_image_structured', describe)
+    if document_wide:
+        import document_wide_provider
+        monkeypatch.setattr(document_wide_provider, 'generate_document', lambda *a, **k: pytest.fail('Already proved figure must not charge a second model'))
     handlers._remediate_file(job['payload'], job)
     assert len(calls) == 1  # no inline + proposal duplicate
     items = s.list_hitl_queue(scan_id=SID, owner=OWNER)
@@ -81,10 +87,28 @@ def test_managed_run_generates_once_and_standing_approval_rechecks_exact_artifac
     assert len(jobs) == 1
     payload = json.loads(jobs[0]['payload']) if isinstance(jobs[0]['payload'], str) else jobs[0]['payload']
     check_application(s, payload, working=corrected)
+    if document_wide:
+        from remediate_pdf import validate_exact_pdf_finding_bindings
+        assert proposal['finding_ids'] and proposal['assessment_revision']
+        for field, wrong in [('finding_ids', ['invented']), ('baseline_finding_ids', ['invented']), ('assessment_revision', 'stale')]:
+            altered = {**proposal, field: wrong}
+            assert not validate_exact_pdf_finding_bindings(s, OWNER, SID, job['payload']['stage_execution_id'], FILE, corrected, [altered])
+    if document_wide:
+        run_id = job['payload']['stage_execution_id']
+        with s._db.cursor() as cur:
+            s._db.execute(cur, 'SELECT baseline_json FROM remediation_contribution_runs WHERE owner_id=%s AND scan_id=%s AND run_id=%s', (OWNER, SID, run_id))
+            original_baseline = s._db.fetchone(cur)['baseline_json']
+            bad = json.loads(original_baseline)
+            bad[0]['instance_key'] = 'pdf:fig:2:0'
+            s._db.execute(cur, 'UPDATE remediation_contribution_runs SET baseline_json=%s WHERE owner_id=%s AND scan_id=%s AND run_id=%s', (json.dumps(bad), OWNER, SID, run_id))
+        assert not validate_exact_pdf_finding_bindings(s, OWNER, SID, run_id, FILE, corrected, [proposal])
+        with s._db.cursor() as cur:
+            s._db.execute(cur, 'UPDATE remediation_contribution_runs SET baseline_json=%s WHERE owner_id=%s AND scan_id=%s AND run_id=%s', (original_baseline, OWNER, SID, run_id))
+        assert not validate_exact_pdf_finding_bindings(s, OWNER, SID, run_id, FILE, corrected + b'changed', [proposal])
     tampered = dict(proposal); tampered.pop('kind')
     with s._db.cursor() as cur:
         s._db.execute(cur, 'UPDATE hitl_queue SET proposals=%s WHERE id=%s', (json.dumps([tampered]), row['id']))
-    with pytest.raises(ValueError, match='exact output'):
+    with pytest.raises(ValueError, match='Document-wide automatic approval|exact output'):
         check_application(s, payload, working=corrected)
     with s._db.cursor() as cur:
         s._db.execute(cur, 'UPDATE hitl_queue SET proposals=%s WHERE id=%s', (json.dumps([proposal]), row['id']))

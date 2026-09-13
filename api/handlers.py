@@ -716,8 +716,17 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
         return
     from ai_run_policy import optional_current_run_context
     from document_wide_workflow import suppressed_criteria
-    if sc in suppressed_criteria(optional_current_run_context(), filename):
-        return
+    context = optional_current_run_context()
+    if sc in suppressed_criteria(context, filename):
+        try:
+            import blob
+            from remediate_pdf import bind_exact_pdf_findings
+            if sc != '1.1.1' or not filename.lower().endswith('.pdf'):
+                return
+            data = blob.download_remediated(context.owner_id, scan_id, filename)
+            proposals = bind_exact_pdf_findings(core.store, context.owner_id, scan_id, context.run_id, filename, data, proposals)
+        except (ValueError, TypeError):
+            return
     # OPERATOR SCOPE. One gate here covers every proposer — 19 call sites across 12 criteria —
     # because this is the single boundary where a proposal is still labelled with its SC. Gating
     # at each proposer instead would be 19 chances to forget one, and the one forgotten is the

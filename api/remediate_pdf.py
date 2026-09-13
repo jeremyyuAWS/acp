@@ -958,6 +958,56 @@ def validate_exact_figure_proposals(data: bytes, proposals: list[dict]) -> bool:
         return False
 
 
+def bind_exact_pdf_findings(store, owner, sid, run_id, filename, data, proposals, *, applied=False):
+    """Bind proved raster captions to the frozen real assessment, without provider calls.
+
+    Ambiguous legacy aggregate groups cannot authorize individual Figure edits.
+    Retained binding is checked again outside managed generation at application.
+    """
+    import hashlib, io, json
+    import pikepdf
+    from pdf_figure_evidence import bounded_figures
+    if not proposals or not filename.lower().endswith('.pdf') or any(p.get('kind') != 'pdf-figure-alt' for p in proposals):
+        raise ValueError('Exact PDF finding binding requires only figure captions')
+    artifact = (store.get_file_record(sid, filename) or {}).get('corrected_sha256')
+    if not artifact or hashlib.sha256(data).hexdigest() != artifact or not validate_exact_figure_proposals(data, proposals):
+        raise ValueError('Exact PDF caption evidence is stale or unproved')
+    with store._db.cursor() as cur:
+        store._db.execute(cur, 'SELECT snapshot_id,baseline_json FROM remediation_contribution_runs WHERE owner_id=%s AND scan_id=%s AND run_id=%s', (owner, sid, run_id))
+        baseline = store._db.fetchone(cur)
+    if not baseline or baseline['snapshot_id'] != store.remediation_source_revision(sid):
+        raise ValueError('Exact PDF assessment identities are stale or unavailable')
+    rows = [r for r in json.loads(baseline['baseline_json']) if r['file'] == filename and r['rule_id'] == '1.1.1']
+    with pikepdf.open(io.BytesIO(data)) as pdf:
+        figures = bounded_figures(pdf)
+        locators = _figure_locators(figures, pdf)
+        missing = [locators[id(f)] for f in figures if not str(f.get('/Alt', '')).strip()]
+    dispositions = {r['finding_id']: r.get('disposition') for r in store.list_finding_dispositions(sid, run_id)}
+    result, seen = [], set()
+    for proposal in proposals:
+        loc = proposal.get('locator')
+        if not applied and (loc not in missing or proposal.get('source_sha256') != artifact):
+            raise ValueError('Exact PDF target is no longer an outstanding current figure')
+        matches = [r for r in rows if str(r.get('instance_key', '')).casefold() == str(loc).casefold()]
+        if not matches and len(rows) == 1 and len(figures) == 1 and (applied or len(missing) == 1) and str(rows[0].get('instance_key', '')).startswith('aggregate-instance:'):
+            matches = rows
+        if len(matches) != 1 or matches[0]['finding_id'] in seen:
+            raise ValueError('Exact PDF figure has no unambiguous assessed identity')
+        fid = matches[0]['finding_id']; seen.add(fid)
+        if not applied and dispositions.get(fid) in {'resolved_verified', 'excluded_by_policy', 'superseded_by_reassessment'}:
+            raise ValueError('Exact PDF finding is no longer outstanding')
+        result.append({**proposal, 'finding_ids': [fid], 'baseline_finding_ids': [fid], 'assessment_revision': baseline['snapshot_id']})
+    return result
+
+
+def validate_exact_pdf_finding_bindings(store, owner, sid, run_id, filename, data, proposals, *, applied=False):
+    try:
+        bound = bind_exact_pdf_findings(store, owner, sid, run_id, filename, data, proposals, applied=applied)
+        return all(all(p.get(k) == b[k] for k in ('finding_ids', 'baseline_finding_ids', 'assessment_revision')) for p, b in zip(proposals, bound))
+    except Exception:
+        return False
+
+
 def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
                         scan_id: str | None, file: str,
                         applied_fixes=None, proposals=None) -> tuple[list[str], int]:
