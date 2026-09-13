@@ -6,6 +6,7 @@ operations; the frozen manifest and code-owned adapter allowlist are authoritati
 from __future__ import annotations
 
 import json
+import re
 import base64
 import copy
 import hashlib
@@ -50,7 +51,10 @@ def build_document_prompt(request, *, native_pdf=False, native_profile=None):
 
 
 def _decode(request, text):
-    raw = json.loads(text)
+    # Accept only a complete single JSON fence, never extract a convenient
+    # object from commentary or repair source/finding identity supplied by AI.
+    fenced = re.fullmatch(r'\s*```(?:json)?[ \t]*\r?\n(.*?)\r?\n```\s*', text, re.DOTALL)
+    raw = json.loads(fenced.group(1) if fenced else text)
     if not isinstance(raw, dict) or set(raw) != {
         'contract_version', 'request_id', 'source_sha256', 'edits', 'unresolved'
     }:
