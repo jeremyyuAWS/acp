@@ -328,6 +328,12 @@ def _attempt(store, *, scan_id, filename, original, failed, values, applied,
             return False
 
     def persist(action, proof):
+        if action in {'validated', 'rejected', 'stopped'}:
+            from ai_escalation_activity import emit
+            emit(store, scan_id=scan_id, owner_id=ctx.owner_id, run_id=ctx.run_id,
+                 file=filename, operation_id=operation, model=generator.models[1].name,
+                 reason_code='independent_caption_verification_failed',
+                 status='candidate_caption_validated' if action == 'validated' else 'needs_manual')
         with store.transaction():
             if action == 'intent':
                 with store._db.cursor() as cur:

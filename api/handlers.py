@@ -5362,6 +5362,17 @@ def _apply_one_value_kind(
             return retry_bytes, True
 
     if caption_contradictions:
+        if exact_tickets:
+            from ai_escalation_activity import emit
+            ticket = exact_tickets[0]
+            retry_owner = (core.store.get_scan(scan_id) or {}).get('run', {}).get('owner_email')
+            retry_run = ticket.get('run_id')
+            if retry_owner and retry_run:
+                retry_operation = _proof_sha256((retry_owner + ':' + retry_run + ':' + filename
+                    + ':office-caption-retry.v1').encode()).hexdigest()
+                emit(core.store, scan_id=scan_id, owner_id=retry_owner, run_id=retry_run,
+                     file=filename, operation_id=retry_operation,
+                     reason_code='independent_caption_verification_failed', status='needs_manual')
         # Disproven text is different from an unknown draft. Keep the previous copy;
         # allowing remaining issues must never publish a caption known to be false.
         reason = 'Written caption contradicts independently checked visible pixels; previous copy retained. Manual review required.'

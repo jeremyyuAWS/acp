@@ -12524,6 +12524,7 @@ class Store:
         "remediate.cancel_requested", "remediate.paused", "remediate.resumed",
         "remediate.vision_retry_pending", "remediate.vision_retry_recovered",
         "remediate.vision_retry_blocked",
+        "remediate.ai_escalation_started", "remediate.ai_escalation_finished",
     })
 
     #: The kinds that mean THE RUN MOVED. Every one is written after a durable change to a

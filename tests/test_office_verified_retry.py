@@ -307,6 +307,16 @@ def test_live_adapter_uses_restored_frozen_run_and_only_next_settled_model(isola
     calls=[];selected={}
     def post(*a,**kw):
         calls.append(kw);model=kw['json']['model']
+        notices=[event for event in store.list_scan_events('scan')
+                 if event['kind']=='remediate.ai_escalation_started']
+        if model==names[1]:
+            assert len(notices)==1  # Durable notice precedes the actual provider dispatch.
+            detail=notices[0]['detail']
+            assert detail['model']==names[1] and detail['generation_position']==1
+            assert detail['reason_code']=='independent_caption_verification_failed'
+            assert detail['may_take_longer'] and 'prompt' not in detail
+        else:
+            assert not notices
         if model==names[1] and mutation=='unknown_usage':
             raise RuntimeError('fixture ambiguous request outcome')
         if model==names[1] and mutation=='delete_review':
@@ -412,6 +422,9 @@ def test_live_adapter_uses_restored_frozen_run_and_only_next_settled_model(isola
             assert len(calls)==expected_calls
             handlers._apply_approved_values(payload,{})
             assert len(calls)==expected_calls and store.get_file_record('scan','file.docx')['corrected_sha256']==digest
+            notices=[e for e in store.list_scan_events('scan') if e['kind'].startswith('remediate.ai_escalation_')]
+            assert sum(e['kind'].endswith('started') for e in notices)==expected_calls-1
+            assert sum(e['kind'].endswith('finished') for e in notices)==1
             return
         assert record['corrected_sha256']!=digest and record['compliant']==1
         assert release_artifacts.release_ready(record)
@@ -440,6 +453,8 @@ def test_live_adapter_uses_restored_frozen_run_and_only_next_settled_model(isola
         assert [c['json']['model'] for c in calls]==[names[0],names[1]]
         handlers._apply_approved_values(payload,{})
         assert len(calls)==2
+        notices=[e for e in store.list_scan_events('scan') if e['kind'].startswith('remediate.ai_escalation_')]
+        assert len(notices)==2 and notices[-1]['detail']['status']=='candidate_caption_validated'
         return
     retry=attempt(store,**kwargs)
     if mutation!='none':
@@ -539,3 +554,43 @@ def test_immutable_retry_upload_verifies_bounded_exact_bytes(monkeypatch, alread
             blob.upload_immutable_retry('owner','scan','file.docx',b'abc','application/octet-stream')
     assert calls[0]['offset']==0 and calls[0]['length']==4
     assert identity==[{'container':blob._CONTAINER,'blob':blob._blob_path('owner','scan','file.docx')+'.retry/'+sha256(b'abc').hexdigest()}]
+
+@pytest.mark.parametrize('failed', [False, True])
+def test_governed_generic_next_model_notice_precedes_dispatch_and_replay(isolated_store, monkeypatch, failed):
+    import time, core
+    import llm_waterfall_provider as transport
+    from ai_run_policy import run_context
+    from test_llm_waterfall_provider import FakeProviders, Response, result
+    store=isolated_store
+    monkeypatch.setattr(core,'store',store)
+    names=('gpt-4.1-mini-2025-04-14','gpt-4.1-2025-04-14','gpt-4.1-nano-2025-04-14')
+    specs=tuple(transport.TextModelSpec('openai',name,'fixture-price-v1','1','2',32768,128,int(time.time())+3600) for name in names)
+    steps=[dict(step_id=step,position=i,provider='openai',model=name,enabled=True,capabilities=['text'])
+           for i,(step,name) in enumerate(zip(('primary','fallback_1','fallback_2'),names))]
+    policy=dict(rule_based=2,ai=1,ai_budget_usd='1.00',generation_chain=dict(version=1,steps=steps))
+    with store._db.cursor() as cur:
+        store._db.execute(cur,"INSERT INTO scan_runs(id,owner_email,status,source) VALUES('scan','owner','done','sharepoint')")
+        store._db.execute(cur,"INSERT INTO file_records(scan_id,file,drive_file_id,source_modified) VALUES('scan','file.docx','source','2026-09-01')")
+    batch=store.enqueue_stage_batch('scan','remediate','remediate_file',[dict(scan_id='scan',file='file.docx',owner='owner',source='sharepoint',remediation_impact_policy=policy)],snapshot_id=store.remediation_source_revision('scan'),request_fingerprint='generic-notice')
+    job=store.get_job(batch['job_ids'][0]);calls=[]
+    def post(*a,**kw):
+        model=kw['json']['model'];calls.append(model)
+        starts=[e for e in store.list_scan_events('scan') if e['kind']=='remediate.ai_escalation_started']
+        if model==names[1]:
+            assert len(starts)==1 and starts[0]['detail']['reason_code']=='approved_model_fallback'
+            assert starts[0]['detail']['model']==model
+            if failed:
+                raise RuntimeError('ambiguous synthetic request')
+        else:
+            assert not starts
+        return Response(result(model=model,text='' if model==names[0] else 'Useful response'))
+    generator=transport.StrictTextGenerator(specs,provider_module=FakeProviders,post=post)
+    with run_context(store,job['payload'],job) as ctx:
+        response=transport.managed_generate_attempts('Generic review',ctx,generator,purpose='review',tier_indices=(1,2))
+        repeated=transport.managed_generate_attempts('Generic review',ctx,generator,purpose='review',tier_indices=(1,2))
+    assert calls==list(names[:2])
+    notices=[e for e in store.list_scan_events('scan') if e['kind'].startswith('remediate.ai_escalation_')]
+    assert len(notices)==2
+    assert notices[-1]['detail']['status']==('usage_unconfirmed' if failed else 'response_ready')
+    assert bool(response.get('deferred'))==failed
+    assert bool(repeated.get('deferred'))==failed

@@ -497,9 +497,23 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
         except Exception:
             attempt['status'] = 'reservation_or_dispatch_denied'
             return defer_managed('budget_admission_denied', attempts=attempts)
+        def narrate(status):
+            if chain and index > 1 and getattr(ctx, 'scan_id', None) and getattr(ctx, 'file', None):
+                try:
+                    import core
+                    from ai_escalation_activity import emit
+                    emit(core.store, scan_id=ctx.scan_id, owner_id=ctx.owner_id,
+                         run_id=ctx.run_id, file=ctx.file, operation_id=operation,
+                         position=index-1, model=model.name, status=status,
+                         reason_code=('independent_caption_verification_failed' if verified_retry is not None
+                                      else 'approved_model_fallback'))
+                except Exception:
+                    pass  # Narration cannot change admitted work or spending reconciliation.
+        narrate('dispatched')
         try:
             result = generator.generate_text(model.name, prompt)
         except PreDispatchRejected:
+            narrate('not_dispatched')
             attempt['status'] = 'rejected_before_dispatch'
             try:
                 ctx.ledger.release(ctx.owner_id, ctx.run_id, token, confirmed_not_charged=True)
@@ -509,6 +523,7 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
             retain(attempt, 'rejected_before_dispatch')
             return defer_managed('request_rejected_before_dispatch', attempts=attempts)
         except Exception as exc:
+            narrate('usage_unconfirmed')
             failure = 'provider_access_denied' if isinstance(exc, ProviderAccessDenied) else 'provider_usage_unknown'
             attempt['status'] = 'usage_unknown'
             try:
@@ -521,6 +536,7 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
         try:
             budget.settle(token, result['cost_usd'])
         except Exception:
+            narrate('usage_unconfirmed')
             attempt['status'] = 'settlement_failed_or_breached'
             retain(attempt, attempt['status'], result)
             return defer_managed('budget_settlement_failed_or_breached', attempts=attempts)
@@ -545,7 +561,10 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
         if issue:
             attempt['reason'] = issue
         if not retain(attempt, status, result, issue):
+            narrate('needs_manual')
             return defer_managed('attempt_output_retention_failed', attempts=attempts)
+        if verified_retry is None:
+            narrate('response_ready' if status == 'drafted' else 'needs_manual')
         if status == 'provider_limit_exceeded':
             return defer_managed('provider_limit_exceeded', attempts=attempts)
         if status == 'refused':
