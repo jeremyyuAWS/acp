@@ -18,7 +18,7 @@ describe('vision retry narration', () => {
   it('explains spending uncertainty without calling it manual document work', () => {
     const line = remediationEventLine({ kind: 'remediate.vision_retry_blocked', document: 'A.docx',
       detail: { reason_code: 'vision_spending_reconciliation_required' } })
-    expect(line).toContain('confirming previous AI usage')
+    expect(line).toContain('awaiting confirmation of previous AI usage')
     expect(line).not.toContain('individual review')
   })
   it('shows a yellow retry only when newly received', async () => {
