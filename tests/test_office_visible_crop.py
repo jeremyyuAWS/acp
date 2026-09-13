@@ -130,3 +130,18 @@ def test_crop_preserves_alpha_instead_of_flattening_onto_black():
     decoded = Image.open(io.BytesIO(visible['image_bytes']))
     assert decoded.mode == 'RGBA'
     assert decoded.getpixel((0,0)) == (255,255,255,0)
+
+
+def test_inline_with_an_extra_blip_cannot_supply_visible_crop():
+    original = _document()
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(original)) as source, zipfile.ZipFile(output, 'w') as target:
+        for entry in source.infolist():
+            value = source.read(entry.filename)
+            if entry.filename == 'word/document.xml':
+                root = ET.fromstring(value)
+                inline = root.xpath('.//wp:inline', namespaces=NS)[0]
+                ET.SubElement(inline, '{'+NS['a']+'}blip').set('{'+NS['r']+'}embed', 'different-image')
+                value = ET.tostring(root)
+            target.writestr(entry, value)
+    assert visible_word_image(output.getvalue(), 'image 1') is None
