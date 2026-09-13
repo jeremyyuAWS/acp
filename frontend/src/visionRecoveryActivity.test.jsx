@@ -15,6 +15,12 @@ describe('vision retry narration', () => {
     expect(remediationEventLine({ kind: 'remediate.vision_retry_blocked', document: 'A.pdf' })).toContain('individual review')
     expect(eventTone('remediate.vision_retry_blocked')).toBe('attention')
   })
+  it('explains spending uncertainty without calling it manual document work', () => {
+    const line = remediationEventLine({ kind: 'remediate.vision_retry_blocked', document: 'A.docx',
+      detail: { reason_code: 'vision_spending_reconciliation_required' } })
+    expect(line).toContain('confirming previous AI usage')
+    expect(line).not.toContain('individual review')
+  })
   it('shows a yellow retry only when newly received', async () => {
     const event = { key: 'retry', documentKey: 'A', kind: 'remediate.vision_retry_pending',
       tone: 'attention', line: 'Image description queued to retry' }

@@ -1037,10 +1037,17 @@ def propose_images_of_text(path, ext: str, *, ai_enabled: bool = True) -> list[d
                     swallowed("proposals.propose_images_of_text: asking the vision model whether the image "
                               "is a logotype failed")
             if visible_crop:
+                import hashlib
+                visible_crop['transcription_sha256'] = hashlib.sha256(text.encode('utf-8')).hexdigest()
+                visible_crop['transcription_source'] = 'visible-crop-ocr-v1'
                 rationale += (" This draft transcribes only the visible Word crop. Confirm its "
                               "accuracy and that replacing the picture would lose no useful "
                               "diagram content; the full-image draft is not valid for this crop. "
-                              "Automatic picture replacement remains unavailable for this crop.")
+                              "Automatic picture replacement remains unavailable for this crop. "
+                              "If the picture contains a useful diagram, use Keep image and describe "
+                              "and supply a description covering the diagram and its visible text. "
+                              "The graphic is preserved; a transcript or description alone does not "
+                              "verify that the image-of-text finding was cleared.")
             out.append({**proposal(
                 locator=f"image {i + 1}",
                 before="text baked into an image — assistive technology cannot read it",

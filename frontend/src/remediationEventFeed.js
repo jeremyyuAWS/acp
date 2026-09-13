@@ -58,6 +58,8 @@ export function remediationEventLine(event) {
     case 'remediate.vision_retry_recovered':
       return `Image description recovered for ${file(event)} · saved corrections still need verification`
     case 'remediate.vision_retry_blocked':
+      if (detail.reason_code === 'vision_spending_reconciliation_required') return `Image description for ${file(event)} paused · confirming previous AI usage before another paid request`
+      if (detail.reason_code === 'vision_permission_or_budget_blocked') return `Image description for ${file(event)} paused · saved AI permission or spending limit needs attention`
       return `Image description for ${file(event)} still needs individual review`
     case 'scan.retrying':
       return `A processing attempt failed and was scheduled to retry${event?.attempt ? ` · attempt ${event.attempt}` : ''}`

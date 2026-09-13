@@ -1360,7 +1360,6 @@ def _remediate_file(payload: dict, job: dict) -> None:
         try:
             result = _remediate_file_with_policy(payload, job)
             if context is not None:
-                schedule(core.store, context, job, vision_misses)
                 try:
                     from document_wide_workflow import process_file
                     process_file(core.store, context)
@@ -1369,6 +1368,9 @@ def _remediate_file(payload: dict, job: dict) -> None:
                         scan_id=context.scan_id, file=context.file,
                         detail=__import__('json').dumps({'owner_id': context.owner_id, 'run_id': context.run_id,
                             'reason': f'Document-wide suggestions did not complete: {type(exc).__name__}'}))
+                # Inspect after document-wide generation too: no captured transport
+                # miss does not establish that a pending caption has a usable draft.
+                schedule(core.store, context, job, vision_misses, inspect_pending=True)
             if context is not None:
                 try:
                     from ai_standing_approval import approve_file

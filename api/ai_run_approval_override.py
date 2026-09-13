@@ -83,6 +83,8 @@ def process_pending(store, payload):
     if payload['source_revision'] != current['source_revision']:
         raise ValueError('Automatic approval source changed')
     policy, _ = run(store, owner, sid, run_id)
+    from vision_recovery import schedule_existing_pending
+    schedule_existing_pending(store, owner, sid, run_id)
     with store._db.cursor() as cur:
         store._db.execute(cur, '''SELECT DISTINCT p.file FROM ai_proposal_snapshots p JOIN hitl_queue q
           ON q.id=p.item_id AND q.scan_id=p.scan_id AND q.file=p.file
