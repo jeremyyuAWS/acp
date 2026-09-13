@@ -31,7 +31,7 @@ async function ensureInstance() {
   return _initPromise
 }
 
-export async function refreshSPToken({ interactive = true } = {}) {
+export async function refreshSPToken({ interactive = true, persist = true } = {}) {
   const inst = await ensureInstance()
   if (!inst) throw new Error('MSAL not ready')
   const account = inst.getActiveAccount() || inst.getAllAccounts()[0]
@@ -43,6 +43,6 @@ export async function refreshSPToken({ interactive = true } = {}) {
     if (!interactive) throw error
     tok = await inst.acquireTokenPopup({ scopes: SCOPES, account })
   }
-  try { sessionStorage.setItem('sp_token', tok.accessToken) } catch { /* ignore */ }
+  try { if (persist) sessionStorage.setItem('sp_token', tok.accessToken) } catch { /* ignore */ }
   return tok.accessToken
 }

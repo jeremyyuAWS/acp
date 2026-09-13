@@ -4,9 +4,11 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 import DriveReleaseReconnect from './DriveReleaseReconnect.jsx'
 import { reconnectDriveForRelease } from './driveAuth.js'
 import { noteAuthChange, _resetAuthEpoch } from './apiIdentity.js'
-import { setDriveToken } from './api.js'
+import { refreshSPToken } from './spAuth.js'
+import { setDriveToken, setSPToken } from './api.js'
 vi.mock('./driveAuth.js', () => ({ reconnectDriveForRelease: vi.fn() }))
-vi.mock('./api.js', () => ({ setDriveToken: vi.fn() }))
+vi.mock('./api.js', () => ({ setDriveToken: vi.fn(), setSPToken: vi.fn() }))
+vi.mock('./spAuth.js', () => ({ refreshSPToken: vi.fn() }))
 afterEach(async () => { await unmountAll(); vi.resetAllMocks(); sessionStorage.clear(); _resetAuthEpoch() })
 async function mount(extra = {}) {
  const {root, container} = createTestRoot()
@@ -59,5 +61,39 @@ it('never installs a late grant after the ACP account changes', async () => {
  noteAuthChange('old-account','new-account')
  await act(async () => finish('old-grant'))
  expect(setDriveToken).not.toHaveBeenCalled()
+ expect(v.props.onResume).not.toHaveBeenCalled()
+})
+
+
+it('renews Microsoft access and resumes the saved SharePoint plan', async () => {
+ refreshSPToken.mockResolvedValue('new-microsoft-token')
+ const v = await mount({provider:'sharepoint'})
+ expect(v.container.textContent).toContain('Reconnect SharePoint and resume')
+ await v.click()
+ expect(refreshSPToken).toHaveBeenCalledOnce()
+ expect(reconnectDriveForRelease).not.toHaveBeenCalled()
+ expect(setSPToken).toHaveBeenCalledWith('new-microsoft-token')
+ expect(v.props.onResume).toHaveBeenCalledOnce()
+ expect(sessionStorage.getItem('sp_token')).toBe('new-microsoft-token')
+})
+
+it('does not resume a SharePoint plan after Microsoft sign-in fails', async () => {
+ refreshSPToken.mockRejectedValue(new Error('Microsoft sign-in required'))
+ const v = await mount({provider:'sharepoint'}); await v.click()
+ expect(v.props.onResume).not.toHaveBeenCalled()
+ expect(setSPToken).not.toHaveBeenCalled()
+ expect(v.container.querySelector('[role=alert]').textContent).toContain('Microsoft sign-in required')
+})
+
+
+it('ignores late Microsoft credentials after the ACP account changes', async () => {
+ let finish
+ refreshSPToken.mockImplementation(() => new Promise(resolve => {finish=resolve}))
+ const v = await mount({provider:'sharepoint'}); await v.click()
+ noteAuthChange('old-account','new-account')
+ await act(async () => finish('old-microsoft-token'))
+ expect(refreshSPToken).toHaveBeenCalledWith({persist:false})
+ expect(setSPToken).not.toHaveBeenCalled()
+ expect(sessionStorage.getItem('sp_token')).toBeNull()
  expect(v.props.onResume).not.toHaveBeenCalled()
 })

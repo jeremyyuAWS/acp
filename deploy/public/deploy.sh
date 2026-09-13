@@ -601,6 +601,7 @@ for s in json.loads(os.environ.get("APP_SECRETS_JSON") or "[]"):
     echo "   commands are in docs/adr/0013-worker-durability-hardening.md (§2 runbook)."
   fi
   _apply_worker_scale_rule
+  python3 "$(dirname "$0")/repair_queue_connection.py" "$RG" "$WORKER_APP"
   # ADR 0013 §2: hand job processing to the worker tier — flip the API to serve-only.
   WORKERS_ENV="ACP_WORKERS=0"
   echo "   API → ACP_WORKERS=0 (job processing handed to $WORKER_APP)"

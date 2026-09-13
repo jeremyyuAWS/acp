@@ -286,7 +286,16 @@ def _bound_sdk_error_logging():
                 count = self.count
             if count & (count - 1):
                 return False
-            record.msg = f"Langfuse SDK export error (occurrence {count}); see exporter health"
+            # The SDK swallows transport failures, so a fresh diagnostic process
+            # cannot read this worker's counters. Include only our allowlisted
+            # reason in the actual worker log, never SDK exception/body text.
+            with _ingestion_lock:
+                reason = _ingestion_last_error
+                circuit_open = _time.monotonic() < _ingestion_retry_mono
+            if not isinstance(reason, str) or not _re.fullmatch(r"http_[1-5][0-9]{2}|connection_error|tls_error|timeout_error|dns_error", reason):
+                reason = "sdk_error"
+            record.msg = (f"Langfuse SDK export error (occurrence {count}; "
+                          f"reason={reason}; circuit_open={circuit_open}); see exporter health")
             record.args, record.exc_info, record.exc_text = (), None, None
             return True
 
@@ -312,8 +321,25 @@ def _ingestion_transport(inner=None):
                 response = self.inner.handle_request(request)
                 failed = response.status_code >= 400
                 reason = f"http_{response.status_code}" if failed else None
-            except Exception:
-                failed, reason = True, "connection_error"
+            except Exception as error:
+                import socket
+                import ssl
+                reason = "connection_error"
+                chain = error
+                seen = set()
+                while chain is not None and id(chain) not in seen:
+                    seen.add(id(chain))
+                    if isinstance(chain, ssl.SSLError):
+                        reason = "tls_error"
+                        break
+                    if isinstance(chain, (httpx.TimeoutException, TimeoutError)):
+                        reason = "timeout_error"
+                        break
+                    if isinstance(chain, socket.gaierror):
+                        reason = "dns_error"
+                        break
+                    chain = chain.__cause__ or chain.__context__
+                failed = True
                 response = None
             with _ingestion_lock:
                 if failed:

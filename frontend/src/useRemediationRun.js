@@ -88,9 +88,30 @@ export function useRemediationRun(runId) {
     }
     window.addEventListener('acp:session-expired', stopForExpiredSession)
 
-    const loadSnapshot = () => getRemediationSnapshot(runId)
-      .then((next) => { if (live) accept(next) })
-      .catch(() => { /* transient: the last confirmed snapshot and its age stay on screen */ })
+    let streamNeedsSnapshot = false
+    let snapshotPending = false
+    const loadSnapshot = async () => {
+      if (!live || snapshotPending) return
+      snapshotPending = true
+      try {
+        const next = await getRemediationSnapshot(runId)
+        if (live) accept(next)
+      } catch (error) {
+        if (!live) return
+        if ([401, 403, 404].includes(error?.status)) {
+          // An inaccessible/removed scan is not a transport gap. Stop retrying it and
+          // discard scoped progress; never fall back to another owner's scan.
+          stopForExpiredSession()
+          snapRef.current = null
+          setSnapshot(null); setReceivedAt(null); setStatus(null); setEvents([])
+          setActivityStatus('unavailable')
+        } else {
+          // Retain confirmed totals during transient errors and recover even if the
+          // stream is producing legacy status frames without a reconciled snapshot.
+          startPoll()
+        }
+      } finally { snapshotPending = false }
+    }
 
     let historyPending = false, historyAgain = false
     const loadHistory = async () => {
@@ -116,7 +137,7 @@ export function useRemediationRun(runId) {
         // Terminality is read off the REF: this closure captures state from the render that
         // created it, so `snapshot` here would be null forever and the stop-when-terminal it
         // expresses would never once be true.
-        if (!snapRef.current?.terminal) { loadSnapshot(); loadHistory() }
+        if (!snapRef.current?.terminal || streamNeedsSnapshot) { loadSnapshot(); loadHistory() }
       }, IDLE_POLL_MS)
     }
 
@@ -129,9 +150,16 @@ export function useRemediationRun(runId) {
         onMessage: (frame) => {
           if (!live) return
           setConnected(true)
-          stopPoll()                       // a live frame supersedes the fallback
-          setStatus(frame)
-          accept(frame?.snapshot)
+          if (frame?.snapshot) {
+            streamNeedsSnapshot = false
+            stopPoll()                       // a reconciled frame supersedes the fallback
+            if (isNewer(snapRef.current, frame.snapshot)) setStatus(frame)
+            accept(frame.snapshot)
+          } else {
+            streamNeedsSnapshot = true
+            setStatus(frame)
+            startPoll()                      // transport alone cannot refresh reconciled totals
+          }
         },
         onEvent: (event, id) => {
           if (!live) return
@@ -150,6 +178,7 @@ export function useRemediationRun(runId) {
         },
         onDone: () => {
           if (!live) return
+          streamNeedsSnapshot = false
           setConnected(false)
           setEndedAt(Date.now())
           loadHistory()

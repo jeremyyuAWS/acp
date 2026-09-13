@@ -74,3 +74,32 @@ def test_sdk_repeated_errors_are_bounded_and_content_free(monkeypatch):
         assert all('secret' not in message for message in passed)
     finally:
         logger.removeFilter(error_filter)
+
+
+@pytest.mark.parametrize('reason,expected', [('http_401', 'http_401'), ('connection_error', 'connection_error'), ('secret payload', 'sdk_error')])
+def test_worker_sdk_log_carries_only_sanitized_transport_reason(monkeypatch, reason, expected):
+    import logging
+    monkeypatch.setattr(lf, '_ingestion_last_error', reason)
+    monkeypatch.setattr(lf, '_sdk_error_filter', None)
+    logger = logging.getLogger('langfuse')
+    lf._bound_sdk_error_logging()
+    try:
+        record = logging.LogRecord('langfuse', logging.ERROR, '', 0, 'secret payload', (), None)
+        assert lf._sdk_error_filter.filter(record)
+        assert 'reason=' + expected in record.getMessage()
+        assert 'secret' not in record.getMessage()
+    finally:
+        logger.removeFilter(lf._sdk_error_filter)
+
+
+@pytest.mark.parametrize('kind,expected', [('tls', 'tls_error'), ('dns', 'dns_error'), ('timeout', 'timeout_error')])
+def test_transport_classifies_safe_network_error_type_without_exception_content(kind, expected):
+    import socket
+    import ssl
+    cause = {'tls': ssl.SSLError('secret endpoint'), 'dns': socket.gaierror('secret endpoint'), 'timeout': TimeoutError('secret endpoint')}[kind]
+    def fail(request):
+        raise httpx.ConnectError('secret payload', request=request) from cause
+    transport = lf._ingestion_transport(httpx.MockTransport(fail))
+    with pytest.raises(httpx.ConnectError, match='Telemetry endpoint unavailable'):
+        transport.handle_request(httpx.Request('POST', 'https://telemetry.invalid/ingest'))
+    assert lf.exporter_health()['ingestion_last_error'] == expected

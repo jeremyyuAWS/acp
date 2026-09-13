@@ -152,6 +152,13 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PostgreSQL scaler parser
+        run: python3 -m pip install 'psycopg2-binary>=2.9,<3'
+
       - name: Deploy
         env:
           # gh is preinstalled on GitHub runners; this is what lets the script's CI gate actually

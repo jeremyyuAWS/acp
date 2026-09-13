@@ -345,17 +345,9 @@ describe('one stream, owned above the tab switch', () => {
     expect(reconcile.slice(0, 400)).toContain('loadSnapshot()')
   })
 
-  it('polls only while nothing is streaming', () => {
-    // The poll is the FALLBACK. A live frame supersedes it, and the stream closing turns it back
-    // on so the card keeps reconciling. That close means more than it used to — since ADR 0052
-    // the server holds the stream through delivery and reconciliation rather than ending it the
-    // moment the batch drains — and the poll is still required, because review decisions and
-    // evidence can outlive delivery and only the reconciled snapshot says the run is terminal.
-    const h = hook()
-    expect(h).toMatch(/stopPoll\(\)\s+\/\/ a live frame supersedes the fallback/)
-    const onDone = h.slice(h.indexOf('onDone:'))
-    expect(onDone.slice(0, 600)).toContain('startPoll()')
-  })
+  // Snapshot polling behavior is exercised with mounted hooks and fake timers in
+  // remediationSnapshotRecovery.test.jsx: a reconciled frame stops fallback reads;
+  // a live legacy frame without a snapshot keeps reconciliation polling active.
 
   it('does not finalize a fresh batch on a previous run\'s stream close', () => {
     // `endedAt` is a timestamp, not a flag, precisely so "the stream ended" for run A cannot be

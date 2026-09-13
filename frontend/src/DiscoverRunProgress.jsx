@@ -215,12 +215,18 @@ function SharePointLiveSummary({ source, scope, progress, freshness }) {
   const completedLibraries = libraries.filter((library) => library.status === 'complete').length
   const throttles = libraries.reduce((sum, library) => sum + (Number(library.throttled) || 0), 0)
   const modes = new Set(libraries.map((library) => library.mode).filter(Boolean))
+  const hasObservedEnumeration = (Number(progress?.files_found) || 0) > 0
+    || (Number(progress?.folders_visited) || 0) > 0
+  const selectedFolderWalk = Array.isArray(scope?.folders) && scope.folders.some(Boolean)
   const mode = modes.size > 1 ? 'Mixed enumeration'
     : modes.has('delta') ? 'Incremental enumeration'
       : modes.has('search') ? 'Search-index enumeration'
-        : modes.has('full') ? 'Full enumeration' : 'Enumeration starting'
+        : modes.has('full') ? 'Full enumeration'
+          : hasObservedEnumeration ? (selectedFolderWalk ? 'Reading selected folders' : 'Reading document inventory')
+            : 'Enumeration starting'
   const activeSite = sites.find((site) => site.status === 'scanning')
   const activeLibrary = activeSite?.active_library
+  freshness = freshness ?? progress?.freshness ?? null
   const streamLabel = freshness === 'live' ? 'Live updates connected'
     : freshness === 'reconnecting' ? 'Live updates reconnecting'
       : freshness === 'checkpoint' ? 'Showing latest checkpoint'

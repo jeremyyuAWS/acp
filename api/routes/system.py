@@ -1,6 +1,7 @@
 """System & meta endpoints: liveness, SPA auth config, schedule, hub landing page."""
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import re
@@ -793,13 +794,31 @@ def _probe_database() -> tuple[bool, str]:
         _PROBE_DB_LOCK.release()
 
 
-@router.get("/probe/readyz")
 def probe_readyz(response: Response):
     """Is THIS container able to serve a database-backed request right now?
 
     The rollout gate. See the block comment above for why /healthz and /readyz cannot be it.
     """
     ok, reason = _probe_database()
+    if not ok:
+        response.status_code = 503
+    return {"ready": ok, "checks": {"db": "ok" if ok else reason}, "service": "acp"}
+
+
+_PROBE_HTTP_TIMEOUT_S = 2.0
+
+
+@router.get("/probe/readyz")
+async def bounded_probe_readyz(response: Response):
+    # Ordinary sync routes consume AnyIO request slots. Readiness must still
+    # answer when those slots are busy, without running a database call on the
+    # event loop. The shared gate keeps at most one underlying ping outstanding
+    # even after its HTTP deadline; a timeout never cancels or unlocks that ping.
+    try:
+        ok, reason = await asyncio.wait_for(
+            asyncio.to_thread(_probe_database), timeout=_PROBE_HTTP_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        ok, reason = False, 'db_check_timeout'
     if not ok:
         response.status_code = 503
     return {"ready": ok, "checks": {"db": "ok" if ok else reason}, "service": "acp"}

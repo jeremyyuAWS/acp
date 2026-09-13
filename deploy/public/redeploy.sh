@@ -553,6 +553,7 @@ if [ "$BG" = 1 ]; then
   done
 
   _verify_remediation_scaler
+  python3 "$SRC_ROOT/deploy/public/repair_queue_connection.py" "$RG" "$ASSESS_WORKER" "$REMEDIATE_WORKER"
 
   # Verified through the PUBLIC url, not green's. Green being healthy proves green is healthy;
   # only the public url proves traffic actually moved.
@@ -622,6 +623,7 @@ for a in "$APP" "${LANE_WORKERS[@]}"; do
 done
 
 _verify_remediation_scaler
+python3 "$SRC_ROOT/deploy/public/repair_queue_connection.py" "$RG" "$ASSESS_WORKER" "$REMEDIATE_WORKER"
 
 # ── 8b. single-revision mode, so the new revision actually holds traffic ──────────────────────
 # The whole normal path assumes Single mode — where the update above makes its new revision the
