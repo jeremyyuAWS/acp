@@ -60,6 +60,14 @@ it('refreshes outdated PDF reports without restarting document publication', asy
  expect(c.textContent).not.toContain('Generate PDF reports')
 })
 
+it('keeps old reports downloadable when newer saved bytes block regeneration', async () => {
+ const read=vi.fn().mockResolvedValue({status:'completed',can_regenerate:false,regeneration_blocked:'The saved copy changed after publication.',bundle_id:'old',reports:[{name:'old.html',content_type:'text/html',download_url:'/old'}]})
+ const c=await mount({read})
+ expect(c.textContent).toContain('saved copy changed')
+ expect([...c.querySelectorAll('button')].some(b=>b.textContent==='Generate PDF reports')).toBe(false)
+ expect([...c.querySelectorAll('button')].some(b=>b.textContent==='Download')).toBe(true)
+})
+
 it('keeps version-matched per-file actions beneath the published copy without duplicating the reports intro', async () => {
  const {default: Documents}=await import('./ReleaseCompletionDocuments.jsx')
  const files=[{file:'a.pdf',remediated_at:'now'},{file:'b.pdf',remediated_at:'now'}]

@@ -213,6 +213,29 @@ def test_completed_v5_pdf_refresh_preserves_old_assets_and_document_receipt(setu
     assert store.release_status(release['id'], OWNER)['documents'] == original_documents
 
 
+def test_report_refresh_cannot_attach_newer_repairs_to_old_published_bytes(setup, monkeypatch):
+    store, release = setup
+    current = delivery.REPORT_FORMAT
+    monkeypatch.setattr(delivery, 'REPORT_FORMAT', 'pdf-v5-word-native-revision-companion')
+    old = delivery.queue_release_reports(store, SID, OWNER, release['id'])
+    monkeypatch.setattr(delivery, '_upload', lambda *a: dict(id='old', url='https://example.com/old'))
+    delivery.process_release_reports(store, old['bundle_id'], OWNER)
+    old_asset = delivery.get_release_report_asset(store, SID, OWNER, old['bundle_id'], 0)['content']
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "INSERT INTO file_records(scan_id,file,engine,status,corrected_sha256) VALUES(%s,'doc.pdf','pdf','analysed',%s)", (SID, 'b' * 64))
+    store.record_remediation_diffs(SID, 'doc.pdf', [{'rule_id':'1.3.1','before':'OLD','after':'NEW COPY ONLY','note':'New saved copy'}])
+    monkeypatch.setattr(delivery, 'REPORT_FORMAT', current)
+    import release_reports
+    monkeypatch.setattr(release_reports, 'build_release_reports', lambda *a: pytest.fail('Mismatched repair records must never be rendered'))
+    status = delivery.get_latest_release_reports(store, SID, OWNER)
+    assert not status['can_regenerate'] and status['regeneration_blocked']
+    with pytest.raises(ValueError, match='saved copy changed'):
+        delivery.retry_release_reports(store, SID, OWNER)
+    with pytest.raises(ValueError, match='saved copy changed'):
+        delivery.queue_release_reports(store, SID, OWNER, release['id'])
+    assert delivery.get_release_report_asset(store, SID, OWNER, old['bundle_id'], 0)['content'] == old_asset
+
+
 def test_optional_render_precedes_local_release_transaction(setup, monkeypatch):
     import release_reports
     from contextlib import contextmanager
