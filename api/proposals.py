@@ -980,8 +980,25 @@ def propose_images_of_text(path, ext: str, *, ai_enabled: bool = True) -> list[d
     except Exception:
         return []
     out: list[dict] = []
+    document_bytes = None
+    if (ext or "").lower().lstrip(".") == "docx":
+        try:
+            from pathlib import Path
+            document_bytes = Path(path).read_bytes()
+        except OSError:
+            pass
     for i, img in enumerate(images):
         try:
+            visible_crop = None
+            if document_bytes is not None:
+                from office_visible_image import visible_word_image, has_word_crop
+                visible = visible_word_image(document_bytes, f"image {i + 1}")
+                if visible is not None:
+                    img = visible.pop("image_bytes")
+                    visible_crop = {**visible, "requires_visual_confirmation": True}
+                elif has_word_crop(document_bytes, f"image {i + 1}"):
+                    # Shared or unsupported crop cannot safely use the full raster OCR.
+                    continue
             # Band determination uses the scan's own functions at the scan's own floors, so
             # the card and the finding can never disagree about which tier an image is in.
             aa_band = (criteria_enabled("1.4.5")
@@ -1019,6 +1036,11 @@ def propose_images_of_text(path, ext: str, *, ai_enabled: bool = True) -> list[d
                 except Exception:
                     swallowed("proposals.propose_images_of_text: asking the vision model whether the image "
                               "is a logotype failed")
+            if visible_crop:
+                rationale += (" This draft transcribes only the visible Word crop. Confirm its "
+                              "accuracy and that replacing the picture would lose no useful "
+                              "diagram content; the full-image draft is not valid for this crop. "
+                              "Automatic picture replacement remains unavailable for this crop.")
             out.append({**proposal(
                 locator=f"image {i + 1}",
                 before="text baked into an image — assistive technology cannot read it",
@@ -1026,7 +1048,8 @@ def propose_images_of_text(path, ext: str, *, ai_enabled: bool = True) -> list[d
                 rationale=rationale,
                 source="OCR (tesseract) — human confirmation required",
                 thumb=thumb_b64(img),
-            ), "sc": "1.4.5" if aa_band else "1.4.9"})
+            ), "sc": "1.4.5" if aa_band else "1.4.9",
+                **({"visible_crop": visible_crop} if visible_crop else {})})
         except Exception:
             continue                           # one bad image never sinks the rest
     return out
