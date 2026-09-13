@@ -108,7 +108,7 @@ describe('Discover wires it', () => {
     expect(d).not.toContain('Start new SharePoint scan')
     expect(d).not.toContain('setShowSites(true)')
     expect(d).toContain("Discover's new-scan entry is retired")
-    expect(d).toContain('{showSites && (')
+    expect(d).toContain('{!resultsOnly && showSites && (')
   })
 
   it('is fed the token flag by App', () => {

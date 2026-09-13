@@ -91,7 +91,7 @@ describe('process-health chip', () => {
     const actionsStart = SRC.indexOf('<div className="header-actions">')
     expect(actionsStart).toBeGreaterThan(-1)
     const actionsEnd = SRC.indexOf('</div>', actionsStart)
-    const chipGate = SRC.indexOf('run?.completed_at')
+    const chipGate = SRC.indexOf('run?.completed_at', actionsStart)
     expect(chipGate).toBeGreaterThan(actionsStart)
     expect(chipGate).toBeLessThan(actionsEnd + 2000) // allow for deeply nested markup
   })

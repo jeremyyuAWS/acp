@@ -76,14 +76,16 @@ def schedule(store, context, job, misses):
            for item in context.deferred):
         _decision(store, sid, file, 'blocked', run_id=context.run_id, reason='AI spending or permission is unresolved; automatic vision retry is paused.')
         return
-    if file.lower().endswith('.pdf'):
-        _decision(store, sid, file, 'blocked', run_id=context.run_id, reason='PDF figure recovery needs an exact figure image association; review the figure individually. Whole-page text is not safe figure alt text.')
-        return
-    if not file.lower().endswith(('.docx', '.pptx', '.xlsx')):
+    if not file.lower().endswith(('.docx', '.pptx', '.xlsx', '.pdf')):
         _decision(store, sid, file, 'blocked', run_id=context.run_id, reason='Proposal-only vision recovery is not available for this format.')
         return
     record_ = store.get_file_record(sid, file) or {}
     row = _pending(store, sid, file)
+    if file.lower().endswith('.pdf') and row:
+        proposals = json.loads(row.get('proposals') or '[]')
+        if not any(p.get('figure_image_sha256') and p.get('figure_association_method') == 'unique-mcid-parenttree-sole-opaque-raster-v1' for p in proposals):
+            _decision(store, sid, file, 'blocked', run_id=context.run_id, reason='PDF figure recovery needs an exact figure image association; review the figure individually.')
+            return
     digest = record_.get('corrected_sha256')
     if not digest or not row:
         _decision(store, sid, file, 'blocked', run_id=context.run_id, reason='A stored corrected copy and pending review are required.')
@@ -179,6 +181,10 @@ def process(store, payload):
                 raise ValueError('Vision is still unavailable after two automatic retries; remaining work stays in review.')
             if not proposals:
                 raise ValueError('No usable vision draft was recovered; remaining work stays in review.')
+            if file.lower().endswith('.pdf'):
+                current_data = blob.download_remediated(payload['owner'], sid, file)
+                if not current_data or hashlib.sha256(current_data).hexdigest() != payload['corrected_sha256']:
+                    raise ValueError('The exact saved PDF changed while vision was recovering; drafts remain unresolved.')
             # Preserve non-image proposals and unresolved instances. Never silently
             # shrink the criterion's finding population to the recovered subset.
             prior = json.loads(payload['proposals_before'] or '[]')

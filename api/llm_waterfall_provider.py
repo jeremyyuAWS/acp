@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_CEILING
 import hashlib
 import json
+import logging
 import os
 import time
 from uuid import uuid4
@@ -303,7 +304,7 @@ def managed_text_generate(prompt: str) -> dict:
 
 
 def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
-                              tier_indices=None, operation_id=None, image_prefix=False):
+                              tier_indices=None, operation_id=None, image_prefix=False, verified_retry=None):
     """One bounded generation operation, also usable for explicit review stages.
 
     The caller supplies a trusted configured generator and immutable run context.
@@ -351,6 +352,14 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
         adapter = current_generation_adapter()
         if (adapter is None and not image_prefix) or not getattr(ctx, 'scan_id', None) or not getattr(ctx, 'file', None):
             return defer_managed('supported_generation_adapter_required')
+    if verified_retry is not None:
+        from office_verified_retry import RetryAuthority
+        if (type(verified_retry) is not RetryAuthority or purpose != 'review'
+                or tuple(tier_indices) != (2,) or not chain
+                or (verified_retry.owner_id, verified_retry.run_id, verified_retry.scan_id, verified_retry.file)
+                != (ctx.owner_id, ctx.run_id, ctx.scan_id, ctx.file)
+                or verified_retry.check() is not True):
+            return defer_managed('verified_retry_authority_unavailable')
     budget = BudgetAdapter(ctx.ledger, ctx.owner_id, ctx.run_id, generator.pricing_refs)
     input_hash = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
     operation = operation_id or (input_hash if purpose == 'draft' else
@@ -444,7 +453,10 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
                         WHERE execution_id=%s AND scan_id=%s AND owner_email=%s''',
                         (ctx.run_id, ctx.scan_id, ctx.owner_id))
                     execution = ctx.ledger.db.fetchone(cur)
-                if execution is None or execution['cancel_requested_at'] or execution['state'] not in ('accepted', 'queued', 'processing'):
+                allowed_states = ('accepted', 'queued', 'processing')
+                if verified_retry is not None and verified_retry.check() is True:
+                    allowed_states += ('processing_complete', 'succeeded')
+                if execution is None or execution['cancel_requested_at'] or execution['state'] not in allowed_states:
                     return defer_managed('run_stopped_or_unavailable', attempts=attempts)
             except Exception:
                 return defer_managed('run_dispatch_permission_unavailable', attempts=attempts)
@@ -486,9 +498,25 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
         except Exception:
             attempt['status'] = 'reservation_or_dispatch_denied'
             return defer_managed('budget_admission_denied', attempts=attempts)
+        def narrate(status):
+            if chain and index > 1 and getattr(ctx, 'scan_id', None) and getattr(ctx, 'file', None):
+                try:
+                    import core
+                    from ai_escalation_activity import emit
+                    emit(core.store, scan_id=ctx.scan_id, owner_id=ctx.owner_id,
+                         run_id=ctx.run_id, file=ctx.file, operation_id=operation,
+                         position=index-1, model=model.name, status=status,
+                         reason_code=('independent_caption_verification_failed' if verified_retry is not None
+                                      else 'approved_model_fallback'))
+                except Exception as error:
+                    # Narration cannot change admitted work or spending reconciliation.
+                    logging.getLogger(__name__).warning('ai_escalation_narration_unavailable error_type=%s',
+                                                       type(error).__name__)
+        narrate('dispatched')
         try:
             result = generator.generate_text(model.name, prompt)
         except PreDispatchRejected:
+            narrate('not_dispatched')
             attempt['status'] = 'rejected_before_dispatch'
             try:
                 ctx.ledger.release(ctx.owner_id, ctx.run_id, token, confirmed_not_charged=True)
@@ -498,6 +526,7 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
             retain(attempt, 'rejected_before_dispatch')
             return defer_managed('request_rejected_before_dispatch', attempts=attempts)
         except Exception as exc:
+            narrate('usage_unconfirmed')
             failure = 'provider_access_denied' if isinstance(exc, ProviderAccessDenied) else 'provider_usage_unknown'
             attempt['status'] = 'usage_unknown'
             try:
@@ -510,6 +539,7 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
         try:
             budget.settle(token, result['cost_usd'])
         except Exception:
+            narrate('usage_unconfirmed')
             attempt['status'] = 'settlement_failed_or_breached'
             retain(attempt, attempt['status'], result)
             return defer_managed('budget_settlement_failed_or_breached', attempts=attempts)
@@ -534,7 +564,10 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
         if issue:
             attempt['reason'] = issue
         if not retain(attempt, status, result, issue):
+            narrate('needs_manual')
             return defer_managed('attempt_output_retention_failed', attempts=attempts)
+        if verified_retry is None:
+            narrate('response_ready' if status == 'drafted' else 'needs_manual')
         if status == 'provider_limit_exceeded':
             return defer_managed('provider_limit_exceeded', attempts=attempts)
         if status == 'refused':

@@ -23,7 +23,16 @@ def prepare(store, monkeypatch):
     original = make_docx(image_count=1)
     doc=Document(io.BytesIO(original)); doc.core_properties.title='Deterministic title'
     out=io.BytesIO(); doc.save(out); candidate=out.getvalue()
-    job=base.seed(store,monkeypatch)
+    # Consent must be frozen in the accepted job, not changed after acceptance.
+    enqueue = store.enqueue_stage_batch
+    def accept_document_policy(scan_id, stage, job_type, payloads, **kwargs):
+        payloads = [{**payload, 'remediation_impact_policy': {
+            **payload['remediation_impact_policy'], 'document_wide_ai': True}}
+            for payload in payloads]
+        return enqueue(scan_id, stage, job_type, payloads, **kwargs)
+    with monkeypatch.context() as acceptance:
+        acceptance.setattr(store, 'enqueue_stage_batch', accept_document_policy)
+        job=base.seed(store,monkeypatch)
     sid,file=base.SID,base.FILE
     with store._db.cursor() as cur:
         store._db.execute(cur,'UPDATE file_records SET corrected_sha256=%s WHERE scan_id=%s', (sha256(candidate).hexdigest(),sid))
@@ -53,9 +62,7 @@ def test_document_proposals_apply_to_current_candidate_and_release_exact_bytes(i
     token=SOURCE.set(None)
     try:
         with run_context(store,job['payload'],job) as ctx:
-            object.__setattr__(ctx,'policy',{**ctx.policy,'document_wide_ai':True})
-            with store._db.cursor() as cur:
-                store._db.execute(cur,'UPDATE ai_spending_run_policies SET policy_json=%s WHERE run_id=%s',(json.dumps(dict(ctx.policy)),ctx.run_id))
+            assert ctx.policy['document_wide_ai'] is True
             assert bind_assessed_input(base.SID,base.FILE,original,original)
             def generate(request,**kwargs):
                 f=request.manifest.findings[0]

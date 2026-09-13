@@ -111,6 +111,26 @@ def process_file(store, context, *, _artifact=None):
             raise
         _record(store, context, 'deferred', {'reason': reasons.get(str(exc), _reason(str(exc), automatic=context.policy.get('cloud_input_strategy') == 'automatic'))})
         return
+    # Exact raster captions already have independent semantic evidence and real
+    # frozen finding IDs. Do not send those same targets to another model.
+    exact_ids = set()
+    if filename.lower().endswith('.pdf'):
+        from remediate_pdf import validate_exact_pdf_finding_bindings
+        for row in store.list_hitl_queue(scan_id=sid, owner=context.owner_id):
+            ps = row.get('proposals') or []
+            if row.get('file') == filename and row.get('rule_id') == '1.1.1' and row.get('status') == 'pending' and validate_exact_pdf_finding_bindings(store, context.owner_id, sid, context.run_id, filename, data, ps):
+                exact_ids.update(fid for p in ps for fid in p['finding_ids'])
+        if exact_ids:
+            from dataclasses import replace
+            # One review row per file/criterion cannot retain both this exact
+            # canonical write and unvalidated generic drafts. Preserve its pending
+            # decision; other 1.1.1 targets stay unresolved for the next pass.
+            # Never charge a model for replies this row cannot durably retain.
+            remaining_ids = [f.finding_id for f in manifest.findings if f.success_criterion == '1.1.1' and f.finding_id not in exact_ids]
+            if remaining_ids:
+                _record(store, context, 'deferred', {'reason': 'Remaining figure captions need review after the pending exact caption is applied.',
+                        'unresolved_finding_ids': remaining_ids})
+            manifest = replace(manifest, findings=tuple(f for f in manifest.findings if f.success_criterion != '1.1.1'))
     input_mode = ('native_pdf' if filename.lower().endswith('.pdf')
                   and context.policy.get('document_wide_input_mode') == 'native_pdf'
                   else 'extracted')
@@ -187,7 +207,8 @@ def process_file(store, context, *, _artifact=None):
         rows = store.list_hitl_queue(scan_id=sid, owner=context.owner_id)
         for sc, proposals in result['proposals'].items():
             existing = next((r for r in rows if r.get('file') == filename and r.get('rule_id') == sc), None)
-            if existing and (existing.get('status') != 'pending' or existing.get('applied')):
+            if existing and (existing.get('status') != 'pending' or existing.get('applied') or
+                             (sc == '1.1.1' and exact_ids)):
                 _record(store, context, 'deferred', {'request_id': request_id, 'reason': 'An existing review decision was preserved.', 'sc': sc})
                 continue
             count = len({r['finding_id'] for r in canonical_rows if r.get('file') == filename and r.get('rule_id') == sc})

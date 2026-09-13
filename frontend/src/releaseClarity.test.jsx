@@ -3,6 +3,7 @@ import { createElement } from 'react'
 import { getAutomaticRelease, resumeAutomaticRelease, getReleaseReports, downloadReleaseReport } from './api.js'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
+import { noteAuthChange, _resetAuthEpoch } from './apiIdentity.js'
 
 // W5 — Publish surfaces the set-level certification status and offers a one-action graduation
 // from conditional → full without a re-scan. Verified at the DOM level (per the repo's rule that
@@ -51,7 +52,7 @@ vi.mock('./driveAuth.js', () => ({reconnectDriveForRelease: vi.fn().mockResolved
 
 const { default: Publish } = await import('./Publish.jsx')
 
-afterEach(async () => { await unmountAll(); vi.clearAllMocks(); getAutomaticRelease.mockResolvedValue({authorization:null}); getReleaseReports.mockResolvedValue({status:'not_started',reports:[]}); getReleaseStatus.mockResolvedValue({ release_id: null }); getSourceStatus.mockResolvedValue({ files: [], stale_count: 0 }); publishAllFiles.mockResolvedValue({ published: [] }); listHitlQueue.mockResolvedValue([]) })
+afterEach(async () => { await unmountAll(); vi.useRealTimers(); _resetAuthEpoch(); vi.clearAllMocks(); getAutomaticRelease.mockResolvedValue({authorization:null}); getReleaseReports.mockResolvedValue({status:'not_started',reports:[]}); getReleaseStatus.mockResolvedValue({ release_id: null }); getSourceStatus.mockResolvedValue({ files: [], stale_count: 0 }); publishAllFiles.mockResolvedValue({ published: [] }); listHitlQueue.mockResolvedValue([]) })
 const flush = async () => { for (let k = 0; k < 5; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
 const mount = async (props) => {
   const { container, root } = createTestRoot()
@@ -501,13 +502,17 @@ it('does not apply an old publish response after changing scans', async () => {
   expect(props.onPublish).not.toHaveBeenCalled()
 })
 
-it('Release reconnect resumes the exact saved authorization without publishing or approving again', async () => {
- getAutomaticRelease.mockResolvedValue({authorization:{id:'saved-auth',status:'blocked',requires_reconnect:true,files:['one.pdf'],allow_remaining_issues:true}})
- const c=await mount({run,files:[held('one.pdf')]})
- await click(button(c,'Reconnect Google Drive and resume'))
+it('automatically recovers the durable exact saved Release without publishing or approving again', async () => {
+ const saved={id:'saved-auth',run_id:'accepted-run',revision:1,status:'blocked',can_resume:true,
+   requires_reconnect:false,files:['one.pdf'],allow_remaining_issues:true,
+   destination:{provider:'drive',folder_id:'folder'}}
+ getAutomaticRelease.mockResolvedValue({run_id:'accepted-run',authorization:saved})
+ const c=await mount({run:{...run,source:'drive',owner_email:'owner'},files:[held('one.pdf')]})
  expect(resumeAutomaticRelease).toHaveBeenCalledWith('scan1','saved-auth')
  expect(publishAllFiles).not.toHaveBeenCalled()
- expect(button(c,'Reconnect Google Drive and resume')).toBeUndefined()
+ expect(button(c,'Resume delivery')).toBeUndefined()
+ expect(document.querySelector('.release-recovery-banner').textContent).toContain('Checking saved delivery status')
+ expect(document.querySelector('.release-recovery-banner button')).toBeNull()
 })
 
  it('retires redundant assessment details from the publishing path', async () => {
@@ -616,4 +621,98 @@ it('bounds an unresponsive initial automatic publication check and offers an exp
  await act(async()=>button(container,'Refresh automatic publication status').click())
  expect(button(container,'Publish batch (1)').disabled).toBe(false)
  vi.useRealTimers()
+})
+
+it('keeps uncertainty honest after fresh same-revision status and reload without another delivery request',async()=>{
+ const saved={id:'unconfirmed-auth',run_id:'accepted-run',revision:7,status:'blocked',can_resume:true,
+   requires_reconnect:false,files:['one.pdf'],allow_remaining_issues:true,
+   destination:{provider:'drive',folder_id:'folder'}}
+ // The resume request failed before any accepted job was observed; subsequent durable
+ // GETs still report the identical blocked revision. That cannot establish delivery.
+ getAutomaticRelease.mockResolvedValue({run_id:'accepted-run',authorization:saved})
+ resumeAutomaticRelease.mockRejectedValueOnce(new Error('Connection lost before confirmation'))
+ const props={run:{...run,source:'drive',owner_email:'owner'},files:[held('one.pdf')]}
+ await mount(props)
+ expect(resumeAutomaticRelease).toHaveBeenCalledOnce()
+ const firstGets=getAutomaticRelease.mock.calls.length
+ expect(document.querySelector('.release-recovery-banner').textContent).toContain('Delivery recovery is unconfirmed')
+ await click(document.querySelector('.release-recovery-banner button'))
+ await flush()
+ expect(getAutomaticRelease.mock.calls.length).toBeGreaterThan(firstGets)
+ expect(resumeAutomaticRelease).toHaveBeenCalledOnce()
+ expect(document.querySelector('.release-recovery-banner').textContent).not.toContain('sign-in is required')
+ await unmountAll()
+ const { _resetRecoveryAttempts }=await import('./useAutomaticDeliveryRecovery.js')
+ _resetRecoveryAttempts() // Simulate a freshly loaded page retaining session storage.
+ await mount(props)
+ expect(resumeAutomaticRelease).toHaveBeenCalledOnce()
+ expect(document.querySelector('.release-recovery-banner button').textContent).toBe('Check delivery status')
+ expect(publishAllFiles).not.toHaveBeenCalled()
+})
+
+it('retries a transient automatic-status GET without a click and keeps the confirmed authorization',async()=>{
+ vi.useFakeTimers()
+ const saved={id:'get-recovery',run_id:'accepted-run',revision:4,status:'blocked',can_resume:false,
+   requires_reconnect:false,files:['one.pdf'],allow_remaining_issues:true,destination:{provider:'drive',folder_id:'folder'}}
+ getAutomaticRelease.mockRejectedValueOnce(new Error('Temporary network failure')).mockResolvedValue({run_id:'accepted-run',authorization:saved})
+ const {container,root}=createTestRoot()
+ const props={run:{...run,source:'drive',owner_email:'owner'},files:[held('one.pdf')]}
+ await act(async()=>root.render(createElement(Publish,props)))
+ expect(getAutomaticRelease).toHaveBeenCalledOnce()
+ await act(async()=>vi.advanceTimersByTimeAsync(5000))
+ expect(getAutomaticRelease).toHaveBeenCalledTimes(2)
+ expect(container.textContent).toContain('Automatic publishing is on')
+ getAutomaticRelease.mockRejectedValueOnce(new Error('Another transient failure'))
+ await act(async()=>vi.advanceTimersByTimeAsync(5000))
+ expect(container.textContent).toContain('Automatic publishing is on')
+ const failedSignal=getAutomaticRelease.mock.calls.at(-1)[2].signal
+ await act(async()=>vi.advanceTimersByTimeAsync(5000))
+ expect(getAutomaticRelease.mock.calls.at(-1)[2].signal).not.toBe(failedSignal)
+ expect(resumeAutomaticRelease).not.toHaveBeenCalled()
+ expect(publishAllFiles).not.toHaveBeenCalled()
+ await act(async()=>root.unmount());vi.useRealTimers()
+})
+it('replaces a timed-out GET controller with a fresh controller without a click',async()=>{
+ vi.useFakeTimers()
+ const signals=[]
+ getAutomaticRelease.mockImplementationOnce((sid,files,options)=>{signals.push(options.signal);return new Promise(()=>{})})
+ getAutomaticRelease.mockResolvedValue({authorization:null})
+ const {root}=createTestRoot()
+ await act(async()=>root.render(createElement(Publish,{run:{...run,owner_email:'owner'},files:[held('one.pdf')]})))
+ await act(async()=>vi.advanceTimersByTimeAsync(25000))
+ expect(signals[0].aborted).toBe(true)
+ expect(getAutomaticRelease).toHaveBeenCalledTimes(2)
+ expect(getAutomaticRelease.mock.calls[1][2].signal.aborted).toBe(false)
+ await act(async()=>root.unmount());vi.useRealTimers()
+})
+it('bounds consecutive GET retries and stops immediately on terminal authorization failure',async()=>{
+ vi.useFakeTimers()
+ getAutomaticRelease.mockRejectedValue(new Error('Network unavailable'))
+ const {root}=createTestRoot()
+ await act(async()=>root.render(createElement(Publish,{run:{...run,owner_email:'owner'},files:[held('one.pdf')]})))
+ await act(async()=>vi.advanceTimersByTimeAsync(120000))
+ expect(getAutomaticRelease).toHaveBeenCalledTimes(5)
+ await act(async()=>root.unmount());getAutomaticRelease.mockClear()
+ getAutomaticRelease.mockRejectedValue(Object.assign(new Error('Sign-in required'),{status:401}))
+ const second=createTestRoot()
+ await act(async()=>second.root.render(createElement(Publish,{run:{...run,id:'another',owner_email:'owner'},files:[held('one.pdf')]})))
+ await act(async()=>vi.advanceTimersByTimeAsync(120000))
+ expect(getAutomaticRelease).toHaveBeenCalledOnce()
+ await act(async()=>second.root.unmount());getAutomaticRelease.mockResolvedValue({authorization:null});vi.useRealTimers()
+})
+
+it('does not dispatch a delayed GET after account change or unmount',async()=>{
+ vi.useFakeTimers();getAutomaticRelease.mockRejectedValue(new Error('Temporary error'))
+ const first=createTestRoot()
+ await act(async()=>first.root.render(createElement(Publish,{run:{...run,owner_email:'owner'},files:[held('one.pdf')]})))
+ noteAuthChange('owner','other')
+ await act(async()=>vi.advanceTimersByTimeAsync(5000))
+ expect(getAutomaticRelease).toHaveBeenCalledOnce()
+ await act(async()=>first.root.unmount());_resetAuthEpoch();getAutomaticRelease.mockClear()
+ const second=createTestRoot()
+ await act(async()=>second.root.render(createElement(Publish,{run:{...run,id:'new',owner_email:'owner'},files:[held('one.pdf')]})))
+ await act(async()=>second.root.unmount())
+ await act(async()=>vi.advanceTimersByTimeAsync(120000))
+ expect(getAutomaticRelease).toHaveBeenCalledOnce()
+ getAutomaticRelease.mockResolvedValue({authorization:null})
 })

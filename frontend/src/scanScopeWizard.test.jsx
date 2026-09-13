@@ -238,10 +238,13 @@ describe('App renders the gate once and routes every entry point through it', ()
     //
     // So assert the thing itself — each component that STILL launches a scan carries
     // onScan={requestScan} — and that EmptyState no longer does.
-    for (const entry of ['Overview', 'Integrations', 'Discover']) {
+    for (const entry of ['Overview', 'Integrations']) {
       const tag = new RegExp(`<${entry}\\b[^>]*onScan=\\{requestScan\\}`, 's')
       expect(code, `${entry} does not route its scan through the gate`).toMatch(tag)
     }
+    // Discover keeps the same universal gate with an additional call-time
+    // durable-stage guard; results-only history cannot start another scan.
+    expect(code).toMatch(/<Discover\b[\s\S]{0,400}?onScan=\{guardStageAction\(priorResultsRef, 'discover', requestScan\)\}/)
     expect(code, 'EmptyState is a scan entry point again').not.toMatch(/<EmptyState[^>]*onScan=/s)
     expect(code).not.toMatch(/onScan=\{doScan\}/)
   })

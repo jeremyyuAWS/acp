@@ -107,15 +107,68 @@ def upload_remediated(owner: str | None, scan_id: str, filename: str, data: byte
     return blob.url
 
 
+def upload_immutable_retry(owner, scan_id, filename, data, content_type):
+    """Digest-scoped retry evidence; an existing object is never overwritten."""
+    import hashlib
+    digest = hashlib.sha256(data).hexdigest()
+    svc = _service_client()
+    if svc is None:
+        return None
+    from azure.storage.blob import ContentSettings
+    client = svc.get_blob_client(container=_CONTAINER,
+                                 blob=_blob_path(owner, scan_id, filename) + '.retry/' + digest)
+    try:
+        client.upload_blob(data, overwrite=False, content_settings=ContentSettings(content_type=content_type))
+    except Exception as exc:
+        if getattr(exc, 'status_code', None) != 409 and getattr(exc, 'error_code', '') != 'BlobAlreadyExists':
+            raise
+    # An SDK acknowledgement is not proof of the persisted candidate. Verify the
+    # exact configured object on new uploads and immutable AlreadyExists replays.
+    persisted = client.download_blob(offset=0, length=len(data) + 1, **_timeouts()).readall()
+    if len(persisted) != len(data) or hashlib.sha256(persisted).hexdigest() != digest:
+        raise ValueError('retry_artifact_readback_mismatch') from None
+    return client.url
+
+
+def _remediated_client(svc, owner, scan_id, filename):
+    """Follow only a digest-scoped pointer within the configured account/container."""
+    canonical = svc.get_blob_client(container=_CONTAINER, blob=_blob_path(owner, scan_id, filename))
+    import core
+    lookup = getattr(core.store, 'get_file_record', None)
+    record = lookup(scan_id, filename) if callable(lookup) else None
+    record = record or {}
+    if record.get('blob_url') == canonical.url or '.retry/' not in str(record.get('blob_url') or ''):
+        return canonical, None
+    if (not owner or any(part in {'.', '..'} for part in filename.split('/'))
+            or '%' in filename or '\\' in filename):
+        raise ValueError('retry_artifact_identity_invalid')
+    scan = core.store.get_scan(scan_id) or {}
+    if scan.get('run', {}).get('owner_email') != owner:
+        raise ValueError('retry_artifact_owner_mismatch')
+    digest = record.get('corrected_sha256') or ''
+    if len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
+        raise ValueError('retry_artifact_digest_invalid')
+    client = svc.get_blob_client(container=_CONTAINER,
+                                blob=_blob_path(owner, scan_id, filename) + '.retry/' + digest)
+    if client.url != record['blob_url']:
+        raise ValueError('retry_artifact_pointer_invalid')
+    return client, digest
+
+
 def download_remediated(owner: str | None, scan_id: str, filename: str) -> bytes | None:
     """Stream a remediated file's bytes back out. None if not configured, or not found
     (e.g. a pre-ADR-0010 remediation that only ever wrote to Drive)."""
     svc = _service_client()
     if svc is None:
         return None
-    blob = svc.get_blob_client(container=_CONTAINER, blob=_blob_path(owner, scan_id, filename))
     try:
-        return blob.download_blob(**_timeouts()).readall()
+        blob, digest = _remediated_client(svc, owner, scan_id, filename)
+        data = blob.download_blob(**_timeouts()).readall()
+        if digest:
+            import hashlib
+            if hashlib.sha256(data).hexdigest() != digest:
+                return None
+        return data
     except Exception:
         return None
 
@@ -134,8 +187,14 @@ def download_report_evidence(owner, scan_id, filename, *, original=False, checks
     container = _SOURCES_CONTAINER if original else _CONTAINER
     key = _source_key(owner, scan_id, filename, checksum) if original else _blob_path(owner, scan_id, filename)
     try:
-        client = svc.get_blob_client(container=container, blob=key)
-        return client.download_blob(offset=0, length=max_bytes + 1, **_timeouts()).readall()
+        client, digest = ((svc.get_blob_client(container=container, blob=key), None) if original
+                          else _remediated_client(svc, owner, scan_id, filename))
+        data = client.download_blob(offset=0, length=max_bytes + 1, **_timeouts()).readall()
+        if digest and len(data) <= max_bytes:
+            import hashlib
+            if hashlib.sha256(data).hexdigest() != digest:
+                return None
+        return data
     except Exception:
         return None
 

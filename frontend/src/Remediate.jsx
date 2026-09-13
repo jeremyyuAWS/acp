@@ -420,7 +420,7 @@ function VerifyState({ state, pct, remaining, ready, latest }) {
 // are the time-travel feature itself).
 const reviewEvidence = createReviewEvidenceCache(getHitlAnalytics)
 
-export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, assignees = {}, setAssignees, myEmail = null, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate, cap = null, assessment = null, assessedAt = null,
+export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, assignees = {}, setAssignees, myEmail = null, aiEnabled = true, readOnly = false, resultsOnly = false, onRefresh, onHitlCount, onNavigate, cap = null, assessment = null, assessedAt = null,
                                    // The run's live state and its ONE stream, owned by
                                    // useRemediationRun at App level so both survive this
                                    // component being unmounted on every tab change.
@@ -459,6 +459,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // instead of the config's intent. Any cloud call for a file wins (privacy-conservative); a file
   // with no AI call at all stays absent (deterministic fix — no badge, nothing to claim).
   const [aiZoneByFile, setAiZoneByFile] = useState({})
+  readOnly = readOnly || resultsOnly
+  const resultsOnlyRef = useRef(resultsOnly)
+  resultsOnlyRef.current = resultsOnly
   const runId = run?.id
   const [releasePlanIntent, setReleasePlanIntent] = useState(null)
   const [releasePlanNotice, setReleasePlanNotice] = useState('')
@@ -768,7 +771,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   }, [triage]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const runServerRemediation = async (scopeFiles, remediationPolicy, releaseIntent = null) => {
-    if (!runId || readOnly || remBusy || remStartRef.current) return
+    if (!runId || readOnly || resultsOnlyRef.current || remBusy || remStartRef.current) return
     // The page-level controls pass file records; RemediationWork's deterministic batch passes
     // filenames because it partitions findings rather than owning the scan records. Normalize
     // both entry points here so they reach the same durable Remediate queue and progress watcher.
@@ -815,7 +818,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       remStartRef.current = false
     }
   }
-  const triageFile = (file, st) => setTriage((t) => { const n = { ...t }; if (st == null) delete n[file]; else n[file] = st; return n })
+  const triageFile = (file, st) => { if (resultsOnlyRef.current || readOnly) return; setTriage((t) => { const n = { ...t }; if (st == null) delete n[file]; else n[file] = st; return n }) }
   const revalidated = files.filter((f) => f.compliant)
 
   // A review decision that fails to reach the server must NOT look like one that succeeded.
@@ -859,6 +862,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // instead of advancing them past it behind a banner they have already scrolled away from.
   // `undoAct` still performs the local rollback; the re-throw is what makes the failure visible.
   const act = (id, kind, editedValue, approvedValues, resolution = null, frozen = null) => {
+    if (readOnly || resultsOnlyRef.current) return Promise.reject(new Error('This earlier stage is available for results browsing only.'))
     const current = queue.find((x) => x.id === id)
     if (frozen && (!current || selectionFingerprint(current) !== frozen.decision.selectionFingerprint)) {
       return Promise.reject(Object.assign(new Error('Proposal or source changed — review and select again.'), { status: 409 }))
@@ -935,8 +939,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     }
     return Promise.resolve()
   }
-  const draftAi = (item) => suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion)
+  const draftAi = (item) => { if (readOnly || resultsOnlyRef.current) return Promise.resolve(); return suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion) }
   const rescan = (id) => {
+    if (readOnly || resultsOnlyRef.current) return
     const item = self.find((x) => x.id === id)
     setSelf((s) => s.map((x) => x.id === id ? { ...x, status: 'scanning' } : x))
     if (SIM || !runId || !item?.file) {
@@ -1223,7 +1228,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // awaiting-revalidation count is reported as state in the summary line instead.
   const planAccepted = !!acceptedBatchId || !!(acceptedLaunch && acceptedLaunch.scanId === runId)
   const remediationHasStarted = planAccepted || remStarted || hasRemediationResults || !!scopedSnapshot?.batch_id
-  const openRemediationPlan = () => setWorkspaceRequest({ mode: planAccepted ? 'live' : 'plan' })
+  const openRemediationPlan = () => { if (!readOnly && !resultsOnlyRef.current) setWorkspaceRequest({ mode: planAccepted ? 'live' : 'plan' }) }
   const primary = readOnly ? null
     : remRunning ? { label: 'Applying fixes…', disabled: true }
     : !planAccepted && autoBatch && autoBatch.count > 0
@@ -1290,7 +1295,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         run={run}
         fileCount={files.length}
         state="done"
-        onReassess={() => onNavigate?.('assess')}
+        onReassess={readOnly ? undefined : () => onNavigate?.('assess')}
         docScope={documentScopeSentence(documentSelection(files, triage))}
       />
     </>
@@ -1611,11 +1616,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 </span>
               )}
             </div>
-            <button disabled={remBusy || !runId || readOnly} onClick={openRemediationPlan}
+            {!resultsOnly && <button disabled={remBusy || !runId || readOnly} onClick={openRemediationPlan}
                     title="Review permissions and impact before starting remediation."
                     style={{ flexShrink: 0 }}>
               {remBusy ? '⏳ Enqueueing…' : planAccepted ? 'Show progress' : 'Start remediation'}
-            </button>
+            </button>}
             {(serverFixed > 0 || remProg) && <TraceChip scanId={runId} kind="session" label="View scan traces" />}
           </div>
 
@@ -1796,7 +1801,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             readOnly={readOnly}
             autoApprove={runAiApproval.enabled}
             automaticApprovalPolicy={runAiApproval.policy}
-            onAutoApproveChange={readOnly ? undefined : runAiApproval.change}
+            onAutoApproveChange={readOnly ? undefined : (...args) => { if (!resultsOnlyRef.current) return runAiApproval.change(...args) }}
             autoApproveSaving={runAiApproval.saving}
             autoApproveError={runAiApproval.error}
             onAutoApproveRetry={runAiApproval.retry}
@@ -1849,6 +1854,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             assignees={assignees}
             myEmail={myEmail}
             onAssign={(file, email) => {
+              if (readOnly || resultsOnlyRef.current) return
               setAssignees?.((a) => {
                 const next = { ...a }
                 if (email) next[file] = email; else delete next[file]

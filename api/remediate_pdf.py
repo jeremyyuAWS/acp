@@ -845,37 +845,212 @@ def apply_pdf_figure_alt(data: bytes, values: dict) -> tuple[bytes, list[dict], 
     return out.getvalue(), applied, unresolved
 
 
-def alt_proposals_for_pdf(data: bytes, *, scan_id=None, context_file="") -> list[dict]:
-    """Fail closed until the tagged figure maps to its own image evidence.
+def _pdf_figure_drafts(pdf, *, ai_enabled, scan_id, file):
+    """Pure proposals from exact pixels, with independent semantic approval attached."""
+    import ai
+    import proposals as proposal_api
+    from pdf_figure_evidence import exact_figure_image, FigureEvidenceError, bounded_figures
+    from caption_validation import validate_caption
+    if "/StructTreeRoot" not in pdf.Root:
+        return []
+    try:
+        figures = bounded_figures(pdf)
+    except FigureEvidenceError:
+        return []
+    locators = _figure_locators(figures, pdf)
+    drafts, budget = [], _VISION_MAX_FIGURES
+    for figure in figures:
+        if _fig_alt(figure) is not None:
+            continue
+        image, association, response = None, None, None
+        validation = {"approved": False, "status": "needs_manual", "reason_codes": ["figure_image_association_unavailable"]}
+        try:
+            association = exact_figure_image(pdf, figure)
+            image = association["image_bytes"]
+            if ai_enabled and budget > 0:
+                budget -= 1  # attempts, including provider misses, consume capacity
+                response = ai.describe_image_structured(image, filename=file, scan_id=scan_id,
+                    file=file, allow_transcription=True)
+                if response:
+                    validation = validate_caption(response["alt"], image)
+                    current = exact_figure_image(pdf, figure)
+                    if current["image_sha256"] != association["image_sha256"]:
+                        validation = {"approved": False, "status": "needs_manual", "reason_codes": ["figure_image_changed"]}
+            elif ai_enabled:
+                validation["reason_codes"] = ["figure_vision_attempt_limit"]
+        except FigureEvidenceError as error:
+            validation["reason_codes"] = [str(error)]
+        except Exception:
+            validation = {"approved": False, "status": "needs_manual", "reason_codes": ["figure_caption_unavailable"]}
+        approved = (validation.get("approved") is True and validation.get("status") == "validated"
+                    and response is not None and not response.get("automatic_write_blocked"))
+        value = ((validation.get("canonical_caption") or response["alt"]) if approved
+                 else response.get("alt", "") if response else "")
+        proposal = proposal_api.proposal(locator=locators[id(figure)],
+            before="(figure has no alt text — invisible to screen readers · 1.1.1)",
+            proposed_value=value,
+            rationale=("Exact figure pixels independently match this caption." if approved
+                       else "A reliable automatic caption is unavailable. Review the exact image if shown and write the description individually."),
+            source=("Verified against the figure image" if approved
+                    else "Exact figure image or caption semantics unavailable — manual description required"),
+            kind="pdf-figure-alt", thumb=proposal_api.thumb_b64(image, max_edge=_PAGE_THUMB_EDGE) if image else None,
+            model=response.get("model") if response else None,
+            model_call_id=response.get("ai_call_id") if response else None)
+        if response and response.get("model"):
+            proposal["model"] = response["model"]
+        proposal["caption_validation"] = validation
+        proposal["automatic_write_blocked"] = not approved
+        proposal["requires_semantic_review"] = not approved
+        if association:
+            proposal["figure_image_sha256"] = association["image_sha256"]
+            proposal["figure_association_method"] = association["method"]
+        drafts.append((figure, proposal))
+    return drafts
 
-    Whole-page OCR can transcribe body text even with only one tagged figure.
-    Existing remediation stays unchanged; automatic recovery may never treat a
-    page description as proof of the individual figure's meaning.
+
+def alt_proposals_for_pdf(data: bytes, *, scan_id=None, context_file="") -> list[dict]:
+    """Proposal-only exact-image recovery; never modifies tags or page/source bytes."""
+    import io
+    import pikepdf
+    import ai
+    with pikepdf.open(io.BytesIO(data)) as pdf, ai.assessment_vision_budget(60):
+        drafts = [proposal for _figure, proposal in _pdf_figure_drafts(
+            pdf, ai_enabled=True, scan_id=scan_id, file=context_file)]
+        import hashlib
+        for proposal in drafts:
+            proposal["source_sha256"] = hashlib.sha256(data).hexdigest()
+        return drafts
+
+
+
+def validate_exact_figure_proposals(data: bytes, proposals: list[dict]) -> bool:
+    """Recompute caption facts from the actual corrected artifact, without AI calls.
+
+    Proposal flags are insufficient: each canonical value must still match the
+    associated pixels and their retained independent evidence at application.
     """
-    raise ValueError('PDF figure recovery needs an exact figure image association; review the figure individually. Whole-page text is not safe figure alt text.')
+    import io
+    import pikepdf
+    from pdf_figure_evidence import exact_figure_image, bounded_figures
+    from caption_validation import validate_caption
+    try:
+        with pikepdf.open(io.BytesIO(data)) as pdf:
+            figures = bounded_figures(pdf)
+            locators = _figure_locators(figures, pdf)
+            by_locator = {locators[id(figure)]: figure for figure in figures}
+            for proposal in proposals:
+                figure = by_locator.get(proposal.get("locator"))
+                if figure is None or proposal.get("automatic_write_blocked"):
+                    return False
+                association = exact_figure_image(pdf, figure)
+                retained = proposal.get("caption_validation") or {}
+                validation = validate_caption(proposal.get("proposed_value", ""), association["image_bytes"])
+                if (not validation.get("approved") or validation.get("status") != "validated"
+                        or retained.get("approved") is not True or retained.get("status") != "validated"
+                        or validation.get("canonical_caption") != proposal.get("proposed_value")
+                        or retained.get("canonical_caption") != proposal.get("proposed_value")
+                        or retained.get("evidence") != validation.get("evidence")
+                        or proposal.get("figure_image_sha256") != association["image_sha256"]
+                        or proposal.get("figure_association_method") != association["method"]):
+                    return False
+        return True
+    except Exception:
+        return False
+
+
+def bind_exact_pdf_findings(store, owner, sid, run_id, filename, data, proposals, *, applied=False):
+    """Bind proved raster captions to the frozen real assessment, without provider calls.
+
+    Ambiguous legacy aggregate groups cannot authorize individual Figure edits.
+    Retained binding is checked again outside managed generation at application.
+    """
+    import hashlib, io, json
+    import pikepdf
+    from pdf_figure_evidence import bounded_figures
+    if not proposals or not filename.lower().endswith('.pdf') or any(p.get('kind') != 'pdf-figure-alt' for p in proposals):
+        raise ValueError('Exact PDF finding binding requires only figure captions')
+    artifact = (store.get_file_record(sid, filename) or {}).get('corrected_sha256')
+    if not artifact or hashlib.sha256(data).hexdigest() != artifact or not validate_exact_figure_proposals(data, proposals):
+        raise ValueError('Exact PDF caption evidence is stale or unproved')
+    with store._db.cursor() as cur:
+        store._db.execute(cur, 'SELECT snapshot_id,baseline_json FROM remediation_contribution_runs WHERE owner_id=%s AND scan_id=%s AND run_id=%s', (owner, sid, run_id))
+        baseline = store._db.fetchone(cur)
+    if not baseline or baseline['snapshot_id'] != store.remediation_source_revision(sid):
+        raise ValueError('Exact PDF assessment identities are stale or unavailable')
+    rows = [r for r in json.loads(baseline['baseline_json']) if r['file'] == filename and r['rule_id'] == '1.1.1']
+    with pikepdf.open(io.BytesIO(data)) as pdf:
+        figures = bounded_figures(pdf)
+        locators = _figure_locators(figures, pdf)
+        missing = [locators[id(f)] for f in figures if not str(f.get('/Alt', '')).strip()]
+    dispositions = {r['finding_id']: r.get('disposition') for r in store.list_finding_dispositions(sid, run_id)}
+    result, seen = [], set()
+    for proposal in proposals:
+        loc = proposal.get('locator')
+        if not applied and (loc not in missing or proposal.get('source_sha256') != artifact):
+            raise ValueError('Exact PDF target is no longer an outstanding current figure')
+        matches = [r for r in rows if str(r.get('instance_key', '')).casefold() == str(loc).casefold()]
+        if not matches and len(rows) == 1 and len(figures) == 1 and (applied or len(missing) == 1) and str(rows[0].get('instance_key', '')).startswith('aggregate-instance:'):
+            matches = rows
+        if len(matches) != 1 or matches[0]['finding_id'] in seen:
+            raise ValueError('Exact PDF figure has no unambiguous assessed identity')
+        fid = matches[0]['finding_id']; seen.add(fid)
+        if not applied and dispositions.get(fid) in {'resolved_verified', 'excluded_by_policy', 'superseded_by_reassessment'}:
+            raise ValueError('Exact PDF finding is no longer outstanding')
+        result.append({**proposal, 'finding_ids': [fid], 'baseline_finding_ids': [fid], 'assessment_revision': baseline['snapshot_id']})
+    return result
+
+
+def validate_exact_pdf_finding_bindings(store, owner, sid, run_id, filename, data, proposals, *, applied=False):
+    try:
+        bound = bind_exact_pdf_findings(store, owner, sid, run_id, filename, data, proposals, applied=applied)
+        return all(all(p.get(k) == b[k] for k in ('finding_ids', 'baseline_finding_ids', 'assessment_revision')) for p, b in zip(proposals, bound))
+    except Exception:
+        return False
 
 
 def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
                         scan_id: str | None, file: str,
                         applied_fixes=None, proposals=None) -> tuple[list[str], int]:
-    """Keep missing figure descriptions in manual review until exact image mapping exists.
+    """Write only exact-raster captions independently validated against pixel facts.
 
-    The available renderer supplies a whole page, not the pixels associated with
-    a tagged Figure. Page OCR or a second model's agreement cannot authorize
-    writing that description into a specific Figure, even with auto-apply on.
-    Empty manual proposals preserve locators and context thumbnails; they are
-    neither approvable AI drafts nor verified fixes. Reviewer-authored write-back
-    remains available through apply_pdf_figure_alt.
+    OCR presence and model agreement alone authorize nothing. Unmapped or complex
+    figures remain manual; the retained page-caption implementation is not used.
     """
-    return _fix_pdf_figure_alt_from_page_legacy(
-        pdf, source_path, ai_enabled=False, scan_id=scan_id, file=file,
-        applied_fixes=applied_fixes, proposals=proposals)
+    import pikepdf
+    import ai
+    applied, deferred = [], 0
+    with ai.assessment_vision_budget(60):
+        drafts = _pdf_figure_drafts(pdf, ai_enabled=ai_enabled, scan_id=scan_id, file=file)
+    for figure, proposal in drafts:
+        if proposal["automatic_write_blocked"]:
+            deferred += 1
+            if proposals is not None:
+                proposals.append(proposal)
+            continue
+        try:
+            figure["/Alt"] = pikepdf.String(proposal["proposed_value"])
+        except Exception:
+            deferred += 1
+            proposal["automatic_write_blocked"] = True
+            proposal["requires_semantic_review"] = True
+            if proposals is not None:
+                proposals.append(proposal)
+            continue
+        validation = proposal["caption_validation"]
+        if applied_fixes is not None:
+            applied_fixes.append({"rule_id": "SC_1_1_1", "locator": proposal["locator"],
+                "value": proposal["proposed_value"], "source": proposal["source"],
+                "thumb": proposal.get("thumb"), "model": proposal.get("model"),
+                "model_call_id": proposal.get("model_call_id"),
+                "caption_validation": validation, "figure_image_sha256": proposal["figure_image_sha256"]})
+        applied.append(f'Alt text "{proposal["proposed_value"][:60]}" set from independently validated exact figure pixels · 1.1.1')
+    return applied, deferred
 
 
 def _fix_pdf_figure_alt_from_page_legacy(pdf, source_path: str, *, ai_enabled: bool,
                         scan_id: str | None, file: str,
                         applied_fixes=None, proposals=None) -> tuple[list[str], int]:
-    """Retained page-caption implementation; live callers use only its manual path.
+    """Retired page-caption implementation; no live caller uses this path.
 
     Set /Alt on tagged /Figure struct elements that lack it, from a vision description
     of the figure's page. Returns (applied messages, deferred_count). Mutates pdf in place;

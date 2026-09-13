@@ -21,7 +21,7 @@ import os as _os
 
 import core
 import provenance
-from worker import handler, FatalJobError, JobCancelledError, check_cancel
+from worker import handler, FatalJobError, JobCancelledError, ReservationRetryError, check_cancel
 from swallowed import swallowed
 from scanner import run_scan
 
@@ -634,6 +634,12 @@ def _record_applied_fixes(scan_id: str, filename: str, fixes: list) -> None:
             core.store.record_applied_fix(
                 scan_id, filename, fx["rule_id"], fx["value"],
                 source=fx.get("source"), thumb=fx.get("thumb"), seq=i)
+            validation = fx.get("caption_validation") or {}
+            if validation.get("approved") is True and validation.get("status") == "validated":
+                evidence = validation.get("evidence") or {}
+                detail = {key: evidence[key] for key in ("version", "image_sha256", "method") if key in evidence}
+                core.store.log_decision("system", "remediate.caption_validated", scan_id=scan_id,
+                    file=filename, rule_id=fx["rule_id"], detail=__import__("json").dumps(detail, sort_keys=True))
         except Exception:
             swallowed("_record_applied_fixes: recording an applied fix failed", scan_id)
 
@@ -710,8 +716,17 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
         return
     from ai_run_policy import optional_current_run_context
     from document_wide_workflow import suppressed_criteria
-    if sc in suppressed_criteria(optional_current_run_context(), filename):
-        return
+    context = optional_current_run_context()
+    if sc in suppressed_criteria(context, filename):
+        try:
+            import blob
+            from remediate_pdf import bind_exact_pdf_findings
+            if sc != '1.1.1' or not filename.lower().endswith('.pdf'):
+                return
+            data = blob.download_remediated(context.owner_id, scan_id, filename)
+            proposals = bind_exact_pdf_findings(core.store, context.owner_id, scan_id, context.run_id, filename, data, proposals)
+        except (ValueError, TypeError):
+            return
     # OPERATOR SCOPE. One gate here covers every proposer — 19 call sites across 12 criteria —
     # because this is the single boundary where a proposal is still labelled with its SC. Gating
     # at each proposer instead would be 19 chances to forget one, and the one forgotten is the
@@ -966,14 +981,16 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
     target_file_id = None
     reconcile_only = False
 
+    class PublicationReservationRetry(ReservationRetryError, RuntimeError):
+        """Preserve the publication error contract while requesting a lease-aware retry."""
+
     def reservation_retry(message):
-        from worker import ReservationRetryError
         from datetime import datetime, timezone
         remaining = 300
         if (reservation or {}).get("lease_expires_at"):
             expires = datetime.fromisoformat(reservation["lease_expires_at"].replace("Z", "+00:00"))
             remaining = max(1, (expires - datetime.now(timezone.utc)).total_seconds() + 1)
-        return ReservationRetryError(message, retry_after_seconds=remaining)
+        return PublicationReservationRetry(message, retry_after_seconds=remaining)
 
     def log_provider_failure(exc):
         from routes.scans import _log_release_provider_error
@@ -1073,9 +1090,7 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
                                "filename": saved_receipt.get("filename") or planned_name,
                                "verified": bool(saved_receipt.get("verified", True))}
             elif not reservation.get("acquired"):
-                if source == "drive":
-                    raise reservation_retry("Google Drive delivery is reserved by another attempt; waiting for its lease.")
-                raise RuntimeError(f"{provider} publication is owned by another worker attempt")
+                raise reservation_retry(f"{provider} publication is owned by another worker attempt; waiting for its lease.")
             else:
                 # A reclaimed reservation may represent a predecessor that wrote and died before
                 # finalizing. The publisher verifies matching destination bytes before deciding
@@ -1175,7 +1190,7 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
                           if source == "drive" else
                           "SharePoint refused the write. Reconnect after an administrator grants Files.ReadWrite.All and Sites.ReadWrite.All."))
         raise FatalJobError(f"{provider} write permission denied — reconnect with write access")
-    except FatalJobError:
+    except (FatalJobError, ReservationRetryError):
         raise
     except Exception as exc:
         if source in {"drive", "sharepoint"}:
@@ -1194,8 +1209,8 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
         # attempt, settle the document into an actionable durable state instead of leaving it
         # looking queued forever after the job dead-letters.
         if int((job or {}).get("attempts") or 1) < int((job or {}).get("max_attempts") or 5):
-            if source == "drive" and reservation:
-                raise reservation_retry("Google Drive delivery is unconfirmed; waiting to verify the reserved copy.") from exc
+            if reservation:
+                raise reservation_retry(f"{provider} delivery is unconfirmed; waiting to verify the reserved copy.") from exc
             raise
         _release_failure(release_id, owner, filename, record,
                          "provider_write_failed",
@@ -1481,7 +1496,13 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
     from ai_run_policy import optional_current_run_context
     from document_wide_workflow import enabled as document_wide_enabled
     _document_mode = document_wide_enabled(optional_current_run_context(), filename)
-    if impact_controls is not None and not _eligible_rules and not _document_mode:
+    _context = optional_current_run_context()
+    _pdf_figure_mode = (ext == "pdf" and _draft_ai and _context is not None
+                        and (_context.enabled or _context.local_drafting)
+                        and core.store._selected_sc(scan_id, filename, "1.1.1")
+                        and any(row.get("rule_id") == "1.1.1" and row.get("outcome") == "FAIL"
+                                for row in core.store.get_scan_traces(scan_id, file=filename)))
+    if impact_controls is not None and not _eligible_rules and not _document_mode and not _pdf_figure_mode:
         review_rules = [{"rule_id": row["rule_id"], "rule_name": row.get("rule_name"),
                          "finding_count": row.get("finding_count")}
                         for row in core.store.get_scan_traces(scan_id, file=filename)
@@ -1589,8 +1610,9 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
                 # write back through remediate_pdf.apply_pdf_approved, so they are enqueued.
                 # Without these two lines the cards were built by remediate_pdf and then dropped
                 # here — the reviewer never saw them, so the deferral existed only as a tally.
-                _enqueue_proposals(scan_id, filename, "1.1.1", "Non-text Content",
-                                   [p for p in _pdf_proposals if p.get("kind") == "pdf-figure-alt"])
+                if not _pdf_figure_mode:
+                    _enqueue_proposals(scan_id, filename, "1.1.1", "Non-text Content",
+                                       [p for p in _pdf_proposals if p.get("kind") == "pdf-figure-alt"])
                 _enqueue_proposals(scan_id, filename, "4.1.2", "Name, Role, Value",
                                    [p for p in _pdf_proposals if p.get("kind") == "pdf-field-name"])
                 _enqueue_proposals(scan_id, filename, "2.4.6", "Headings and Labels",
@@ -1671,7 +1693,7 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
                     # evidence is a nicety; never fail a remediation job for a thumbnail
                     swallowed("_remediate_file: attaching 1.1.1 HITL evidence failed", scan_id)
             if not out_path or not _Path(out_path).exists():
-                if not _document_mode:
+                if not _document_mode and not _pdf_figure_mode:
                     core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
                                             file=filename, detail=f".{ext}: no deterministic fixes applied")
                     return
@@ -1790,6 +1812,13 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
     _digest = _hashlib.sha256(fixed_bytes).hexdigest()
     core.store.record_remediation(scan_id, filename, drive_write_url=web_url, blob_url=blob_url,
                                   corrected_sha256=_digest, corrected_bytes=len(fixed_bytes))
+    if _pdf_figure_mode:
+        # Managed runs draft against the immutable bytes actually stored. Inline
+        # AI stays disabled; only independently validated exact raster drafts
+        # can later qualify for standing approval and the separate verified writer.
+        from remediate_pdf import alt_proposals_for_pdf
+        _enqueue_proposals(scan_id, filename, "1.1.1", "Non-text Content",
+            alt_proposals_for_pdf(fixed_bytes, scan_id=scan_id, context_file=filename))
     # `delivered` names the DESTINATION write, not the correction. A corrected copy that
     # reached blob but not the provider is stored-not-delivered — PRD §11's delivery-failure
     # class — and the snapshot counts it as pending. Saying `delivered` for it would make a
@@ -5278,6 +5307,86 @@ def _apply_one_value_kind(
     baseline = (residual_state or {}).get("verification")
     regressions = (sorted(verification.residual - baseline.residual)
                    if verification.ok and baseline is not None and baseline.ok else None)
+    # Independent semantic rejection remains a gate when consent/model/usage blocks retry.
+    # Legacy proposals may omit the semantic-review flag; presence cannot override pixels.
+    caption_contradictions = []
+    if filename.rsplit('.', 1)[-1].lower() in _OFFICE_ALT_MIME and '1.1.1' in scs_to_clear:
+        from office_verified_retry import contradicted_captions
+        caption_contradictions = contradicted_captions(fixed, values)
+        if caption_contradictions:
+            semantic_review = True
+            semantic_review_revision = (semantic_review_revision or
+                core.store.remediation_source_revision(scan_id))
+            core.store.log_decision('system', 'apply.caption_contradicted', scan_id=scan_id,
+                file=filename, rule_id='1.1.1',
+                detail='Written caption contradicts independently checked visible pixels; verification credit withheld.')
+    # A presence-only 1.1.1 pass is not caption accuracy. A single exact Office
+    # contradiction can try only the next already-consented tier under standing approval.
+    if (caption_contradictions and (residual_state or {}).get('office_retry_allowed')
+            and baseline is not None and not unresolved):
+        from office_verified_retry import attempt as retry_office_caption
+        from ai_spending_budget import BudgetError
+        try:
+            retry = retry_office_caption(core.store, scan_id=scan_id, filename=filename,
+                original=working, failed=fixed, values=values, applied=applied,
+                baseline=baseline, failed_check=verification, tickets=exact_tickets,
+                verify=lambda candidate: _verify_residual(candidate, filename, scan_id=scan_id))
+        except (ValueError, BudgetError):
+            retry = None  # Missing/frozen/replayed authority never opens another paid attempt.
+        if retry:
+            retry_bytes, retry_check, retry_changes, retry_proof = retry
+            residual_state['verification'] = retry_check
+            residual_state['office_retry'] = retry_proof
+            def commit_retry():
+                record = core.store.get_file_record(scan_id, filename) or {}
+                if record.get('corrected_sha256') != retry_proof['replacement_sha256']:
+                    raise ValueError('office_retry_artifact_mismatch')
+                existing = core.store.get_remediation_diffs(scan_id, filename) or []
+                core.store.record_remediation_diffs(scan_id, filename, existing + [
+                    {'rule_id': '1.1.1', 'before': a['before'], 'after': a['after'],
+                     'note': retry_proof['writer_identity']} for a in retry_changes])
+                from office_verified_retry import persist_replacement_approval
+                replacement_ticket = persist_replacement_approval(core.store, retry_proof)
+                record_writer_result(core.store, [replacement_ticket], outcome='verified_cleared',
+                    artifact_sha256=record['corrected_sha256'],
+                    reference='Independent caption validation and actual Office reassessment',
+                    writer_attempt_id=retry_proof['writer_identity'])
+                core.store.mark_row_applied(retry_proof['item_id'])
+                import json
+                core.store.log_decision('system', 'office_retry.saved', scan_id=scan_id,
+                    file=filename, rule_id='1.1.1', detail=json.dumps({**retry_proof,
+                        'artifact_sha256': record['corrected_sha256'], 'changes': retry_changes,
+                        'verification': 'independent_caption_and_actual_reassessment',
+                        'original_outcome': 'superseded_not_verified'}, sort_keys=True))
+            pending_credits.append(commit_retry)
+            return retry_bytes, True
+
+    if caption_contradictions:
+        if exact_tickets:
+            from ai_escalation_activity import emit
+            ticket = exact_tickets[0]
+            retry_owner = (core.store.get_scan(scan_id) or {}).get('run', {}).get('owner_email')
+            retry_run = ticket.get('run_id')
+            if retry_owner and retry_run:
+                retry_operation = _proof_sha256((retry_owner + ':' + retry_run + ':' + filename
+                    + ':office-caption-retry.v1').encode()).hexdigest()
+                emit(core.store, scan_id=scan_id, owner_id=retry_owner, run_id=retry_run,
+                     file=filename, operation_id=retry_operation,
+                     reason_code='independent_caption_verification_failed', status='needs_manual')
+        # Disproven text is different from an unknown draft. Keep the previous copy;
+        # allowing remaining issues must never publish a caption known to be false.
+        reason = 'Written caption contradicts independently checked visible pixels; previous copy retained. Manual review required.'
+        _model_outcome('could_not_verify', reason, regressions=regressions)
+        import json
+        core.store.log_decision('system', 'apply.caption_rejected', scan_id=scan_id,
+            file=filename, rule_id='1.1.1', detail=json.dumps({
+                'reason': 'pixel_caption_contradiction_no_verified_alternative',
+                'previous_artifact_sha256': _proof_sha256(working).hexdigest(),
+                'failed_artifact_sha256': _proof_sha256(fixed).hexdigest(),
+                'locators': caption_contradictions, 'manual_review_required': True,
+                'previous_copy_retained': True}, sort_keys=True))
+        return working, False
+
     def preserve_unverified(outcome, reason):
         if not (residual_state or {}).get('retain_unverified') or regressions:
             return working, False
@@ -5502,6 +5611,11 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     residual_state = {"verification": _verify_residual(working, filename, scan_id=scan_id),
                       "retain_unverified": bool(payload.get("standing_approval"))}
     pending_credits = []
+    residual_state['office_retry_allowed'] = bool(
+        payload.get('standing_approval') and ext in _OFFICE_ALT_MIME
+        and len(alt_values) == 1 and not (deco_locators or link_values or field_values
+        or sensory_values or language_values or structure_label_values or image_of_text_values
+        or any(pdf_structure_groups.values())))
 
     # ADR 0055: a described-not-replaced row carries the 1.4.5 card's own 'image N' locator — a
     # media index, which apply_alt cannot read at all (parse_locator requires a '#'). Translate
@@ -5692,18 +5806,56 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         check_standing_application(core.store, payload)
     check_file_approvals(core.store, scan_id, filename)
     _phase(job, "storing the corrected copy")
-    blob_url = _blob.upload_remediated(
-        owner, scan_id, filename, working, _OFFICE_ALT_MIME.get(ext, "application/pdf"))
+    retry_proof = residual_state.get('office_retry')
+    blob_url = (_blob.upload_immutable_retry(owner, scan_id, filename, working,
+                    _OFFICE_ALT_MIME.get(ext, 'application/pdf')) if retry_proof
+                else _blob.upload_remediated(owner, scan_id, filename, working,
+                    _OFFICE_ALT_MIME.get(ext, 'application/pdf')))
     if not blob_url:
         raise RuntimeError("approved values were verified but durable storage is unavailable")
     # Upload first: failed storage must leave every approval retryable. The database commit
     # then binds its evidence to these exact bytes; no credit survives a metadata failure.
     record = core.store.get_remediation_urls(scan_id, filename) or {}
     with core.store.transaction():
-        core.store.record_remediation(
-            scan_id, filename, drive_write_url=record.get("drive_write_url"),
-            blob_url=blob_url, corrected_sha256=_hashlib.sha256(working).hexdigest(),
-            corrected_bytes=len(working))
+        if retry_proof:
+            # The upload is outside SQL: an intervening review/revocation must not
+            # advance its pointer or inherit credit. Match decide_hitl's review-before-
+            # stage lock order, then authorize and recheck under the same transaction.
+            if getattr(core.store._db, 'supports_for_update', False):
+                with core.store._db.cursor() as cur:
+                    for expected in sorted(payload['standing_approval']['items'], key=lambda row: row['id']):
+                        core.store._db.execute(cur,
+                            'SELECT id FROM hitl_queue WHERE id=%s AND scan_id=%s AND file=%s FOR UPDATE',
+                            (expected['id'], scan_id, filename))
+                        core.store._db.fetchone(cur)
+            from ai_standing_approval import authorization as retry_authorization, _source as retry_source
+            revision = retry_authorization(core.store, owner, scan_id, retry_proof['run_id'])
+            stage = core.store.get_stage_execution(retry_proof['run_id'], owner=owner) or {}
+            from ai_run_approval_override import read as read_retry_consent
+            if read_retry_consent(core.store, owner, scan_id, retry_proof['run_id'])['revision'] != retry_proof['consent_revision']:
+                raise ValueError('office_retry_consent_changed')
+            if check_standing_application(core.store, payload) is True:
+                raise ValueError('office_retry_approval_already_applied')
+            check_file_approvals(core.store, scan_id, filename)
+            from worker import check_cancel as check_retry_cancel
+            check_retry_cancel()
+            if (revision != retry_proof['source_revision'] or not stage.get('is_current')
+                    or stage.get('cancel_requested_at')
+                    or stage.get('state') not in {'accepted', 'queued', 'processing', 'processing_complete', 'succeeded'}
+                    or stage.get('input_snapshot_id') != revision):
+                raise ValueError('office_retry_run_changed')
+            retry_source(core.store, owner, scan_id, filename, retry_proof['run_id'])
+            if not core.store.compare_and_set_retry_artifact(owner, scan_id, filename,
+                    previous_sha256=retry_proof['previous_artifact_sha256'],
+                    source_identity=retry_proof['source_identity'], run_id=retry_proof['run_id'],
+                    source_revision=retry_proof['source_revision'], blob_url=blob_url,
+                    corrected_sha256=_hashlib.sha256(working).hexdigest(), corrected_bytes=len(working)):
+                raise ValueError('office_retry_source_or_artifact_changed')
+        else:
+            core.store.record_remediation(
+                scan_id, filename, drive_write_url=record.get("drive_write_url"),
+                blob_url=blob_url, corrected_sha256=_hashlib.sha256(working).hexdigest(),
+                corrected_bytes=len(working))
         for commit_credit in pending_credits:
             commit_credit()
         if payload.get("release_intent_id"):

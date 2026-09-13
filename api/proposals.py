@@ -704,13 +704,20 @@ def propose_sensory_rewrite(text: str, *, filename: str = "", ai_enabled: bool =
             res = None
         if not res or not res.get("suggestion"):
             continue
-        out.append(proposal(
+        draft = proposal(
             locator=sentence[:60],
             before=sentence,
             proposed_value=res["suggestion"],
             rationale="instruction relies on a sensory characteristic (shape / colour / position); "
                       "confirm the rewrite names the right control",
-            source=f"AI text model ({res.get('model', 'llama')}) — human judgement required"))
+            source=f"AI text model ({res.get('model', 'llama')}) — human judgement required",
+            model=res.get("model"),
+            model_call_id=res.get("model_call_id") or res.get("ai_call_id") or res.get("call_id"))
+        # The immutable run approval gate needs structured exact-call provenance;
+        # a provider name embedded in prose cannot authorize an automatic write.
+        if res.get("model"):
+            draft["model"] = res["model"]
+        out.append(draft)
         if len(out) >= _SENSORY_CAP:
             break
     return out

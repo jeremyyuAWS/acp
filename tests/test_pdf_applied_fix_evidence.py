@@ -39,6 +39,8 @@ def _patch(monkeypatch, *, alt="Bar chart: Q3 revenue by region", page=1, render
         return {"alt": alt, "grounded": True, "model": "moondream"} if alt else None
     monkeypatch.setattr(ai, "describe_image_structured", describe)
     figure = _Figure()
+    import pdf_figure_evidence
+    monkeypatch.setattr(pdf_figure_evidence, "bounded_figures", lambda pdf: [figure])
     monkeypatch.setattr(remediate_pdf, "_collect_figures", lambda root: [figure])
     monkeypatch.setattr(remediate_pdf, "_fig_alt", lambda f: None)     # unlabelled
     monkeypatch.setattr(remediate_pdf, "_resolve_page_number", lambda f, p: page)
@@ -81,22 +83,19 @@ def test_manual_context_uses_exact_locator_and_honest_provenance(monkeypatch):
     remediate_pdf._fix_pdf_figure_alt(pdf, "policy.pdf", ai_enabled=True,
         scan_id=None, file="policy.pdf", proposals=props)
     assert props[0]["locator"] == "pdf:fig:7:0"
-    assert "page thumbnail is context" in props[0]["rationale"]
+    assert "reliable automatic caption is unavailable" in props[0]["rationale"]
     assert "moondream" not in props[0]["source"]
     assert props[0].get("model_call_id") is None
 
 
-def test_manual_thumbnail_is_real_png_sized_for_review_not_fix_receipt(monkeypatch):
-    import base64
-    from PIL import Image
+def test_unmapped_manual_figure_does_not_present_unrelated_page_pixels(monkeypatch):
     pdf = _patch(monkeypatch)
     props = []
     remediate_pdf._fix_pdf_figure_alt(pdf, "policy.pdf", ai_enabled=True,
         scan_id=None, file="policy.pdf", proposals=props)
-    thumb = props[0]["thumb"]
-    assert thumb.startswith("data:image/png;base64,")
-    im = Image.open(io.BytesIO(base64.b64decode(thumb.split(",", 1)[1])))
-    assert max(im.size) == remediate_pdf._PAGE_THUMB_EDGE == 320
+    assert props[0].get("thumb") is None
+    assert props[0]["automatic_write_blocked"] is True
+    assert pdf.calls == []
 
 
 def test_no_render_still_emits_manual_item_without_thumbnail(monkeypatch):

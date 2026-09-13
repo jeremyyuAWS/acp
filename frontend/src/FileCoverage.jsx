@@ -14,7 +14,7 @@ export default function FileCoverage({ evidence, animate = false, onSelect, sele
       const fraction = state.withFindings > 0 && state[key] != null ? state[key] / state.withFindings : 0
       const content = <><span className="kpi-tile-fill" aria-hidden="true" style={{width:`${Math.min(100, fraction * 100)}%`}}/><span className="progress-tile-label">{label}</span><strong><BidirectionalKpiCounter value={state[key]} animate={animate} positiveDirection={positiveDirection}/></strong>
         {key === 'processed' && <small>{state.processed == null ? 'Processing coverage unavailable' : `${state.processed} of ${state.withFindings} files with findings`}</small>}
-        <KpiComparison value={state[key]} baseline={evidence?.baseline?.[key]}/></>
+        {!(key === 'withFindings' && evidence?.population_fixed === true) && <KpiComparison value={state[key]} baseline={evidence?.baseline?.[key]}/>}</>
       return onSelect ? <button type="button" className={`coverage-${color}`} key={key} title={key === 'processed' ? 'A remediation attempt finished; unresolved findings or failed fixes may remain.' : label} aria-pressed={queueMode ? undefined : selected === key} aria-expanded={queueMode ? selected === key : undefined} aria-haspopup={queueMode ? 'dialog' : undefined} onClick={() => onSelect(key)} aria-label={`${label}: ${state[key] ?? 'unavailable'}`}>{content}</button>
         : <div className={`coverage-${color}`} key={key}>{content}</div>
     })}</div><p className="muted">Processed means a remediation attempt finished. It does not mean fully remediated, verified, or published.</p>

@@ -79,9 +79,9 @@ describe('source — DiscoverCompleteSummary shows after discovery, not assessme
 // ── Gap 3 — onContinue wired ──────────────────────────────────────────────────
 
 describe('source — DiscoverRunProgress gets the Continue callback', () => {
-  it('passes onContinue={onAdvance} to DiscoverRunProgress', () => {
+  it('passes the Continue callback only for a mutable current stage', () => {
     // Without this the done-card CTA inside DiscoverRunProgress is disabled.
-    expect(discover).toMatch(/onContinue=\{onAdvance\}/)
+    expect(discover).toMatch(/onContinue=\{resultsOnly \? undefined : onAdvance\}/)
   })
 })
 

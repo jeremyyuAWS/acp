@@ -145,7 +145,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // annotated array is the 2026-08-21 defect: annotate() gives every real file a department, so
   // the check read "classified" on every real scan.
   rawFiles = null, onStop = null, onViewMonitor = null, onViewLiveOps = null,
-  onOpenSource = null, pendingScanLoad = false, showRunProgress = true }) {
+  onOpenSource = null, resultsOnly = false, pendingScanLoad = false, showRunProgress = true }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
   // are assembled here rather than threading the whole run object through a new prop; the resolver
@@ -179,7 +179,10 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   const sf = useSearchFilter('discover')
   const [localDecisions, setLocalDecisions] = useState({})
   const decisions = decisionsProp ?? localDecisions
-  const setDecisions = setDecisionsProp ?? setLocalDecisions
+  const resultsOnlyRef = useRef(resultsOnly)
+  resultsOnlyRef.current = resultsOnly
+  const writeDecisions = setDecisionsProp ?? setLocalDecisions
+  const setDecisions = (...args) => { if (!resultsOnlyRef.current) writeDecisions(...args) }
   const [classState, setClassState] = useState({})
   const [editAct, setEditAct] = useState(null)
   const [seg, setSeg] = useState(null)
@@ -446,7 +449,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // all-or-nothing paginated read, never patched into local state (a locally-patched row would
   // outrun the server on a failed write and there would be no way to tell the two apart).
   const overrideRecommendation = useCallback(async (file, reason) => {
-    if (!scanId) return false
+    if (!scanId || resultsOnlyRef.current) return false
     try {
       await overrideLifecycleRecommendation(scanId, file, reason)
       reloadInventory()
@@ -735,7 +738,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                         <div className="classctl">
                           <span className="classchips">
                             {CLASS_TAGS.map((t) => { const on = tagsOf(f).includes(t); return (
-                              <button key={t} className={on ? 'classchip on' : 'classchip'} style={on ? { background: CLASS_COLOR[t] + '22', color: CLASS_COLOR[t], borderColor: CLASS_COLOR[t] + '55' } : undefined} aria-pressed={on} onClick={() => toggleTag(f, t)} title={on ? `Remove ${t}` : `Add ${t}`}>{on ? '✓ ' : '+ '}{t}</button>
+                              <button disabled={resultsOnly} key={t} className={on ? 'classchip on' : 'classchip'} style={on ? { background: CLASS_COLOR[t] + '22', color: CLASS_COLOR[t], borderColor: CLASS_COLOR[t] + '55' } : undefined} aria-pressed={on} onClick={() => toggleTag(f, t)} title={on ? `Remove ${t}` : `Add ${t}`}>{on ? '✓ ' : '+ '}{t}</button>
                             ) })}
                             {f.superseded && <span className="classchip on" style={{ background: '#EEEDFE', color: '#3C3489', borderColor: '#cdc9f0', cursor: 'default' }}>superseded</span>}
                           </span>
@@ -745,7 +748,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                           <span className="badge" style={{ background: bg, color: fg, borderLeft: `3px solid ${RET_COLOR[a]}` }} title={f.rec?.rationale || ''}>{l}</span>
                           {dec?.state === 'accepted' && <span className="dectag ok">✓ accepted</span>}
                           {dec?.state === 'override' && <span className="dectag ov">changed</span>}
-                          {editAct === f.file ? (
+                          {resultsOnly ? null : editAct === f.file ? (
                             <span className="modchips">
                               {OVERRIDE_ACTIONS.map((a2) => <button key={a2} className="modchip" style={{ color: RET_COLOR[a2] }} onClick={() => decide(f, a2 === RET_BUCKET(f) ? { state: 'accepted' } : { state: 'override', action: a2 })}>{RET_BADGE[a2][0]}</button>)}
                               <button className="modchip cancel" onClick={() => setEditAct(null)}>cancel</button>
@@ -840,7 +843,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           from the last GET /scans/{id} the outer `scan` state holds, which during an active run
           can be the PREVIOUS scan's terminal value until this one settles. */}
       {/* The queue/assignment card below owns status until listing starts. */}
-      {showRunProgress && !(displayBusy && ['queued', 'preparing', 'submitting'].includes(displayProgress?.phase)) && <DiscoverRunProgress progress={discoveryProgressForCard} busy={displayBusy} onStop={onStop} onContinue={onAdvance} assessmentComplete={Boolean(run?.assessed_at)} sources={sources} source={run?.source} scope={scope} inv={inv} preflightDegraded={preflightDegraded} freshness={displayProgress?.freshness ?? run?.freshness ?? null} runStartedAt={run?.started_at ?? null} />}
+      {showRunProgress && !(displayBusy && ['queued', 'preparing', 'submitting'].includes(displayProgress?.phase)) && <DiscoverRunProgress progress={discoveryProgressForCard} busy={displayBusy} onStop={onStop} onContinue={resultsOnly ? undefined : onAdvance} assessmentComplete={Boolean(run?.assessed_at)} sources={sources} source={run?.source} scope={scope} inv={inv} preflightDegraded={preflightDegraded} freshness={displayProgress?.freshness ?? run?.freshness ?? null} runStartedAt={run?.started_at ?? null} />}
 
       {showRunProgress && (() => {
         const jobClaimed = !!(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued')
@@ -904,7 +907,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                 hasFolderActivity: !!(displayProgress?.active_folders?.length || displayProgress?.recent_folders?.length),
                 workerHeartbeatAgeS: workerSnap?.workerHeartbeatAgeS ?? null,
               })}
-              onRerun={() => onScan('all')}
+              onRerun={resultsOnly ? undefined : () => onScan('all')}
               onViewMonitor={onViewMonitor}
             />
           </>
@@ -1009,8 +1012,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           integrity={discoveryIntegrity}
           source={run?.source}
           onReconnect={onOpenSource ? () => onOpenSource(run?.source || 'drive') : undefined}
-          onReviewScope={onScan ? () => onScan(run?.source || 'drive') : undefined}
-          onRetry={onScan ? () => onScan(run?.source || 'drive', null, { allFolders: true }) : undefined}
+          onReviewScope={!resultsOnly && onScan ? () => onScan(run?.source || 'drive') : undefined}
+          onRetry={!resultsOnly && onScan ? () => onScan(run?.source || 'drive', null, { allFolders: true }) : undefined}
           onViewLiveOps={onViewLiveOps}
         />
       )}
@@ -1167,7 +1170,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               <div className={isNarrowScope(scope) ? 'scopewarn' : 'muted'} style={{ marginTop: 3, fontSize: 12.5 }}
                    role={isNarrowScope(scope) ? 'status' : undefined}>
                 {isNarrowScope(scope) ? '⚠ ' : ''}{scopeLine}
-                {scope?.kind === 'folder' && hasDriveToken && !displayBusy && (
+                {!resultsOnly && scope?.kind === 'folder' && hasDriveToken && !displayBusy && (
                   <> <button className="linklike" onClick={() => onScan('drive')}
                              title="Re-run discovery with no folder restriction, across your whole Drive">
                     Scan my whole Drive instead
@@ -1190,7 +1193,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           and bare site ids, so a list of site ids needs no third parameter either. The single
           case keeps the old shape deliberately — a saved link, a queued job and every existing
           test still name one site the way they always did. */}
-      {showSites && (
+      {!resultsOnly && showSites && (
         <SitePicker
           onScan={(siteIds) => {
             setShowSites(false)
@@ -1219,7 +1222,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
       {/* Deva #3 — define archival/deletion rules right here in Discover. The rules run at discovery
           time and mark matched files as candidates; Assess excludes them by default. */}
-      <DispositionRules />
+      {!resultsOnly && <DispositionRules />}
 
       {/* Discovery results (approved board `DiscoverResults.dc.html`): what the run found, what it
           could not read, which files a lifecycle rule recommended for review and which rule said
@@ -1254,7 +1257,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                         reasonOf={why ? why.reasonOf : undefined}
                         reasonSampleOf={why ? why.sampleOf : null}
                         reasonFetchLikely={why ? why.fetchLikely : null}
-                        onOverrideRecommendation={overrideRecommendation}
+                        onOverrideRecommendation={resultsOnly ? undefined : overrideRecommendation}
                         actor={me?.email || me?.name || null} scanId={scanId}
                         rawScope={scope} rawDecisions={errLog} runStatus={run?.status ?? null} />
 
@@ -1291,7 +1294,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
       )}
 
-      {(files.length > 0 || nonAssessable.length > 0) && (
+      {!resultsOnly && (files.length > 0 || nonAssessable.length > 0) && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12,
                       margin: '20px 0 4px', paddingTop: 14, borderTop: '1px solid var(--line)' }}>
           {pendingActions > 0 ? (
@@ -1346,7 +1349,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       )}
 
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); f._estateOnly ? setEstOnlyFile(f) : setSel(f) }} />}
-      {sel && <FileDrawer file={mergeLifecycle([sel], inv)[0]} context="discover" onClose={() => setSel(null)} overrideOwner={ownerOf(sel)} delegatedFrom={isDelegated(sel) ? sel.owner : null} scanId={scanId} />}
+      {sel && <FileDrawer file={mergeLifecycle([sel], inv)[0]} context="discover" readOnly={resultsOnly} onClose={() => setSel(null)} overrideOwner={ownerOf(sel)} delegatedFrom={isDelegated(sel) ? sel.owner : null} scanId={scanId} />}
       {estOnlyFile && <EstateOnlyDrawer file={estOnlyFile} onClose={() => setEstOnlyFile(null)} />}
     </>
   )

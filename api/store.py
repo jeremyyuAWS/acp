@@ -4289,6 +4289,31 @@ class Store:
         events.sort(key=lambda e: (e.get("ts") is None, e.get("ts") or ""))
         return events[:limit]
 
+    def compare_and_set_retry_artifact(self, owner, scan_id, file, *, previous_sha256,
+                                       source_identity, run_id, source_revision, blob_url, corrected_sha256, corrected_bytes):
+        """Advance a retry pointer only from the source/artifact its intent froze.
+
+        Caller rechecks standing authorization inside the surrounding transaction.
+        Immutable storage precedes CAS; failure leaves harmless archived candidates.
+        """
+        identity_keys = ('checksum', 'source_modified', 'drive_file_id', 'drive_id', 'source_relative_path')
+        with self._db.cursor() as cur:
+            if self._db.supports_skip_locked:
+                self._db.execute(cur, 'SELECT corrected_sha256 FROM file_records WHERE scan_id=%s AND file=%s FOR UPDATE', (scan_id, file))
+            record = self.get_file_record(scan_id, file) or {}
+            if (record.get('corrected_sha256') != previous_sha256 or
+                    any(record.get(key) != source_identity.get(key) for key in identity_keys)):
+                return False
+            self._db.execute(cur, "UPDATE file_records SET blob_url=%s,corrected_sha256=%s,corrected_bytes=%s,compliant=0 "
+                "WHERE scan_id=%s AND file=%s AND corrected_sha256=%s "
+                "AND EXISTS (SELECT 1 FROM scan_runs WHERE id=%s AND owner_email=%s) "
+                "AND EXISTS (SELECT 1 FROM stage_executions WHERE execution_id=%s AND scan_id=%s AND owner_email=%s "
+                "AND stage='remediate' AND is_current=1 AND cancel_requested_at IS NULL AND input_snapshot_id=%s "
+                "AND state IN ('accepted','queued','processing','processing_complete','succeeded'))",
+                (blob_url, corrected_sha256, corrected_bytes, scan_id, file, previous_sha256, scan_id, owner,
+                 run_id, scan_id, owner, source_revision))
+            return cur.rowcount == 1
+
     def drive_targets_for_files(self, scan_id: str, files: list[str], owner: str) -> dict[str, str]:
         """{file: drive_file_id} for the files in one scan that have one, in ONE query.
 
@@ -12499,6 +12524,7 @@ class Store:
         "remediate.cancel_requested", "remediate.paused", "remediate.resumed",
         "remediate.vision_retry_pending", "remediate.vision_retry_recovered",
         "remediate.vision_retry_blocked",
+        "remediate.ai_escalation_started", "remediate.ai_escalation_finished",
     })
 
     #: The kinds that mean THE RUN MOVED. Every one is written after a durable change to a

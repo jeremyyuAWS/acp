@@ -199,16 +199,45 @@ def test_oversized_download_rejected_before_hash_or_render(monkeypatch):
 
 
 def test_blob_evidence_requests_bounded_owner_scoped_range(monkeypatch):
-    import blob
+    import blob, core
+    monkeypatch.setattr(core,'store',SimpleNamespace(get_file_record=lambda *args:None))
     calls = []
     def client(**identity):
         def download(**kwargs):
             calls.append((identity, kwargs))
             return SimpleNamespace(readall=lambda: b'x' * kwargs['length'])
-        return SimpleNamespace(download_blob=download)
+        return SimpleNamespace(download_blob=download,
+            url='https://fixture.blob.core.windows.net/' + identity['container'] + '/' + identity['blob'])
     monkeypatch.setattr(blob, '_service_client', lambda: SimpleNamespace(get_blob_client=client))
     assert len(blob.download_report_evidence('owner', 'scan', 'file.pdf', max_bytes=4)) == 5
     assert calls[0][0] == {'container': blob._CONTAINER, 'blob': blob._blob_path('owner', 'scan', 'file.pdf')}
     assert calls[0][1]['offset'] == 0 and calls[0][1]['length'] == 5
     blob.download_report_evidence('owner', 'scan', 'file.pdf', original=True, checksum='cached', max_bytes=4)
     assert calls[1][0] == {'container': blob._SOURCES_CONTAINER, 'blob': blob._source_key('owner', 'scan', 'file.pdf', 'cached')}
+
+
+@pytest.mark.parametrize('max_bytes', [2, 4])
+def test_immutable_corrected_pointer_report_read_is_bounded_and_owner_scoped(monkeypatch, max_bytes):
+    import blob, core
+    payload=b'abc'; digest=sha256(payload).hexdigest()
+    key=blob._blob_path('owner','scan','file.pdf') + '.retry/' + digest
+    url='https://fixture.blob.core.windows.net/' + blob._CONTAINER + '/' + key
+    monkeypatch.setattr(core,'store',SimpleNamespace(
+        get_file_record=lambda *args:{'blob_url':url,'corrected_sha256':digest},
+        get_scan=lambda *args:{'run':{'owner_email':'owner'}}))
+    calls=[]
+    def client(**identity):
+        def download(**kwargs):
+            calls.append((identity,kwargs))
+            return SimpleNamespace(readall=lambda:payload[kwargs['offset']:kwargs['offset']+kwargs['length']])
+        return SimpleNamespace(download_blob=download,
+            url='https://fixture.blob.core.windows.net/' + identity['container'] + '/' + identity['blob'])
+    monkeypatch.setattr(blob,'_service_client',lambda:SimpleNamespace(get_blob_client=client))
+    assert blob.download_report_evidence('owner','scan','file.pdf',max_bytes=max_bytes)==payload
+    assert len(calls)==1 and calls[0][0]=={'container':blob._CONTAINER,'blob':key}
+    assert calls[0][1]['offset']==0 and calls[0][1]['length']==max_bytes+1
+    assert blob.download_report_evidence('another-owner','scan','file.pdf',max_bytes=max_bytes) is None
+    assert len(calls)==1  # An unauthorized pointer never reaches the downloader.
+    if max_bytes==4:
+        payload=b'abd'
+        assert blob.download_report_evidence('owner','scan','file.pdf',max_bytes=max_bytes) is None

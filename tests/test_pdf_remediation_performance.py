@@ -33,7 +33,7 @@ def _png() -> bytes:
      "evidence": "stub", "model": "stub-vision"},
     None,
 ])
-def test_same_page_manual_figures_share_context_render_without_vision(tmp_path, monkeypatch, result):
+def test_same_page_unmapped_figures_do_not_render_or_draft_page_pixels(tmp_path, monkeypatch, result):
     """Even an available grounded model must not caption whole-page context."""
     src = tmp_path / "three-figures-one-page.pdf"
     _tagged_pdf(src, n_figs=3)
@@ -58,15 +58,15 @@ def test_same_page_manual_figures_share_context_render_without_vision(tmp_path, 
             proposals=props, applied_fixes=fixes)
         assert all(rp._fig_alt(f) is None for f in rp._collect_figures(pdf.Root.StructTreeRoot))
 
-    assert calls == {"render": 1, "ocr_and_vision": 0}
+    assert calls == {"render": 0, "ocr_and_vision": 0}
     assert applied == [] and fixes == [] and deferred == 3
     assert [p["locator"] for p in props] == ["pdf:fig:1:0", "pdf:fig:1:1", "pdf:fig:1:2"]
-    assert len({p["thumb"] for p in props}) == 1
+    assert all(not p.get("thumb") for p in props)
     assert all(not p["proposed_value"] for p in props)
 
 
-def test_different_pages_keep_distinct_manual_context_thumbnails(tmp_path, monkeypatch):
-    """Page thumbnails cannot be reused for a figure belonging to another page."""
+def test_different_pages_keep_locators_without_unmapped_page_thumbnails(tmp_path, monkeypatch):
+    """Unmapped page pixels never become evidence for any figure."""
     src = tmp_path / "two-pages.pdf"
     _tagged_pdf(src, n_figs=2)
     with pikepdf.open(str(src), allow_overwriting_input=True) as pdf:
@@ -98,10 +98,8 @@ def test_different_pages_keep_distinct_manual_context_thumbnails(tmp_path, monke
             proposals=props, applied_fixes=fixes)
         assert all(rp._fig_alt(f) is None for f in rp._collect_figures(pdf.Root.StructTreeRoot))
 
-    assert rendered == [1, 2] and described == []
+    assert rendered == [] and described == []
     assert applied == [] and fixes == [] and deferred == 2
     assert [p["locator"] for p in props] == ["pdf:fig:1:0", "pdf:fig:2:0"]
-    pixels = [Image.open(io.BytesIO(base64.b64decode(p["thumb"].split(",", 1)[1]))).getpixel((0, 0))
-              for p in props]
-    assert pixels == [(1, 0, 0), (2, 0, 0)]
+    assert all(not p.get("thumb") for p in props)
     assert all(not p["proposed_value"] for p in props)

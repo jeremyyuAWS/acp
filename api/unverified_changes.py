@@ -66,6 +66,15 @@ def pending_records(store, scan_id, filename):
         rows = store._db.fetchall(cur)
     parsed=[{**json.loads(row['detail']), 'event_id':row['id'], 'rule_id':row['rule_id'],
              'action':row['action'], 'recorded_at':row['ts']} for row in rows]
+    # Only an exact independently validated retry can supersede its own failed caption.
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "SELECT detail FROM decision_log WHERE scan_id=%s AND file=%s AND action='office_retry.saved'", (scan_id, filename))
+        retries = [json.loads(row['detail']) for row in store._db.fetchall(cur)]
+    retries = [r for r in retries if r.get('artifact_sha256') == r.get('replacement_sha256')
+               and r.get('replacement_validation', {}).get('approved') is True
+               and r.get('verification') == 'independent_caption_and_actual_reassessment'
+               and r.get('original_outcome') == 'superseded_not_verified'
+               and r.get('approval_identity') == 'standing-caption-retry:' + str(r.get('operation_id'))]
     # A later edit to a different criterion must not erase an outstanding semantic
     # obligation. Carry it only along durable writer edges for this file. A new assessment is not semantic confirmation.
     ancestors = {digest}
@@ -74,6 +83,7 @@ def pending_records(store, scan_id, filename):
         edges = [(r.get('actual_source_sha256'), r.get('artifact_sha256')) for r in store._db.fetchall(cur)]
     edges.extend((r.get('source_sha256'),r.get('artifact_sha256')) for r in parsed
                  if r.get('assessment_revision') and r['action']=='apply.saved_unverified')
+    edges.extend((r.get('previous_artifact_sha256'), r.get('artifact_sha256')) for r in retries)
     while True:
         earlier={before for before,after in edges if before and after in ancestors}
         if earlier.issubset(ancestors):
@@ -101,9 +111,20 @@ def pending_records(store, scan_id, filename):
                 and all(any(r['item_id']==item and r['rule_id']==entry['rule_id']
                             and r.get('created_at') and r['created_at'] > entry['recorded_at']
                             for r in human_confirmed) for item in entry['item_ids']))
-    return [{**r, 'artifact_sha256': digest, 'applied_artifact_sha256': r.get('artifact_sha256')}
-            for r in relevant if r['action']=='apply.saved_unverified' and r['event_id'] not in cleared
-            and not confirmed(r)]
+    pending = []
+    for r in relevant:
+        if r['action'] != 'apply.saved_unverified' or r['event_id'] in cleared or confirmed(r):
+            continue
+        changes = [change for change in r.get('changes', []) if not any(
+            retry.get('artifact_sha256') in ancestors and retry.get('source_revision') == r.get('assessment_revision')
+            and retry.get('item_id') in r.get('item_ids', [])
+            and retry.get('locator') == change.get('locator')
+            and retry.get('original_caption') == change.get('after') for retry in retries)]
+        if r.get('changes') and not changes:
+            continue
+        pending.append({**r, 'changes': changes, 'artifact_sha256': digest,
+                        'applied_artifact_sha256': r.get('artifact_sha256')})
+    return pending
 
 
 def blocks_certification(store, scan_id, filename):

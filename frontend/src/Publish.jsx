@@ -40,6 +40,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   // the restriction; this filter enforces it for selection, delivery, packaging and set status.
   const releaseFiles = documentsInSelection(files, triage)
   const [automaticAuthorization, setAutomaticAuthorization] = useState(null)
+  const automaticBinding = useRef(null)
   const [automaticStatusPending, setAutomaticStatusPending] = useState(true)
   const [automaticStatusError, setAutomaticStatusError] = useState('')
   const [automaticStatusRefresh, setAutomaticStatusRefresh] = useState(0)
@@ -120,23 +121,29 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     setConfirm(null); setSel(null); setBuilderStep(1); setReleaseAnnouncement(''); setReleaseError(null)
   }, [run?.id, releaseOwner])
   useEffect(() => {
-    let live = true
-    const controller = new AbortController()
+    let live = true, controller, timer, deadline, cancel, failures = 0
     const epoch = authEpoch()
-    partialChoice.current = null
-    setAutomaticAuthorization(null)
+    const binding = JSON.stringify([releaseScopeKey, releaseOwner, epoch, readOnly])
+    if (automaticBinding.current !== binding) {
+      automaticBinding.current = binding
+      partialChoice.current = null
+      setAutomaticAuthorization(null)
+      setAllowRemainingIssues(false)
+    }
     setAutomaticStatusPending(true)
     setAutomaticStatusError('')
-    setAllowRemainingIssues(false)
-    if (!run?.id || !releaseFiles.length || readOnly) { setAutomaticStatusPending(false); return () => controller.abort() }
-    let timer, deadline, cancel
+    if (!run?.id || !releaseFiles.length || readOnly) { setAutomaticStatusPending(false); return }
+    const current = () => live && authEpoch() === epoch
     const refresh = async () => {
+      if (!current()) return
+      controller = new AbortController() // A timed-out attempt cannot poison later GETs.
       try {
         const result = await Promise.race([
           getAutomaticRelease(run.id, releaseFiles.map(file => file.file), { signal: controller.signal }),
           new Promise((_, reject) => { cancel = () => reject(new Error('Cancelled')); deadline = setTimeout(() => { controller.abort(); reject(new Error('Automatic publication status timed out.')) }, 20000) }),
         ])
-        if (!live || authEpoch() !== epoch) return
+        if (!current()) return
+        failures = 0
         const saved = result?.authorization
         setAutomaticAuthorization(saved ? { ...saved, observedScope: releaseScopeKey, observedOwner: releaseOwner, observedRunId: result.run_id, observedEpoch: epoch } : null)
         setAutomaticStatusPending(false)
@@ -146,11 +153,18 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           && releaseFiles.every(file => saved.files?.includes(file.file))) setAllowRemainingIssues(true)
         if (saved && (['active','waiting','processing','publishing','blocked'].includes(saved.status)
           || (saved.package && !['done','dead','cancelled'].includes(saved.package.status)))) timer = window.setTimeout(refresh, 5000)
-      } catch { if (live && authEpoch() === epoch) { setAutomaticStatusPending(false); setAutomaticStatusError('Automatic publication status could not be confirmed. Refresh status before publishing again.') } }
-      finally { clearTimeout(deadline); cancel = null }
+      } catch (error) {
+        if (current()) {
+          failures += 1
+          const retry = ![401, 403].includes(error?.status) && failures < 5
+          setAutomaticStatusPending(false)
+          setAutomaticStatusError(retry ? 'Automatic publication status is temporarily unavailable. ACP will check again automatically.' : 'Automatic publication status could not be confirmed. Refresh status before publishing again.')
+          if (retry) timer = window.setTimeout(refresh, [5000, 10000, 20000, 30000][failures-1])
+        }
+      } finally { clearTimeout(deadline); cancel = null }
     }
     refresh()
-    return () => { live = false; window.clearTimeout(timer); clearTimeout(deadline); controller.abort(); cancel?.() }
+    return () => { live = false; window.clearTimeout(timer); clearTimeout(deadline); controller?.abort(); cancel?.() }
   }, [releaseScopeKey, releaseOwner, readOnly, automaticStatusRefresh])
   useEffect(() => {
     if (!run?.id) { setPackageJob(null); return }
@@ -780,9 +794,6 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }
 
   const changeRemainingIssues = value => { partialChoice.current = releaseScopeKey; setAllowRemainingIssues(value); setReleasePreview(null); setPackagePreview(null); setReviewedPlanKey(null); setBuilderStep(1); setDeliveryMethod('publish'); setSelectedFiles(new Set()); selectionInitialized.current = false }
-  const driveReconnect = (automaticAuthorization?.requires_reconnect === true || automaticAuthorization?.can_resume === true) && automaticAuthorization.resumable !== false && ['active', 'waiting', 'processing', 'publishing', 'blocked'].includes(automaticAuthorization.status) && <DriveReleaseReconnect
-        key={`${run?.id}:${automaticAuthorization.id}`} scanId={run?.id} authorizationId={automaticAuthorization.id} provider={automaticAuthorization?.destination?.provider} requiresReconnect={automaticAuthorization.requires_reconnect === true} readOnly={readOnly}
-        onResume={async () => { await resumeAutomaticRelease(run.id, automaticAuthorization.id); setAutomaticAuthorization(previous => previous?.id === automaticAuthorization.id ? {...previous, requires_reconnect:false, can_resume:false} : previous) }} />
   const automaticCoveredFiles = automaticAuthorization?.observedScope === releaseScopeKey
     && automaticAuthorization?.observedOwner === releaseOwner
     && automaticAuthorization?.observedEpoch === authEpoch()
@@ -792,6 +803,14 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     && automaticAuthorization.destination?.provider === releaseProvider
     && (!releaseDestination || ['provider', 'folder_id', 'drive_id', 'site_id'].every(key => (releaseDestination[key] || null) === (automaticAuthorization.destination?.[key] || null)))
       ? automaticAuthorization.files || [] : []
+  const driveReconnect = automaticCoveredFiles.length > 0
+    && (automaticAuthorization.requires_reconnect === true || automaticAuthorization.can_resume === true)
+    && automaticAuthorization.resumable !== false && <DriveReleaseReconnect
+      key={`${run?.id}:${automaticAuthorization.id}`} scanId={run?.id} authorizationId={automaticAuthorization.id}
+      authorization={automaticAuthorization} owner={releaseOwner} provider={automaticAuthorization.destination?.provider}
+      requiresReconnect={automaticAuthorization.requires_reconnect === true} readOnly={readOnly || automaticStatusPending}
+      onRefresh={() => setAutomaticStatusRefresh(value => value + 1)}
+      onResume={() => resumeAutomaticRelease(run.id, automaticAuthorization.id)} />
   const automaticDelivery = !readOnly && ['active', 'waiting', 'processing', 'publishing', 'blocked'].includes(automaticAuthorization?.status)
     ? automaticAuthorization : null
   const manualReady = automaticDelivery

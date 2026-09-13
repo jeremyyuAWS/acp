@@ -264,3 +264,29 @@ def test_native_provider_limit_is_explained_without_claiming_a_fix(monkeypatch):
     assert not queued
     assert 'input allowance' in logs[0][1]['detail']
     assert 'document_wide_native_pdf_context_limit' not in logs[0][1]['detail']
+
+
+def test_pending_exact_caption_does_not_charge_for_other_same_criterion_drafts(monkeypatch):
+    """One file/SC row cannot retain a second unvalidated draft set.
+
+    Semantic validation itself has real managed PDF coverage; this fixture tests
+    orchestration with a trusted exact result and a separate unresolved target.
+    """
+    from dataclasses import replace
+    import remediate_pdf
+    store, ctx, calls, logs, queued = setup(monkeypatch, sc='1.1.1')
+    _, _, locator, manifest = fixture(monkeypatch, '1.1.1')
+    additional = replace(manifest.findings[0], finding_id='remaining-real-finding',
+                         locator=replace(locator, element_ref='pdf:fig:2:0'))
+    manifest = replace(manifest, findings=manifest.findings + (additional,))
+    sys.modules['document_wide_manifest'].build_manifest = lambda *a: manifest
+    proposal = {'kind': 'pdf-figure-alt', 'finding_ids': ['real-finding']}
+    existing = {'file': 'file.pdf', 'rule_id': '1.1.1', 'status': 'pending',
+                'proposals': [proposal]}
+    store.list_hitl_queue = lambda **kw: [existing]
+    monkeypatch.setattr(remediate_pdf, 'validate_exact_pdf_finding_bindings', lambda *a, **kw: True)
+    workflow.process_file(store, ctx)
+    assert not calls and not queued
+    assert existing['proposals'] == [proposal] and existing['status'] == 'pending'
+    assert 'No remaining findings have a supported document-wide target' in logs[-1][1]['detail']
+    assert additional.finding_id == 'remaining-real-finding'  # never resolved/credited

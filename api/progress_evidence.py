@@ -83,6 +83,7 @@ def _read(store, execution_id, *, owner=None):
         return unavailable
     baseline = {'available': False, 'run_id': execution_id}
     if execution['stage'] == 'release':
+        from release_batch_progress import read as read_release_batch
         total = execution.get('expected_items')
         if type(total) is int and total >= 0:
             baseline = {'available': True, 'run_id': execution_id,
@@ -90,7 +91,8 @@ def _read(store, execution_id, *, owner=None):
                         'started_at': execution['created_at'],
                         'publication': {'queued': total, 'processing': 0,
                                         'published': 0, 'attention': 0, 'skipped': 0}}
-        return {**unavailable, 'progress_baseline': baseline}
+        return {**unavailable, 'progress_baseline': baseline,
+                'release_batch_progress': read_release_batch(store, execution)}
     if execution['stage'] != 'remediate':
         return unavailable
     with store._db.cursor() as cur:
@@ -127,7 +129,7 @@ def _read(store, execution_id, *, owner=None):
                 'findings': {'queued': len(findings), 'processing': 0, 'attention': 0,
                              'verified': 0, 'excluded': 0}, 'file_coverage': coverage_before}
     return {'progress_baseline': baseline, 'file_processing': {
-        'available': True, 'run_id': execution_id,
+        'available': True, 'run_id': execution_id, 'population_fixed': True,
         'files': [{'file': name, 'hasFindings': name in affected} for name in files],
         'attempts': attempts, 'baseline': coverage_before,
         'counts': {'withFindings': len(affected), 'processed': len(processed),
