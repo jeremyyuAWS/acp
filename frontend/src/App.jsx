@@ -2280,7 +2280,8 @@ export default function App() {
               onStop={canonicalScanId ? () => stopScan(canonicalScanId) : undefined}
               onReview={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
               onContinue={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
-              preflightDegraded={preflightDegraded} runStartedAt={progress?.started_at ?? null} />
+              preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? null}
+              runStartedAt={progress?.started_at ?? null} />
           ) : null,
           assess: canonicalStage?.stage === 'assess' ? (
             <LiveAssessmentLive scanId={canonicalScanId}

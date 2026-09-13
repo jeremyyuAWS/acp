@@ -92,7 +92,7 @@ export default function RemediationAutoRelease({ scanId, files = [], readOnly = 
         {authorization.last_progress_at && Number.isFinite(Date.parse(authorization.last_progress_at)) && <p>Last delivery progress: {new Date(authorization.last_progress_at).toLocaleString()}.</p>}
       </div>}
       {(authorization.requires_reconnect === true || authorization.can_resume === true) && authorization.resumable !== false && enabled && <DriveReleaseReconnect
-        key={`${scanId}:${authorization.id}`} scanId={scanId} authorizationId={authorization.id} requiresReconnect={authorization.requires_reconnect === true} readOnly={readOnly || busy}
+        key={`${scanId}:${authorization.id}`} provider={authorization.destination?.provider} scanId={scanId} authorizationId={authorization.id} requiresReconnect={authorization.requires_reconnect === true} readOnly={readOnly || busy}
         onResume={async () => { await client.resume(scanId, authorization.id); setRefresh(n => n + 1) }} />}
       <dl aria-live="off">
         <div><dt>Released</dt><dd><LiveCounter value={progress.published || 0} /></dd></div>

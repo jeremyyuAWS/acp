@@ -937,12 +937,12 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
         raise FatalJobError("Release with remaining issues requires exact artifact authorization")
     saved = core.store.get_release_document(release_id, filename, owner)
     def require_reconnect():
-        if source == "drive" and payload.get("automatic_release_id"):
+        if source in {"drive", "sharepoint"} and payload.get("automatic_release_id"):
             import automatic_release_store as persistence
             persistence.update_file(core.store, payload["automatic_release_id"], owner, filename,
                                     {"state": "blocked", "requires_reconnect": True,
                                      "waiting_for_delivery": False,
-                                     "message": "Reconnect Google Drive with write access to resume delivery."})
+                                     "message": f"Reconnect {provider} with write access to resume delivery."})
 
     token = core.get_scan_tokens(scan_id).get("drive" if source == "drive" else "sp")
     if not token:
@@ -1164,6 +1164,7 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
         _release_failure(release_id, owner, filename, record,
                          "provider_session_expired",
                          f"Reconnect {provider} and retry this document.")
+        require_reconnect()
         raise FatalJobError(f"{provider} session expired — reconnect and retry")
     except PermissionError as exc:
         log_provider_failure(exc)
@@ -1177,15 +1178,18 @@ def _publish_file_guarded(payload: dict, job: dict) -> None:
     except FatalJobError:
         raise
     except Exception as exc:
-        if source == "drive":
+        if source in {"drive", "sharepoint"}:
             diagnostic = log_provider_failure(exc)
             status = diagnostic.get("http_status")
+            if source == "sharepoint" and status == 401 and int((job or {}).get("attempts") or 1) < int((job or {}).get("max_attempts") or 5):
+                # Allow the running page a bounded window to silently refresh access.
+                raise
             if status in {401, 403}:
                 require_reconnect()
                 category = "provider_session_expired" if status == 401 else "provider_permission_denied"
                 _release_failure(release_id, owner, filename, record, category,
-                                 "Reconnect Google Drive with write access and retry this document.")
-                raise FatalJobError("Google Drive access needs reconnecting") from exc
+                                 f"Reconnect {provider} with write access and retry this document.")
+                raise FatalJobError(f"{provider} access needs reconnecting") from exc
         # Let transient Graph/Redis failures use the queue's normal retry/backoff. On the final
         # attempt, settle the document into an actionable durable state instead of leaving it
         # looking queued forever after the job dead-letters.

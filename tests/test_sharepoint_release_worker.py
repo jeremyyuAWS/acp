@@ -533,3 +533,29 @@ def _candidate_assessment_for_delivery_fixture(monkeypatch):
     import release_candidate_assessment
     monkeypatch.setattr(release_candidate_assessment, 'assess_candidate',
                         lambda *args, **kwargs: {'fixture_assessment': True})
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_sharepoint_http_auth_failure_is_actionable_and_reconnectable(monkeypatch, status):
+    import core, handlers, publish, automatic_release_store
+    from worker import FatalJobError
+    import requests
+    store = FakeStore()
+    store.root = {"folder_id": "root-1"}
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setattr(core, "get_scan_tokens", lambda *a: {"sp": "expired-token"})
+    updates = []
+    monkeypatch.setattr(automatic_release_store, "update_file", lambda *a: updates.append(a[-1]))
+    response = requests.Response()
+    response.status_code = status
+    error = requests.HTTPError("SECRET provider text", response=response)
+    monkeypatch.setattr(publish, "archive_copy_publish_sharepoint", lambda *a, **k: (_ for _ in ()).throw(error))
+    with pytest.raises(FatalJobError, match="SharePoint access needs reconnecting"):
+        handlers._publish_file_guarded({"scan_id": SID, "release_id": "release-1", "file": FILE,
+                                       "owner": OWNER, "automatic_release_id": "auto-1"},
+                                      {"attempts": 5, "max_attempts": 5})
+    assert updates[0]["requires_reconnect"]
+    assert "SharePoint" in updates[0]["message"]
+    assert store.documents[FILE]["failure_category"] == ("provider_session_expired" if status == 401 else "provider_permission_denied")
+    assert "SECRET" not in repr(store.documents)
+    assert store.published is None

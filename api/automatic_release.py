@@ -143,7 +143,7 @@ def public(row, store=None):
                 allow_remaining_issues=row['intent'].get('allow_remaining_issues', False),
                 include_reports=row['intent'].get('include_reports', False),
                 requires_reconnect=any(e.get('requires_reconnect') for e in details.values()),
-                can_resume=row['intent']['destination']['provider'] == 'drive' and row['status'] in ACTIVE and any(
+                can_resume=row['intent']['destination']['provider'] in {'drive', 'sharepoint'} and row['status'] in ACTIVE and any(
                     e.get('state') == 'blocked' and e.get('artifact_digest') for e in details.values()),
                 needs_attention=stalled_files > 0,
                 attention_reason=row['progress'].get('_delivery_watch', {}).get('reason') if stalled_files else None,
@@ -401,6 +401,46 @@ def resume(store, authorization_id, owner, scan_id):
         return persistence.save(store, row, status='waiting', progress=progress, schedule=True, delay=0)
 
 
+def resume_sharepoint_job(store, row, file, digest):
+    """Revive the original dead job, retaining its receipt and reservation identity.
+
+    Advance consumes exact receipts first. The same worker then checks the exact
+    destination bytes before writing; a newly computed batch could lose that proof.
+    """
+    with store.transaction():
+        fresh = persistence.get(store, row['id'], row['owner_email'], lock=True)
+        require_authority(store, fresh, file)
+        if fresh['intent']['destination']['provider'] != 'sharepoint':
+            raise ValueError('This recovery requires the original SharePoint destination.')
+        entry = fresh['progress'].get('files', {}).get(file, {})
+        if not entry.get('resume_requested') or entry.get('artifact_digest') != digest:
+            raise ValueError('Resume the saved delivery explicitly before retrying.')
+        with store._db.cursor() as cur:
+            store._db.execute(cur, "SELECT id,payload,status,batch_id FROM jobs WHERE scan_id=%s AND type='publish_file'", (row['scan_id'],))
+            matching = []
+            for job in store._db.fetchall(cur):
+                payload = json.loads(job['payload']) if isinstance(job['payload'], str) else job['payload']
+                if payload.get('automatic_release_id') == row['id'] and payload.get('file') == file:
+                    if payload.get('owner') != row['owner_email'] or payload.get('artifact_digest') != 'sha256:' + digest:
+                        raise ValueError('The original delivery identity differs. Review a new plan explicitly.')
+                    matching.append(job)
+            if len(matching) != 1 or matching[0]['status'] != 'dead':
+                raise ValueError('The original delivery cannot be resumed safely. Check its receipt and stage.')
+            job = matching[0]
+            original = json.loads(job['payload']) if isinstance(job['payload'], str) else job['payload']
+            release = store.release_status(original.get('release_id'), row['owner_email'])
+            if not release or release.get('scan_id') != row['scan_id'] or release.get('parent_folder_id') != row['intent']['release_parent_id'] or release.get('folder_name') != row['intent']['release_folder_name']:
+                raise ValueError('The original release destination differs. Review a new plan explicitly.')
+            store._db.execute(cur, "SELECT owner_email,state,is_current FROM stage_executions WHERE execution_id=%s", (job['batch_id'],))
+            stage = store._db.fetchone(cur)
+            if not stage or stage['owner_email'] != row['owner_email'] or not stage['is_current'] or stage['state'] == 'cancelled':
+                raise ValueError('The original release stage changed or was stopped. Review a new plan explicitly.')
+            now = store._now()
+            store._db.execute(cur, "UPDATE jobs SET status='queued',attempts=0,run_after=%s,locked_at=NULL,locked_by=NULL,lease_expires_at=NULL,last_error=NULL,updated_at=%s WHERE id=%s AND status='dead'", (now, now, job['id']))
+            store._db.execute(cur, "UPDATE stage_work_items SET state='queued',revision=revision+1,attempt=0,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,terminal_reason=NULL,updated_at=%s WHERE job_id=%s", (now, job['id']))
+            store._db.execute(cur, "UPDATE stage_executions SET state='processing',revision=revision+1,updated_at=%s WHERE execution_id=%s", (now, job['batch_id']))
+
+
 def dispatch(store, row, file, digest):
     from routes.scans import publish_files
     request = request_for(row['owner_email'], row['scan_id'])
@@ -508,8 +548,15 @@ def advance(store, payload, job):
                             persistence.update_file(store,row['id'],row['owner_email'],file,
                                 dict(state='blocked', message='Delivery job stopped or failed. Reconnect Google Drive and resume to check its receipt safely.'))
                     else:
-                        persistence.update_file(store,row['id'],row['owner_email'],file,
-                            dict(state='failed',message='Delivery job stopped or failed. Reconcile its receipt before authorizing another attempt.'))
+                        if entry.get('resume_requested') and dispatched < MAX_DISPATCH_PER_TICK:
+                            resume_sharepoint_job(store, row, file, entry['artifact_digest'])
+                            dispatched += 1
+                            persistence.update_file(store,row['id'],row['owner_email'],file,
+                                dict(state='publishing', resume_requested=False, requires_reconnect=False,
+                                     message='Checking the saved delivery before resuming.'))
+                        else:
+                            persistence.update_file(store,row['id'],row['owner_email'],file,
+                                dict(state='blocked',message='SharePoint delivery stopped. Restore access and resume the saved release to check its receipt safely.'))
                 elif row['intent']['destination']['provider'] == 'drive' and not pending_jobs.get(file) and dispatched < MAX_DISPATCH_PER_TICK:
                     # Legacy synchronous delivery has no durable worker. The queue helper
                     # retains its stage/reservation identities and only admits frozen bytes.

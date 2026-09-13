@@ -94,6 +94,8 @@ it('freezes only eligible files when the selection includes blocked files', asyn
   expect(v.input().disabled).toBe(false)
   expect(v.onChange).toHaveBeenLastCalledWith(expect.objectContaining({files:['a']}))
   expect(v.container.textContent).toContain('1 file will be skipped')
+  expect(v.container.textContent).toContain('Automatic publishing covers 1 of 2 selected files.')
+  expect(v.container.textContent).toContain('becoming ready later does not add them')
   expect(v.container.querySelector('[aria-label="Files blocking automatic publishing"]').textContent).toContain('failed — Assessment failed.')
 })
 it('refreshes blocked readiness in the same scope without answering or approving publication', async () => {
