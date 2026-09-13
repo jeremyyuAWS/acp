@@ -620,7 +620,8 @@ def generation(trace, name: str, *, model: str | None = None, prompt_chars: int 
                completion_chars: int = 0, prompt_tokens: int | None = None,
                completion_tokens: int | None = None, cost: float = 0.0,
                provider: str | None = None, zone: str | None = None,
-               latency_ms: int | None = None, ok: bool = True, surface: str | None = None):
+               latency_ms: int | None = None, ok: bool = True, surface: str | None = None,
+               timing: dict | None = None):
     """A Langfuse GENERATION (not a span) for one model call, hung on `trace`.
 
     A generation is what carries the LLM-native fields Langfuse understands — model, token
@@ -637,6 +638,8 @@ def generation(trace, name: str, *, model: str | None = None, prompt_chars: int 
     # Langfuse v2 usage model — token counts + a real measured cost (0 for local Ollama; a
     # cloud adapter's per-call cost otherwise, never a fabricated one). Keys omitted when the
     # provider did not report them, so an absent count reads as "unknown", not "zero".
+    from ollama_runtime import safe_timings
+    measured = safe_timings(timing)
     usage: dict = {"unit": "TOKENS"}
     if prompt_tokens is not None:
         usage["input"] = prompt_tokens
@@ -655,7 +658,8 @@ def generation(trace, name: str, *, model: str | None = None, prompt_chars: int 
             usage=usage,
             metadata={"provider": provider, "zone": zone, "cost_usd": cost,
                       "surface": surface or name, "prompt_tokens": prompt_tokens,
-                      "completion_tokens": completion_tokens, "ok": ok},
+                      "completion_tokens": completion_tokens, "ok": ok,
+                      **({"timing": measured} if measured else {})},
         )
         g.end()
         return g
@@ -668,7 +672,7 @@ def trace_ai_call(surface: str, model: str, latency_ms: int, *, ok: bool,
                   scan_id: str | None = None, file: str | None = None,
                   provider: str = "ollama", zone: str | None = None, cost: float = 0.0,
                   prompt_tokens: int | None = None,
-                  completion_tokens: int | None = None) -> None:
+                  completion_tokens: int | None = None, timing: dict | None = None) -> None:
     """Trace one model call as a Langfuse GENERATION. Captures model, latency, prompt size,
     completion SIZE, token usage, provider/zone and cost — the LLM-observability the audit
     found missing (it was recorded as a plain span, so token usage and cost never reached
@@ -707,7 +711,7 @@ def trace_ai_call(surface: str, model: str, latency_ms: int, *, ok: bool,
                    completion_chars=len(completion or ""),
                    prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                    cost=cost, provider=provider, zone=zone, latency_ms=latency_ms, ok=ok,
-                   surface=surface)
+                   surface=surface, timing=timing)
     except Exception:
         swallowed("lf.trace_ai_call: tracing the AI call failed", scan_id)
 

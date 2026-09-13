@@ -27,3 +27,16 @@ def timings(data):
     # A server's actual model-load time is separate from inference. These are
     # observed durations, not guesses that every slow response was a cold start.
     return result
+
+
+# Fixed numeric allowlist: never retain provider payloads, text or endpoint metadata.
+TIMING_FIELDS = frozenset(('total_ms', 'model_load_ms', 'prompt_eval_ms',
+                           'inference_ms', 'output_tokens_per_second'))
+
+
+def safe_timings(value):
+    if not isinstance(value, dict):
+        return {}
+    return {key: round(number, 3) for key, number in value.items()
+            if key in TIMING_FIELDS and type(number) in (int, float)
+            and 0 <= number <= 2**63 / 1_000_000 and math.isfinite(number)}

@@ -405,7 +405,7 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
               reason: str | None = None, prompt_tokens: int | None = None,
               completion_tokens: int | None = None, temperature: float | None = None,
               prompt_version: str | None = None, managed_output_sha256: str | None = None,
-              managed_operation_id: str | None = None) -> str | None:
+              managed_operation_id: str | None = None, timing: dict | None = None) -> str | None:
     """Emit a Langfuse span + persist an ai_calls provenance row for one model call — model,
     latency, prompt size, completion, ok, and (ADR 0019 §1) which provider/zone/cost it ran on.
     model defaults to the text model; vision calls pass the vision model. `provider`/`zone`/`cost_usd`
@@ -416,6 +416,8 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
     tell an operator whether the endpoint was unreachable, answered an error, or answered 200
     with nothing — three different fixes that were one indistinguishable row until 2026-07-31."""
     import time as _t
+    from ollama_runtime import safe_timings
+    measured = safe_timings(timing)
     latency_ms = int((_t.monotonic() - t0) * 1000)
     mdl = model or OLLAMA_MODEL
     zn = zone or provenance()["zone"]
@@ -444,7 +446,8 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
         _lf.trace_ai_call(surface, mdl, latency_ms, ok=ok, prompt_chars=len(prompt or ""),
                           completion=completion, scan_id=scan_id, file=file,
                           provider=provider, zone=zn, cost=cost_usd,
-                          prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+                          prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                          **({"timing": measured} if measured else {}))
     except Exception:
         swallowed("ai._trace_ai: emitting the AI-call trace failed", scan_id)
     # ADR 0019 Phase 0b — persist an ai_calls provenance row (provider/model/local-or-cloud zone/
@@ -456,6 +459,7 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
                                          zone=zn, latency_ms=latency_ms, ok=ok, cost_usd=cost_usd,
                                          scan_id=scan_id, file=file, reason=reason,
                                          temperature=temperature, prompt_version=prompt_version,
+                                         **({"timing": measured} if measured else {}),
                                          **({'call_identity':managed_identity} if managed_identity else {}))
         try:
             from ai_run_policy import optional_current_run_context
@@ -1029,7 +1033,7 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
                zone=res.get("zone"), cost_usd=res.get("cost_usd", 0.0),
                prompt_tokens=res.get("prompt_tokens"),
                completion_tokens=res.get("completion_tokens"),
-               prompt_version=prompt_version)
+               prompt_version=prompt_version, timing=res.get("timing"))
     raw = (res.get("text") or "").strip() if res.get("ok") else ""
     if not res.get("ok") or not raw:
         # The adapter already logged the distinguishing detail and named the mode; carry its
