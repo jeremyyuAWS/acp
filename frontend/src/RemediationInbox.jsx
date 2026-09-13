@@ -383,6 +383,9 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
   // proposed value until the reviewer types; `edited` flips the primary action to "Save edited fix".
   const structuralRow = isPdfStructuralRow(f)
   const structuralReady = !structuralRow || proposalsFor(f).every(pdfStructuralSummary)
+  const automaticState = f._raw?.automatic_approval?.state || f.automatic_approval?.state
+    || f._raw?.auto_approval_status || f.auto_approval_status
+  const automaticLabel = automaticState === 'processing' ? 'Applying automatically' : 'Queued automatically'
   const canEdit = !structuralRow && !resolved && !isManual && !isAutoFix && f.after != null && f.after !== ''
   const draftValue = draft ?? (f.after ?? '')
   const edited = canEdit && draftValue !== (f.after ?? '')
@@ -489,8 +492,8 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
                back for a person; it does NOT auto-revert the applied change (no backend undo exists —
                see PR body), so it is labelled as a flag, not a "reject & revert". */
             <>
-              <button className="primary" disabled={saving} onClick={() => onDecide?.(f, { state: 'accepted' })}>
-                {saving ? 'Saving…' : f.autoApplied ? 'Mark inspected →' : legacyApprovalControls ? 'Yes, apply fix' : 'Apply this fix'}
+              <button className="primary" disabled={saving || f.automaticQueued} onClick={() => { if (!f.automaticQueued) onDecide?.(f, { state: 'accepted' }) }}>
+                {f.automaticQueued ? automaticLabel : saving ? 'Saving…' : f.autoApplied ? 'Mark inspected →' : legacyApprovalControls ? 'Yes, apply fix' : 'Apply this fix'}
               </button>
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
               {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
@@ -498,9 +501,9 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             </>
           ) : (
             <>
-              <button className="primary" disabled={saving || !structuralReady}
-                      onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>
-                {saving ? 'Saving…' : legacyApprovalControls ? 'Yes, apply fix' : 'Apply this fix'}
+              <button className="primary" disabled={saving || !structuralReady || f.automaticQueued}
+                      onClick={() => { if (!f.automaticQueued) onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined }) }}>
+                {f.automaticQueued ? automaticLabel : saving ? 'Saving…' : legacyApprovalControls ? 'Yes, apply fix' : 'Apply this fix'}
               </button>
               {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
                   person (the handoff lane), so the label names that outcome rather than leaving the
@@ -691,6 +694,8 @@ export default function RemediationInbox({
   renderDetailExtra = null,
 }) {
   const queue = useMemo(() => automaticReviewQueue(suppliedQueue, automaticApprovalPolicy, decisions), [suppliedQueue, automaticApprovalPolicy, decisions])
+  const currentQueueRef = useRef(queue)
+  currentQueueRef.current = queue
   const [selectedId, setSelectedId] = useState(null)
   const [tab, setTab] = useState(initialTab)
   const [sort, setSort] = useState(initialSort)
@@ -890,6 +895,9 @@ export default function RemediationInbox({
   // the buttons that failed, and nothing advances.
   async function act(f, decision) {
     if (!f || savingId != null) return
+    // Recheck the current server-projected row: an old pane callback must not
+    // manually approve a proposal admitted automatically since it rendered.
+    if (decision?.state === 'accepted' && currentQueueRef.current.find(row => row.id === f.id)?.automaticQueued) return
     // The parent removes the row from `queue` optimistically and puts it back only if the write
     // fails, so hold our own reference to keep the pane rendering THIS finding while it is in flight.
     heldRef.current.set(f.id, f)
