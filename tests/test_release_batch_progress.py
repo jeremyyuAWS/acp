@@ -185,3 +185,15 @@ def test_same_parent_and_folder_receipts_from_other_provider_do_not_count(isolat
     batch = progress_evidence.read(store, execution, owner='owner')['release_batch_progress']
     assert batch['delivered'] == 0
     assert batch['remaining'] == 3
+    assert automatic_release.receipt(store, authorization, 'file-0.pdf', 'a' * 64) is None
+
+
+@pytest.mark.parametrize('destination', [None, 'legacy-default', {'provider': 'unknown'}, {}])
+def test_missing_legacy_destination_identity_is_explicitly_unavailable(isolated_store, destination):
+    import release_batch_progress
+    store = isolated_store
+    _, authorization, _, _ = setup(store, scope=3)
+    authorization['intent']['destination'] = destination
+    assert release_batch_progress.read_authorization(store, authorization) == {
+        'available': False, 'scope': 'automatic', 'reason': 'destination_identity_unavailable'}
+    assert automatic_release.receipt(store, authorization, 'file-0.pdf', 'a' * 64) is None

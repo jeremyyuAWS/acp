@@ -66,7 +66,10 @@ def _project(store, row):
     if len(set(files)) != len(files):
         return {'available': False, 'scope': 'automatic'}
     release = store.release_for_scan(scan, owner) or {}
-    provider = (row['intent'].get('destination') or {}).get('provider')
+    destination = row['intent'].get('destination')
+    provider = destination.get('provider') if isinstance(destination, dict) else None
+    if provider not in {'drive', 'sharepoint', 'local'}:
+        return {'available': False, 'scope': 'automatic', 'reason': 'destination_identity_unavailable'}
     destination_matches = (provider in {'drive', 'sharepoint', 'local'}
                            and release.get('source') == provider
                            and release.get('parent_folder_id') == row['intent'].get('release_parent_id')

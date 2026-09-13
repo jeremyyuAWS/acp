@@ -332,8 +332,12 @@ def ready(store, row, file):
 
 
 def receipt(store, row, file, digest):
+    destination = row['intent'].get('destination')
+    provider = destination.get('provider') if isinstance(destination, dict) else None
+    if provider not in {'drive', 'sharepoint', 'local'}:
+        return None
     release = store.release_for_scan(row['scan_id'], row['owner_email'])
-    if not release or release.get('parent_folder_id') != row['intent']['release_parent_id'] or release.get('folder_name') != row['intent']['release_folder_name']:
+    if not release or release.get('source') != provider or release.get('parent_folder_id') != row['intent']['release_parent_id'] or release.get('folder_name') != row['intent']['release_folder_name']:
         return None
     saved = store.get_release_document(release['id'], file, row['owner_email'])
     return saved if saved and saved.get('status') == 'published' and saved.get('artifact_digest') == artifact_tag(digest) else None
