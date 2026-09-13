@@ -15,10 +15,11 @@ describe('Review queue action pills', () => {
         scan_id:'s',proposal_snapshot_ids:['p'],run_id:'r',source_revision:1}}
     const mapReason='This PDF needs headings or table structure added in the original document. ACP cannot apply this draft automatically.'
     const nativeReason='This PDF structure draft was created from document rules and needs your review before ACP applies it.'
-    const projected=reason=>automaticReviewQueue([{...base,automatic_approval:{...base.automatic_approval,reason}}],policy)[0]
+    const native={...base,proposals:[{kind:'pdf-tag-heading',locator:'pdf:struct:1',proposed_value:JSON.stringify({op:'heading',role:'H1'})}]}
+    const projected=(reason,row=base)=>automaticReviewQueue([{...row,automatic_approval:{...row.automatic_approval,reason}}],policy)[0]
     expect(reviewQueueAction(projected(mapReason),{},true).label).toBe('Edit needed')
-    expect(reviewQueueAction(projected(nativeReason),{},true).label).toBe('Review needed')
-    const stale=automaticReviewQueue([{...base,automatic_approval:{...base.automatic_approval,reason:mapReason,run_id:'old'}}],policy)[0]
+    expect(reviewQueueAction(projected(nativeReason,native),{},true).label).toBe('Review needed')
+    const stale=automaticReviewQueue([{...native,automatic_approval:{...native.automatic_approval,reason:mapReason,run_id:'old'}}],policy)[0]
     expect(reviewQueueAction(stale,{},true).key).not.toBe('edit')
   })
   it('uses action ownership rather than severity and preserves uncertain automatic work', () => {
