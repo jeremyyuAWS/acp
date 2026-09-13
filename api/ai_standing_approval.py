@@ -123,8 +123,13 @@ def eligible_item(store, owner, sid, run_id, item, *, approved=False):
         raise ValueError("Suggestion is outside the selected assessment criteria")
     row = {**item, 'status': 'pending', 'applied': False} if approved else item
     reason = eligibility(row, row.get('file', ''))
-    if reason or row.get('rule_id') not in RULES:
-        raise ValueError(reason or 'This change requires individual review')
+    from release_continuation import PDF_STRUCTURE_KINDS, PDF_STRUCTURE_REVIEW
+    if reason:
+        raise ValueError(reason)
+    if row['file'].lower().endswith('.pdf') and row['rule_id'] in PDF_STRUCTURE_KINDS:
+        raise ValueError(PDF_STRUCTURE_REVIEW)
+    if row.get('rule_id') not in RULES:
+        raise ValueError('This change requires individual review')
     pdf_figures = [p for p in row['proposals'] if p.get('kind') == 'pdf-figure-alt']
     if pdf_figures:
         import blob

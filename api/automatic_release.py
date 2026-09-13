@@ -162,7 +162,7 @@ def public(row, store=None):
                 include_reports=row['intent'].get('include_reports', False),
                 requires_reconnect=any(e.get('requires_reconnect') for e in details.values()),
                 can_resume=row['intent']['destination']['provider'] in {'drive', 'sharepoint'} and row['status'] in ACTIVE and any(
-                    e.get('state') == 'blocked' and e.get('artifact_digest') for e in details.values()),
+                    e.get('state') == 'blocked' and e.get('artifact_digest') and e.get('failure_category') != 'admitted_copy_changed' for e in details.values()),
                 needs_attention=stalled_files > 0,
                 attention_reason=row['progress'].get('_delivery_watch', {}).get('reason') if stalled_files else None,
                 last_progress_at=row['progress'].get('_delivery_watch', {}).get('last_progress_at'))
@@ -590,6 +590,16 @@ def advance(store, payload, job):
                     persistence.update_file(store,row['id'],row['owner_email'],file,
                         dict(state='published',receipt=saved,message='Delivered',requires_reconnect=False,resume_requested=False))
                 elif pending_jobs.get(file) and all(s in {'dead','cancelled'} for s in pending_jobs[file]):
+                    # A dead request for older bytes is not a connection problem.
+                    # Keep its frozen identity and consume receipts first, but do
+                    # not encourage recovery to upload a different corrected copy.
+                    current_copy = store.get_file_record(row['scan_id'], file) or {}
+                    if current_copy.get('corrected_sha256') and current_copy['corrected_sha256'] != entry['artifact_digest']:
+                        persistence.update_file(store, row['id'], row['owner_email'], file,
+                            dict(state='blocked', failure_category='admitted_copy_changed',
+                                 requires_reconnect=False, resume_requested=False,
+                                 message='The corrected copy changed after delivery was queued. Check the original delivery result, then review a new release plan for the current copy.'))
+                        continue
                     if row['intent']['destination']['provider'] == 'drive':
                         if entry.get('resume_requested') and dispatched < MAX_DISPATCH_PER_TICK:
                             dispatch(store, row, file, entry['artifact_digest'])

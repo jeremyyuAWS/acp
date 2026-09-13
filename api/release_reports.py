@@ -24,6 +24,53 @@ def _rule(value):
     return '.'.join(match.groups()) if match else catalog().get(raw, raw)
 
 
+_OFFICE_LOCATION_TOKEN = r"word:(?:p:[1-9]\d*(?::run:[1-9]\d*)?|table:[1-9]\d*:row:[1-9]\d*|document:outline)"
+
+
+def _display_note(note):
+    """Hide only appended structural metadata; preserve recorded excerpt text."""
+    return re.sub(r"\s*\[location:" + _OFFICE_LOCATION_TOKEN + r"\]\s*$", "", str(note or ""))
+
+
+def _office_location(row):
+    """Only recorded structural targets/excerpts; Word layout pages are not inferred."""
+    note = str(row.get('note') or '')[:4000]
+    token_pattern = _OFFICE_LOCATION_TOKEN
+    # The writer appends one target at the end. Earlier wrappers can be
+    # literal document text inside the recorded excerpt, not writer metadata.
+    target = re.search(r'\[location:(' + token_pattern + r')\]\s*$', note)
+    tokens = [target.group(1)] if target else []
+    locator = str(row.get('locator') or '')[:200]
+    if re.fullmatch(token_pattern, locator):
+        tokens.append(locator)
+    locations = []
+    for token in dict.fromkeys(tokens):
+        parts = token.split(':')
+        if token == 'word:document:outline':
+            value = 'Document heading outline'
+        elif parts[1] == 'p':
+            value = 'Paragraph ' + parts[2] + ('; Run ' + parts[4] if len(parts) == 5 else '')
+        else:
+            value = 'Table ' + parts[2] + '; Row ' + parts[4]
+        locations.append(value)
+    if locations:
+        return '; '.join(locations)
+    # Older writers retained useful excerpts, but not structural indices. Label
+    # them as excerpts rather than implying a numbered paragraph or layout page.
+    before = str(row.get('before') or '')[:2000]
+    heading = re.match(r'^paragraph “([^”]{1,80})” was body text styled to look like a heading$', before)
+    if heading:
+        return 'Heading text (recorded excerpt): “' + heading.group(1) + '”'
+    run = re.fullmatch(r'text run "([^"\n]{1,80})"', note)
+    if run:
+        return 'Text run (recorded excerpt): “' + run.group(1) + '”'
+    if before == 'first row was ordinary data cells (<w:tr>)':
+        return 'First table row; exact table index not recorded'
+    if re.fullmatch(r'[1-9]\d* separate Heading 1s competed as the document title', before):
+        return 'Document heading outline'
+    return None
+
+
 def _location(row):
     from pdf_release_evidence import evidence_location
     canonical = evidence_location(row)
@@ -37,7 +84,7 @@ def _location(row):
         value = row.get(key)
         if value is not None and value != '':
             parts.append(f'{label}: {value}' if label else re.sub(r'^Location:\s*', '', str(value), flags=re.I))
-    return '; '.join(parts) or str(row.get('locator') or 'Not recorded')
+    return '; '.join(parts) or _office_location(row) or str(row.get('locator') or 'Not recorded')
 
 
 def _suggestions(task):
@@ -345,7 +392,7 @@ def build_release_report_sources(store, scan_id, owner, release_id):
         for sc in sorted({_rule(d['rule_id']) for d in changes}):
             records = [d for d in changes if _rule(d['rule_id']) == sc]
             detail += f'<details open><summary>SC {_text(sc)} - {_text(_name_for(sc))} · {len(records)} change record{"s" if len(records) != 1 else ""}</summary>'
-            detail += _table(['Location', 'Before', 'After', 'Verification evidence'], [[change_location(d), _text(d.get('before')), _text(d.get('after')), _text(d.get('note') or 'Recorded by the verified-change process; finding credit requires matching ledger evidence.')] for d in records]) + '</details>'
+            detail += _table(['Location', 'Before', 'After', 'Verification evidence'], [[change_location(d), _text(d.get('before')), _text(d.get('after')), _text(_display_note(d.get('note')) or 'Recorded by the verified-change process; finding credit requires matching ledger evidence.')] for d in records]) + '</details>'
         if saved_unverified:
             detail += '<h2>Applied AI changes - not verified</h2><p>These edits were saved to the current processed copy. They do not count as verified fixes; remaining human actions are listed in the checklist.</p>'
             for sc in sorted({_rule(d['rule_id']) for d in saved_unverified}):

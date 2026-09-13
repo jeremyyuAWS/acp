@@ -9,7 +9,10 @@ export function reviewQueueAction(row, decisions = {}, automatic = false) {
   if (owner === 'acp') return { key: 'processing', label: 'Processing' }
   if (status === 'awaiting-validation' || (automatic && owner === 'check')) return { key: 'check', label: 'Status check' }
   const lane = laneOf(row).key
-  if (owner === 'human' && row.automaticDisposition?.reason === 'Manual work or no supported proposal writer') return { key: 'edit', label: 'Edit needed' }
+  const manualReason = ['Manual work or no supported proposal writer',
+    'This PDF needs headings or table structure added in the original document. ACP cannot apply this draft automatically.']
+    .includes(row.automaticDisposition?.reason)
+  if (owner === 'human' && manualReason) return { key: 'edit', label: 'Edit needed' }
   if (['manual', 'handoff'].includes(lane)) return { key: 'edit', label: 'Edit needed' }
   if (lane === 'blocked' && owner !== 'human') return { key: 'check', label: 'Status check' }
   return { key: 'review', label: 'Review needed' }

@@ -56,7 +56,9 @@ export default function ReleaseReports({ scanId, publishedCount = 0, readOnly = 
     <p role="status">{!state ? (error ? '' : 'Checking reports…') : state.status === 'completed' ? (state.reports?.length && state.reports.every(report => /^https?:\/\//i.test(report.url || '')) ? 'Reports saved alongside the published files.' : 'Reports are ready to download.') : state.status === 'failed' ? 'Files may be published, but report delivery needs attention.' : ['queued', 'publishing'].includes(state.status) ? 'Preparing and saving reports alongside the published files…' : 'Reports are generated after files are published with reporting enabled.'}</p>
     {!!headerReports.length && <ul>{headerReports.map(reportLink)}</ul>}
     {state?.status === 'not_started' && <button type="button" className="linklike" onClick={() => setRefresh(n => n + 1)}>Refresh reports</button>}
-    {state?.status === 'completed' && state.reports?.some(printableLegacyReport) && <button type="button" disabled={busy || readOnly} onClick={retryDelivery}>Generate PDF reports</button>}
+    {state?.status === 'completed' && state.reports?.some(printableLegacyReport) && !state.regeneration_blocked && <button type="button" disabled={busy || readOnly} onClick={retryDelivery}>Generate PDF reports</button>}
+    {state?.status === 'completed' && state.can_regenerate && !state.reports?.some(printableLegacyReport) && <button type="button" disabled={busy || readOnly} onClick={retryDelivery}>Refresh reports</button>}
+    {state?.regeneration_blocked && <p className="muted">{state.regeneration_blocked}</p>}
     {state?.status === 'failed' && <button type="button" className="ghost small" disabled={busy || readOnly} onClick={retryDelivery}>Retry report delivery</button>}
     {error && <p role="alert">{error} <button type="button" className="linklike" onClick={() => setRefresh(n => n + 1)}>Refresh reports</button></p>}
   </section>

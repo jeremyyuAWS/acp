@@ -4,9 +4,23 @@ import { act } from 'react'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import RemediationInbox from './RemediationInbox.jsx'
 import { reviewQueueAction, reviewQueueActions } from './reviewQueueAction.js'
+import { automaticReviewQueue } from './automaticReviewQueue.js'
 
 afterEach(unmountAll)
 describe('Review queue action pills', () => {
+  it('distinguishes scope-bound PDF map editing from native-tag approval without trusting stale reasons', () => {
+    const policy={enabled:true,supported:true,run_id:'r',source_revision:1}
+    const base={id:71,file:'document.pdf',rule_id:'1.3.1',status:'pending',hasProposal:true,after:'draft',
+      _raw:{scan_id:'s',proposal_snapshot_ids:['p']},automatic_approval:{state:'blocked',responsibility:'human',
+        scan_id:'s',proposal_snapshot_ids:['p'],run_id:'r',source_revision:1}}
+    const mapReason='This PDF needs headings or table structure added in the original document. ACP cannot apply this draft automatically.'
+    const nativeReason='This PDF structure draft was created from document rules and needs your review before ACP applies it.'
+    const projected=reason=>automaticReviewQueue([{...base,automatic_approval:{...base.automatic_approval,reason}}],policy)[0]
+    expect(reviewQueueAction(projected(mapReason),{},true).label).toBe('Edit needed')
+    expect(reviewQueueAction(projected(nativeReason),{},true).label).toBe('Review needed')
+    const stale=automaticReviewQueue([{...base,automatic_approval:{...base.automatic_approval,reason:mapReason,run_id:'old'}}],policy)[0]
+    expect(reviewQueueAction(stale,{},true).key).not.toBe('edit')
+  })
   it('uses action ownership rather than severity and preserves uncertain automatic work', () => {
     expect(reviewQueueAction({ id:1, severity:'MODERATE' }).key).toBe('edit')
     expect(reviewQueueAction({ id:2, severity:'CRITICAL',hasProposal:true, after:'draft' }).key).toBe('review')

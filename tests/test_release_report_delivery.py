@@ -170,10 +170,11 @@ def test_completed_legacy_bundle_can_generate_new_pdf_without_rescanning(setup, 
     assert delivery.get_release_report_asset(store, SID, OWNER, 'legacy-bundle', 0)['content'].startswith(b'<a')
 
 
-def test_page_evidence_format_invalidates_previous_bundle(setup, monkeypatch):
+@pytest.mark.parametrize('previous_format', ['pdf-v3-release-page-evidence', 'pdf-v5-word-native-revision-companion'])
+def test_page_evidence_format_invalidates_previous_bundle(setup, monkeypatch, previous_format):
     store, release = setup
     current = delivery.REPORT_FORMAT
-    monkeypatch.setattr(delivery, 'REPORT_FORMAT', 'pdf-v3-release-page-evidence')
+    monkeypatch.setattr(delivery, 'REPORT_FORMAT', previous_format)
     old = delivery.queue_release_reports(store, SID, OWNER, release['id'])
     monkeypatch.setattr(delivery, 'REPORT_FORMAT', current)
     new = delivery.queue_release_reports(store, SID, OWNER, release['id'])
@@ -190,6 +191,49 @@ def test_release_changed_during_render_is_not_frozen(setup, monkeypatch):
     monkeypatch.setattr(release_reports, 'build_release_reports', changed)
     with pytest.raises(ValueError, match='Release changed'):
         delivery.queue_release_reports(store, SID, OWNER, release['id'])
+
+
+def test_completed_v5_pdf_refresh_preserves_old_assets_and_document_receipt(setup, monkeypatch):
+    import release_reports
+    store, release = setup
+    current = delivery.REPORT_FORMAT
+    content = b'%PDF-1.7\nprevious frozen report'
+    monkeypatch.setattr(release_reports, 'build_release_reports', lambda *a: [dict(name='changes-doc.pdf', content=content, content_type='application/pdf')])
+    monkeypatch.setattr(delivery, 'REPORT_FORMAT', 'pdf-v5-word-native-revision-companion')
+    old = delivery.queue_release_reports(store, SID, OWNER, release['id'])
+    monkeypatch.setattr(delivery, '_upload', lambda *a: dict(id='old-report', url='https://example.com/old-report'))
+    delivery.process_release_reports(store, old['bundle_id'], OWNER)
+    original_documents = store.release_status(release['id'], OWNER)['documents']
+    monkeypatch.setattr(delivery, 'REPORT_FORMAT', current)
+    assert delivery.get_latest_release_reports(store, SID, OWNER)['can_regenerate']
+    refreshed = delivery.retry_release_reports(store, SID, OWNER)
+    assert refreshed['bundle_id'] != old['bundle_id']
+    assert not refreshed['can_regenerate']
+    assert delivery.get_release_report_asset(store, SID, OWNER, old['bundle_id'], 0)['content'] == content
+    assert store.release_status(release['id'], OWNER)['documents'] == original_documents
+
+
+def test_report_refresh_cannot_attach_newer_repairs_to_old_published_bytes(setup, monkeypatch):
+    store, release = setup
+    current = delivery.REPORT_FORMAT
+    monkeypatch.setattr(delivery, 'REPORT_FORMAT', 'pdf-v5-word-native-revision-companion')
+    old = delivery.queue_release_reports(store, SID, OWNER, release['id'])
+    monkeypatch.setattr(delivery, '_upload', lambda *a: dict(id='old', url='https://example.com/old'))
+    delivery.process_release_reports(store, old['bundle_id'], OWNER)
+    old_asset = delivery.get_release_report_asset(store, SID, OWNER, old['bundle_id'], 0)['content']
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "INSERT INTO file_records(scan_id,file,engine,status,corrected_sha256) VALUES(%s,'doc.pdf','pdf','analysed',%s)", (SID, 'b' * 64))
+    store.record_remediation_diffs(SID, 'doc.pdf', [{'rule_id':'1.3.1','before':'OLD','after':'NEW COPY ONLY','note':'New saved copy'}])
+    monkeypatch.setattr(delivery, 'REPORT_FORMAT', current)
+    import release_reports
+    monkeypatch.setattr(release_reports, 'build_release_reports', lambda *a: pytest.fail('Mismatched repair records must never be rendered'))
+    status = delivery.get_latest_release_reports(store, SID, OWNER)
+    assert not status['can_regenerate'] and status['regeneration_blocked']
+    with pytest.raises(ValueError, match='saved copy changed'):
+        delivery.retry_release_reports(store, SID, OWNER)
+    with pytest.raises(ValueError, match='saved copy changed'):
+        delivery.queue_release_reports(store, SID, OWNER, release['id'])
+    assert delivery.get_release_report_asset(store, SID, OWNER, old['bundle_id'], 0)['content'] == old_asset
 
 
 def test_optional_render_precedes_local_release_transaction(setup, monkeypatch):

@@ -42,6 +42,21 @@ def _legacy_asset_identity(release, row, asset):
     return matches[0] if len(matches) == 1 else {}
 
 
+def _published_copy_changed(store, sid, owner, release):
+    """Live repair records cannot describe different, already-published bytes."""
+    published = {d['file']: str(d.get('artifact_digest') or '').removeprefix('sha256:')
+                 for d in release['documents'] if d.get('status') == 'published' and
+                 re.fullmatch(r'(?:sha256:)?[0-9a-f]{64}', str(d.get('artifact_digest') or ''))}
+    if not published:
+        return False
+    records = store.get_file_records(sid, owner=owner, files=list(published))
+    return any((records.get(file) or {}).get('corrected_sha256') and
+               records[file]['corrected_sha256'] != digest for file, digest in published.items())
+
+
+REPORT_COPY_CHANGED = 'The saved copy changed after publication. Keep the recorded reports, or publish the updated copy before refreshing them.'
+
+
 def _public(row, store=None):
     if not row:
         return dict(status='not_started', bundle_id=None, reports=[], error=None)
@@ -54,14 +69,19 @@ def _public(row, store=None):
                             report_kind=asset.get('report_kind'), file=asset.get('file'), artifact_digest=asset.get('artifact_digest'),
                             url=next((r.get('url') for r in receipts if r.get('url')), None),
                             download_url=f"/scans/{quote(row['scan_id'], safe='')}/release/reports/{row['id']}/{index}"))
-    return dict(status=row['status'], bundle_id=row['id'], scan_id=row['scan_id'], release_id=row['release_id'], reports=reports, error=row.get('error'))
+    release = store.release_status(row['release_id'], row['owner_email']) if store else None
+    outdated = bool(row['status'] == 'completed' and release and
+                    _fingerprint(row['release_id'], release)[:24] != row['id'])
+    changed = outdated and _published_copy_changed(store, row['scan_id'], row['owner_email'], release)
+    return dict(status=row['status'], bundle_id=row['id'], scan_id=row['scan_id'], release_id=row['release_id'], reports=reports, error=row.get('error'), can_regenerate=outdated and not changed,
+                regeneration_blocked=REPORT_COPY_CHANGED if changed else None)
 
 
 def _enqueue(store, row):
     return store.enqueue_job('publish_release_reports', dict(bundle_id=row['id'], owner=row['owner_email']), scan_id=row['scan_id'])
 
 
-REPORT_FORMAT = 'pdf-v5-word-native-revision-companion'
+REPORT_FORMAT = 'pdf-v6-word-structural-report-locations'
 
 
 def _fingerprint(release_id, release):
@@ -78,6 +98,8 @@ def queue_release_reports(store, scan_id, owner, release_id):
     existing = _get(store, identity, owner)
     if existing:
         return _public(existing, store)
+    if _published_copy_changed(store, scan_id, owner, release):
+        raise ValueError(REPORT_COPY_CHANGED)
     # Download/render optional visuals before taking the local release row lock.
     # Recheck the snapshot and bundle under the lock before freezing any assets.
     assets = build_release_reports(store, scan_id, owner, release_id)
@@ -91,6 +113,8 @@ def queue_release_reports(store, scan_id, owner, release_id):
         current = store.release_status(release_id, owner)
         if not current or _fingerprint(release_id, current) != fingerprint:
             raise ValueError('Release changed while preparing reports; retry with the current release')
+        if _published_copy_changed(store, scan_id, owner, current):
+            raise ValueError(REPORT_COPY_CHANGED)
         names = {a['name']: a['name'].rsplit('.', 1)[0] + '-' + identity[:10] + '.' + a['name'].rsplit('.', 1)[1] for a in assets}
         frozen = []
         for asset in assets:
@@ -129,7 +153,9 @@ def retry_release_reports(store, sid, owner):
     latest = get_latest_release_reports(store, sid, owner)
     if not latest['bundle_id']:
         raise KeyError('Report not found')
-    if latest['status'] == 'completed' and (any(report['content_type'].startswith('text/html') for report in latest['reports']) or not any(report['name'].startswith('changes-') for report in latest['reports'])):
+    if latest.get('regeneration_blocked'):
+        raise ValueError(latest['regeneration_blocked'])
+    if latest['status'] == 'completed' and (latest.get('can_regenerate') or any(report['content_type'].startswith('text/html') for report in latest['reports']) or not any(report['name'].startswith('changes-') for report in latest['reports'])):
         result = queue_if_release_settled(store, sid, owner, _get(store, latest['bundle_id'], owner)['release_id'])
         if not result:
             raise ValueError('Wait for publication to finish before generating PDF reports')
