@@ -4,6 +4,7 @@ import { assessmentStageActivity } from './assessmentStageActivity.js'
 import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import WorkflowStageActivityCard from './WorkflowStageActivityCard.jsx'
+import { releaseBatchProgress } from './releaseBatchProgress.js'
 import { canonicalStageCardModel, canonicalWorkflowStages, currentCanonicalStage,
   stageNeedsAttention, alignRemediationAssessment, omittedAssessmentGroups } from './canonicalStageCard.js'
 
@@ -61,9 +62,10 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
         const isCurrent = Boolean(snapshot && stage === current?.stage
           && snapshot.execution_id === current?.execution_id)
         const model = snapshot ? canonicalStageCardModel(snapshot, { isCurrent }) : null
-        const attention = Boolean(snapshot && (stageNeedsAttention(snapshot) || !model.integrityOk))
+        const batch = releaseBatchProgress(snapshot)
+        const attention = Boolean(snapshot && (stageNeedsAttention(snapshot) || !model.integrityOk || batch?.state === 'failed'))
         const assessment = assessmentStageActivity(snapshot, assessmentActivity, lineage?.scan_id)
-        const displayState = assessment?.state || snapshot.state
+        const displayState = assessment?.state || batch?.state || snapshot.state
         const isCompleted = completed(displayState)
         // Completed stages collapse so the report below gets the user's attention. Keep
         // attention/error cards open, and scope manual reopening to this execution and phase.
@@ -83,10 +85,10 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
                 {attention ? '!' : displayState === 'succeeded' ? '✓' : '•'}
               </span>
               <span className="workflow-stage-stack__label"><b>{model.stageLabel}</b>
-                <span className="workflow-stage-stack__state"> · {assessment?.label || model.stateLabel}</span>
+                <span className="workflow-stage-stack__state"> · {assessment?.label || batch?.label || model.stateLabel}</span>
               </span>
               <span className="workflow-stage-stack__meta">
-                <span className="muted workflow-stage-stack__count">{assessment?.count || primaryOutcome(model)}</span>
+                <span className="muted workflow-stage-stack__count">{assessment?.count || batch?.summary || primaryOutcome(model)}</span>
                 {!open && !terminal(displayState) && <LiveHeartbeatBars measuredAt={receivedAt} stage={stage}
                   historyKey={`${snapshot.workflow_id || lineage?.workflow_id || 'workflow'}:${snapshot.execution_id || stage}`}
                   showText />}

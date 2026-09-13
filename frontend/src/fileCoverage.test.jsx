@@ -20,6 +20,13 @@ it('does not infer processing coverage from finding or approval totals', () => {
   expect(fileCoverage({counts:{withFindings:4,processed:3,remaining:3}})).toMatchObject({withFindings:4,processed:null,remaining:null,available:false})
   expect(fileCoverage({counts:{withFindings:4,processed:2,remaining:2}})).toMatchObject({withFindings:4,processed:2,remaining:2})
 })
+it('omits only structurally fixed population comparisons while unchanged dynamic queues retain theirs', async () => {
+  await mount(<FileCoverage evidence={{population_fixed:true,counts:{withFindings:147,processed:0,remaining:147},baseline:{withFindings:147,processed:0,remaining:147}}}/>)
+  expect(container.querySelector('.coverage-attention .kpi-comparison')).toBeNull()
+  expect(container.querySelector('.coverage-attention strong').textContent).toBe('147')
+  expect(container.querySelector('.coverage-verified .kpi-comparison').textContent).toBe('Before: 0Since start: 0')
+  expect(container.querySelector('.coverage-processing .kpi-comparison').textContent).toBe('Before: 147Since start: 0')
+})
 it('shows a saved baseline and defines processed separately from remediation success', async () => {
   const onSelect = vi.fn()
   await mount(<FileCoverage evidence={{counts:{withFindings:11,processed:5,remaining:6},baseline:{withFindings:11,processed:0,remaining:11}}} onSelect={onSelect}/>)

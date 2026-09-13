@@ -4,6 +4,7 @@ import { getStageProgressQueue } from './api.js'
 import { useEffect, useState } from 'react'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import { canonicalStageCardModel, alignRemediationAssessment } from './canonicalStageCard.js'
+import { releaseBatchProgress } from './releaseBatchProgress.js'
 
 const terminal = (state) => ['processing_complete', 'succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed'].includes(state)
 const shown = (value) => value == null ? '—' : Number(value).toLocaleString()
@@ -38,6 +39,7 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
   }, [queue, queueIdentity, executionId, expected, snapshot?.generated_at])
   if (!model) return null
   const domain = model.domain
+  const batch = releaseBatchProgress(snapshot)
   const done = domain?.accounted ?? model.accounted
   const total = domain?.total ?? model.total
   const pct = typeof done === 'number' && typeof total === 'number' && total > 0
@@ -47,18 +49,19 @@ export default function WorkflowStageActivityCard({ snapshot, receivedAt, onOpen
   const balanced = findingAccounting && Number.isSafeInteger(total) && Number.isSafeInteger(done)
     && done >= 0 && done <= total && domain.buckets.every(([, value]) => Number.isSafeInteger(value) && value >= 0)
     && domain.buckets.reduce((sum, [, value]) => sum + value, 0) === total
-  const live = !terminal(snapshot.state)
+  const live = !terminal(batch?.state || snapshot.state)
   return <section className={`workflow-sse-card stage-${model.stage}`} aria-label={`${model.stageLabel} activity`}>
     <header className="workflow-sse-card__header">
-      <div><strong>{model.stageLabel} · {model.stateLabel}</strong>
+      <div><strong>{model.stageLabel} · {batch?.label || model.stateLabel}</strong>
         <span>Workflow revision {model.workflowRevision ?? '—'}</span></div>
       {live && <LiveHeartbeatBars measuredAt={receivedAt} stage={model.stage}
         historyKey={`${snapshot.workflow_id || 'workflow'}:${model.executionId || model.stage}`} showText />}
       {onOpen && <button type="button" className="linklike" onClick={onOpen}>Open details →</button>}
     </header>
-    <p className="workflow-sse-card__outcome">{findingAccounting
+    <p className="workflow-sse-card__outcome">{batch ? <b>{batch.summary}</b> : findingAccounting
       ? <><b>{shown(total)} assessed findings</b> · Outcome breakdown</>
       : <><b>{shown(done)} of {shown(total)}</b> {domain?.unit || model.unit}</>}</p>
+    {batch && <p className="workflow-sse-card__notice">{shown(batch.remaining)} authorized files awaiting confirmed delivery. Latest delivery request: {shown(done)} of {shown(total)} requested documents accounted for. Request completion does not mean the entire batch is delivered.</p>}
     {findingAccounting && <p className="workflow-sse-card__notice">{live ? 'Verified totals update as document work progresses.' : 'Automatic document work has stopped; remaining findings still need review or remediation.'} Outcomes show what happened to the findings. Document categories show how they can be remediated; individual bucket counts can differ.</p>}
     {model.stage === 'remediate' && progressHostId && <div id={progressHostId} data-scan-id={progressScanId} data-batch-id={model.executionId} aria-label="Document progress summary" />}
     {['remediate', 'release'].includes(model.stage) ? <>

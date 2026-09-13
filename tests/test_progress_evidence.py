@@ -28,6 +28,7 @@ def test_baseline_is_frozen_and_failed_attempt_counts_as_processed(store):
     before = progress_evidence.read(store, run, owner='owner')
     assert before['progress_baseline']['findings']['queued'] == 6
     assert before['file_processing']['counts'] == {'withFindings': 2, 'processed': 0, 'remaining': 2}
+    assert before['file_processing']['population_fixed'] is True
     with store._db.cursor() as cur:
         store._db.execute(cur, "UPDATE scan_rule_traces SET finding_count=100 WHERE scan_id='scan'")
         store._db.execute(cur, "UPDATE stage_work_items SET state='failed',attempt=1 "
