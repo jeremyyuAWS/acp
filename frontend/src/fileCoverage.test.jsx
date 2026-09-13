@@ -21,7 +21,7 @@ it('does not infer processing coverage from finding or approval totals', () => {
   expect(fileCoverage({counts:{withFindings:4,processed:2,remaining:2}})).toMatchObject({withFindings:4,processed:2,remaining:2})
 })
 it('omits only structurally fixed population comparisons while unchanged dynamic queues retain theirs', async () => {
-  await mount(<FileCoverage evidence={{population_fixed:true,counts:{withFindings:147,processed:0,remaining:147},baseline:{withFindings:147,processed:0,remaining:147}}}/>)
+  await mount(<FileCoverage compact={false} evidence={{population_fixed:true,counts:{withFindings:147,processed:0,remaining:147},baseline:{withFindings:147,processed:0,remaining:147}}}/>)
   expect(container.querySelector('.coverage-attention .kpi-comparison')).toBeNull()
   expect(container.querySelector('.coverage-attention strong').textContent).toBe('147')
   expect(container.querySelector('.coverage-verified .kpi-comparison').textContent).toBe('Before: 0Since start: 0')
@@ -29,7 +29,7 @@ it('omits only structurally fixed population comparisons while unchanged dynamic
 })
 it('shows a saved baseline and defines processed separately from remediation success', async () => {
   const onSelect = vi.fn()
-  await mount(<FileCoverage evidence={{counts:{withFindings:11,processed:5,remaining:6},baseline:{withFindings:11,processed:0,remaining:11}}} onSelect={onSelect}/>)
+  await mount(<FileCoverage compact={false} evidence={{counts:{withFindings:11,processed:5,remaining:6},baseline:{withFindings:11,processed:0,remaining:11}}} onSelect={onSelect}/>)
   expect(container.textContent).toContain('5 of 11 files with findings')
   expect(container.textContent).toContain('Before: 11')
   expect(container.textContent).toContain('Since start: −5')
@@ -48,7 +48,7 @@ it('animates signed decreases once, with no delta on initial render', async () =
   expect(container.textContent).toBe('5')
 })
 it('shows unknown coverage and unavailable baseline for historical runs', async () => {
-  await mount(<FileCoverage evidence={{available:false}}/>)
+  await mount(<FileCoverage compact={false} evidence={{available:false}}/>)
   expect(container.textContent).toContain('Recorded processing coverage is unavailable for this run.')
   expect(container.querySelectorAll('.kpi-comparison')).toHaveLength(3)
   expect(container.querySelector('.kpi-comparison').textContent).toBe('Before unavailable')
