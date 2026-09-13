@@ -51,7 +51,7 @@ it('offers a report-only PDF refresh for completed legacy reports', async () => 
  expect(retry).toHaveBeenCalledWith('scan')
 })
 
-it('places scan reports beneath the outcomes intro and version-matched per-file actions beneath the published copy', async () => {
+it('keeps version-matched per-file actions beneath the published copy without duplicating the reports intro', async () => {
  const {default: Documents}=await import('./ReleaseCompletionDocuments.jsx')
  const files=[{file:'a.pdf',remediated_at:'now'},{file:'b.pdf',remediated_at:'now'}]
  const digest='sha256:a';const read=vi.fn().mockResolvedValue({status:'completed',bundle_id:'bundle',scan_id:'scan',release_id:'release',reports:[
@@ -61,15 +61,17 @@ it('places scan reports beneath the outcomes intro and version-matched per-file 
  ]})
  const download=vi.fn();const states=files.map(()=>({status:'released',label:'Published',reason:'Delivered'}))
  const results={'a.pdf':{status:'published',artifact_digest:digest,published_url:'https://example.com/copy'},'b.pdf':{status:'published',artifact_digest:'sha256:new'}}
- const c=await mount({read,download,files,results,releaseId:'release',children:({reportSummary,reportsByFile})=>createElement(Documents,{files,states,results,reportSummary,reportsByFile})})
+ const c=await mount({read,download,files,results,releaseId:'release',compact:true,children:({reportSummary,reportsByFile})=>createElement(Documents,{files,states,results,reportActions:reportSummary,reportsByFile})})
  const section=c.querySelector('[aria-label="Publication outcomes"]')
- expect(section.children[1].textContent).toContain('Saved copies, verification')
- expect(section.children[2].getAttribute('aria-label')).toBe('Release reports')
+ expect(section.querySelector('h3')).toBeNull()
+ expect(section.querySelector('[aria-label="Release reports"]')).not.toBeNull()
+ expect(section.textContent).not.toContain('Scan summary and per-file checklists')
+ expect(section.textContent).not.toContain('publication does not certify accessibility')
  const rows=[...section.querySelectorAll('tbody tr')]
  expect(rows[0].querySelector('td:last-child').textContent).toContain('Open published copya-changes.pdfDownload')
  expect(rows[1].textContent).not.toContain('b-checklist.pdf')
- expect(section.querySelector('[aria-label="Release reports"]').textContent).toContain('summary.pdf')
- expect(section.querySelector('[aria-label="Release reports"]').textContent).toContain('b-checklist.pdf')
+ expect(section.textContent).toContain('summary.pdf')
+ expect(section.textContent).toContain('b-checklist.pdf')
  expect(section.textContent).toContain('Document version could not be matched')
  expect(section.querySelectorAll('a[href="https://example.com/a"]')).toHaveLength(1)
  await act(async()=>rows[0].querySelector('button').click())

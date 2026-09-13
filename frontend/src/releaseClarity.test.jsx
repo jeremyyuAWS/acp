@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { getAutomaticRelease, resumeAutomaticRelease } from './api.js'
+import { getAutomaticRelease, resumeAutomaticRelease, getReleaseReports, downloadReleaseReport } from './api.js'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
@@ -51,7 +51,7 @@ vi.mock('./driveAuth.js', () => ({reconnectDriveForRelease: vi.fn().mockResolved
 
 const { default: Publish } = await import('./Publish.jsx')
 
-afterEach(async () => { await unmountAll(); vi.clearAllMocks(); getAutomaticRelease.mockResolvedValue({authorization:null}); getReleaseStatus.mockResolvedValue({ release_id: null }); getSourceStatus.mockResolvedValue({ files: [], stale_count: 0 }); publishAllFiles.mockResolvedValue({ published: [] }); listHitlQueue.mockResolvedValue([]) })
+afterEach(async () => { await unmountAll(); vi.clearAllMocks(); getAutomaticRelease.mockResolvedValue({authorization:null}); getReleaseReports.mockResolvedValue({status:'not_started',reports:[]}); getReleaseStatus.mockResolvedValue({ release_id: null }); getSourceStatus.mockResolvedValue({ files: [], stale_count: 0 }); publishAllFiles.mockResolvedValue({ published: [] }); listHitlQueue.mockResolvedValue([]) })
 const flush = async () => { for (let k = 0; k < 5; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
 const mount = async (props) => {
   const { container, root } = createTestRoot()
@@ -63,6 +63,30 @@ const mount = async (props) => {
 const verified = (file, over = {}) => ({ file, compliant: true, remediated_at: '2026-07-31T00:00:00Z', score: 100, department: 'D', sourceName: 'S', ...over })
 const held = (file, over = {}) => ({ file, compliant: false, score: 40, issues: [{ wcag: 'SC_1_1_1' }], department: 'D', sourceName: 'S', ...over })
 const run = { id: 'scan1', files: 3, certifiable: 2 }
+
+it('mounts compact scan and matching per-file report downloads in the real supporting reports tab', async()=>{
+ getReleaseStatus.mockResolvedValue({release_id:'receipt',documents:[{
+   file:'a.pdf',status:'published',artifact_digest:'sha256:current',published_at:'2026-09-12T00:00:00Z',released_document_url:'https://example.test/copy'}]})
+ getReleaseReports.mockResolvedValue({status:'completed',scan_id:'scan1',release_id:'receipt',bundle_id:'bundle',reports:[
+   {name:'Scan summary.pdf',report_kind:'scan_summary',download_url:'/download/0'},
+   {name:'a-checklist.pdf',report_kind:'checklist',file:'a.pdf',artifact_digest:'sha256:current',download_url:'/download/1'},
+ ]})
+ const c=await mount({run,files:[verified('a.pdf')]})
+ await click(c.querySelector('#release-tab-reports'))
+ const panel=c.querySelector('#release-panel-reports')
+ expect(panel.hidden).toBe(false)
+ const outcomes=panel.querySelector('[aria-label="Publication outcomes"]')
+ expect(outcomes.textContent).not.toContain('Saved copies, verification, remaining work')
+ expect(outcomes.textContent).not.toContain('Scan summary and per-file checklists')
+ const summary=outcomes.querySelector('[aria-label="Release reports"]')
+ expect(summary.textContent).toContain('Scan summary.pdf')
+ const row=[...outcomes.querySelectorAll('tbody tr')].find(r=>r.textContent.includes('a.pdf'))
+ expect(row.textContent).toContain('a-checklist.pdf')
+ await click(summary.querySelector('button'))
+ await click(row.querySelector('.release-file-reports button'))
+ expect(downloadReleaseReport.mock.calls).toEqual([
+   ['scan1','bundle',0,'Scan summary.pdf'],['scan1','bundle',1,'a-checklist.pdf']])
+})
 
 
 Element.prototype.scrollIntoView = vi.fn()
@@ -507,7 +531,10 @@ it('defaults to Manage publication and keeps reports in a separate keyboard acce
   expect(c.querySelector('#release-panel-manage').textContent).toContain('Publish your documents')
   await click(reports)
   expect(c.querySelector('#release-panel-manage').hidden).toBe(true)
-  expect(c.querySelector('#release-panel-reports').textContent).toContain('Publication outcomes')
+  expect(c.querySelector('#release-panel-reports [aria-label="Publication outcomes"]')).toBeTruthy()
+  expect(c.querySelector('#release-panel-reports').textContent).toContain('Search filenames')
+  expect(c.querySelectorAll('#release-panel-reports [aria-label="Release reports"]')).toHaveLength(1)
+  expect(c.querySelector('#release-panel-reports').textContent).not.toContain('Scan summary and per-file checklists')
   expect(c.querySelector('#release-panel-reports').textContent).toContain('Assessment reports')
   await click(manage)
   expect(c.querySelector('#release-panel-manage').hidden).toBe(false)

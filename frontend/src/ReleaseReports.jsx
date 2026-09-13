@@ -5,7 +5,7 @@ const FILE_REPORT_KINDS = new Set(['changes', 'checklist', 'tracked_changes', 't
 const NATIVE_LABEL = { tracked_changes: 'Tracked changes (Word companion)', tracked_changes_evidence: 'Change evidence (JSON)' }
 export const printableLegacyReport = report => !NATIVE_LABEL[report?.report_kind] && (String(report?.content_type || '').split(';')[0].trim() === 'text/html' || /\.html?$/i.test(report?.name || ''))
 
-export default function ReleaseReports({ scanId, publishedCount = 0, readOnly = false, read = getReleaseReports, retry = retryReleaseReports, download = downloadReleaseReport, files = [], results = {}, releaseId, children }) {
+export default function ReleaseReports({ scanId, publishedCount = 0, readOnly = false, read = getReleaseReports, retry = retryReleaseReports, download = downloadReleaseReport, files = [], results = {}, releaseId, children, compact = false }) {
   const [state, setState] = useState(null)
   const [error, setError] = useState('')
   const [refresh, setRefresh] = useState(0)
@@ -49,10 +49,10 @@ export default function ReleaseReports({ scanId, publishedCount = 0, readOnly = 
     {state?.bundle_id && report.download_url && <button type="button" className="linklike" style={{ marginLeft: 10 }} onClick={async () => { try { await download(scanId, state.bundle_id, index, report.name) } catch { if (currentScan.current === scanId) setError('The report could not be downloaded.') } }}>{NATIVE_LABEL[report.report_kind] ? `Download ${report.report_kind === 'tracked_changes' ? 'Word companion' : 'change evidence'}` : 'Download'}</button>}
     {children && unassigned && <small>Document version could not be matched to the current delivery receipt.</small>}
   </li>
-  const reportSummary = <section aria-label="Release reports" style={{ marginTop: 16, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
-    <strong>Scan summary and per-file checklists</strong>
+  const reportSummary = <section aria-label="Release reports" className={compact ? 'release-report-actions' : undefined} style={compact ? undefined : { marginTop: 16, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+    {!compact && <strong>Scan summary and per-file checklists</strong>}
     {children && state?.release_id && state.release_id !== releaseId && <p className="muted">Reports describe release {state.release_id}; document actions below describe the current release.</p>}
-    <p>Verified fixes, applied but unverified changes, remaining issues, and incomplete checks are recorded separately. Remaining work is a follow-up checklist; publication does not certify accessibility.</p>
+    {!compact && <p>Verified fixes, applied but unverified changes, remaining issues, and incomplete checks are recorded separately. Remaining work is a follow-up checklist; publication does not certify accessibility.</p>}
     <p role="status">{!state ? (error ? '' : 'Checking reports…') : state.status === 'completed' ? (state.reports?.length && state.reports.every(report => /^https?:\/\//i.test(report.url || '')) ? 'Reports saved alongside the published files.' : 'Reports are ready to download.') : state.status === 'failed' ? 'Files may be published, but report delivery needs attention.' : ['queued', 'publishing'].includes(state.status) ? 'Preparing and saving reports alongside the published files…' : 'Reports are generated after files are published with reporting enabled.'}</p>
     {!!headerReports.length && <ul>{headerReports.map(reportLink)}</ul>}
     {state?.status === 'not_started' && <button type="button" className="linklike" onClick={() => setRefresh(n => n + 1)}>Refresh reports</button>}

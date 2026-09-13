@@ -1308,10 +1308,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       </div>
       <div role="tabpanel" id="release-panel-reports" aria-labelledby="release-tab-reports" hidden={releaseTab !== 'reports'}>
       <section className="panel"><h3>Assessment reports</h3><button className="ghost" onClick={() => run?.id && openReport(run.id)}>Download scope-limited report (PDF)</button></section>
-      <ReleaseReports scanId={run?.id} releaseId={releaseId} files={releaseFiles} results={releaseResults} publishedCount={publishedCount} readOnly={readOnly}>
+      <ReleaseReports compact scanId={run?.id} releaseId={releaseId} files={releaseFiles} results={releaseResults} publishedCount={publishedCount} readOnly={readOnly}>
         {({ reportSummary, reportsByFile }) => <ReleaseCompletionDocuments files={releaseFiles} states={states} progressDocuments={progressDocuments} results={releaseResults} urls={pubUrls}
           filter={outcomeFilter} onFilter={setOutcomeFilter} readOnly={readOnly} publishing={publishing}
-          onRetry={names => publishAll(names, releaseFolder?.name || releaseFolderName, true)} reportSummary={reportSummary} reportsByFile={reportsByFile}
+          onRetry={names => publishAll(names, releaseFolder?.name || releaseFolderName, true)} reportActions={reportSummary} reportsByFile={reportsByFile}
           receipt={(releaseId || publishedList.length > 0) && <section className="release-receipt" aria-label="Delivery receipt">
           <h3>{failedCount ? 'Partial delivery receipt' : deliveringCount ? 'Delivery in progress' : 'Delivery receipt'}</h3>
           <p><b>{publishedCount} delivered</b> · {failedCount} failed · {deliveringCount} in progress · {releaseFiles.length - publishedCount} in-scope files not delivered.</p>
@@ -1325,7 +1325,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
 
       <section className="panel" aria-label="Reports and delivery history">
         <h3>Reports and delivery history</h3>
-        {!(releaseId || publishedList.length > 0) && <ReleaseReports scanId={run?.id} publishedCount={publishedCount} readOnly={readOnly} />}
+        {/* Retired duplicate reports mount: compact table actions above retain downloads and recovery. */}
         <ReleaseHistory refreshKey={`${run?.id || ''}:${publishedCount}:${failedCount}`} />
       </section>
 
