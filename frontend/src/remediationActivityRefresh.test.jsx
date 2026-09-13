@@ -29,3 +29,9 @@ it('resets activity history and motion when the run scope changes', async () => 
   expect(container.querySelector('details').open).toBe(false)
   expect(container.querySelector('.remops-activity-fresh')).toBeNull()
 })
+it('animates the first new activity after a confirmed empty feed', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(<Activity events={[]} status="ready" />))
+  await act(async () => root.render(<Activity events={[event('1')]} status="ready" />))
+  expect(container.querySelector('.remops-activity-fresh')).not.toBeNull()
+})
