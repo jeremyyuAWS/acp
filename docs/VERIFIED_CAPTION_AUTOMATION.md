@@ -48,6 +48,8 @@ Use at most the next distinct model tier already frozen and approved for the run
 Restore the original run authority in approved-value workers, preserve budget
 reservations, and require settled usage. Uncertain paid dispatch is not replayed.
 Cancellation, changed consent, a changed review or a replaced artifact stops work.
+If no independently verified replacement is available, retain the previous saved
+file rather than delivering an objectively wrong caption as remaining work.
 
 Retain the failed bytes and store replacement candidates immutably. Commit the
 replacement pointer only after exact read-back, actual corrected-file reassessment
