@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Body
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, StrictBool
 
@@ -735,10 +735,15 @@ async def remediate_scan(sid: str, request: Request):
     saved_impact = impact_settings.read_impact_policy(core.store, owner)
     impact_snapshot = None
     impact_allowed = {}
-    if "remediation_policy" in body or saved_impact["revision"] > 0:
+    scan_approval = ((core.store.get_scan(sid, owner=owner) or {}).get('run', {}).get('scope') or {}).get('fix_approval_policy')
+    if "remediation_policy" in body or saved_impact["revision"] > 0 or scan_approval is not None:
         try:
+            selected_policy = body.get("remediation_policy")
+            if scan_approval is not None:
+                selected_policy = dict(selected_policy or {key: value for key, value in saved_impact.items() if key != 'revision'})
+                selected_policy['fix_approval_policy'] = scan_approval
             impact_snapshot = impact_settings.snapshot_impact_policy(
-                core.store, owner, body.get("remediation_policy"))
+                core.store, owner, selected_policy)
         except (ValueError, TypeError) as exc:
             raise HTTPException(422, str(exc)) from exc
         from remediation_impact import build_run_impact
@@ -1544,7 +1549,7 @@ def set_assessment_scope(sid: str, body: dict, request: Request):
 
 @router.post("/scans/{sid}/assess")
 def assess(sid: str, request: Request, level: str = Query("AA"),
-           include_lifecycle_flagged: bool = Query(False)):
+           include_lifecycle_flagged: bool = Query(False), body: dict | None = Body(None)):
     """Run the assessment. In the deferred-analysis model (ADR 0020) a Discover-only scan has an
     inventory but no assessed file_records yet, so this KICKS OFF the download+WCAG fan-out (the
     heavy work now lives here, not in Discover) — assessed_at is stamped when that analysis
@@ -1553,6 +1558,18 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
     scan = core.store.get_scan(sid, owner=_owner(request))
     if scan is None:
         raise HTTPException(404, "scan not found")
+    approval_choice = None
+    if isinstance(body, dict) and 'fix_approval_policy' in body:
+        from fix_approval_policy import normalize
+        try:
+            approval_choice = normalize(body['fix_approval_policy'])
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        from assess_approval_intent import freeze
+        try:
+            freeze(core.store, sid, approval_choice)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(409, str(exc)) from exc
     integrity = ((scan.get("run", {}).get("scope") or {}).get("integrity") or {})
     if integrity.get("status") == "blocked":
         raise HTTPException(409, integrity.get("message") or
@@ -1579,9 +1596,9 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
                 core.store.merge_scan_scope(sid, {"scan_scope": _scope_as_json(_live)})
         snapshot_id, input_manifest_id = _sealed_stage_input(
             sid, "discover", core.store.stage_snapshot_id(sid))
-        request_fingerprint = _json.dumps(
-            {"level": level, "include_lifecycle_flagged": include_lifecycle_flagged},
-            sort_keys=True)
+        from assess_approval_intent import request_fingerprint as approval_fingerprint
+        request_fingerprint = approval_fingerprint(level, include_lifecycle_flagged,
+            approval_choice or (scan.get("run", {}).get("scope") or {}).get("fix_approval_policy"))
         execution = _enqueue_stage_batch(
             sid, "assess", "scan_assess",
             [{"scan_id": sid, "user": _owner(request),
@@ -1598,9 +1615,9 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
     core.store.mark_assessed(sid, _dt.datetime.now(_dt.timezone.utc).isoformat())
     snapshot_id, input_manifest_id = _sealed_stage_input(
         sid, "discover", core.store.stage_snapshot_id(sid))
-    request_fingerprint = _json.dumps(
-        {"level": level, "include_lifecycle_flagged": include_lifecycle_flagged},
-        sort_keys=True)
+    from assess_approval_intent import request_fingerprint as approval_fingerprint
+    request_fingerprint = approval_fingerprint(level, include_lifecycle_flagged,
+        approval_choice or (scan.get("run", {}).get("scope") or {}).get("fix_approval_policy"))
     execution = _enqueue_stage_batch(
         sid, "assess", "assess_trace", [{"scan_id": sid, "level": level}],
         snapshot_id=snapshot_id, request_fingerprint=request_fingerprint,

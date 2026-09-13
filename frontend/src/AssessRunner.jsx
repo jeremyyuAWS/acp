@@ -518,7 +518,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     // container restart) has a stale/absent token and every file would 401. Push a fresh Drive
     // token from the live session first (best-effort; the endpoint 422s harmlessly for a local /
     // SharePoint scan with no token). Then kick off the assessment.
-    Promise.resolve(refreshScanDriveToken(runId)).catch(() => {}).then(() => assessScan(runId, opts?.level || level, opts ? !!opts.includeLifecycleFlagged : !ignoreLifecycle)).then((resp) => {
+    Promise.resolve(refreshScanDriveToken(runId)).catch(() => {}).then(() => assessScan(runId, opts?.level || level, opts ? !!opts.includeLifecycleFlagged : !ignoreLifecycle, opts?.fix_approval_policy || null)).then((resp) => {
       executionRef.current = resp?.execution_id || null
       setExecutionId(executionRef.current)
       setExecutionNotice(stageExecutionNotice('Assessment', resp))

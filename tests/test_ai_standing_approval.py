@@ -15,7 +15,7 @@ BYTES = b'synthetic verified working artifact'
 DIGEST = sha256(BYTES).hexdigest()
 
 
-def seed(store, monkeypatch, enabled=True, review=False):
+def seed(store, monkeypatch, enabled=True, review=False, fix_policy=None):
     monkeypatch.setattr(core, 'store', store)
     monkeypatch.setattr(core, 'get_scan_tokens', lambda sid: {'sp': 'synthetic-token'})
     import release_artifacts
@@ -25,6 +25,7 @@ def seed(store, monkeypatch, enabled=True, review=False):
         store._db.execute(cur, "INSERT INTO file_records(scan_id,file,drive_file_id,source_modified,corrected_sha256,remediated_at) VALUES(%s,%s,'source-id','2026-09-01',%s,'2026-09-02')", (SID, FILE, DIGEST))
     policy = {'rule_based': 2, 'ai': 1, 'ai_budget_usd': '1.00', 'auto_approve_ai': enabled}
     if review: policy['ai_review'] = {'enabled':True}
+    if fix_policy is not None: policy['fix_approval_policy'] = fix_policy
     batch = store.enqueue_stage_batch(SID, 'remediate', 'remediate_file', [{
         'scan_id': SID, 'file': FILE, 'owner': OWNER, 'source': 'sharepoint',
         'remediation_impact_policy': policy}], snapshot_id=store.remediation_source_revision(SID), request_fingerprint='standing')
@@ -97,6 +98,17 @@ def test_later_fallbacks_approve_once_without_human_confirmation(isolated_store,
     assert not [r for r in rows(s,'decision_log') if r['action']=='hitl.approved']
     assert read_run_budget(s,OWNER,SID,ctx.run_id)['policy']['auto_approve_ai'] is True
     assert not [j for j in rows(s,'jobs') if j['type'] in {'publish_file','release_continue'}]
+
+
+def test_custom_criterion_remains_pending_while_other_supported_suggestion_auto_approves(isolated_store, monkeypatch):
+    s=isolated_store; job=seed(s, monkeypatch, fix_policy={'mode':'custom','review_scs':['2.4.6']})
+    with run_context(s, job['payload'], job) as ctx:
+        protected=s.enqueue_proposals(SID, FILE, '2.4.6', [proposal(s)])
+        eligible=s.enqueue_proposals(SID, FILE, '1.1.1', [proposal(s,locator='ppt/slides/slide1.xml#rId1')])
+        approve_file(s, ctx)
+    assert s.get_hitl_item(protected)['status'] == 'pending'
+    assert s.get_hitl_item(eligible)['status'] == 'approved'
+    assert len(apply_jobs(s)) == 1
 
 
 @pytest.mark.parametrize('review', [False, True])

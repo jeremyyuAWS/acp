@@ -62,6 +62,7 @@ class IssueSeverity(_StrNameIntEnum):
     SERIOUS = 1
     MODERATE = 2
     MINOR = 3
+    REVIEW = 4
 
 
 class IssueCategory(_StrNameIntEnum):
@@ -101,6 +102,8 @@ class WcagCriterion(_StrNameIntEnum):
     SC_4_1_1 = 12
     SC_4_1_2 = 13
     SC_4_1_3 = 14
+    # Append only: preserve the deployed manifest integer contracts.
+    SC_2_4_5 = 15
 
 
 class RemediationType(_StrNameIntEnum):

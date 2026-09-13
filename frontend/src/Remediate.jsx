@@ -8,6 +8,7 @@ import { getAcceptedRemediationPlan } from './api.js'
 import { automaticReviewQueue } from './automaticReviewQueue.js'
 import useRunAiApproval from './useRunAiApproval.js'
 import useReviewQueueRefresh from './useReviewQueueRefresh.js'
+import ReviewRefreshNotice from './ReviewRefreshNotice.jsx'
 import { authEpoch } from './apiIdentity.js'
 import { assessMetrics } from './assessMetrics.js'
 import { reviewableRemediationItems } from './remediationReviewAvailability.js'
@@ -460,6 +461,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // instead of the config's intent. Any cloud call for a file wins (privacy-conservative); a file
   // with no AI call at all stays absent (deterministic fix — no badge, nothing to claim).
   const [aiZoneByFile, setAiZoneByFile] = useState({})
+  // Earlier stages cannot restart work; current-run review decisions remain available.
+  const reviewReadOnly = readOnly
+  const reviewReadOnlyRef = useRef(reviewReadOnly)
+  reviewReadOnlyRef.current = reviewReadOnly
   readOnly = readOnly || resultsOnly
   const resultsOnlyRef = useRef(resultsOnly)
   resultsOnlyRef.current = resultsOnly
@@ -569,6 +574,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     scanId: runId, snapshot: runStream?.snapshot, launch: acceptedLaunch, clearLaunch: setAcceptedLaunch, releaseState: automaticReleaseState,
   })
   const runAiApproval = useRunAiApproval(runId, acceptedBatchId)
+  const [reviewRefreshError, setReviewRefreshError] = useState(null)
+  useEffect(() => { setReviewRefreshError(null) }, [runId, acceptedBatchId])
   useEffect(() => {
     let active = true
     setAcceptedPlan(null)
@@ -863,7 +870,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // instead of advancing them past it behind a banner they have already scrolled away from.
   // `undoAct` still performs the local rollback; the re-throw is what makes the failure visible.
   const act = (id, kind, editedValue, approvedValues, resolution = null, frozen = null) => {
-    if (readOnly || resultsOnlyRef.current) return Promise.reject(new Error('This earlier stage is available for results browsing only.'))
+    if (reviewReadOnlyRef.current) return Promise.reject(new Error('Historical scans are available for results browsing only.'))
     const current = queue.find((x) => x.id === id)
     if (frozen && (!current || selectionFingerprint(current) !== frozen.decision.selectionFingerprint)) {
       return Promise.reject(Object.assign(new Error('Proposal or source changed — review and select again.'), { status: 409 }))
@@ -940,7 +947,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     }
     return Promise.resolve()
   }
-  const draftAi = (item) => { if (readOnly || resultsOnlyRef.current) return Promise.resolve(); return suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion) }
+  const draftAi = (item) => { if (reviewReadOnlyRef.current) return Promise.reject(new Error('Historical scans are available for results browsing only.')); return suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion) }
   const rescan = (id) => {
     if (readOnly || resultsOnlyRef.current) return
     const item = self.find((x) => x.id === id)
@@ -1058,13 +1065,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         && (matchesWorkflow(row, 'needs-review', { ...decisions, ...ackd })
           || matchesWorkflow(row, 'awaiting-validation', { ...decisions, ...ackd })))),
     onRows: items => {
-      setActError(previous => previous === 'Review updates could not be refreshed. Recorded counts are retained.' ? '' : previous)
+      setReviewRefreshError(null)
       const seeded = {}
       applyHitlRows(items).forEach(item => { if (item.assignee) seeded[item.file] = item.assignee })
       if (Object.keys(seeded).length) setAssignees?.(previous => ({ ...seeded, ...previous }))
       fetchFixes()
     },
-    onError: () => setActError('Review updates could not be refreshed. Recorded counts are retained.'),
+    onError: error => setReviewRefreshError(error),
   })
   const hasRemediationResults = inboxQueue.length > 0 || files.some(file => file.remediated_at || file.drive_write_url)
     || (runStream?.snapshot?.terminal === true && runStream.snapshot.total_documents > 0)
@@ -1768,6 +1775,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         {/* A decision the server refused. It rolled back, so the card is in the queue again —
             say so loudly, because a reviewer who thinks they signed something off and did not
             is the worst outcome this screen can produce. */}
+        <ReviewRefreshNotice error={reviewRefreshError} onRetry={refreshReviewQueue}/>
         {actError && (
           <p role="alert" className="rem-act-error"
              style={{ margin: '0 0 12px', padding: '10px 12px', borderRadius: 8, fontSize: 13,
@@ -1799,15 +1807,17 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           // A LINE comment, not {/* */}: this is an expression position, not a children position,
           // and a JSX comment here is a parse error. Second time tonight.
           <RemediationInbox
-            readOnly={readOnly}
+            readOnly={reviewReadOnly}
             autoApprove={runAiApproval.enabled}
             automaticApprovalPolicy={runAiApproval.policy}
-            onAutoApproveChange={readOnly ? undefined : (...args) => { if (!resultsOnlyRef.current) return runAiApproval.change(...args) }}
+            onAutoApproveChange={reviewReadOnly ? undefined : (...args) => { if (!reviewReadOnlyRef.current) return runAiApproval.change(...args) }}
             autoApproveSaving={runAiApproval.saving}
             autoApproveError={runAiApproval.error}
+            approvalExplanation={runAiApproval.explanation}
+            afterRelease={resultsOnly && !reviewReadOnly}
             onAutoApproveRetry={runAiApproval.retry}
             autoApproveNotice={runAiApproval.notice} onDismissAutoApproveNotice={runAiApproval.dismissNotice}
-            onPublish={readOnly ? undefined : () => onNavigate?.('publish')}
+            onPublish={reviewReadOnly ? undefined : () => onNavigate?.('publish')}
             onOpenPlan={readOnly ? undefined : openRemediationPlan}
             preparingProposals={!runStream?.snapshot?.terminal && ((runStream?.status?.running ?? remProg?.running ?? 0) > 0 || (runStream?.status?.queued ?? remProg?.queued ?? 0) > 0)}
             renderDetailExtra={(sel) => (sel ? (
@@ -1833,6 +1843,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             decisions={inboxDecisions}
             scanId={run?.id}
             onDecide={(f, d) => {
+              if (reviewReadOnlyRef.current) return Promise.reject(new Error('Historical scans are available for results browsing only.'))
               // W2 — a handoff row (a rejected AI fix) is already out of the hitl queue; acting on it
               // here ("Mark as assigned") just clears it from the needs-manual-handling lane. It is
               // owned by a person now — this is the acknowledgement that they have it.
@@ -1981,7 +1992,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         </>} />
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} context="remediate" aiEnabled={aiEnabled} scanId={run?.id} readOnly={readOnly} onClose={() => setSel(null)} />}
-      {selItem && <ReviewDrawer item={selItem} onClose={() => setSelItem(null)} onAct={act} onDraft={selItem.aiDraftable ? draftAi : null} />}
+      {selItem && <ReviewDrawer item={selItem} onClose={() => setSelItem(null)} onAct={act} onDraft={!reviewReadOnly && selItem.aiDraftable ? draftAi : null} />}
     </>
   )
 }

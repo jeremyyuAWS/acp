@@ -23,5 +23,7 @@ def execution_controls(payload: dict, ai_enabled: bool) -> dict | None:
     rules = payload.get("remediation_impact_allowed_rules")
     if not isinstance(rules, list) or any(not isinstance(rule, str) for rule in rules):
         raise ValueError("Missing authoritative remediation rule scope")
+    from fix_approval_policy import requires_review
+    rules = [rule for rule in rules if not requires_review(policy, rule)]
     return {"allowed_rules": frozenset(rules) if rule_based else frozenset(),
             "draft_ai": bool(ai_enabled) and ai == 1}

@@ -4,6 +4,8 @@ import { SCOPE_FORMATS } from './scopePresets.js'
 import { parseStoredScope } from './ScanScope.jsx'
 import { scopeImpact, coverageGaps } from './scopeImpact.js'
 import { WCAG } from './wcagCatalog.js'
+import AssessApprovalPolicy from './AssessApprovalPolicy.jsx'
+import { normalizeApprovalPolicy } from './assessApprovalPolicy.js'
 
 // The Assess PRE-RUN screen — board 2 of the redesign. One card that holds every decision the run
 // depends on, and nothing that reports on a run.
@@ -99,7 +101,7 @@ const linkBtn = { border: 'none', background: 'none', padding: 0, font: 'inherit
  * @param discoveredAt  optional. The discovery run's timestamp, for the header line. Omitted
  *                      renders no line at all rather than an invented one.
  */
-export default function AssessSetup({ scanId, onRun, onSaved, busy = false, discoveredAt = null }) {
+export default function AssessSetup({ scanId, onRun, onSaved, busy = false, discoveredAt = null, approvalPolicy = null, capability }) {
   const [codeset, setCodeset] = useState([])            // [{code, name, formats:[...]}] — the Core 17
   const [codes, setCodes] = useState(() => new Set())   // selected criteria (criterion axis)
   const [formats, setFormats] = useState(() => new Set(SCOPE_FORMATS))  // selected doc-types
@@ -112,7 +114,12 @@ export default function AssessSetup({ scanId, onRun, onSaved, busy = false, disc
   const [acked, setAcked] = useState(false)
   const [starting, setStarting] = useState(false)
   const [msg, setMsg] = useState('')
+  const [fixApprovalPolicy, setFixApprovalPolicy] = useState(() => approvalPolicy || {mode:'automatic',review_scs:[]})
   const debounce = useRef(null)
+
+  useEffect(() => {
+    setFixApprovalPolicy(approvalPolicy || {mode:'automatic',review_scs:[]})
+  }, [scanId, approvalPolicy])
 
   // Load the catalogue and the stored scope together, so the screen opens reflecting the platform's
   // current selection rather than a fresh default. No stored scope reads as "everything".
@@ -243,6 +250,7 @@ export default function AssessSetup({ scanId, onRun, onSaved, busy = false, disc
         scope, codes: [...codes].sort(), formats: [...formats].sort(),
         documents, criteria: criteriaCount, checks, level,
         includeLifecycleFlagged: includeFlagged, discovered, excluded,
+        fix_approval_policy: normalizeApprovalPolicy(fixApprovalPolicy, [...codes]),
       })
     } catch (e) {
       setMsg(e?.message || 'Could not save the assessment scope, so the run was not started.')
@@ -367,6 +375,10 @@ export default function AssessSetup({ scanId, onRun, onSaved, busy = false, disc
             )}
           </div>
         </div>
+
+        <AssessApprovalPolicy value={fixApprovalPolicy} onChange={setFixApprovalPolicy}
+          criteria={codeset.filter(item => codes.has(item.code))}
+          formats={selectedFormats} capability={capability} disabled={busy || starting} />
 
         {/* ③ NOT BEING ASSESSED — the exclusions, with their arithmetic ───────────────────── */}
         {/* Gated on a real estate. With nothing discovered there is no population to exclude

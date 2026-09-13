@@ -29,6 +29,15 @@ const file = (event) => event?.document || event?.detail?.file
 export const eventDocumentKey = (event) => event?.document_ref || event?.document
   || event?.detail?.file || null
 
+// Only named server reason codes are projected; raw detector errors may contain content.
+export function verificationFailureLabel(detail = {}) {
+  const labels = {criterion_still_failing: 'still fails on the corrected copy',
+    verification_unavailable: 're-scan unavailable; check the saved copy before retrying'}
+  const rows = Array.isArray(detail.failed_criteria) ? detail.failed_criteria : []
+  return rows.filter(row => /^\d+\.\d+\.\d+$/.test(row?.criterion || '') && labels[row?.reason_code])
+    .slice(0, 20).map(row => `WCAG ${row.criterion}: ${labels[row.reason_code]}`).join('; ')
+}
+
 export function remediationEventLine(event) {
   const detail = event?.detail || {}
   switch (event?.kind) {
@@ -39,7 +48,8 @@ export function remediationEventLine(event) {
     case 'remediate.verified':
       return `${n(detail.fixes, 'fix')} independently verified for ${file(event)}`
     case 'remediate.verification_failed':
-      return `${n(detail.fixes, 'fix')} did not pass re-scan for ${file(event)}`
+      return verificationFailureLabel(detail) ? `${file(event)} · ${verificationFailureLabel(detail)}`
+        : `${n(detail.fixes, 'fix')} did not pass re-scan for ${file(event)}`
     case 'remediate.delivered':
       return `Corrected copy of ${file(event)} saved to the source provider`
     case 'remediate.delivery_failed':
@@ -48,6 +58,7 @@ export function remediationEventLine(event) {
       if (detail.reason === 'write_permission_required') return `Corrected copy of ${file(event)} retained in ACP · provider write permission required`
       return `Corrected copy of ${file(event)} retained in ACP; provider delivery failed`
     case 'remediate.review_requested':
+      if (detail.reason_code === 'pdf_structure_tagging_required') return `${file(event)} · WCAG 1.3.1: Add PDF accessibility tags in a document editor; automatic metadata fixes cannot create the structure tree`
       return `Manual review requested for ${file(event)}${detail.criterion ? ` · WCAG ${detail.criterion}` : ''}`
     case 'remediate.document_completed':
       return `${file(event)} remediation finished`

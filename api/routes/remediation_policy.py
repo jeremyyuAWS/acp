@@ -30,6 +30,7 @@ class ImpactPreviewRequest(BaseModel):
     ai_zone: StrictStr | None = None
     cloud_input_strategy: StrictStr | None = None
     generation_chain: dict | None = None
+    fix_approval_policy: dict | None = None
 
 
 class ImpactSaveRequest(ImpactPreviewRequest):

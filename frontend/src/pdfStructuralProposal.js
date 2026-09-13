@@ -20,3 +20,11 @@ export function pdfStructuralSummary(proposal) {
   }
   return null
 }
+
+// A prose outline is guidance for an editor, not a PDF tag-writing instruction.
+export function requiresPdfSourceEditing(finding) {
+  const file = String(finding?.file || finding?._raw?.file || '').toLowerCase()
+  const criterion = String(finding?.rule_id || finding?.ruleId || finding?.sc || finding?._raw?.rule_id || '').replace(/^(?:WCAG_?|SC_)/, '').replace(/_/g, '.')
+  return file.endsWith('.pdf') && ['1.3.1', '2.4.6'].includes(criterion)
+    && !isPdfStructuralRow(finding)
+}

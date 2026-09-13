@@ -80,3 +80,18 @@ it('does not prioritize an old delivery failure after a confirmed delivery', () 
   ])
   expect(groups[0].lead.key).toBe('2')
 })
+
+ it('shows actual failed criteria and distinguishes manual PDF tagging', () => {
+  const detail = {file:'a.pdf', fixes:1, failed_criteria:[{criterion:'2.4.2',reason_code:'criterion_still_failing'}]}
+  expect(remediationEventLine({kind:'remediate.verification_failed',detail})).toContain('WCAG 2.4.2')
+  expect(remediationEventLine({kind:'remediate.verification_failed',detail})).toContain('still fails on the corrected copy')
+  expect(remediationEventLine({kind:'remediate.review_requested',detail:{file:'a.pdf',criterion:'1.3.1',reason_code:'pdf_structure_tagging_required'}})).toContain('Add PDF accessibility tags')
+ })
+
+ it('keeps unavailable checks distinct and never displays arbitrary detector messages', () => {
+  const detail={failed_criteria:[{criterion:'2.4.2',reason_code:'verification_unavailable',reason:'private document text'}, {criterion:'private',reason_code:'criterion_still_failing'}, {criterion:'1.3.1',reason_code:'raw secret'}]}
+  const line=remediationEventLine({kind:'remediate.verification_failed',detail})
+  expect(line).toContain('re-scan unavailable')
+  expect(line).not.toContain('private')
+  expect(line).not.toContain('raw secret')
+ })

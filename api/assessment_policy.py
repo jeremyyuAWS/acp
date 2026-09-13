@@ -194,6 +194,7 @@ REVIEW_FORMATS: dict[str, frozenset[str]] = {
     # 1.4.11 Non-text Contrast: REMOVED — docx, pdf, and pptx are all registry-backed now.
     # A clean-file now reads REVIEW through the registry, not NOT_EVALUATED.
     "2.4.3": frozenset({"pptx"}),                   # Focus Order — title not first in reading order
+    "2.4.5": frozenset({"pdf"}),                    # PDF2 bookmarks advisory, never title conformance
     # ADR 0024 Tier A — render-gated structural proxies (no rendering). 1.4.3 is NOT here: its
     # hybrid text-over-non-solid REVIEW rides the existing 1.4.3 pass/fail lane (a solid-fill FAIL
     # still wins), so it must not be diverted to the review-only lane.
@@ -1001,5 +1002,4 @@ def _extract_sc(wcag: str) -> str:
     import re as _re
     m = _re.search(r'(\d+)[._](\d+)[._](\d+)', wcag or '')
     return f"{m.group(1)}.{m.group(2)}.{m.group(3)}" if m else ""
-
 

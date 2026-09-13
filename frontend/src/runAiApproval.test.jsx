@@ -11,6 +11,26 @@ function View({ run = 'run' }) {
   return <><input type="checkbox" role="switch" checked={state.enabled === true} disabled={!state.change || state.saving}
     onChange={event => state.change?.(event.target.checked)} /><span>{state.error}</span><button onClick={state.retry}>Refresh setting</button>{state.notice && <p data-notice="true">Confirmed automatic approval</p>}</>
 }
+it('retains confirmed On after a failed refresh, then recovers without replaying consent',async()=>{
+ getRunAiApproval.mockResolvedValueOnce({enabled:true,revision:1,source_revision:'source'})
+  .mockRejectedValueOnce(new Error('offline'))
+  .mockResolvedValue({enabled:true,revision:1,source_revision:'source'})
+ const {root,container}=createTestRoot();await act(async()=>root.render(<View/>))
+ await act(async()=>container.querySelector('button').click())
+ expect(container.querySelector('input').checked).toBe(true)
+ expect(container.textContent).toContain('does not mean approval was switched off')
+ await act(async()=>container.querySelector('button').click())
+ expect(container.querySelector('input').checked).toBe(true)
+ expect(container.textContent).not.toContain('unavailable')
+ expect(setRunAiApproval).not.toHaveBeenCalled()
+})
+it('does not offer a run switch that would bypass the frozen review-every-fix choice',async()=>{
+ getRunAiApproval.mockResolvedValue({enabled:false,supported:true,can_change:false,revision:1,source_revision:'source',fix_approval_policy:{mode:'review',review_scs:[]}})
+ const {root,container}=createTestRoot();await act(async()=>root.render(<View/>))
+ expect(container.querySelector('input').disabled).toBe(true)
+ expect(container.querySelector('input').checked).toBe(false)
+ expect(setRunAiApproval).not.toHaveBeenCalled()
+})
 it('changes only after the saved response and binds consent to the current source revision', async () => {
   getRunAiApproval.mockResolvedValue({ enabled: false, revision: 2, source_revision: 'source' })
   let finish

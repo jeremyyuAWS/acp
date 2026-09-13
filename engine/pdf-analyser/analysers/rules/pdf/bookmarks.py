@@ -1,8 +1,11 @@
 """
-Rule: pdf.missing-bookmarks — WCAG 2.4.2 (Page Titled)
+Rule: pdf.missing-bookmarks — WCAG 2.4.5 (Multiple Ways), advisory
 
 For PDFs longer than a threshold number of pages, checks that a bookmark
 outline (/Outlines) is present to aid navigation.
+
+W3C technique PDF2 is advisory. Missing bookmarks alone do not establish a
+normative failure, and must never be reported as a missing document title.
 """
 
 from __future__ import annotations
@@ -55,9 +58,9 @@ class BookmarksRule:
                     "Bookmarks allow keyboard and screen reader users to navigate directly to "
                     "sections without scrolling through the entire document."
                 ),
-                severity=IssueSeverity.MINOR,
+                severity=IssueSeverity.REVIEW,
                 category=IssueCategory.KEYBOARD_NAVIGATION,
-                wcag_criterion=WcagCriterion.SC_2_4_2,
+                wcag_criterion=WcagCriterion.SC_2_4_5,
                 location=IssueLocation(description="pdf:catalog:/Outlines"),
                 evidence=IssueEvidence(
                     computed_value=f"{page_count} pages, no /Outlines entry",
