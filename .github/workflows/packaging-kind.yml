@@ -791,6 +791,12 @@ jobs:
               print(f"  [{entry['state']:>7}] {entry['id']}: {entry['detail']}")
           PY
 
+      - name: Capture application diagnostics before the restore drill replaces pods
+        if: always()
+        run: |
+          python scripts/collect_kind_acceptance_diagnostics.py \
+            --namespace "$NAMESPACE" --out /tmp/acceptance/diagnostics.json
+
       - name: Keep the acceptance report
         # ALWAYS, INCLUDING ON FAILURE, because the report is the entire point: a failed step whose
         # evidence was thrown away costs a whole run to reproduce. It carries no credential — the
@@ -1045,7 +1051,7 @@ jobs:
           kubectl -n "$NAMESPACE" describe jobs || true
           kubectl -n "$NAMESPACE" describe pods || true
           kubectl -n "$NAMESPACE" get events --sort-by=.lastTimestamp || true
-          kubectl -n "$NAMESPACE" logs -l app.kubernetes.io/part-of=acp --all-containers --tail=200 --prefix || true
+          # Application logs are captured and allow-listed before the restore drill above.
           kubectl -n "$NAMESPACE" logs -l batch.kubernetes.io/job-name --all-containers --tail=200 --prefix || true
 
       - name: Delete the cluster
