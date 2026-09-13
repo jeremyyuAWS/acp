@@ -14,6 +14,20 @@ from types import SimpleNamespace
 
 from llm_waterfall_provider import configured_generator, managed_context, managed_generate_attempts
 from document_wide_provider import _image_transport, VISION_MODELS
+from llm_waterfall_provider import PreDispatchRejected
+
+
+def _remaining():
+    from ai import _VISION_DEADLINE
+    deadline = _VISION_DEADLINE.get()
+    return None if deadline is None else max(0.0, deadline - time.monotonic())
+
+
+def _check_deadline():
+    remaining = _remaining()
+    if remaining is not None and remaining <= 0:
+        raise PreDispatchRejected('assessment_vision_budget_exhausted')
+    return remaining
 
 
 def configured_vision_generator(*, preserve_positions=False):
@@ -49,6 +63,9 @@ def _rate_limit_retry(generator):
     wrapped = copy.copy(generator)
     def post(endpoint, **kwargs):
         for attempt in range(3):
+            remaining = _check_deadline()
+            if remaining is not None:
+                kwargs['timeout'] = min(kwargs.get('timeout', remaining), remaining)
             response = generator.post(endpoint, **kwargs)
             if getattr(response, 'status_code', None) != 429 or attempt == 2:
                 return response
@@ -61,6 +78,10 @@ def _rate_limit_retry(generator):
             # earlier than requested or tying up an assessment worker indefinitely.
             if not 0 <= wait <= 2:
                 return response
+            remaining = _remaining()
+            if remaining is not None and remaining <= wait:
+                # The only prior HTTP result here is an explicit uncharged 429.
+                raise PreDispatchRejected('assessment_vision_budget_exhausted')
             time.sleep(wait)
         raise AssertionError('bounded retry exhausted')
     wrapped.post = post
@@ -138,10 +159,16 @@ class _CaptionGenerator:
     def __init__(self, generator, image_processing, *, clean=True):
         self.generator = generator
         self.image_processing, self.clean = image_processing, clean
+        self.deadline_rejected = False
         self.models, self.specs, self.pricing_refs = generator.models, generator.specs, generator.pricing_refs
 
     def generate_text(self, model, prompt):
-        result = self.generator.generate_text(model, prompt)
+        try:
+            _check_deadline()
+            result = self.generator.generate_text(model, prompt)
+        except PreDispatchRejected as exc:
+            self.deadline_rejected = str(exc) == 'assessment_vision_budget_exhausted'
+            raise
         result['image_processing'] = self.image_processing
         if self.clean and result.get('text') and not result.get('response_issue'):
             from ai import _clean_alt, _is_usable_alt
@@ -158,6 +185,8 @@ def generate(prompt, image_bytes, *, clean=True, model=None):
         return deferred('vision_cloud_consent_required')
     if not ctx.scan_id or not ctx.file:
         return deferred('vision_source_identity_required')
+    if _remaining() == 0:
+        return deferred('assessment_vision_budget_exhausted')
     try:
         image_prefix = len((ctx.policy.get('generation_chain') or {}).get('steps', [])) == 3
         generator = configured_vision_generator(preserve_positions=image_prefix)
@@ -167,6 +196,7 @@ def generate(prompt, image_bytes, *, clean=True, model=None):
         # Reuse the already-reviewed image validation, MIME, conservative context
         # bounds, and provider-native image blocks. No document manifest is sent.
         prepared_image, image_processing = prepare_image(image_bytes)
+        _check_deadline()
         image_hash = image_processing['original_sha256']
         ref = 'sha256:' + image_processing['processed_sha256']
         locator = SimpleNamespace(key=lambda: 'image')
@@ -177,6 +207,8 @@ def generate(prompt, image_bytes, *, clean=True, model=None):
         generator = _image_transport(generator, request, {ref: prepared_image})
         generator = _rate_limit_retry(generator)
         generator = _CaptionGenerator(generator, image_processing, clean=clean)
+    except PreDispatchRejected:
+        return deferred('assessment_vision_budget_exhausted')
     except Exception:
         return deferred('vision_verified_model_or_image_unavailable')
     # Image identity is part of the durable input and replay key. Equal prompts
@@ -186,13 +218,25 @@ def generate(prompt, image_bytes, *, clean=True, model=None):
                       + '\nImage processing: ' + json.dumps(image_processing, sort_keys=True) + '\n' + prompt)
     started = time.monotonic()
     from ai import _CLOUD_VISION_GATE, VISION_QUEUE_TIMEOUT
-    if not _CLOUD_VISION_GATE.acquire(timeout=VISION_QUEUE_TIMEOUT):
-        return deferred('cloud_capacity_busy')
+    remaining = _remaining()
+    if remaining == 0:
+        return deferred('assessment_vision_budget_exhausted')
+    queue_wait = VISION_QUEUE_TIMEOUT if remaining is None else min(VISION_QUEUE_TIMEOUT, remaining)
+    if not _CLOUD_VISION_GATE.acquire(timeout=queue_wait):
+        return deferred('assessment_vision_budget_exhausted' if _remaining() == 0 else 'cloud_capacity_busy')
     try:
+        if _remaining() == 0:
+            return deferred('assessment_vision_budget_exhausted')
         result = managed_generate_attempts(bounded_prompt, ctx, generator, tier_indices=tiers, image_prefix=image_prefix)
     finally:
         _CLOUD_VISION_GATE.release()
     if result.get('deferred'):
+        if result.get('reason') == 'request_rejected_before_dispatch' and generator.deadline_rejected:
+            result = {**result, 'reason': 'assessment_vision_budget_exhausted'}
+            # Preserve the causal reason for proposal-recovery policy. Other
+            # admission/unknown-usage failures retain their exact ledger reason.
+            if ctx.deferred and ctx.deferred[-1].get('reason') == 'request_rejected_before_dispatch':
+                ctx.deferred[-1]['reason'] = 'assessment_vision_budget_exhausted'
         return {**result, 'ok': False, 'text': None}
     from ai import _trace_ai
     call_id = _trace_ai('vision', bounded_prompt, result['text'], started, ok=True,

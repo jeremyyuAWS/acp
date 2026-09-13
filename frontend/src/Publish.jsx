@@ -1,3 +1,4 @@
+import { authEpoch } from './apiIdentity.js'
 import AutomaticReleasePackage from './AutomaticReleasePackage.jsx'
 import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
@@ -40,6 +41,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const releaseFiles = documentsInSelection(files, triage)
   const [automaticAuthorization, setAutomaticAuthorization] = useState(null)
   const [automaticStatusPending, setAutomaticStatusPending] = useState(true)
+  const [automaticStatusError, setAutomaticStatusError] = useState('')
+  const [automaticStatusRefresh, setAutomaticStatusRefresh] = useState(0)
   const [outcomeFilter, setOutcomeFilter] = useState('all')
   const [progressQueue, setProgressQueue] = useState(null)
   const [releaseTab, setReleaseTab] = useState('manage')
@@ -119,29 +122,36 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   useEffect(() => {
     let live = true
     const controller = new AbortController()
+    const epoch = authEpoch()
     partialChoice.current = null
     setAutomaticAuthorization(null)
     setAutomaticStatusPending(true)
+    setAutomaticStatusError('')
     setAllowRemainingIssues(false)
     if (!run?.id || !releaseFiles.length || readOnly) { setAutomaticStatusPending(false); return () => controller.abort() }
-    let timer
+    let timer, deadline, cancel
     const refresh = async () => {
       try {
-        const result = await getAutomaticRelease(run.id, releaseFiles.map(file => file.file), { signal: controller.signal })
-        if (!live) return
+        const result = await Promise.race([
+          getAutomaticRelease(run.id, releaseFiles.map(file => file.file), { signal: controller.signal }),
+          new Promise((_, reject) => { cancel = () => reject(new Error('Cancelled')); deadline = setTimeout(() => { controller.abort(); reject(new Error('Automatic publication status timed out.')) }, 20000) }),
+        ])
+        if (!live || authEpoch() !== epoch) return
         const saved = result?.authorization
-        setAutomaticAuthorization(saved)
+        setAutomaticAuthorization(saved ? { ...saved, observedScope: releaseScopeKey, observedOwner: releaseOwner, observedRunId: result.run_id, observedEpoch: epoch } : null)
         setAutomaticStatusPending(false)
+        setAutomaticStatusError('')
         if (partialChoice.current !== releaseScopeKey && saved?.allow_remaining_issues === true
           && ['active', 'waiting', 'processing', 'publishing', 'blocked', 'completed'].includes(saved.status)
           && releaseFiles.every(file => saved.files?.includes(file.file))) setAllowRemainingIssues(true)
         if (saved && (['active','waiting','processing','publishing','blocked'].includes(saved.status)
           || (saved.package && !['done','dead','cancelled'].includes(saved.package.status)))) timer = window.setTimeout(refresh, 5000)
-      } catch { if (live) timer = window.setTimeout(refresh, 5000) }
+      } catch { if (live && authEpoch() === epoch) { setAutomaticStatusPending(false); setAutomaticStatusError('Automatic publication status could not be confirmed. Refresh status before publishing again.') } }
+      finally { clearTimeout(deadline); cancel = null }
     }
     refresh()
-    return () => { live = false; window.clearTimeout(timer); controller.abort() }
-  }, [releaseScopeKey, releaseOwner, readOnly])
+    return () => { live = false; window.clearTimeout(timer); clearTimeout(deadline); controller.abort(); cancel?.() }
+  }, [releaseScopeKey, releaseOwner, readOnly, automaticStatusRefresh])
   useEffect(() => {
     if (!run?.id) { setPackageJob(null); return }
     let stored = null
@@ -563,14 +573,14 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     return true
   }
   const publishAll = async (fileNames = null, preferredFolderName = '', exact = false) => {
-    if (publishLock.current || publishing || readOnly || destinationPending || (settingsPending && !destinationLocked)) return
+    if (publishLock.current || publishing || readOnly || automaticStatusPending || destinationPending || (settingsPending && !destinationLocked)) return
     const operation = { scanId: run?.id, context: releaseContext.current }
     publishLock.current = operation
     setPublishing(true)
     setReleaseError(null)
     setReleaseAnnouncement('Publishing your selected copies. Please wait for confirmation.')
     const requested = fileNames ? new Set(fileNames) : null
-    const pending = selectableReady.filter((f) => !done[f.file] && (!requested || requested.has(f.file))).map((f) => f.file)
+    const pending = selectableReady.filter((f) => !done[f.file] && !automaticCoveredFiles.includes(f.file) && (!requested || requested.has(f.file))).map((f) => f.file)
     if (!pending.length) { publishLock.current = false; setPublishing(false); return }
     try {
       const res = exact
@@ -773,6 +783,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const driveReconnect = (automaticAuthorization?.requires_reconnect === true || automaticAuthorization?.can_resume === true) && automaticAuthorization.resumable !== false && ['active', 'waiting', 'processing', 'publishing', 'blocked'].includes(automaticAuthorization.status) && <DriveReleaseReconnect
         key={`${run?.id}:${automaticAuthorization.id}`} scanId={run?.id} authorizationId={automaticAuthorization.id} provider={automaticAuthorization?.destination?.provider} requiresReconnect={automaticAuthorization.requires_reconnect === true} readOnly={readOnly}
         onResume={async () => { await resumeAutomaticRelease(run.id, automaticAuthorization.id); setAutomaticAuthorization(previous => previous?.id === automaticAuthorization.id ? {...previous, requires_reconnect:false, can_resume:false} : previous) }} />
+  const automaticCoveredFiles = automaticAuthorization?.observedScope === releaseScopeKey
+    && automaticAuthorization?.observedOwner === releaseOwner
+    && automaticAuthorization?.observedEpoch === authEpoch()
+    && automaticAuthorization?.run_id && automaticAuthorization.run_id === automaticAuthorization.observedRunId
+    && automaticAuthorization.id && ['active', 'waiting', 'processing', 'publishing', 'blocked'].includes(automaticAuthorization.status)
+    && (!automaticAuthorization.expires_at || Date.parse(automaticAuthorization.expires_at) > Date.now())
+    && automaticAuthorization.destination?.provider === releaseProvider
+    && (!releaseDestination || ['provider', 'folder_id', 'drive_id', 'site_id'].every(key => (releaseDestination[key] || null) === (automaticAuthorization.destination?.[key] || null)))
+      ? automaticAuthorization.files || [] : []
   const automaticDelivery = !readOnly && ['active', 'waiting', 'processing', 'publishing', 'blocked'].includes(automaticAuthorization?.status)
     ? automaticAuthorization : null
   const manualReady = automaticDelivery
@@ -825,7 +844,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                     onClick={startRelease}>More delivery options</button>
           </div>
         </div>
-        <RemediationProgressSummary variant="release" documents={progressDocuments} queueMode
+        <RemediationProgressSummary key={`${run?.id}:${releaseOwner}`} variant="release" documents={progressDocuments} animate={progressDocuments.length > 0} queueMode
           selected={progressQueue?.key}
           onSelect={state => setProgressQueue({key:state})} />
         <p className="muted">Manage remaining work in Remediate.</p>
@@ -869,7 +888,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </details>
       </section>
 
-      <ReleaseQuickActions runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
+      {automaticStatusError && <p role="status">{automaticStatusError} <button className="linklike" onClick={() => setAutomaticStatusRefresh(n => n + 1)}>Refresh automatic publication status</button></p>}
+      <ReleaseQuickActions automaticStatusPending={automaticStatusPending} automaticNeedsReconnect={automaticAuthorization?.requires_reconnect === true} automaticNeedsAttention={automaticAuthorization?.status === 'blocked'} automaticCoveredFiles={automaticCoveredFiles} runId={run?.id} files={releaseFiles} ready={publishableReady} destination={releaseDestination}
         folderName={releaseFolderName} readOnly={readOnly} publishing={publishing} destinationLocked={destinationLocked} destinationPending={destinationPending || (settingsPending && !destinationLocked)}
         announcement={releaseError ? 'Publishing needs attention. See the message below.' : releaseAnnouncement}
         allowRemainingIssues={allowRemainingIssues}
@@ -1288,10 +1308,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       </div>
       <div role="tabpanel" id="release-panel-reports" aria-labelledby="release-tab-reports" hidden={releaseTab !== 'reports'}>
       <section className="panel"><h3>Assessment reports</h3><button className="ghost" onClick={() => run?.id && openReport(run.id)}>Download scope-limited report (PDF)</button></section>
-      <ReleaseReports scanId={run?.id} releaseId={releaseId} files={releaseFiles} results={releaseResults} publishedCount={publishedCount} readOnly={readOnly}>
+      <ReleaseReports compact scanId={run?.id} releaseId={releaseId} files={releaseFiles} results={releaseResults} publishedCount={publishedCount} readOnly={readOnly}>
         {({ reportSummary, reportsByFile }) => <ReleaseCompletionDocuments files={releaseFiles} states={states} progressDocuments={progressDocuments} results={releaseResults} urls={pubUrls}
           filter={outcomeFilter} onFilter={setOutcomeFilter} readOnly={readOnly} publishing={publishing}
-          onRetry={names => publishAll(names, releaseFolder?.name || releaseFolderName, true)} reportSummary={reportSummary} reportsByFile={reportsByFile}
+          onRetry={names => publishAll(names, releaseFolder?.name || releaseFolderName, true)} reportActions={reportSummary} reportsByFile={reportsByFile}
           receipt={(releaseId || publishedList.length > 0) && <section className="release-receipt" aria-label="Delivery receipt">
           <h3>{failedCount ? 'Partial delivery receipt' : deliveringCount ? 'Delivery in progress' : 'Delivery receipt'}</h3>
           <p><b>{publishedCount} delivered</b> · {failedCount} failed · {deliveringCount} in progress · {releaseFiles.length - publishedCount} in-scope files not delivered.</p>
@@ -1305,7 +1325,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
 
       <section className="panel" aria-label="Reports and delivery history">
         <h3>Reports and delivery history</h3>
-        {!(releaseId || publishedList.length > 0) && <ReleaseReports scanId={run?.id} publishedCount={publishedCount} readOnly={readOnly} />}
+        {/* Retired duplicate reports mount: compact table actions above retain downloads and recovery. */}
         <ReleaseHistory refreshKey={`${run?.id || ''}:${publishedCount}:${failedCount}`} />
       </section>
 

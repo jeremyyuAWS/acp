@@ -1339,11 +1339,13 @@ def _remediate_file(payload: dict, job: dict) -> None:
     from ai_run_policy import run_context
     from remediation_contribution import SOURCE
     from remediation_run_insights import proposal_context
-    with run_context(core.store, payload, job) as context, proposal_context(core.store, payload, job):
+    from vision_recovery import capture, schedule
+    with run_context(core.store, payload, job) as context, proposal_context(core.store, payload, job), capture() as vision_misses:
         source_token = SOURCE.set(None)
         try:
             result = _remediate_file_with_policy(payload, job)
             if context is not None:
+                schedule(core.store, context, job, vision_misses)
                 try:
                     from document_wide_workflow import process_file
                     process_file(core.store, context)
@@ -1367,6 +1369,12 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 for reason in sorted(set(str(item) for item in context.deferred)):
                     core.store.log_decision("system", "remediate.ai_deferred",
                         scan_id=context.scan_id, file=payload.get("file"), detail=reason)
+
+
+@handler("vision_proposal_retry")
+def _vision_proposal_retry(payload: dict, job: dict) -> None:
+    from vision_recovery import process
+    process(core.store, payload)
 
 
 def _remediate_file_with_policy(payload: dict, job: dict) -> None:

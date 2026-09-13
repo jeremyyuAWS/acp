@@ -919,27 +919,50 @@ def unacknowledge_scan(sid: str, request: Request):
 def scan_job(job_id: str, request: Request):
     # core.get_job_state, not core.JOBS: the poll must be answerable by whichever replica the
     # request lands on, which is the whole point of removing session affinity.
-    j = core.get_job_state(job_id)
+    j = _scan_job_state(job_id)
     if j is None:
-        # Stage batches persist jobs without creating a Redis progress entry.
-        # Poll the durable identity returned by assess/remediate, including before
-        # a worker claims it. Never expose the queue payload or raw worker errors.
-        durable = core.store.get_job(job_id)
-        if durable is None:
-            raise HTTPException(404, "job not found")
-        payload = durable.get("payload")
-        payload = payload if isinstance(payload, dict) else {}
-        scan_id = durable.get("scan_id") or payload.get("scan_id")
-        _require_job_owner(job_id, {"scan_id": scan_id}, request)
-        status = durable.get("status") or "queued"
-        failed = status == "dead"
-        return {"job_id": job_id, "scan_id": scan_id,
-                "status": "failed" if failed else status,
-                "phase": {"done": "complete", "dead": "error"}.get(status, status),
-                "done": status in ("done", "dead", "cancelled"),
-                "error": "The job failed. Check the scan for details." if failed else None}
+        raise HTTPException(404, "job not found")
     _require_job_owner(job_id, j, request)
     return j
+
+
+_LOAD_DURABLE_JOB = object()
+
+
+def _scan_job_state(job_id: str, durable=_LOAD_DURABLE_JOB) -> dict | None:
+    """Progress enriches a job; its durable queue row owns status and identity.
+
+    A caller may pass its bounded-age durable reading to keep the 4Hz SSE
+    progress loop from making database queries at the same rate.
+    """
+    progress = core.get_job_state(job_id, reconcile_durable=False)
+    if durable is _LOAD_DURABLE_JOB:
+        durable = core.store.get_job(job_id)
+    if not isinstance(durable, dict):
+        if progress is not None and core._job_is_stale(progress) and progress.get('state_source') != 'durable_queue':
+            return {**progress, 'phase': 'error', 'done': True,
+                    'error': 'scan interrupted — the server likely restarted mid-run; please start a new scan'}
+        return progress
+    payload = durable.get('payload')
+    payload = payload if isinstance(payload, dict) else {}
+    status = durable.get('status') or 'queued'
+    scan_id = durable.get('scan_id') or payload.get('scan_id')
+    previous = dict(progress or {})
+    if previous.get('scan_id') != scan_id:
+        previous = {}
+    for private_key in ('payload', 'last_error', 'owner_email', 'user'):
+        previous.pop(private_key, None)
+    phase = previous.get('phase')
+    if status != 'running' or previous.get('done') or phase in (
+            None, 'error', 'failed', 'complete', 'done', 'cancelled'):
+        phase = {'done': 'complete', 'dead': 'error'}.get(status, status)
+    if not scan_id:
+        previous['owner_email'] = payload.get('user') or payload.get('owner_email')
+    return {**previous, 'job_id': job_id,
+        'scan_id': scan_id,
+        'status': 'failed' if status == 'dead' else status, 'phase': phase,
+        'done': status in ('done', 'dead', 'cancelled'),
+        'error': 'The job failed. Check the scan for details.' if status == 'dead' else None}
 
 
 def _require_job_owner(job_id: str, state: dict, request: Request) -> None:
@@ -975,16 +998,26 @@ async def stream_job_state(job_id: str, request: Request):
     import asyncio
     import json as _j
 
-    initial = core.get_job_state(job_id)
+    durable = await asyncio.to_thread(core.store.get_job, job_id)
+    initial_durable_read = asyncio.get_running_loop().time()
+    initial = await asyncio.to_thread(_scan_job_state, job_id, durable)
     if initial is None:
         raise HTTPException(404, "job not found")
     _require_job_owner(job_id, initial, request)
 
     async def _generate():
-        last_seq = -1
+        last_signature = None
         not_found_streak = 0
+        cached_durable = durable
+        next_durable_read = initial_durable_read + 1.0
+        authorized_identity = (initial.get('scan_id'), initial.get('owner_email'), initial.get('user'))
         while True:
-            state = await asyncio.to_thread(core.get_job_state, job_id)
+            now = asyncio.get_running_loop().time()
+            refreshed = now >= next_durable_read
+            if refreshed:
+                cached_durable = await asyncio.to_thread(core.store.get_job, job_id)
+                next_durable_read = now + 1.0
+            state = await asyncio.to_thread(_scan_job_state, job_id, cached_durable)
             if state is None:
                 not_found_streak += 1
                 if not_found_streak >= 4:   # ~1s of misses before giving up
@@ -993,9 +1026,17 @@ async def stream_job_state(job_id: str, request: Request):
                 await asyncio.sleep(0.25)
                 continue
             not_found_streak = 0
-            seq = int(state.get("seq") or 0)
-            if seq != last_seq:
-                last_seq = seq
+            identity = (state.get('scan_id'), state.get('owner_email'), state.get('user'))
+            if refreshed or identity != authorized_identity:
+                try:
+                    await asyncio.to_thread(_require_job_owner, job_id, state, request)
+                except HTTPException:
+                    yield "event: error\ndata: {\"error\": \"job not found\"}\n\n"
+                    return
+                authorized_identity = identity
+            signature = (int(state.get('seq') or 0), state.get('status'), bool(state.get('done')))
+            if signature != last_signature:
+                last_signature = signature
                 yield f"data: {_j.dumps(state)}\n\n"
             if state.get("done"):
                 # One final event so the client can close the EventSource cleanly.

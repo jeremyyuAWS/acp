@@ -234,7 +234,7 @@ it('keeps initial planning and retires repeated Live release controls in favor o
   const source = code('Remediate.jsx')
   expect(source.slice(source.indexOf('plan={<>'), source.indexOf('reviewCount={reviewCounts'))).toContain('releaseOption={<RemediationReleasePlan')
   expect(source.slice(source.indexOf('live={<>'))).not.toMatch(/<RemediationAutoRelease(?! statusOnly)/)
-  expect(source).toContain('<RemediationAutoRelease statusOnly')
+  expect(source).not.toContain('<RemediationAutoRelease'); expect(source).toContain('useAutomaticReleaseStatus(runId, impactScope, setAutomaticReleaseState)')
   expect(source).toContain('<RemediationOpsPanel streamlined')
   expect(source).toContain('<AcceptedRemediationPlanSummary')
   expect(code('RemediationImpactCard.jsx')).toContain('{releaseOption}')

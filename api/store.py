@@ -2709,33 +2709,44 @@ class _PgAdapter:
         if not acquired:
             kind = "critical mutation" if critical else "ordinary database work"
             raise psycopg2.pool.PoolError(f"{kind} admission limit reached")
-        while True:
-            try:
-                conn = pool.getconn()
+        conn = None
+        try:
+            while True:
+                try:
+                    conn = pool.getconn()
+                except psycopg2.pool.PoolError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
+                    continue
                 with self._read_connections_lock:
                     self._connection_gates[id(conn)] = gate
                 return conn
-            except psycopg2.pool.PoolError:
-                if time.monotonic() >= deadline:
-                    gate.release()
-                    raise
-                time.sleep(0.05)
+        except BaseException:
+            # Connection establishment can fail with OperationalError after admission.
+            # Release the permit even when the physical pool failed or retry was cancelled.
+            try:
+                if conn is not None:
+                    with self._read_connections_lock:
+                        self._connection_gates.pop(id(conn), None)
+                    pool.putconn(conn)
+            finally:
+                gate.release()
+            raise
 
     def _putconn(self, conn, pool=None) -> None:
-        """Return a connection and its read-admission permit, when it held one."""
-        # Use the exact pool that issued the connection. Lazy pool initialization can race on
-        # first use: two threads may each construct a pool before one becomes self._pool. Looking
-        # self._pool up again here can therefore return a different pool, which rejects the
-        # connection as unkeyed. Callers that already captured the issuing pool pass it through.
-        (pool or self._get_pool()).putconn(conn)
-        gate = None
-        lock = getattr(self, "_read_connections_lock", None)
-        if lock is None:
-            return
-        with lock:
-            gate = self._connection_gates.pop(id(conn), None)
-        if gate is not None:
-            gate.release()
+        """Return a connection and its admission permit, even if the pool rejects it."""
+        # Return to the exact issuing pool; lazy initialization can race on first use.
+        try:
+            (pool or self._get_pool()).putconn(conn)
+        finally:
+            gate = None
+            lock = getattr(self, "_read_connections_lock", None)
+            if lock is not None:
+                with lock:
+                    gate = self._connection_gates.pop(id(conn), None)
+            if gate is not None:
+                gate.release()
 
     @contextlib.contextmanager
     def cursor(self):
@@ -10270,17 +10281,17 @@ class Store:
                 if (count or 0) > (row.get("finding_count") or 0):
                     self._db.execute(cur, "UPDATE hitl_queue SET finding_count=%s WHERE id=%s",
                                      (count, row["id"]))
-                self.sync_hitl_finding_dispositions(row["id"], "pending")
-                return None    # merged, not created — callers must not fire a "new item" webhook
-            item_id = uuid.uuid4().hex[:12]
-            pages = self._pages_for(cur, scan_id, file, canonical)
-            self._db.execute(cur,
-                "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status,page,pages) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
-                (item_id, datetime.now(timezone.utc).isoformat(), scan_id, file, canonical,
-                 (rule_name or note)[:200], count, pages[0] if pages else None, _pages_csv(pages)))
+                item_id = row["id"]
+            else:
+                item_id = uuid.uuid4().hex[:12]
+                pages = self._pages_for(cur, scan_id, file, canonical)
+                self._db.execute(cur,
+                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status,page,pages) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
+                    (item_id, datetime.now(timezone.utc).isoformat(), scan_id, file, canonical,
+                     (rule_name or note)[:200], count, pages[0] if pages else None, _pages_csv(pages)))
         self.sync_hitl_finding_dispositions(item_id, "pending")
-        return item_id
+        return None if row else item_id  # merged rows do not fire a new-item webhook
 
     # A regression review row's rule_id: the criterion the write broke, suffixed. The suffix is
     # load-bearing twice over.
@@ -10651,23 +10662,23 @@ class Store:
                 self._db.execute(cur,
                     "UPDATE hitl_queue SET proposal_snapshot_ids=%s WHERE id=%s",
                     (_json.dumps(snapshot_ids), row['id']))
-                self.sync_hitl_finding_dispositions(row["id"], "pending")
-                return row["id"]
-            item_id = uuid.uuid4().hex[:12]
-            self._db.execute(cur,
-                "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,"
-                "finding_count,status,proposals,validated) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
-                (item_id, now, scan_id, file, sc, rule_name or sc, count, blob, vflag))
-            from ai_run_policy import optional_current_run_context
-            from remediation_run_insights import capture_proposals
-            snapshot_ids = capture_proposals(
-                self._db, cur, optional_current_run_context(), scan_id=scan_id,
-                file=file, rule_id=sc, item_id=item_id, proposals=proposals)
-            if snapshot_ids:
+                item_id = row["id"]
+            else:
+                item_id = uuid.uuid4().hex[:12]
                 self._db.execute(cur,
-                    "UPDATE hitl_queue SET proposal_snapshot_ids=%s WHERE id=%s",
-                    (_json.dumps(snapshot_ids), item_id))
+                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,"
+                    "finding_count,status,proposals,validated) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
+                    (item_id, now, scan_id, file, sc, rule_name or sc, count, blob, vflag))
+                from ai_run_policy import optional_current_run_context
+                from remediation_run_insights import capture_proposals
+                snapshot_ids = capture_proposals(
+                    self._db, cur, optional_current_run_context(), scan_id=scan_id,
+                    file=file, rule_id=sc, item_id=item_id, proposals=proposals)
+                if snapshot_ids:
+                    self._db.execute(cur,
+                        "UPDATE hitl_queue SET proposal_snapshot_ids=%s WHERE id=%s",
+                        (_json.dumps(snapshot_ids), item_id))
         self.sync_hitl_finding_dispositions(item_id, "pending")
         return item_id
 
@@ -12480,6 +12491,8 @@ class Store:
         # of it is how a delivered document looks undelivered to whichever reader knows only one.
         "remediate.delivery_retry_requested", "remediate.delivery_retry_refused",
         "remediate.cancel_requested", "remediate.paused", "remediate.resumed",
+        "remediate.vision_retry_pending", "remediate.vision_retry_recovered",
+        "remediate.vision_retry_blocked",
     })
 
     #: The kinds that mean THE RUN MOVED. Every one is written after a durable change to a

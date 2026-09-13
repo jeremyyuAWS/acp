@@ -845,6 +845,16 @@ def apply_pdf_figure_alt(data: bytes, values: dict) -> tuple[bytes, list[dict], 
     return out.getvalue(), applied, unresolved
 
 
+def alt_proposals_for_pdf(data: bytes, *, scan_id=None, context_file="") -> list[dict]:
+    """Fail closed until the tagged figure maps to its own image evidence.
+
+    Whole-page OCR can transcribe body text even with only one tagged figure.
+    Existing remediation stays unchanged; automatic recovery may never treat a
+    page description as proof of the individual figure's meaning.
+    """
+    raise ValueError('PDF figure recovery needs an exact figure image association; review the figure individually. Whole-page text is not safe figure alt text.')
+
+
 def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
                         scan_id: str | None, file: str,
                         applied_fixes=None, proposals=None) -> tuple[list[str], int]:

@@ -1886,6 +1886,7 @@ ASSESS_LANE_JOB_TYPES = (
 # it anywhere else would let a Remediate backlog and its own recovery queue behind different
 # capacity — the exact cross-lane stall these disjoint tuples exist to prevent.
 REMEDIATE_LANE_JOB_TYPES = (
+    "vision_proposal_retry",
     "remediate_file", "deliver_corrected_copy", "rescore_file", "apply_approved_values",
     "publish_file", "prepare_release_package", "release_continue", "publish_release_reports",
 )
@@ -2438,13 +2439,15 @@ def update_job(job_id: str, patch: dict) -> None:
     # `local` was updated before the Redis attempt, including when it failed or was coalesced.
 
 
-def get_job_state(job_id: str) -> dict | None:
+def get_job_state(job_id: str, *, reconcile_durable: bool = True) -> dict | None:
     """The poll's answer, with staleness resolved into an honest terminal state rather than left
     for the caller to notice. Never mutates the stored record — every replica computes this fresh,
     so an already-dead job reads the same way from whichever replica answers the next poll.
 
     Reads from a Redis hash (HGETALL). Falls back to the old JSON-string format during the
-    deployment window when string-type keys from pre-HSET instances are still live in Redis."""
+    deployment window when string-type keys from pre-HSET instances are still live in Redis.
+    Set reconcile_durable=False when the caller owns a bounded-age SQL reading;
+    that mode returns progress without SQL fallback or local staleness terminality."""
     r = _get_redis()
     state = None
     if r is not None:
@@ -2469,7 +2472,7 @@ def get_job_state(job_id: str) -> dict | None:
     # The shared live cache is optional; durable queue ownership and terminality are not.
     # Another replica cannot see this process's mirror after a Redis outage. Never invent
     # completion from its absence, or let a stale mirror override a durable terminal result.
-    if REDIS_URL and (cache_missing or _job_is_stale(state) or job_id in _JOB_REDIS_DIRTY):
+    if reconcile_durable and REDIS_URL and (cache_missing or _job_is_stale(state) or job_id in _JOB_REDIS_DIRTY):
         try:
             durable = get_store().get_job(job_id)
             if isinstance(durable, dict) and durable.get("status") in (
@@ -2492,7 +2495,7 @@ def get_job_state(job_id: str) -> dict | None:
             swallowed("core.get_job_state: reading durable queue fallback failed")
     if state is None:
         return None
-    if _job_is_stale(state) and state.get("state_source") != "durable_queue":
+    if reconcile_durable and _job_is_stale(state) and state.get("state_source") != "durable_queue":
         return {**state, "phase": "error", "done": True,
                 "error": (state.get("error") or
                           "scan interrupted — the server likely restarted mid-run; "

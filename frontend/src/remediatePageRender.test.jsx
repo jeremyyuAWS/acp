@@ -24,8 +24,8 @@ it('puts workspace tabs first and current activity at the start of the default L
  expect(live.querySelectorAll('[aria-label="Remediation live activity"]')).toHaveLength(1)
  expect(live.textContent).toContain('Saved corrected copy')
  expect(live.querySelector('[aria-label="Remediation run"]')).toBeNull()
- expect(live.querySelector('#accepted-run-details').tagName).toBe('DETAILS')
- expect(live.querySelector('#accepted-run-details').open).toBe(false)
+ expect(live.querySelector('#accepted-run-details')).toBeNull() // Deliberately retired; Release owns delivery.
+ expect(live.querySelector('[aria-label="Publish corrected copies"]')).toBeNull()
  expect(container.querySelector('#rem-panel-review').hidden).toBe(true)
  expect(container.querySelector('#rem-panel-waterfall').hidden).toBe(true)
 })

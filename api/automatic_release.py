@@ -288,6 +288,9 @@ def require_authority(store, row, file):
 
 def ready(store, row, file):
     record = require_authority(store, row, file)
+    from vision_recovery import pending_for_file
+    if pending_for_file(store, row['scan_id'], row['run_id'], file):
+        raise ValueError('Waiting for the bounded vision retry to finish preparing available corrections.')
     work_state = run_files(store, row['run_id']).get(file)
     partial = row['intent'].get('allow_remaining_issues') is True
     with store._db.cursor() as cur:

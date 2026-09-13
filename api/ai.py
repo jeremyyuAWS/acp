@@ -138,6 +138,29 @@ def _leave_vision_capacity() -> None:
 
 
 _VISION_DEADLINE = ContextVar('assessment_vision_deadline', default=None)
+_VISION_FAILURE = ContextVar('vision_failure_reason', default=None)
+
+
+def vision_failure_reason():
+    """Current call's content-free failure; not a document accessibility verdict."""
+    return _VISION_FAILURE.get()
+
+
+def _vision_failed(reason):
+    _VISION_FAILURE.set(reason)
+    return None
+
+
+def _record_vision_miss():
+    from vision_recovery import record
+    record(vision_failure_reason())
+
+
+def _retry_empty_vision():
+    # Smaller prompts can fix empty replies, not an overloaded endpoint.
+    from vision_recovery import TRANSIENT
+    return vision_failure_reason() not in TRANSIENT
+
 
 
 @contextmanager
@@ -167,8 +190,12 @@ def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs
                     'provider': getattr(provider, 'name', 'unknown'), 'model': 'not-dispatched'}
         wait = min(wait, remaining)
     cloud_api = is_remote_vision_api(provider)
+    lease = None
+    admission_started = time.monotonic()
     admitted = _CLOUD_VISION_GATE.acquire(timeout=wait) if cloud_api else _enter_vision_capacity(wait)
     if not admitted:
+        if lease is not None:
+            lease.release()
         return {
             "ok": False, "reason": "capacity_busy",
             "provider": getattr(provider, "name", "unknown"),
@@ -176,6 +203,18 @@ def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs
             "model": kwargs.get("model") or getattr(provider, "model", None),
         }
     try:
+        if not cloud_api:
+            from vision_admission import configured_admission
+            endpoint = (getattr(provider, 'base_url', None) or getattr(provider, 'url', None)
+                        or getattr(provider, 'endpoint', None) or '')
+            lease = configured_admission().acquire(str(endpoint),
+                str(kwargs.get('model') or getattr(provider, 'model', '')),
+                wait_seconds=max(0, wait - (time.monotonic() - admission_started)), lease_seconds=max(1, kwargs.get('timeout', OLLAMA_VISION_TIMEOUT)) + 30)
+            if not lease.admitted:
+                _vision_metric('backpressured')
+                return {'ok': False, 'reason': 'shared_capacity_busy' if lease.reason == 'capacity_exhausted'
+                        else 'shared_coordination_unavailable', 'provider': getattr(provider, 'name', 'unknown'),
+                        'model': 'not-dispatched'}
         for attempt in range(3 if cloud_api else 1):
             if deadline is not None:
                 remaining = deadline - time.monotonic()
@@ -183,7 +222,12 @@ def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs
                     return {'ok': False, 'reason': 'assessment_vision_budget_exhausted',
                             'provider': getattr(provider, 'name', 'unknown'), 'model': 'not-dispatched'}
                 kwargs['timeout'] = min(kwargs.get('timeout', remaining), remaining)
+            if lease is not None and lease.ownership_lost:
+                return {"ok": False, "reason": "shared_coordination_unavailable", "model": "not-dispatched"}
             result = provider.generate(prompt, image_bytes, **kwargs)
+            if lease is not None and lease.ownership_lost:
+                # An unowned response must not become an accepted remediation draft.
+                return {"ok": False, "reason": "shared_coordination_unavailable", "model": "not-accepted"}
             if result.get('reason') != 'http_429' or attempt == 2 or not cloud_api:
                 break
             delay = 0.5 * (attempt + 1)
@@ -201,6 +245,8 @@ def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs
             _CLOUD_VISION_GATE.release()
         else:
             _leave_vision_capacity()
+            if lease is not None:
+                lease.release()
 
 
 def reset_vision_circuits() -> None:
@@ -614,6 +660,7 @@ def vision_is_available() -> bool:
     """An authorized configured cloud image model or installed Ollama vision model.
     Cloud selection does not depend on the availability of a separate GPU endpoint.
     Local-only accepted runs continue to require a private Ollama endpoint."""
+    _VISION_FAILURE.set(None)
     from llm_waterfall_provider import managed_context, defer_managed
     _run = managed_context()
     if _run is not None and not (getattr(_run, 'local_drafting', False) or getattr(_run, 'enabled', False)):
@@ -845,10 +892,14 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     genuine cross-check). `clean=False` returns the raw reply (the validator parses its own format
     rather than an alt string)."""
     from llm_waterfall_provider import managed_context, defer_managed
+    _VISION_FAILURE.set(None)
+    deadline = _VISION_DEADLINE.get()
+    if deadline is not None and time.monotonic() >= deadline:
+        return _vision_failed("assessment_vision_budget_exhausted")
     _run = managed_context()
     if _run is not None and not (getattr(_run, 'local_drafting', False) or getattr(_run, 'enabled', False)):
         defer_managed('legacy_ai_path_not_budgeted', kind='_vision_generate')
-        return None
+        return _vision_failed('vision_pricing_not_verified')
     if _run is not None and getattr(_run, 'enabled', False):
         from vision_generation import available, generate
         if available():
@@ -858,7 +909,7 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
                 text = _TracedVisionText(value, result['ai_call_id'])
                 text.vision_result = result
                 return text
-            return None
+            return _vision_failed(result.get('reason') or 'vision_generation_failed')
     import time as _t
     _t0 = _t.monotonic()
     # The transport goes through the provider seam (ADR 0019 §1): today that is always the local
@@ -893,7 +944,7 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
             _trace_ai("vision", prompt, None, _t0, ok=False, reason="model_not_installed",
                       model=mdl, scan_id=scan_id, file=file, provider="ollama",
                       zone=getattr(prov, "zone", None), prompt_version=prompt_version)
-            return None
+            return _vision_failed('model_not_installed')
 
     now = time.monotonic()
     half_open_probe = False
@@ -909,11 +960,11 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
                       model=mdl, scan_id=scan_id, file=file, provider=circuit_key[0],
                       zone=getattr(prov, "zone", None), prompt_version=prompt_version)
             _vision_metric("circuit_skips")
-            return None
+            return _vision_failed('circuit_open')
         if circuit and now - circuit["opened_at"] >= VISION_CIRCUIT_COOLDOWN:
             if circuit.get("probing"):
                 _vision_metric("circuit_skips")
-                return None
+                return _vision_failed('circuit_open')
             circuit["probing"] = True
             half_open_probe = True
     # A scale-to-zero GPU provider gets its own cold-start budget; the Ollama timeout is too short
@@ -924,7 +975,8 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     # Circuit state belongs to the selected provider. A successful local fallback must not
     # erase evidence that the GPU provider timed out, or every file retries the overloaded GPU.
     circuit_res = res
-    if half_open_probe and res.get("reason") == "capacity_busy":
+    if half_open_probe and res.get("reason") in {"capacity_busy", "shared_capacity_busy",
+            "shared_coordination_unavailable", "assessment_vision_budget_exhausted"}:
         with _VISION_CIRCUIT_LOCK:
             current = _VISION_CIRCUITS.get(circuit_key)
             if current:
@@ -953,10 +1005,14 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     reason = res.get("reason") or _providers.REASON_TRANSPORT
     circuit_reason = circuit_res.get("reason") or _providers.REASON_TRANSPORT
     with _VISION_CIRCUIT_LOCK:
-        if circuit_res.get("ok"):
+        if circuit_res.get("ok") or circuit_reason in (
+                _providers.REASON_EMPTY, _providers.REASON_UNUSABLE):
+            # A completed but unusable model reply proves dependency recovery,
+            # never accessibility success. Leaving a half-open probe claimed here
+            # would block every later call despite the endpoint answering.
             _VISION_CIRCUITS.pop(circuit_key, None)
         elif circuit_enabled and circuit_reason not in (
-                _providers.REASON_EMPTY, _providers.REASON_UNUSABLE, "capacity_busy", "assessment_vision_budget_exhausted"):
+                _providers.REASON_EMPTY, _providers.REASON_UNUSABLE, "capacity_busy", "shared_capacity_busy", "shared_coordination_unavailable", "assessment_vision_budget_exhausted"):
             previous = _VISION_CIRCUITS.get(circuit_key) or {"failures": 0}
             failures = previous.get("failures", 0) + 1
             if failures >= VISION_CIRCUIT_FAILURES:
@@ -980,7 +1036,7 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
         # reason through so the ai_calls row says which one rather than only that it failed.
         _trace_ai("vision", prompt, None, _t0, ok=False,
                   reason=reason, **_tr)
-        return None
+        return _vision_failed(reason)
     if not clean:
         call_id = _trace_ai("vision", prompt, raw, _t0, ok=True,
                             reason=_providers.REASON_OK, **_tr)
@@ -1022,7 +1078,7 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
     import providers
     metered = metered_vision_available() or (managed_context() is None and
         getattr(providers.active_vision_provider(), "name", "") in providers.CLOUD_PROVIDERS)
-    if not alt and not metered:
+    if not alt and not metered and _retry_empty_vision():
         # The model may have replied with nothing at all rather than failed — see
         # _minimal_vision_prompt. One bare retry, which is the difference between a working
         # reviewer re-draft (#131) and a button that silently does nothing on a compact model.
@@ -1041,14 +1097,16 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
     # secret is present, so the default keyless build never leaves the box and this stays a no-op
     # (cloud_vision_provider() → None). The transparent numbered path is attached to the result so
     # the review card can read a real field instead of re-deriving it from the ai_calls ledger.
-    if not metered and not (alt and _is_usable_alt(alt)):
+    if not metered and managed_context() is None and not (alt and _is_usable_alt(alt)):
         esc = _escalate_vision(prompt, image_bytes, scan_id=scan_id, file=file)
         if esc:
             alt = esc["alt"]
             model_used = esc["model"]
             escalation = esc
     if not (alt and _is_usable_alt(alt)):
+        _record_vision_miss()
         return None
+    _VISION_FAILURE.set(None)
     prov = recorded or provenance()
     out = {
         "alt": alt,
@@ -1281,7 +1339,7 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     import providers
     metered = metered_vision_available() or (managed_context() is None and
         getattr(providers.active_vision_provider(), "name", "") in providers.CLOUD_PROVIDERS)
-    if not alt and not grounded and not metered:
+    if not alt and not grounded and not metered and _retry_empty_vision():
         alt = _vision_generate(_minimal_vision_prompt(), image_bytes, scan_id=scan_id, file=file,
                                prompt_version="describe-minimal-v1")
     recorded = getattr(alt, "vision_result", {})
@@ -1292,14 +1350,16 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     # build never leaves the box. The escalation is transparent: the numbered path is attached, not
     # hidden or dressed up as a score.
     escalation = None
-    if (not grounded or not alt) and not metered:
+    if (not grounded or not alt) and not metered and managed_context() is None:
         esc = _escalate_vision(prompt, image_bytes, scan_id=scan_id, file=file)
         if esc:
             alt = esc["alt"]
             model_used = esc["model"]
             escalation = esc
     if not alt:
+        _record_vision_miss()
         return None
+    _VISION_FAILURE.set(None)
     if grounded:
         snippet = re.sub(r"\s+", " ", ocr_txt).strip()[:80]
         evidence = f"anchored in text read from the image (OCR: “{snippet}”)"

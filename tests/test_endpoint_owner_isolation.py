@@ -123,7 +123,7 @@ class TestJobPollOwnerIsolation:
         """NON-VACUITY: the owning user must still be able to poll the job."""
         import core
         job_state = {"phase": "running", "done": False, "scan_id": SID, "seq": 1}
-        monkeypatch.setattr(core, "get_job_state", lambda jid: job_state if jid == JOB_ID else None)
+        monkeypatch.setattr(core, "get_job_state", lambda jid, **kwargs: job_state if jid == JOB_ID else None)
         res = gated_client(OWNER).get(f"/scans/jobs/{JOB_ID}")
         assert res.status_code == 200, (
             f"owner cannot poll their own job ({res.status_code}) — fixture broken")
@@ -137,7 +137,7 @@ class TestJobPollOwnerIsolation:
         """
         import core
         job_state = {"phase": "running", "done": False, "scan_id": SID, "seq": 1}
-        monkeypatch.setattr(core, "get_job_state", lambda jid: job_state if jid == JOB_ID else None)
+        monkeypatch.setattr(core, "get_job_state", lambda jid, **kwargs: job_state if jid == JOB_ID else None)
         res = gated_client(ALLOWED_NON_OWNER).get(f"/scans/jobs/{JOB_ID}")
         assert res.status_code == 404, (
             f"expected 404 for a job whose scan belongs to a different user, got {res.status_code}. "
@@ -147,33 +147,33 @@ class TestJobPollOwnerIsolation:
         """An early job has no scan row yet, so its state-level owner closes that window."""
         import core
         job_state = {"phase": "queued", "done": False, "seq": 0, "owner_email": OWNER}
-        monkeypatch.setattr(core, "get_job_state", lambda jid: job_state if jid == JOB_ID else None)
+        monkeypatch.setattr(core, "get_job_state", lambda jid, **kwargs: job_state if jid == JOB_ID else None)
         res = gated_client(ALLOWED_NON_OWNER).get(f"/scans/jobs/{JOB_ID}")
         assert res.status_code == 404
 
     def test_owner_can_poll_job_before_scan_id_exists(self, gated_client, monkeypatch):
         import core
         job_state = {"phase": "queued", "done": False, "seq": 0, "owner_email": OWNER}
-        monkeypatch.setattr(core, "get_job_state", lambda jid: job_state if jid == JOB_ID else None)
+        monkeypatch.setattr(core, "get_job_state", lambda jid, **kwargs: job_state if jid == JOB_ID else None)
         assert gated_client(OWNER).get(f"/scans/jobs/{JOB_ID}").status_code == 200
 
     def test_foreign_user_cannot_open_job_stream(self, gated_client, monkeypatch):
         import core
         job_state = {"phase": "complete", "done": True, "seq": 1, "owner_email": OWNER}
-        monkeypatch.setattr(core, "get_job_state", lambda jid: job_state if jid == JOB_ID else None)
+        monkeypatch.setattr(core, "get_job_state", lambda jid, **kwargs: job_state if jid == JOB_ID else None)
         assert gated_client(ALLOWED_NON_OWNER).get(f"/scans/jobs/{JOB_ID}/stream").status_code == 404
 
     def test_owner_can_open_job_stream(self, gated_client, monkeypatch):
         import core
         job_state = {"phase": "complete", "done": True, "seq": 1, "owner_email": OWNER}
-        monkeypatch.setattr(core, "get_job_state", lambda jid: job_state if jid == JOB_ID else None)
+        monkeypatch.setattr(core, "get_job_state", lambda jid, **kwargs: job_state if jid == JOB_ID else None)
         res = gated_client(OWNER).get(f"/scans/jobs/{JOB_ID}/stream")
         assert res.status_code == 200
         assert '"done": true' in res.text
 
     def test_nonexistent_job_is_404(self, gated_client, monkeypatch):
         import core
-        monkeypatch.setattr(core, "get_job_state", lambda jid: None)
+        monkeypatch.setattr(core, "get_job_state", lambda jid, **kwargs: None)
         res = gated_client(OWNER).get("/scans/jobs/no-such-job")
         assert res.status_code == 404
 

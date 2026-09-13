@@ -53,6 +53,12 @@ export function remediationEventLine(event) {
       return `${file(event)} remediation finished`
     case 'scan.interrupted':
       return `A worker stopped without reporting · attempt ${event?.attempt || 'unknown'} safely queued to resume`
+    case 'remediate.vision_retry_pending':
+      return `Image description for ${file(event)} queued to retry · attempt ${detail.retry || 1} of 2`
+    case 'remediate.vision_retry_recovered':
+      return `Image description recovered for ${file(event)} · saved corrections still need verification`
+    case 'remediate.vision_retry_blocked':
+      return `Image description for ${file(event)} still needs individual review`
     case 'scan.retrying':
       return `A processing attempt failed and was scheduled to retry${event?.attempt ? ` · attempt ${event.attempt}` : ''}`
     // ── human actions on the run ──────────────────────────────────────────────
@@ -80,7 +86,8 @@ export function eventTone(kind, detail = {}) {
   if (kind === 'remediate.verification_failed' || kind === 'remediate.delivery_failed') return 'error'
   if (kind === 'remediate.delivery_retry_requested' || kind === 'remediate.review_requested' || kind === 'remediate.delivery_retry_refused'
       || kind === 'remediate.cancel_requested' || kind === 'remediate.paused'
-      || kind === 'scan.interrupted' || kind === 'scan.retrying') return 'attention'
+      || kind === 'scan.interrupted' || kind === 'scan.retrying' || kind === 'remediate.vision_retry_pending'
+      || kind === 'remediate.vision_retry_blocked') return 'attention'
   if (kind === 'remediate.verified' || kind === 'remediate.delivered' || kind === 'remediate.document_completed') return 'success'
   return 'neutral'
 }

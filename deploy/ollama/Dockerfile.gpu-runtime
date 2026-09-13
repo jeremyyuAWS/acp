@@ -1,0 +1,8 @@
+# Apply runtime-only reliability changes to an explicitly pinned, already-baked GPU image.
+# Do not pull new Ollama/model versions or re-provision capacity during this rollout.
+ARG ACP_OLLAMA_RUNTIME_BASE
+FROM ${ACP_OLLAMA_RUNTIME_BASE}
+ENV OLLAMA_KEEP_ALIVE=30m ACP_OLLAMA_KEEP_ALIVE=30m ACP_OLLAMA_WARM_MODELS=llava:13b
+COPY acp-start-gpu.sh /usr/local/bin/acp-start-gpu.sh
+COPY acp-ollama-warm.py /usr/local/bin/acp-ollama-warm.py
+RUN chmod +x /usr/local/bin/acp-start-gpu.sh && test -d /models/manifests

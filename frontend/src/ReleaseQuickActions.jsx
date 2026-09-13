@@ -4,12 +4,14 @@ import './release-quick-actions.css'
 import DriveReleaseReconnect from './DriveReleaseReconnect.jsx'
 
 export default function ReleaseQuickActions({ runId, files = [], ready = [], destination, folderName = '', destinationLabel,
-  announcement, destinationPicker, destinationContent, destinationLocked = false, destinationPending = false, readOnly, publishing, releaseOptions, allowRemainingIssues = false, readyReasons = [], fileStates = {}, publishedFolders = [], providerLabel = 'the destination', onReady, onProgress }) {
+  automaticStatusPending = false, automaticNeedsReconnect = false, automaticNeedsAttention = false, automaticCoveredFiles = [], announcement, destinationPicker, destinationContent, destinationLocked = false, destinationPending = false, readOnly, publishing, releaseOptions, allowRemainingIssues = false, readyReasons = [], fileStates = {}, publishedFolders = [], providerLabel = 'the destination', onReady, onProgress }) {
   const reasonId = useId()
   const [excluded, setExcluded] = useState(new Set())
   useEffect(() => { setExcluded(new Set()) }, [runId])
   const eligibleReady = ready.filter(file => !fileStates[file.file]?.status || fileStates[file.file].status === 'ready')
   const selectedReady = eligibleReady.filter(file => !excluded.has(file.file))
+  const automaticBatch = selectedReady.length > 0 && selectedReady.every(file => automaticCoveredFiles.includes(file.file))
+  const automaticScope = files.length > 0 && files.every(file => automaticCoveredFiles.includes(file.file))
   const readyNames = new Set(eligibleReady.map(file => file.file))
   const deliveredCount = files.filter(file => fileStates[file.file]?.status === 'released').length
   const allDelivered = files.length > 0 && deliveredCount === files.length
@@ -73,7 +75,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
   const eligibleFiles = entries.filter(([, f]) => (f.rows || []).some(r => r.authorize)).length
   const activeRunning = active && ['waiting', 'publishing'].includes(active.status)
   async function approve() {
-    if (lock.current || readOnly || !eligible || !plan || plan.key !== currentKey.current || activeRunning) return
+    if (lock.current || readOnly || !eligible || !plan || plan.key !== currentKey.current || activeRunning || automaticScope || automaticStatusPending) return
     lock.current = true; setBusy(true); setError('')
     const frozen = plan
     try {
@@ -92,12 +94,12 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     catch (e) { setError(e?.message || 'The same authorized delivery could not be resumed.') }
     finally { lock.current = false; setBusy(false) }
   }
-  const readyReason = readOnly ? 'History is read-only. Switch to the latest scan to publish.'
+  const readyReason = automaticStatusPending ? 'Checking automatic publication…' : automaticBatch ? automaticNeedsReconnect ? 'Automatic publishing is on. Reconnect the destination above to resume.' : automaticNeedsAttention ? 'Automatic publishing is on and needs attention. Check the saved delivery status above.' : 'Automatic publishing is on. These copies publish automatically after processing; no extra click is needed.' : readOnly ? 'History is read-only. Switch to the latest scan to publish.'
     : destinationPending ? 'Loading the saved release destination…' : publishing ? 'Publishing is in progress.' : !runId ? 'Choose a scan before releasing files.'
     : !files.length ? 'No files are selected in this scope.'
     : !eligibleReady.length ? 'No unpublished files are currently eligible for publishing.'
     : !selectedReady.length ? 'Select at least one ready file above.' : ''
-  const approveReason = readOnly ? 'History is read-only. Switch to the latest scan to approve changes.'
+  const approveReason = automaticStatusPending ? 'Checking automatic publication…' : automaticScope ? 'Automatic publishing is on. The saved plan already handles these files.' : readOnly ? 'History is read-only. Switch to the latest scan to approve changes.'
     : destinationPending ? 'Loading the saved release destination…' : busy ? 'Authorization is in progress.' : activeRunning ? 'An authorized batch is already applying, verifying, and publishing. Follow its progress below.'
     : !runId ? 'Choose a scan before approving changes.' : !files.length ? 'No files are selected in this scope.'
     : checking ? 'Checking which proposals can be approved and published.'
@@ -143,6 +145,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     <section className="release-quick-step" aria-labelledby={`${reasonId}-publish`}>
       <h4 id={`${reasonId}-publish`}><span className="release-step-number">3</span> {allDelivered ? 'Publication complete' : 'Publish copies'}</h4>
       <p>Saved copies are published with a scan summary and a per-file checklist of remaining work. Publishing does not certify accessibility.</p>
+      {automaticScope && <p role="status"><b>Automatic publishing is on</b> · {automaticNeedsReconnect ? 'Reconnect the destination above to resume the saved automatic publication.' : automaticNeedsAttention ? 'The saved automatic publication needs attention. Check the destination and delivery status above.' : 'Files publish after automatic processing. No extra click is needed.'}</p>}
       <div className="release-quick-buttons">
       <div className="release-quick-action">
         <button disabled={allDelivered || Boolean(readyReason)} aria-describedby={!allDelivered && readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(selectedReady.map(f => f.file))}>

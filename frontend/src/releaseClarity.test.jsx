@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { getAutomaticRelease, resumeAutomaticRelease } from './api.js'
+import { getAutomaticRelease, resumeAutomaticRelease, getReleaseReports, downloadReleaseReport } from './api.js'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
@@ -51,7 +51,7 @@ vi.mock('./driveAuth.js', () => ({reconnectDriveForRelease: vi.fn().mockResolved
 
 const { default: Publish } = await import('./Publish.jsx')
 
-afterEach(async () => { await unmountAll(); vi.clearAllMocks(); getAutomaticRelease.mockResolvedValue({authorization:null}); getReleaseStatus.mockResolvedValue({ release_id: null }); getSourceStatus.mockResolvedValue({ files: [], stale_count: 0 }); publishAllFiles.mockResolvedValue({ published: [] }); listHitlQueue.mockResolvedValue([]) })
+afterEach(async () => { await unmountAll(); vi.clearAllMocks(); getAutomaticRelease.mockResolvedValue({authorization:null}); getReleaseReports.mockResolvedValue({status:'not_started',reports:[]}); getReleaseStatus.mockResolvedValue({ release_id: null }); getSourceStatus.mockResolvedValue({ files: [], stale_count: 0 }); publishAllFiles.mockResolvedValue({ published: [] }); listHitlQueue.mockResolvedValue([]) })
 const flush = async () => { for (let k = 0; k < 5; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
 const mount = async (props) => {
   const { container, root } = createTestRoot()
@@ -63,6 +63,30 @@ const mount = async (props) => {
 const verified = (file, over = {}) => ({ file, compliant: true, remediated_at: '2026-07-31T00:00:00Z', score: 100, department: 'D', sourceName: 'S', ...over })
 const held = (file, over = {}) => ({ file, compliant: false, score: 40, issues: [{ wcag: 'SC_1_1_1' }], department: 'D', sourceName: 'S', ...over })
 const run = { id: 'scan1', files: 3, certifiable: 2 }
+
+it('mounts compact scan and matching per-file report downloads in the real supporting reports tab', async()=>{
+ getReleaseStatus.mockResolvedValue({release_id:'receipt',documents:[{
+   file:'a.pdf',status:'published',artifact_digest:'sha256:current',published_at:'2026-09-12T00:00:00Z',released_document_url:'https://example.test/copy'}]})
+ getReleaseReports.mockResolvedValue({status:'completed',scan_id:'scan1',release_id:'receipt',bundle_id:'bundle',reports:[
+   {name:'Scan summary.pdf',report_kind:'scan_summary',download_url:'/download/0'},
+   {name:'a-checklist.pdf',report_kind:'checklist',file:'a.pdf',artifact_digest:'sha256:current',download_url:'/download/1'},
+ ]})
+ const c=await mount({run,files:[verified('a.pdf')]})
+ await click(c.querySelector('#release-tab-reports'))
+ const panel=c.querySelector('#release-panel-reports')
+ expect(panel.hidden).toBe(false)
+ const outcomes=panel.querySelector('[aria-label="Publication outcomes"]')
+ expect(outcomes.textContent).not.toContain('Saved copies, verification, remaining work')
+ expect(outcomes.textContent).not.toContain('Scan summary and per-file checklists')
+ const summary=outcomes.querySelector('[aria-label="Release reports"]')
+ expect(summary.textContent).toContain('Scan summary.pdf')
+ const row=[...outcomes.querySelectorAll('tbody tr')].find(r=>r.textContent.includes('a.pdf'))
+ expect(row.textContent).toContain('a-checklist.pdf')
+ await click(summary.querySelector('button'))
+ await click(row.querySelector('.release-file-reports button'))
+ expect(downloadReleaseReport.mock.calls).toEqual([
+   ['scan1','bundle',0,'Scan summary.pdf'],['scan1','bundle',1,'a-checklist.pdf']])
+})
 
 
 Element.prototype.scrollIntoView = vi.fn()
@@ -507,7 +531,10 @@ it('defaults to Manage publication and keeps reports in a separate keyboard acce
   expect(c.querySelector('#release-panel-manage').textContent).toContain('Publish your documents')
   await click(reports)
   expect(c.querySelector('#release-panel-manage').hidden).toBe(true)
-  expect(c.querySelector('#release-panel-reports').textContent).toContain('Publication outcomes')
+  expect(c.querySelector('#release-panel-reports [aria-label="Publication outcomes"]')).toBeTruthy()
+  expect(c.querySelector('#release-panel-reports').textContent).toContain('Search filenames')
+  expect(c.querySelectorAll('#release-panel-reports [aria-label="Release reports"]')).toHaveLength(1)
+  expect(c.querySelector('#release-panel-reports').textContent).not.toContain('Scan summary and per-file checklists')
   expect(c.querySelector('#release-panel-reports').textContent).toContain('Assessment reports')
   await click(manage)
   expect(c.querySelector('#release-panel-manage').hidden).toBe(false)
@@ -540,4 +567,53 @@ it('opens an honest empty Release queue', async () => {
  await act(async()=>c.querySelector('.progress-processing').click())
  expect(c.querySelector('[role="dialog"]').textContent).toContain('No files are currently in this queue.')
  expect(c.querySelector('.progress-attention')).toBeNull()
+})
+it('restores current durable automatic publication on reload and prevents a duplicate manual batch', async () => {
+ getSettings.mockResolvedValue({drive_mirror_enabled:false,drive_mirror_folder:'Remediated'})
+ getAutomaticRelease.mockResolvedValue({run_id:'batch-a',authorization:{id:'accepted',run_id:'batch-a',status:'active',destination:{provider:'local'},files:['one.pdf'],allow_remaining_issues:true}})
+ const c = await mount({run:{...run,source:'local'},files:[held('one.pdf',{remediated_at:'2026-09-09',corrected_sha256:'digest'})]})
+ expect(button(c,'Publish batch with remaining issues (1)').disabled).toBe(true)
+ expect(c.textContent).toContain('Automatic publishing is on')
+ await click(button(c,'Publish batch with remaining issues (1)'))
+ expect(publishAllFiles).not.toHaveBeenCalled()
+})
+it.each(['completed','stopped','expired'])('leaves manual publication available for an inactive %s intent', async status => {
+ getSettings.mockResolvedValue({drive_mirror_enabled:false,drive_mirror_folder:'Remediated'})
+ getAutomaticRelease.mockResolvedValue({run_id:'batch-a',authorization:{id:'old',run_id:'batch-a',status,destination:{provider:'local'},files:['one.pdf'],allow_remaining_issues:true}})
+ const c = await mount({run:{...run,source:'local'},files:[verified('one.pdf',{corrected_sha256:'digest'})]})
+ expect([...c.querySelectorAll('button')].find(b=>b.textContent.startsWith('Publish batch') && !b.closest('[hidden]')).disabled).toBe(false)
+})
+it('does not let an old remediation batch disable manual publishing', async () => {
+ getSettings.mockResolvedValue({drive_mirror_enabled:false,drive_mirror_folder:'Remediated'})
+ getAutomaticRelease.mockResolvedValue({run_id:'new-batch',authorization:{id:'old',run_id:'old-batch',status:'active',destination:{provider:'local'},files:['one.pdf'],allow_remaining_issues:true}})
+ const c = await mount({run:{...run,source:'local'},files:[held('one.pdf',{remediated_at:'2026-09-09',corrected_sha256:'digest'})]})
+ expect(button(c,'Publish batch with remaining issues (1)').disabled).toBe(false)
+})
+it.each(['expired-time','other-destination'])('does not block manual publication from a %s authorization', async kind => {
+ getSettings.mockResolvedValue({drive_mirror_enabled:false,drive_mirror_folder:'Remediated'})
+ getAutomaticRelease.mockResolvedValue({run_id:'batch-a',authorization:{id:'accepted',run_id:'batch-a',status:'active',expires_at:kind==='expired-time'?'2000-01-01T00:00:00Z':undefined,destination:{provider:'local',folder_id:kind==='other-destination'?'old-parent':undefined},files:['one.pdf'],allow_remaining_issues:true}})
+ const c = await mount({run:{...run,source:'local'},files:[verified('one.pdf',{corrected_sha256:'digest'})]})
+ if(kind==='other-destination') {
+  // Choosing a different provider is an explicit destination change.
+  const select=c.querySelector('[aria-label="Publishing destination"]')
+  await act(async()=>{select.value='drive';select.dispatchEvent(new Event('change',{bubbles:true}))});await flush()
+ }
+ expect(button(c,'Publish batch with remaining issues (1)').disabled).toBe(false)
+})
+it('bounds an unresponsive initial automatic publication check and offers an explicit refresh', async () => {
+ vi.useFakeTimers()
+ getSettings.mockResolvedValue({drive_mirror_enabled:false,drive_mirror_folder:'Remediated'})
+ getAutomaticRelease.mockImplementation(()=>new Promise(()=>{}))
+ const {root,container}=createTestRoot()
+ await act(async()=>root.render(createElement(Publish,{run:{...run,source:'local'},files:[verified('one.pdf',{corrected_sha256:'digest'})]})))
+ expect(button(container,'Publish batch (1)').disabled).toBe(true)
+ expect(container.textContent).toContain('Checking automatic publication…')
+ await act(async()=>vi.advanceTimersByTimeAsync(20000))
+ expect(container.textContent).not.toContain('Checking automatic publication…')
+ expect(button(container,'Refresh automatic publication status')).toBeTruthy()
+ expect(publishAllFiles).not.toHaveBeenCalled()
+ getAutomaticRelease.mockResolvedValue({authorization:null})
+ await act(async()=>button(container,'Refresh automatic publication status').click())
+ expect(button(container,'Publish batch (1)').disabled).toBe(false)
+ vi.useRealTimers()
 })
