@@ -42,8 +42,9 @@ vi.mock('./remediableScope.js', () => ({
 vi.mock('./ReleaseQuickActions.jsx', () => ({default: ({onReady,ready}) => <button onClick={() => onReady(ready.map(f=>f.file))}>Test publish ready</button>}))
 vi.mock('./RemediationLiveDocuments.jsx', () => ({default: () => null}))
 const { default: Publish } = await import('./Publish.jsx')
+const { getAutomaticRelease } = await import('./api.js')
 
-afterEach(async () => { await unmountAll(); vi.useRealTimers(); vi.clearAllMocks(); getReleaseStatus.mockReset().mockResolvedValue({release_id:null}); publishAllFiles.mockReset(); listHitlQueue.mockResolvedValue([]) })
+afterEach(async () => { await unmountAll(); vi.useRealTimers(); vi.clearAllMocks(); getAutomaticRelease.mockReset().mockResolvedValue({authorization:null}); getReleaseStatus.mockReset().mockResolvedValue({release_id:null}); publishAllFiles.mockReset(); listHitlQueue.mockResolvedValue([]) })
 const flush = async () => { for (let k = 0; k < 5; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
 const mount = async (props) => {
   const { container, root } = createTestRoot()
@@ -56,6 +57,14 @@ const run = { id: 'scan1', files: 3, certifiable: 2 }
 
 
 const props={run:{...run,source:'drive'},me:{email:'first@example.com'},files:[verified('a.pdf',{corrected_sha256:'v1'})]}
+it.each(['waiting','processing','blocked'])('uses saved Q3 %s permission instead of manually dispatching covered copies',async status=>{
+ getAutomaticRelease.mockResolvedValue({authorization:{id:'auto',status,files:['a.pdf'],allow_remaining_issues:true}})
+ const c=await mount({...props,embedded:true})
+ expect(c.textContent).toContain('Automatic publishing is on')
+ expect(c.textContent).toContain('1 ready')
+ expect([...c.querySelectorAll('button')].some(b=>b.textContent==='Publish 1 saved copy')).toBe(false)
+ expect(publishAllFiles).not.toHaveBeenCalled()
+})
 const receipt=status=>({release_id:'r',documents:[{file:'a.pdf',status,corrected_checksum:'v1',published_at:status==='published'?'2026-09-12':null}]})
 const start=async c=>act(async()=>[...c.querySelectorAll('button')].find(b=>b.textContent==='Test publish ready').click())
 it('follows queued Drive receipts without publishing twice',async()=>{
