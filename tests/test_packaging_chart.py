@@ -1472,7 +1472,7 @@ def test_the_readiness_probe_points_at_a_route_that_can_actually_fail():
     path = api["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]["httpGet"]["path"]
     source = (ROOT / "api" / "routes" / "system.py").read_text(encoding="utf-8")
     route = re.search(
-        rf'@router\.get\("{re.escape(path)}"\)\s*\ndef (\w+)\(([^)]*)\):(.*?)(?=\n@router\.|\Z)',
+        rf'@router\.get\("{re.escape(path)}"\)\s*\n(?:async )?def (\w+)\(([^)]*)\):(.*?)(?=\n@router\.|\Z)',
         source, re.DOTALL)
     assert route, f"the chart probes {path}, which is not a GET route in api/routes/system.py"
     name, signature, body = route.group(1), route.group(2), route.group(3)
