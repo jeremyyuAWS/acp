@@ -1,3 +1,4 @@
+import useAutomaticReleaseStatus from './useAutomaticReleaseStatus.js'
 import AutomaticReleasePackage from './AutomaticReleasePackage.jsx'
 import { remediationWorkRunning } from './remediationWorkRunning.js'
 import useAcceptedRemediationIdentity from './useAcceptedRemediationIdentity.js'
@@ -10,10 +11,8 @@ import { authEpoch } from './apiIdentity.js'
 import { assessMetrics } from './assessMetrics.js'
 import { reviewableRemediationItems } from './remediationReviewAvailability.js'
 import RemediationLiveDocuments from './RemediationLiveDocuments.jsx'
-import RemediationAutoRelease from './RemediationAutoRelease.jsx'
 import RemediationReleasePlan from './RemediationReleasePlan.jsx'
 import { authorizeAcceptedRelease } from './releasePlanIntent.js'
-import RemediationReleaseAccess from './RemediationReleaseAccess.jsx'
 import { remediationReviewCounts, remediationDiffPage } from './remediationCountSummary.js'
 import { selectionFingerprint } from './batchReviewSelection.js'
 import AssessSummary from './AssessSummary.jsx'
@@ -23,7 +22,6 @@ import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import RemediationInbox from './RemediationInbox.jsx'
 import RemediationRunHeader from './RemediationRunHeader.jsx'
-import RemediationRunDetails from './RemediationRunDetails.jsx'
 // The approved-board core (R2/R3, R5, R6, R9, R11, R12). Every one of these shipped to main
 // unmounted; this is the pass that puts them on the screen they were written for.
 import RemediationWork from './RemediationWork.jsx'
@@ -561,7 +559,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // The resume cursor: the last scan_events.seq this browser actually rendered. Null means "no
   // cursor" — a first connection, which the server answers with live frames and no backfill.
   const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
-  const [runDetailsOpen, setRunDetailsOpen] = useState(false)  // the Run details disclosure (PRD §11)
   const [acceptedLaunch, setAcceptedLaunch] = useState(null)
   const [acceptedPlan, setAcceptedPlan] = useState(null)
   const { batchId: acceptedBatchId, authorization: acceptedAuthorization, scopedSnapshot } = useAcceptedRemediationIdentity({
@@ -1007,6 +1004,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // The old automatic-action cohort would hide precisely the work this card explains.
   const impactScope = remediationImpactScope(files, triage)
     .sort((a, b) => (ontRank(a) - ontRank(b)) || (priority(b) - priority(a)))
+  useAutomaticReleaseStatus(runId, impactScope, setAutomaticReleaseState)
   const dcount = (st) => remediable.filter((f) => decisions[f.file]?.state === st).length
 
   // business priority (findings-based)
@@ -1225,7 +1223,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // awaiting-revalidation count is reported as state in the summary line instead.
   const planAccepted = !!acceptedBatchId || !!(acceptedLaunch && acceptedLaunch.scanId === runId)
   const remediationHasStarted = planAccepted || remStarted || hasRemediationResults || !!scopedSnapshot?.batch_id
-  const openRemediationPlan = () => planAccepted ? setRunDetailsOpen(true) : setWorkspaceRequest({ mode: 'plan' })
+  const openRemediationPlan = () => setWorkspaceRequest({ mode: planAccepted ? 'live' : 'plan' })
   const primary = readOnly ? null
     : remRunning ? { label: 'Applying fixes…', disabled: true }
     : !planAccepted && autoBatch && autoBatch.count > 0
@@ -1616,7 +1614,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             <button disabled={remBusy || !runId || readOnly} onClick={openRemediationPlan}
                     title="Review permissions and impact before starting remediation."
                     style={{ flexShrink: 0 }}>
-              {remBusy ? '⏳ Enqueueing…' : planAccepted ? 'Run details' : 'Start remediation'}
+              {remBusy ? '⏳ Enqueueing…' : planAccepted ? 'Show progress' : 'Start remediation'}
             </button>
             {(serverFixed > 0 || remProg) && <TraceChip scanId={runId} kind="session" label="View scan traces" />}
           </div>
@@ -1940,8 +1938,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                       manual: reviewCounts.manual, revalidating: revalidatingCount, blocked: blockedCount }}
             primary={primary}
             readOnly={readOnly}
-            runDetailsOpen={runDetailsOpen}
-            onOpenRunDetails={() => { setRunDetailsOpen((v) => !v); setWorkspaceRequest({ mode: 'live' }) }} />}
+            />}
           {planAccepted && <details className="panel" aria-label="Saved automation settings">
             <summary>Saved automation plan · repairs and verification continue automatically</summary>
             <AcceptedRemediationPlanSummary
@@ -1950,15 +1947,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               authorization={acceptedAuthorization} />
           </details>}
           <AutomaticReleasePackage scanId={runId} authorization={acceptedAuthorization} />
-          {delivery && <details className="panel" aria-label="Publish corrected copies"><summary>Publish corrected copies</summary>{delivery}</details>}
-          <details className="panel" id="accepted-run-details" open={runDetailsOpen} onToggle={event => setRunDetailsOpen(event.currentTarget.open)} aria-label="Run details">
-            <summary>Run details</summary>
-            <RemediationAutoRelease statusOnly onStatus={setAutomaticReleaseState} scanId={runId} files={impactScope} readOnly={readOnly} />
-            {runDetailsOpen && <details><summary>Additional run information</summary>
-              <RemediationRunDetails sections={runDetailSections} open />
-              <RemediationReleaseAccess files={impactScope} readOnly={readOnly} onNavigate={onNavigate} />
-            </details>}
-          </details>
+          {/* Embedded publication and run-detail panels deliberately retired; Release owns delivery. */}
           {releasePlanNotice && <div role="status">{releasePlanNotice}</div>}
           {remMsg && <div role="status">{remMsg}</div>}
           <RemediationLiveDocuments progressHostId={progressHostId} onShowDocuments={() => setWorkspaceRequest({ mode: 'live' })} snapshot={scopedSnapshot} events={runStream?.events || []} connected={!!runStream?.connected} key={runId} scanId={runId} files={impactScope} cap={cap} assessment={assessment}

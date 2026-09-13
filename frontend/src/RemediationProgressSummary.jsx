@@ -11,7 +11,7 @@ export const PROGRESS_STATES = [
 // neither a corrected copy nor an AI approval proves verification or publication.
 export default function RemediationProgressSummary({ documents = [], selected, onSelect, reconciling = false, animate = false, coverage, onCoverageSelect, selectedCoverage, baselineDocumentCounts, startedAt, queueMode = false, variant }) {
   const states = variant === 'release' ? PROGRESS_STATES.filter(([key]) => key !== 'attention') : PROGRESS_STATES
-  const positiveDirections = { processing: 'neutral', verified: 'increase', attention: 'decrease', ready: 'increase', published: 'increase' }
+  const positiveDirections = { processing: variant === 'release' ? 'decrease' : 'neutral', verified: 'increase', attention: 'decrease', ready: variant === 'release' ? 'decrease' : 'increase', published: 'increase' }
   const known = new Set(PROGRESS_STATES.map(([key]) => key))
   const unknown = documents.filter(document => !known.has(document.progressState)).length
   const selectedLabel = PROGRESS_STATES.find(([key]) => key === selected)?.[1]

@@ -14,7 +14,7 @@ it('keeps one activity feed first in Live and workspace tabs ahead of its run he
   const live = source.slice(source.indexOf('live={<>'))
   expect(live.indexOf('<RemediationActivityPanel')).toBeLessThan(live.indexOf('<RemediationRunHeader'))
   expect(live.indexOf('<RemediationActivityPanel')).toBeLessThan(live.indexOf('<RemediationLiveDocuments'))
-  expect(source).toContain('<details className="panel" aria-label="Publish corrected copies">')
+  expect(source).not.toContain('aria-label="Publish corrected copies"') // Embedded publication deliberately retired.
   expect(source).toContain('<RemediationOpsPanel streamlined hideActivity')
 })
 it('animates the current document row again when a new saved lead event arrives', async () => {
