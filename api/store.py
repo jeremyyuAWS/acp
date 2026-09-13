@@ -555,6 +555,8 @@ _SCHEMA = [
     # whose temperature/prompt is not yet threaded through (see ai._trace_ai).
     "ALTER TABLE ai_calls ADD COLUMN IF NOT EXISTS temperature REAL",
     "ALTER TABLE ai_calls ADD COLUMN IF NOT EXISTS prompt_version TEXT",
+    # Numeric-only measured GPU load/prompt/inference timings, absent for legacy calls.
+    "ALTER TABLE ai_calls ADD COLUMN IF NOT EXISTS timing TEXT",
     """CREATE TABLE IF NOT EXISTS second_opinion_reservations (
       id TEXT PRIMARY KEY, scan_id TEXT NOT NULL, file TEXT NOT NULL, day TEXT NOT NULL,
       estimated_cost_usd REAL NOT NULL, created_at TEXT NOT NULL,
@@ -2507,8 +2509,9 @@ class _PgAdapter:
     # in a card's per-draft fan-out. Additive and nullable: a replica still running v50 keeps
     # writing rows without it, and _decision_rows reads NULL as a legacy row rather than as a
     # decision, so a rolling deploy under-counts nothing and double-counts nothing.
-    _SCHEMA_VERSION = 52
-    _SCHEMA_CHECKSUM_AT_VERSION = "16c3b2ce6b5b581d9f86dcfe680078d2"
+    # v53 retains numeric-only GPU timing in nullable ai_calls.timing.
+    _SCHEMA_VERSION = 53
+    _SCHEMA_CHECKSUM_AT_VERSION = "10672a4d7523cb18b78c2add1da271d8"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -7337,7 +7340,8 @@ class Store:
                        latency_ms: int, ok: bool, scan_id: str | None = None,
                        file: str | None = None, cost_usd: float = 0.0,
                        reason: str | None = None, temperature: float | None = None,
-                       prompt_version: str | None = None, call_identity: str | None = None) -> str:
+                       prompt_version: str | None = None, call_identity: str | None = None,
+                       timing: dict | None = None) -> str:
         """Append one AI-call provenance row (ADR 0019): which provider/model ran, WHERE
         (local/cloud zone), how long, at what cost, and — for a call that did not succeed —
         `reason`, WHICH way it failed (providers.REASON_*). Best-effort — a telemetry write
@@ -7346,14 +7350,16 @@ class Store:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         call_id = call_identity or uuid.uuid4().hex
+        from ollama_runtime import safe_timings
+        measured = safe_timings(timing)
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO ai_calls(id,ts,scan_id,file,surface,provider,model,zone,"
-                "latency_ms,ok,cost_usd,reason,temperature,prompt_version) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
+                "latency_ms,ok,cost_usd,reason,temperature,prompt_version,timing) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
                 (call_id, now, scan_id, file, surface, provider, model, zone,
                  int(latency_ms), 1 if ok else 0, float(cost_usd), reason,
-                 temperature, prompt_version))
+                 temperature, prompt_version, json.dumps(measured, sort_keys=True) if measured else None))
             if call_identity:
                 self._db.execute(cur, 'SELECT scan_id,file,provider,model,cost_usd FROM ai_calls WHERE id=%s', (call_id,))
                 existing = self._db.fetchone(cur)

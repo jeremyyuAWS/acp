@@ -27,6 +27,7 @@ import remediate_pdf as RP  # noqa: E402
 def _tagged_pdf(path: Path, n_figs: int = 1) -> None:
     raw = path.with_name("raw-" + path.name)
     c = canvas.Canvas(str(raw))
+    c.drawString(72, 720, "Patient instructions from body text")
     for i in range(n_figs):
         c.rect(120, 480 - i * 40, 200, 30, fill=1)
     c.showPage(); c.save()
@@ -111,10 +112,10 @@ def _stub_vision(monkeypatch, *, grounded: bool, alt: str = _GUESS):
     return calls
 
 
-def _caption(tmp_path, monkeypatch, name, *, grounded, n_figs=2):
+def _caption(tmp_path, monkeypatch, name, *, grounded, n_figs=2, alt=_GUESS):
     src = tmp_path / name
     _tagged_pdf(src, n_figs=n_figs)
-    calls = _stub_vision(monkeypatch, grounded=grounded)
+    calls = _stub_vision(monkeypatch, grounded=grounded, alt=alt)
     pdf = pikepdf.open(str(src))
     props, fixes = [], []
     applied, deferred = RP._fix_pdf_figure_alt(
@@ -135,26 +136,30 @@ def test_an_ungrounded_description_never_reaches_alt(monkeypatch, tmp_path):
     assert r["deferred"] == 2                            # the 1.1.1 finding stays open
 
 
-def test_an_ungrounded_description_becomes_a_review_card_with_its_draft(monkeypatch, tmp_path):
-    # Withheld, not discarded: the reviewer gets the draft and the page picture, one card
-    # per figure, each with the locator apply_pdf_figure_alt writes back through.
+def test_unresolved_figure_has_manual_card_without_page_draft(monkeypatch, tmp_path):
+    # Each manual card retains its locator and a context page thumbnail, but no
+    # approvable caption derived from unrelated whole-page evidence.
     r = _caption(tmp_path, monkeypatch, "cards.pdf", grounded=False)
     assert [p["locator"] for p in r["props"]] == ["pdf:fig:1:0", "pdf:fig:1:1"]
-    assert all(p["proposed_value"] == _GUESS for p in r["props"])
+    assert all(not p["proposed_value"] for p in r["props"])
     assert all(p["thumb"] and p["thumb"].startswith("data:image/png;base64,") for p in r["props"])
-    assert all("confirm it matches the figure" in p["source"] for p in r["props"])
+    assert all("manual description required" in p["source"] for p in r["props"])
 
 
-def test_a_grounded_description_is_still_applied_inline(monkeypatch, tmp_path):
-    # The other half of the split: grounded work must keep flowing, or the fix is just a stop.
+def test_grounded_page_description_stays_manual(monkeypatch, tmp_path):
+    # Page OCR grounding does not identify the tagged figure, so it cannot credit a fix.
     r = _caption(tmp_path, monkeypatch, "grounded.pdf", grounded=True)
-    assert r["alts"] == [_GUESS, _GUESS]
-    assert len(r["applied"]) == 2 and r["deferred"] == 0
-    assert len(r["fixes"]) == 2 and r["fixes"][0]["value"] == _GUESS
+    assert r["alts"] == ["", ""]
+    assert r["applied"] == [] and r["deferred"] == 2
+    assert r["fixes"] == []
 
 
-def test_the_office_and_pdf_paths_make_the_same_call(monkeypatch, tmp_path):
-    """Parity with remediate_office._vision_alt — the split lives in both remediators."""
+def test_retained_page_anchor_helper_keeps_legacy_semantics(monkeypatch, tmp_path):
+    """The retained helper remains reversible; the live PDF path does not call it.
+
+    Whole-page evidence is insufficient even though Office per-image evidence
+    uses this grounding split. Live manual behavior is pinned above.
+    """
     src = (Path(__file__).resolve().parents[1] / "api" / "remediate_office.py").read_text()
     assert 'if res.get("grounded"):' in src, "office reference behaviour moved — recheck the PDF copy"
     assert RP._alt_write_anchor({"grounded": True}, b"", scan_id=None, file="f.pdf")
@@ -173,13 +178,13 @@ def _policy(monkeypatch, *, on: bool, verdict: str = "consistent"):
                         raising=False)
 
 
-def test_a_validated_ungrounded_draft_is_applied_when_the_policy_is_on(monkeypatch, tmp_path):
-    # Office parity: an ungrounded draft an INDEPENDENT second reading calls consistent may be
-    # written — a measurement, not the model grading itself (ADR 0016).
+def test_page_consistency_policy_cannot_authorize_figure_alt(monkeypatch, tmp_path):
+    # A second model sees the same unrelated page. Agreement cannot establish
+    # which pixels are associated with the tagged figure.
     _policy(monkeypatch, on=True, verdict="consistent")
     r = _caption(tmp_path, monkeypatch, "validated.pdf", grounded=False)
-    assert r["alts"] == [_GUESS, _GUESS] and r["deferred"] == 0
-    assert "second reading" in r["fixes"][0]["source"]      # provenance says WHY it was written
+    assert r["alts"] == ["", ""] and r["deferred"] == 2
+    assert r["fixes"] == [] and r["calls"] == 0
 
 
 def test_a_divergent_second_reading_still_defers(monkeypatch, tmp_path):
@@ -195,12 +200,10 @@ def test_the_policy_is_off_by_default_so_ungrounded_defers(monkeypatch, tmp_path
 
 
 def test_a_deferred_figure_does_not_burn_the_vision_budget_forever(monkeypatch, tmp_path):
-    # Budget counts model CALLS, not writes. It used to decrement only on a successful write,
-    # so a document of ungrounded figures would call the model once per figure unbounded. These
-    # figures share one page, so the byte-identical page evidence now spends only one call.
+    # No page-caption calls are dispatched for unmapped figures, regardless of count.
     monkeypatch.setattr(RP, "_VISION_MAX_FIGURES", 2)
     r = _caption(tmp_path, monkeypatch, "budget.pdf", grounded=False, n_figs=5)
-    assert r["calls"] == 1                     # one page → one cached OCR + vision result
+    assert r["calls"] == 0                     # no dispatch without exact figure evidence
     assert r["deferred"] == 5 and r["alts"] == ["", "", "", "", ""]
 
 
@@ -245,3 +248,20 @@ def test_apply_blank_value_writes_nothing(tmp_path):
     src = tmp_path / "b.pdf"; _tagged_pdf(src)
     fixed, applied, unresolved = RP.apply_pdf_figure_alt(src.read_bytes(), {"pdf:fig:1:0": "   "})
     assert applied == [] and _alts(fixed) == [""]
+
+@pytest.mark.parametrize('n_figs', [1, 2])
+def test_whole_page_body_text_cannot_become_figure_alt(tmp_path, monkeypatch, n_figs):
+    """A real tagged figure with no exact image association stays unresolved.
+
+    Grounded page OCR and optional independent agreement cannot establish which
+    pixels belong to this Figure. Neither an applied fix nor an approvable draft
+    may carry unrelated body text.
+    """
+    _policy(monkeypatch, on=True, verdict='consistent')
+    r = _caption(tmp_path, monkeypatch, 'body.pdf', grounded=True, n_figs=n_figs,
+                 alt='Patient instructions from body text')
+    assert r['alts'] == [''] * n_figs
+    assert r['applied'] == [] and r['fixes'] == []
+    assert r['deferred'] == n_figs
+    assert all(not p['proposed_value'] for p in r['props'])
+    assert r['calls'] == 0

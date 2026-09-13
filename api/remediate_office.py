@@ -154,7 +154,8 @@ def _derive_alt(attrs: str, caption: str | None) -> tuple[str, str] | None:
 _VISION_MAX_IMAGES = int(os.environ.get("ACP_VISION_MAX_IMAGES", "10"))
 # Skip degenerate images the model can't meaningfully describe (1x1 spacers etc.).
 _MIN_IMG_BYTES = 64
-_R_EMBED = re.compile(r'r:embed="(rId\d+)"')
+# OOXML relationship IDs are opaque; alternative producers need not use numeric rId names.
+_R_EMBED = re.compile(r'r:embed="([^"]+)"')
 
 
 def _thumb_b64(img_bytes: bytes, *, max_edge: int = 96) -> str | None:
@@ -184,7 +185,11 @@ def _image_bytes_for(xml: str, m, tag: str, pic_spans, entries, part_name):
         _nm = re.compile(rf"<{tag}\b").search(xml, m.end())
         nxt = _nm.start() if _nm else -1
         region_end = nxt if nxt != -1 else len(xml)
-        region_end = min(region_end, m.end() + 8000)
+        # An authored docPr extension can exceed 8 kB before the actual blip. Bound by
+        # the image container, not an arbitrary byte window that silently hides its pixels.
+        container_end = re.search(r"</wp:(?:inline|anchor)>", xml[m.end():region_end])
+        if container_end:
+            region_end = m.end() + container_end.start()
     rid_m = _R_EMBED.search(xml, m.end(), region_end)
     if not rid_m:
         return None

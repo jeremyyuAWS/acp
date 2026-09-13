@@ -1,12 +1,8 @@
-"""A PDF's AI-written alt text is evidence, and must be recorded like any other.
+"""Unmapped PDF figures leave manual context, never fabricated applied-fix evidence.
 
-`applied_fixes` is the certification record — store.py calls it "the AI wrote + its image
-thumbnail". Office remediation appends {rule_id, value, source, thumb} rows to a list the
-handler persists. `remediate_pdf` did not accept that list at all: it returned prose for the
-job log and nothing else, so a PDF figure that the vision model captioned left NO row. No
-value, no provenance, no picture — the certification evidence showed the fix never happened.
-
-Both remediators now emit the same row shape, and one helper persists it for both formats.
+The old page-caption implementation is retained, but ordinary remediation cannot
+credit a figure from unrelated page OCR. Existing handler persistence and receipt
+contracts remain available for other genuine fixes.
 """
 import io
 import sys
@@ -37,9 +33,13 @@ class _Figure(dict):
 def _patch(monkeypatch, *, alt="Bar chart: Q3 revenue by region", page=1, render=True):
     import ai
     monkeypatch.setattr(ai, "vision_is_available", lambda: True)
-    monkeypatch.setattr(ai, "describe_image_structured",
-                        lambda b, **k: {"alt": alt, "grounded": True, "model": "moondream"} if alt else None)
-    monkeypatch.setattr(remediate_pdf, "_collect_figures", lambda root: [_Figure()])
+    calls = []
+    def describe(b, **kwargs):
+        calls.append(b)
+        return {"alt": alt, "grounded": True, "model": "moondream"} if alt else None
+    monkeypatch.setattr(ai, "describe_image_structured", describe)
+    figure = _Figure()
+    monkeypatch.setattr(remediate_pdf, "_collect_figures", lambda root: [figure])
     monkeypatch.setattr(remediate_pdf, "_fig_alt", lambda f: None)     # unlabelled
     monkeypatch.setattr(remediate_pdf, "_resolve_page_number", lambda f, p: page)
     monkeypatch.setattr(remediate_pdf, "_render_page_png",
@@ -47,7 +47,9 @@ def _patch(monkeypatch, *, alt="Bar chart: Q3 revenue by region", page=1, render
 
     class _Pdf:
         Root = {"/StructTreeRoot": object()}     # tagged → the figure path runs
-    return _Pdf()
+    pdf = _Pdf()
+    pdf.figure, pdf.calls = figure, calls
+    return pdf
 
 
 def _run(monkeypatch, **kw):
@@ -59,87 +61,68 @@ def _run(monkeypatch, **kw):
     return fixes, applied, deferred
 
 
-# ── the row now exists, in the office shape ──
-
-def test_a_captioned_pdf_figure_records_an_evidence_row(monkeypatch):
-    fixes, applied, deferred = _run(monkeypatch)
-    assert deferred == 0 and len(applied) == 1
-    assert len(fixes) == 1, "a PDF figure the AI captioned must leave a row in applied_fixes"
-
-
-def test_the_row_carries_exactly_the_keys_the_handler_persists(monkeypatch):
-    fixes, _, _ = _run(monkeypatch)
-    assert set(fixes[0]) == {"rule_id", "value", "source", "thumb"}
-
-
-def test_the_row_shape_matches_the_office_remediator(monkeypatch):
-    # One helper persists both; a divergence here silently drops a column for one format.
-    import re
-    office = (API / "remediate_office.py").read_text()
-    office_keys = set(re.findall(r'"(rule_id|value|source|thumb)":', office))
-    fixes, _, _ = _run(monkeypatch)
-    assert set(fixes[0]) == office_keys
+@pytest.mark.parametrize("alt", ["Bar chart: Q3 revenue by region", None])
+def test_unmapped_figure_has_no_written_alt_or_applied_receipt(monkeypatch, alt):
+    pdf = _patch(monkeypatch, alt=alt)
+    fixes, props = [], []
+    applied, deferred = remediate_pdf._fix_pdf_figure_alt(
+        pdf, "policy.pdf", ai_enabled=True, scan_id=None, file="policy.pdf",
+        applied_fixes=fixes, proposals=props)
+    assert fixes == [] and applied == [] and deferred == 1
+    assert "/Alt" not in pdf.figure and pdf.calls == []
+    assert len(props) == 1 and props[0]["proposed_value"] == ""
+    assert props[0]["kind"] == "pdf-figure-alt"
+    assert "manual description required" in props[0]["source"]
 
 
-def test_the_value_is_the_alt_text_actually_written(monkeypatch):
-    fixes, _, _ = _run(monkeypatch, alt="Bar chart: Q3 revenue by region")
-    assert fixes[0]["value"] == "Bar chart: Q3 revenue by region"
-    assert fixes[0]["rule_id"] == "SC_1_1_1"
+def test_manual_context_uses_exact_locator_and_honest_provenance(monkeypatch):
+    pdf = _patch(monkeypatch, page=7)
+    props = []
+    remediate_pdf._fix_pdf_figure_alt(pdf, "policy.pdf", ai_enabled=True,
+        scan_id=None, file="policy.pdf", proposals=props)
+    assert props[0]["locator"] == "pdf:fig:7:0"
+    assert "page thumbnail is context" in props[0]["rationale"]
+    assert "moondream" not in props[0]["source"]
+    assert props[0].get("model_call_id") is None
 
 
-def test_the_source_names_the_page_render_not_the_image(monkeypatch):
-    # remediate_pdf captions from a render of the whole PAGE. Saying "the image" would
-    # misdescribe both the input and the thumbnail below it.
-    fixes, _, _ = _run(monkeypatch, page=7)
-    src = fixes[0]["source"]
-    assert "page 7" in src and "render" in src
-    assert "moondream" in src   # provenance names the model that ran
-
-
-def test_the_thumb_is_a_real_png_data_url_sized_for_a_receipt(monkeypatch):
+def test_manual_thumbnail_is_real_png_sized_for_review_not_fix_receipt(monkeypatch):
     import base64
     from PIL import Image
-    fixes, _, _ = _run(monkeypatch)
-    t = fixes[0]["thumb"]
-    assert t.startswith("data:image/png;base64,")
-    raw = base64.b64decode(t.split(",", 1)[1])
-    im = Image.open(io.BytesIO(raw))
-    assert max(im.size) == remediate_pdf._FIX_THUMB_EDGE == 96
-
-
-def test_a_receipt_thumb_is_far_smaller_than_a_review_thumb(monkeypatch):
-    # 25 figures at the reading-order card's 320px would put ~1 MB of base64 in one document's
-    # applied_fixes. The receipt renders at 36px; it does not need the review surface's pixels.
-    assert remediate_pdf._FIX_THUMB_EDGE < remediate_pdf._PAGE_THUMB_EDGE
-
-
-# ── failure modes leave no row, and never raise ──
-
-def test_a_figure_the_model_declines_records_nothing(monkeypatch):
-    fixes, applied, deferred = _run(monkeypatch, alt=None)
-    assert fixes == [] and applied == [] and deferred == 1
-
-
-def test_a_page_that_will_not_render_records_nothing(monkeypatch):
-    fixes, applied, deferred = _run(monkeypatch, render=False)
-    assert fixes == [] and applied == [] and deferred == 1
-
-
-def test_applied_fixes_is_optional_and_omitting_it_still_works(monkeypatch):
-    # The scan path and older callers pass no list; the remediation must not depend on it.
     pdf = _patch(monkeypatch)
-    applied, deferred = remediate_pdf._fix_pdf_figure_alt(
-        pdf, "policy.pdf", ai_enabled=True, scan_id=None, file="policy.pdf")
-    assert len(applied) == 1 and deferred == 0
+    props = []
+    remediate_pdf._fix_pdf_figure_alt(pdf, "policy.pdf", ai_enabled=True,
+        scan_id=None, file="policy.pdf", proposals=props)
+    thumb = props[0]["thumb"]
+    assert thumb.startswith("data:image/png;base64,")
+    im = Image.open(io.BytesIO(base64.b64decode(thumb.split(",", 1)[1])))
+    assert max(im.size) == remediate_pdf._PAGE_THUMB_EDGE == 320
 
 
-def test_no_row_when_ai_is_off(monkeypatch):
-    pdf = _patch(monkeypatch)
-    fixes: list = []
-    applied, deferred = remediate_pdf._fix_pdf_figure_alt(
-        pdf, "policy.pdf", ai_enabled=False, scan_id=None, file="policy.pdf",
-        applied_fixes=fixes)
+def test_no_render_still_emits_manual_item_without_thumbnail(monkeypatch):
+    pdf = _patch(monkeypatch, render=False)
+    fixes, props = [], []
+    applied, deferred = remediate_pdf._fix_pdf_figure_alt(pdf, "policy.pdf",
+        ai_enabled=True, scan_id=None, file="policy.pdf", applied_fixes=fixes, proposals=props)
     assert fixes == [] and applied == [] and deferred == 1
+    assert props[0].get("thumb") is None and not props[0]["proposed_value"]
+    assert pdf.calls == []
+
+
+def test_manual_figure_preserves_prior_genuine_fix_receipts(monkeypatch):
+    pdf = _patch(monkeypatch)
+    prior = {"rule_id": "SC_3_1_1", "value": "en", "source": "author", "thumb": None}
+    fixes = [prior.copy()]
+    applied, deferred = remediate_pdf._fix_pdf_figure_alt(pdf, "policy.pdf",
+        ai_enabled=True, scan_id=None, file="policy.pdf", applied_fixes=fixes)
+    assert fixes == [prior] and applied == [] and deferred == 1
+
+
+def test_applied_fixes_optional_omission_and_ai_off_remain_manual(monkeypatch):
+    pdf = _patch(monkeypatch)
+    applied, deferred = remediate_pdf._fix_pdf_figure_alt(pdf, "policy.pdf",
+        ai_enabled=False, scan_id=None, file="policy.pdf")
+    assert applied == [] and deferred == 1 and pdf.calls == []
 
 
 # ── remediate_pdf threads the list through ──
@@ -159,3 +142,27 @@ def test_the_handler_persists_both_formats_through_one_helper():
     # And the pdf branch actually asks for them.
     pdf_branch = code[code.index('if ext == "pdf":'):code.index("else:  # docx")]
     assert "applied_fixes=_applied_fixes" in pdf_branch
+
+
+def test_retained_page_caption_receipt_contract_is_explicitly_legacy(monkeypatch):
+    """Preserve the retired implementation's receipt format without claiming it ships.
+
+    The live path above dispatches zero calls and never reaches this branch.
+    Restoring AI captions requires exact figure evidence, not this fixture's page.
+    """
+    import base64
+    from PIL import Image
+    pdf = _patch(monkeypatch, page=7)
+    fixes = []
+    applied, deferred = remediate_pdf._fix_pdf_figure_alt_from_page_legacy(
+        pdf, "policy.pdf", ai_enabled=True, scan_id=None, file="policy.pdf", applied_fixes=fixes)
+    assert deferred == 0 and len(applied) == 1 and len(pdf.calls) == 1
+    assert len(fixes) == 1
+    assert set(fixes[0]) == {"rule_id", "value", "source", "thumb"}
+    assert fixes[0]["rule_id"] == "SC_1_1_1"
+    assert fixes[0]["value"] == str(pdf.figure["/Alt"]) == "Bar chart: Q3 revenue by region"
+    assert "moondream" in fixes[0]["source"] and "page 7" in fixes[0]["source"]
+    thumb = fixes[0]["thumb"]
+    assert thumb.startswith("data:image/png;base64,")
+    im = Image.open(io.BytesIO(base64.b64decode(thumb.split(",", 1)[1])))
+    assert max(im.size) == remediate_pdf._FIX_THUMB_EDGE == 96

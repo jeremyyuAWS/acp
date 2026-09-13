@@ -54,8 +54,10 @@ import re
 # overturning a stated claim belongs in the change that measures it rather than as a rider on
 # this one. Until then a notes image is a wedge that the apply.unverified path below now makes
 # VISIBLE rather than silent, which is the part that actually mattered.
+# Word footnotes and endnotes are reader-visible stories with their own image relationships.
+# Keep the detector, proposal locator and corrected-copy writer on the same target set.
 ALT_TARGETS = [
-    (re.compile(r"^word/(document|header\d*|footer\d*)\.xml$"), "wp:docPr", None, True),
+    (re.compile(r"^word/(document|header\d*|footer\d*|footnotes|endnotes)\.xml$"), "wp:docPr", None, True),
     (re.compile(r"^ppt/(slides/slide|slideLayouts/slideLayout"
                 r"|slideMasters/slideMaster)\d+\.xml$"), "p:cNvPr", "p:pic", False),
     (re.compile(r"^xl/drawings/drawing\d+\.xml$"), r"(?:xdr:)?cNvPr", r"(?:xdr:)?pic", False),
