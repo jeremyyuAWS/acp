@@ -10281,17 +10281,17 @@ class Store:
                 if (count or 0) > (row.get("finding_count") or 0):
                     self._db.execute(cur, "UPDATE hitl_queue SET finding_count=%s WHERE id=%s",
                                      (count, row["id"]))
-                self.sync_hitl_finding_dispositions(row["id"], "pending")
-                return None    # merged, not created — callers must not fire a "new item" webhook
-            item_id = uuid.uuid4().hex[:12]
-            pages = self._pages_for(cur, scan_id, file, canonical)
-            self._db.execute(cur,
-                "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status,page,pages) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
-                (item_id, datetime.now(timezone.utc).isoformat(), scan_id, file, canonical,
-                 (rule_name or note)[:200], count, pages[0] if pages else None, _pages_csv(pages)))
+                item_id = row["id"]
+            else:
+                item_id = uuid.uuid4().hex[:12]
+                pages = self._pages_for(cur, scan_id, file, canonical)
+                self._db.execute(cur,
+                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status,page,pages) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
+                    (item_id, datetime.now(timezone.utc).isoformat(), scan_id, file, canonical,
+                     (rule_name or note)[:200], count, pages[0] if pages else None, _pages_csv(pages)))
         self.sync_hitl_finding_dispositions(item_id, "pending")
-        return item_id
+        return None if row else item_id  # merged rows do not fire a new-item webhook
 
     # A regression review row's rule_id: the criterion the write broke, suffixed. The suffix is
     # load-bearing twice over.
@@ -10662,23 +10662,23 @@ class Store:
                 self._db.execute(cur,
                     "UPDATE hitl_queue SET proposal_snapshot_ids=%s WHERE id=%s",
                     (_json.dumps(snapshot_ids), row['id']))
-                self.sync_hitl_finding_dispositions(row["id"], "pending")
-                return row["id"]
-            item_id = uuid.uuid4().hex[:12]
-            self._db.execute(cur,
-                "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,"
-                "finding_count,status,proposals,validated) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
-                (item_id, now, scan_id, file, sc, rule_name or sc, count, blob, vflag))
-            from ai_run_policy import optional_current_run_context
-            from remediation_run_insights import capture_proposals
-            snapshot_ids = capture_proposals(
-                self._db, cur, optional_current_run_context(), scan_id=scan_id,
-                file=file, rule_id=sc, item_id=item_id, proposals=proposals)
-            if snapshot_ids:
+                item_id = row["id"]
+            else:
+                item_id = uuid.uuid4().hex[:12]
                 self._db.execute(cur,
-                    "UPDATE hitl_queue SET proposal_snapshot_ids=%s WHERE id=%s",
-                    (_json.dumps(snapshot_ids), item_id))
+                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,"
+                    "finding_count,status,proposals,validated) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
+                    (item_id, now, scan_id, file, sc, rule_name or sc, count, blob, vflag))
+                from ai_run_policy import optional_current_run_context
+                from remediation_run_insights import capture_proposals
+                snapshot_ids = capture_proposals(
+                    self._db, cur, optional_current_run_context(), scan_id=scan_id,
+                    file=file, rule_id=sc, item_id=item_id, proposals=proposals)
+                if snapshot_ids:
+                    self._db.execute(cur,
+                        "UPDATE hitl_queue SET proposal_snapshot_ids=%s WHERE id=%s",
+                        (_json.dumps(snapshot_ids), item_id))
         self.sync_hitl_finding_dispositions(item_id, "pending")
         return item_id
 
