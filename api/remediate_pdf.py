@@ -858,7 +858,26 @@ def alt_proposals_for_pdf(data: bytes, *, scan_id=None, context_file="") -> list
 def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
                         scan_id: str | None, file: str,
                         applied_fixes=None, proposals=None) -> tuple[list[str], int]:
-    """Set /Alt on tagged /Figure struct elements that lack it, from a vision description
+    """Keep missing figure descriptions in manual review until exact image mapping exists.
+
+    The available renderer supplies a whole page, not the pixels associated with
+    a tagged Figure. Page OCR or a second model's agreement cannot authorize
+    writing that description into a specific Figure, even with auto-apply on.
+    Empty manual proposals preserve locators and context thumbnails; they are
+    neither approvable AI drafts nor verified fixes. Reviewer-authored write-back
+    remains available through apply_pdf_figure_alt.
+    """
+    return _fix_pdf_figure_alt_from_page_legacy(
+        pdf, source_path, ai_enabled=False, scan_id=scan_id, file=file,
+        applied_fixes=applied_fixes, proposals=proposals)
+
+
+def _fix_pdf_figure_alt_from_page_legacy(pdf, source_path: str, *, ai_enabled: bool,
+                        scan_id: str | None, file: str,
+                        applied_fixes=None, proposals=None) -> tuple[list[str], int]:
+    """Retained page-caption implementation; live callers use only its manual path.
+
+    Set /Alt on tagged /Figure struct elements that lack it, from a vision description
     of the figure's page. Returns (applied messages, deferred_count). Mutates pdf in place;
     the caller saves. Never raises — a figure we can't caption is just deferred.
 
@@ -926,9 +945,10 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
             before="(figure has no alt text — invisible to screen readers · 1.1.1)",
             proposed_value=draft,
             rationale=("A screen reader cannot describe this figure. Write the alt text a "
-                       "reader should hear (or edit the AI draft), then approve — ACP writes "
+                       "reader should hear. The page thumbnail is context, not isolated figure evidence. "
+                       "Then approve — ACP writes "
                        "it into the PDF."),
-            source=("AI vision could not ground a description — human authors"
+            source=("Exact figure image unavailable — manual description required"
                     if not draft else "AI vision draft — confirm it matches the figure"),
             kind="pdf-figure-alt",
             thumb=(_prop.thumb_b64(img, max_edge=_PAGE_THUMB_EDGE) if img else None),

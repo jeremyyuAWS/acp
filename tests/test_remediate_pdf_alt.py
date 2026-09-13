@@ -99,16 +99,16 @@ def _stub_vision(monkeypatch, alt="A filled box representing the quarterly figur
     return calls
 
 
-def test_pdf_figure_alt_set_by_vision(tmp_path, monkeypatch):
+def test_pdf_page_description_cannot_set_figure_alt(tmp_path, monkeypatch):
     calls = _stub_vision(monkeypatch)
     src = tmp_path / "fig.pdf"
     _tagged_pdf_with_figure(src)
     fixed, applied, skipped = RP.remediate_pdf(src, ai_enabled=True)
     assert fixed is not None
-    assert _figure_alts(Path(fixed)) == ["A filled box representing the quarterly figure"]
-    assert any("Alt text" in a and "1.1.1" in a for a in applied)
-    assert not any("figure(s) need human alt text" in s for s in skipped)
-    assert calls["n"] == 1
+    assert _figure_alts(Path(fixed)) == [""]
+    assert not any("Alt text" in a and "1.1.1" in a for a in applied)
+    assert any("figure(s) need human alt text" in s for s in skipped)
+    assert calls["n"] == 0
 
 
 def test_pdf_existing_figure_alt_untouched(tmp_path, monkeypatch):
@@ -144,7 +144,7 @@ def test_pdf_alt_deferred_on_vision_miss(tmp_path, monkeypatch):
     src = tmp_path / "miss.pdf"
     _tagged_pdf_with_figure(src)
     fixed, applied, skipped = RP.remediate_pdf(src, ai_enabled=True)
-    assert calls["n"] == 1
+    assert calls["n"] == 0
     assert _figure_alts(Path(fixed or src)) == [""]
     assert any("figure(s) need human alt text" in s for s in skipped)
 
@@ -156,7 +156,7 @@ def test_pdf_ungrounded_alt_deferred_end_to_end(tmp_path, monkeypatch):
     src = tmp_path / "unground.pdf"
     _tagged_pdf_with_figure(src)
     fixed, applied, skipped = RP.remediate_pdf(src, ai_enabled=True)
-    assert calls["n"] == 1                                 # the model ran…
+    assert calls["n"] == 0                                 # no figure-specific evidence, no model dispatch
     assert _figure_alts(Path(fixed or src)) == [""]        # …and its guess was not written
     assert not any("Alt text" in a for a in applied)
     assert any("figure(s) need human alt text" in s for s in skipped)
