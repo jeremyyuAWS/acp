@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_staging_workflow_passes_every_role_name_and_environment_boundary():
     workflow = yaml.safe_load((ROOT / ".github/workflows/deploy-staging.yml").read_text())
-    env = workflow["jobs"]["deploy"]["steps"][3]["env"]
+    env = next(step["env"] for step in workflow["jobs"]["deploy"]["steps"]
+               if step.get("name") == "Deploy to staging")
     assert env["ACP_APP"].endswith("acp-app-staging' }}")
     assert env["ACP_DISCOVERY_WORKER"].endswith("acp-discovery-staging' }}")
     assert env["ACP_ASSESS_WORKER"].endswith("acp-assess-staging' }}")
