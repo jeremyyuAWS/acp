@@ -184,15 +184,45 @@ def read_image_text(img_bytes: bytes, *, min_pixels: int = _MIN_PIXELS_STRICT) -
         return None
 
 
-def _ooxml_images(path: Path):
+class _WordImage(bytes):
+    def __new__(cls, placements, number):
+        obj = super().__new__(cls, placements[0] if placements else b'')
+        obj.placements = placements
+        obj.media_number = number
+        return obj
+
+
+def _read_embedded_image(img, min_pixels):
+    if isinstance(img, _WordImage):
+        if img.placements is None:
+            return None
+        readings = [read_image_text(b, min_pixels=min_pixels) for b in img.placements]
+        if any(t is None for t in readings):
+            return None
+        # Keep each placement separate: labels from multiple diagrams must not
+        # be summed into an invented prose image. Return the largest text signal.
+        signals = [t for t in readings if not _looks_like_chart(t)] if min_pixels == _MIN_PIXELS else readings
+        return max(signals, key=lambda t: len(_WORD_RE.findall(t)), default='')
+    return read_image_text(img, min_pixels=min_pixels)
+
+
+def _ooxml_images(path: Path, *, visible_word=False):
     try:
         with zipfile.ZipFile(path) as z:
-            for n in z.namelist():
-                if _MEDIA_RE.match(n) and n.lower().endswith(_RASTER):
-                    try:
-                        yield z.read(n)
-                    except Exception:
+            media = [n for n in z.namelist() if _MEDIA_RE.match(n) and n.lower().endswith(_RASTER)]
+            if visible_word and path.suffix.lower() == '.docx':
+                from office_visible_image import word_media_visible_placements
+                from apply_office_image_of_text import _media_index
+                ordered = _media_index(z)
+                data = path.read_bytes()
+                for n in media:
+                    placements = word_media_visible_placements(data, n)
+                    if placements == []:
                         continue
+                    yield _WordImage(placements, ordered.index(n)+1)
+            else:
+                for n in media:
+                    yield z.read(n)
     except Exception:
         return
 
@@ -239,7 +269,7 @@ def _pdf_images_with_names(path: Path):
         return
 
 
-def _embedded_images_and_total(path: Path, ext: str) -> tuple[list[bytes], int]:
+def _embedded_images_and_total(path: Path, ext: str, *, visible_word=False) -> tuple[list[bytes], int]:
     """(images examined, images present). The second number is why this exists.
 
     The cap is right — OCR costs ~0.1s per image on a synthetic fixture and more on a real
@@ -256,16 +286,23 @@ def _embedded_images_and_total(path: Path, ext: str) -> tuple[list[bytes], int]:
     """
     ext = ext.lower()
     if ext in (".docx", ".pptx", ".xlsx"):
-        source = _ooxml_images(path)
+        source = _ooxml_images(path, visible_word=True) if visible_word else _ooxml_images(path)
     elif ext == ".pdf":
         source = _pdf_images(path)
     else:
         return [], 0
     out: list[bytes] = []
     total = 0
+    placement_budget = _MAX_IMAGES
     for img in source:
         total += 1
         if len(out) < _MAX_IMAGES:
+            if isinstance(img, _WordImage) and img.placements is not None:
+                needed = len(img.placements)
+                if needed > placement_budget:
+                    img = _WordImage(None, img.media_number)
+                else:
+                    placement_budget -= needed
             out.append(img)
     return out, total
 
@@ -320,11 +357,11 @@ def images_of_text(path: Path, ext: str) -> list[dict]:
     if not is_available():
         return []
     findings: list[dict] = []
-    images, total = _embedded_images_and_total(path, ext)
+    images, total = _embedded_images_and_total(path, ext, visible_word=True)
     unread = 0
     retry_left = 1
     for i, img in enumerate(images):
-        reading = read_image_text(img, min_pixels=_MIN_PIXELS)
+        reading = _read_embedded_image(img, _MIN_PIXELS)
         if reading is None and retry_left:
             # A timeout is a statement about the machine, not about the image, and the evidence
             # says so: on the run that exposed this the 1.4.9 pass re-read the very same image
@@ -335,7 +372,7 @@ def images_of_text(path: Path, ext: str) -> list[dict]:
             # images would turn one 30s stall into fifteen minutes of a scan someone is waiting
             # on — trading a reported gap for an unusable product.
             retry_left -= 1
-            reading = read_image_text(img, min_pixels=_MIN_PIXELS)
+            reading = _read_embedded_image(img, _MIN_PIXELS)
         if reading is None:
             unread += 1
             continue
@@ -347,7 +384,7 @@ def images_of_text(path: Path, ext: str) -> list[dict]:
                 "ruleId": "OCR_IMAGE_OF_TEXT",
                 "wcag": "1.4.5 Images of Text",
                 "severity": "SERIOUS",
-                "detail": f"embedded image {i + 1} contains readable text (OCR): “{text[:160]}”",
+                "detail": f"embedded image {getattr(img, 'media_number', i + 1)} contains readable text (OCR): “{text[:160]}”",
             })
     # SAY WHAT WE COULD NOT READ. Same advisory shape, and the same argument, as the cap notice
     # below: an image whose reading did not complete has not been assessed, and reporting
@@ -398,13 +435,13 @@ def images_of_text_no_exception(path: Path, ext: str) -> list[dict]:
     if not is_available():
         return []
     findings: list[dict] = []
-    for i, img in enumerate(_embedded_images(path, ext)):
-        text = " ".join(ocr_text(img, min_pixels=_MIN_PIXELS_STRICT).split())
+    for i, img in enumerate(_embedded_images_and_total(path, ext, visible_word=True)[0]):
+        text = " ".join((_read_embedded_image(img, _MIN_PIXELS_STRICT) or "").split())
         if len(_WORD_RE.findall(text)) >= _MIN_WORDS_STRICT:
             findings.append({
                 "ruleId": "OCR_IMAGE_OF_TEXT_STRICT",
                 "wcag": "1.4.9 Images of Text (No Exception)",
                 "severity": "MODERATE",
-                "detail": f"embedded image {i + 1} contains readable text (OCR): “{text[:160]}”",
+                "detail": f"embedded image {getattr(img, 'media_number', i + 1)} contains readable text (OCR): “{text[:160]}”",
             })
     return findings

@@ -551,6 +551,22 @@ def recover_approved_writes(store, row, file):
         return True
 
 
+def _permanent_delivery_pause(row, job_states):
+    """Pause only frozen changed-copy exceptions; recoverable work keeps polling."""
+    files = row['intent']['files']
+    entries = row['progress'].get('files', {})
+    changed = [entries.get(file, {}) for file in files
+               if entries.get(file, {}).get('state') == 'blocked'
+               and entries.get(file, {}).get('failure_category') == 'admitted_copy_changed'
+               and entries.get(file, {}).get('artifact_digest')]
+    return bool(changed) and all(
+        entries.get(file, {}).get('state') in {'published', 'failed'} or
+        (entries.get(file, {}).get('state') == 'blocked' and
+         entries.get(file, {}).get('failure_category') == 'admitted_copy_changed' and
+         entries.get(file, {}).get('artifact_digest')) for file in files
+    ) and all(state in {'done', 'dead', 'cancelled'} for state in job_states)
+
+
 def advance(store, payload, job):
     from routes.scans import publish_files
     from worker import check_cancel
@@ -716,9 +732,20 @@ def advance(store, payload, job):
                     expected_artifacts=published, expected_source_revision=row['intent']['source_revision'],
                     report_bundle_id=report_bundle,
                     allow_remaining_issues=row['intent'].get('allow_remaining_issues', False)), scan_id=row['scan_id'], max_attempts=3)
+        # Re-read durable job states under the authorization transaction: a late
+        # receipt or an in-flight admitted request must remain reconcilable. A
+        # permanently changed frozen copy needs a new plan, not successor ticks.
+        with store._db.cursor() as cur:
+            store._db.execute(cur, "SELECT payload,status FROM jobs WHERE scan_id=%s AND type='publish_file'", (row['scan_id'],))
+            job_states = []
+            for item in store._db.fetchall(cur):
+                data = json.loads(item['payload']) if isinstance(item['payload'], str) else item['payload']
+                if data.get('automatic_release_id') == row['id']:
+                    job_states.append(item['status'])
+        paused = _permanent_delivery_pause(row, job_states)
         stalled = progress['_delivery_watch']['needs_attention']
-        persistence.save(store,row,status='completed' if completed else 'failed' if terminal or expired else 'blocked' if stalled else 'waiting',
-                         progress=progress,schedule=not terminal and not expired,delay=STALLED_CHECK_SECONDS if stalled else 20)
+        persistence.save(store,row,status='completed' if completed else 'failed' if terminal or expired else 'blocked' if stalled or paused else 'waiting',
+                         progress=progress,schedule=not terminal and not expired and not paused,delay=STALLED_CHECK_SECONDS if stalled else 20)
 
 
 def validate_publish_request(store, sid, owner, files, body):

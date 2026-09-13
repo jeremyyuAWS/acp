@@ -32,10 +32,17 @@ def _png(text: str | None, size=(800, 220), color="white") -> bytes:
 
 def _docx(tmp: Path, *images: bytes) -> Path:
     p = tmp / "deck.docx"
-    with zipfile.ZipFile(p, "w") as z:
-        z.writestr("word/document.xml", "<w:document/>")
-        for i, img in enumerate(images):
-            z.writestr(f"word/media/image{i + 1}.png", img)
+    from docx import Document
+    from PIL import Image
+    from PIL.PngImagePlugin import PngInfo
+    document = Document()
+    for i, img in enumerate(images):
+        # Distinct media identities retain the per-image threshold test intent.
+        pixels = Image.open(io.BytesIO(img))
+        encoded = io.BytesIO(); metadata = PngInfo(); metadata.add_text('fixture', str(i))
+        pixels.save(encoded, format='PNG', pnginfo=metadata)
+        document.add_picture(io.BytesIO(encoded.getvalue()))
+    document.save(p)
     return p
 
 

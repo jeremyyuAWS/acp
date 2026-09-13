@@ -53,7 +53,8 @@ def test_real_ocr_still_reports_raster_text_after_reviewed_description(tmp_path)
         pytest.skip('Tesseract required for independent verification')
     def crop(root):
         fill = root.xpath('//*[local-name()="blipFill"]')[0]
-        ET.SubElement(fill, '{' + NS['a'] + '}srcRect', t='19861')
+        # Crop blank bottom margin; preserve all visible prose above AA threshold.
+        ET.SubElement(fill, '{' + NS['a'] + '}srcRect', b='19861')
     original = mutate(document('docx'), 'word/document.xml', crop)
     source = tmp_path / 'source.docx'
     source.write_bytes(original)

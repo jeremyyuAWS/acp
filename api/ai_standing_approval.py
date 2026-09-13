@@ -122,6 +122,12 @@ def eligible_item(store, owner, sid, run_id, item, *, approved=False):
     if not store._selected_sc(sid, item.get("file", ""), item.get("rule_id", "")):
         raise ValueError("Suggestion is outside the selected assessment criteria")
     row = {**item, 'status': 'pending', 'applied': False} if approved else item
+    if row.get('rule_id') == '1.3.3':
+        from sensory_rewrite_output import sensory_non_answer_reason
+        for proposal in row.get('proposals') or []:
+            non_answer = sensory_non_answer_reason(proposal.get('proposed_value'))
+            if non_answer:
+                raise ValueError(non_answer)
     reason = eligibility(row, row.get('file', ''))
     from release_continuation import PDF_STRUCTURE_KINDS, PDF_STRUCTURE_REVIEW
     if reason:

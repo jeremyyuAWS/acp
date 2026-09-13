@@ -132,3 +132,57 @@ def visible_word_relationship(entries: dict, part: str, rid: str) -> tuple[bool,
         return True, visible['image_bytes'] if visible is not None else None
     except (ValueError, TypeError, KeyError, OSError, zipfile.BadZipFile, ET.XMLSyntaxError):
         return True, None
+
+
+def word_media_visible_placements(data: bytes, media_name: str) -> list[bytes] | None:
+    """Visible pixels for every Word use; [] unused, None unsupported geometry.
+
+    Shared relationships are safe for detection only when every placement can be
+    examined. This does not authorize replacing/describing shared pictures.
+    """
+    from apply_office_image_replacement import _references
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            raw = z.read(media_name)
+            image = Image.open(io.BytesIO(raw))
+            if image.width * image.height > 20000000 or getattr(image, 'n_frames', 1) != 1:
+                return None
+            result = []
+            for part, rid in _references(z, media_name):
+                if not part.startswith('word/'):
+                    return None
+                root = ET.fromstring(z.read(part), parser=ET.XMLParser(resolve_entities=False, no_network=True))
+                blips = root.xpath('.//a:blip[@r:embed=$rid]', namespaces=NS, rid=rid)
+                uses = sum(v == rid for e in root.iter() for k,v in e.attrib.items() if k.startswith('{'+NS['r']+'}'))
+                if uses != len(blips):
+                    return None
+                for blip in blips:
+                    if len(result) >= 30:
+                        return None
+                    inline = next((p for p in blip.iterancestors() if p.tag == '{'+NS['wp']+'}inline'), None)
+                    if inline is None or inline.xpath('.//a:tile', namespaces=NS) or len(inline.xpath('.//a:blip', namespaces=NS)) != 1:
+                        return None
+                    for transform in inline.xpath('.//a:xfrm', namespaces=NS):
+                        if any(transform.get(k) not in (None,'0','false') for k in ('rot','flipH','flipV')):
+                            return None
+                    rects = blip.getparent().xpath('./a:srcRect', namespaces=NS)
+                    if len(rects) > 1:
+                        return None
+                    if not rects:
+                        result.append(raw)
+                        continue
+                    if any(k not in ('l','t','r','b') for k in rects[0].attrib):
+                        return None
+                    crop = {k:int(rects[0].get(k,'0')) for k in ('l','t','r','b')}
+                    if any(v < 0 or v >= 100000 for v in crop.values()) or crop['l']+crop['r'] >= 100000 or crop['t']+crop['b'] >= 100000:
+                        return None
+                    # Outward rounding includes boundary pixels rather than hiding
+                    # a possibly visible glyph at a fractional crop edge.
+                    import math
+                    box=(math.floor(image.width*crop['l']/100000),math.floor(image.height*crop['t']/100000),math.ceil(image.width*(100000-crop['r'])/100000),math.ceil(image.height*(100000-crop['b'])/100000))
+                    if box[0]>=box[2] or box[1]>=box[3]:
+                        return None
+                    out=io.BytesIO(); image.crop(box).save(out,format='PNG'); result.append(out.getvalue())
+            return result
+    except (ValueError,TypeError,KeyError,OSError,zipfile.BadZipFile,ET.XMLSyntaxError):
+        return None

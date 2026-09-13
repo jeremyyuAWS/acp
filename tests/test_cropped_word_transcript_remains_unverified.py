@@ -20,7 +20,8 @@ from test_remediation_verified_office_image_replacement import (
 def test_append_only_transcript_preserves_cropped_picture_and_remaining_finding(tmp_path):
     def add_crop(root):
         fill = root.xpath('//*[local-name()="blipFill"]')[0]
-        ET.SubElement(fill, '{' + NS['a'] + '}srcRect', t='19861')
+        # Crop blank bottom margin; preserve all visible prose above AA threshold.
+        ET.SubElement(fill, '{' + NS['a'] + '}srcRect', b='19861')
 
     original = mutate(document('docx'), 'word/document.xml', add_crop)
     reopened = Document(io.BytesIO(original))
@@ -34,7 +35,7 @@ def test_append_only_transcript_preserves_cropped_picture_and_remaining_finding(
     assert len(media) == 1
     assert after[media[0]] == before[media[0]], 'The useful graphic must remain unchanged'
     root = ET.fromstring(after['word/document.xml'])
-    assert root.xpath('.//a:srcRect/@t', namespaces=NS) == ['19861']
+    assert root.xpath('.//a:srcRect/@b', namespaces=NS) == ['19861']
     assert len(Document(io.BytesIO(augmented)).inline_shapes) == 1
     assert Document(io.BytesIO(augmented)).paragraphs[-1].text == TEXT
 
