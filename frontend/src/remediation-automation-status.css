@@ -1,6 +1,13 @@
 .remediation-automation-status {display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:12px 0;font-family:var(--font-ui);}
-.remediation-automation-status > div {background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;}
+.remediation-automation-status > details {background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;}
 .remediation-automation-status__label {font-size:11.5px;color:var(--muted);line-height:1.35;}
 .remediation-automation-status h2 {font-size:15px;margin:5px 0;font-weight:650;}
 .remediation-automation-status strong {display:block;font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:5px;line-height:1;}
 .remediation-automation-status p {font-size:11.5px;color:var(--muted);line-height:1.45;margin:5px 0 9px;}
+
+.remediation-automation-status summary {cursor:pointer;font-size:12.5px;}
+.remediation-automation-status__summary {display:inline;margin-left:8px;font-weight:650;}
+.remediation-automation-status summary:focus-visible {outline:2px solid var(--accent,#3464ad);outline-offset:4px;}
+
+.automatic-publication-disclosure summary {cursor:pointer;font-size:12.5px;line-height:1.6;}
+.automatic-publication-disclosure summary:focus-visible {outline:2px solid var(--accent,#3464ad);outline-offset:4px;}

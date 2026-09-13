@@ -84,3 +84,37 @@ def test_admitted_writer_disposition_reconciles_finished_job(isolated_store, mon
         isolated_store._db.execute(cur, "UPDATE jobs SET status='dead' WHERE scan_id=%s AND type='apply_approved_values'", (SID,))
     assert annotate(isolated_store, [row], OWNER)[0]['automatic_approval']['state'] == 'blocked'
     assert not isolated_store.get_hitl_item(item_id).get('applied')
+
+
+def test_explicit_judgment_failure_is_human_but_missing_metadata_is_status_check(isolated_store, monkeypatch):
+    import ai_standing_approval
+    item, run_id = setup_queue(isolated_store, monkeypatch)
+    row = isolated_store.get_hitl_item(item)
+    def human(*args, **kwargs):
+        raise ValueError('The draft contradicts visible image evidence; individual review is required')
+    monkeypatch.setattr(ai_standing_approval, 'eligible_item', human)
+    marker = annotate(isolated_store, [row], OWNER)[0]['automatic_approval']
+    assert marker['responsibility'] == 'human'
+    assert marker['run_id'] == run_id and marker['scan_id'] == SID
+    def check(*args, **kwargs):
+        raise ValueError('Proposal version unavailable')
+    monkeypatch.setattr(ai_standing_approval, 'eligible_item', check)
+    marker = annotate(isolated_store, [row], OWNER)[0]['automatic_approval']
+    assert marker['responsibility'] == 'check'
+    assert isolated_store.get_hitl_item(item)['status'] == 'pending'
+
+
+def test_applied_without_active_verifier_needs_system_check_not_another_approval(isolated_store, monkeypatch):
+    from automatic_review_queue import record
+    item_id, run_id = setup_queue(isolated_store, monkeypatch)
+    state = read(isolated_store, OWNER, SID, run_id)
+    row = isolated_store.get_hitl_item(item_id)
+    record(isolated_store, OWNER, SID, run_id, state['source_revision'], row, 'queued', 'Automatically approved')
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "UPDATE jobs SET status='done' WHERE scan_id=%s AND type='apply_approved_values'", (SID,))
+    projected = annotate(isolated_store, [{**row, 'status':'approved', 'applied':True, 'validated':False}], OWNER)[0]
+    marker = projected['automatic_approval']
+    assert marker['state'] == 'blocked' and marker['responsibility'] == 'check'
+    assert 'Applied, verification incomplete' in marker['reason']
+    assert 'another approval is not needed' in marker['reason']
+    assert projected['applied'] and not projected['validated']

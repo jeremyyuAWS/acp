@@ -9,10 +9,12 @@ export function automaticReviewQueue(rows = [], policy = {}, decisions = {}) {
     const raw = row._raw || row
     const marker = raw.automatic_approval || row.automatic_approval || (raw.auto_approval_status ? {state:raw.auto_approval_status,run_id:raw.auto_approval_run_id,source_revision:raw.auto_approval_source_revision} : null)
     const exactSnapshots = !marker?.proposal_snapshot_ids || JSON.stringify(marker.proposal_snapshot_ids) === JSON.stringify(raw.proposal_snapshot_ids || row.proposal_snapshot_ids || [])
-    const disposition = exactSnapshots && marker?.run_id === policy.run_id && marker?.source_revision === policy.source_revision ? marker : null
+    const scan = raw.scan_id || row.scanId
+    const scopeBound = marker?.responsibility ? !!scan && marker.scan_id === scan && Array.isArray(marker.proposal_snapshot_ids) && exactSnapshots : (!marker?.scan_id || !scan || marker.scan_id === scan) && exactSnapshots
+    const disposition = scopeBound && marker?.run_id === policy.run_id && marker?.source_revision === policy.source_revision ? marker : null
     const unmarked = {...row, automaticQueued:false, automaticDisposition:disposition, automaticReason:disposition?.reason || (policy.enabled === true ? 'This suggestion needs individual review or has not been admitted to automatic application.' : null)}
     const admitted = policy.enabled === true && policy.supported !== false && policy.run_id && policy.source_revision != null
-      && exactSnapshots && marker?.run_id === policy.run_id && marker.source_revision === policy.source_revision
+      && scopeBound && marker?.run_id === policy.run_id && marker.source_revision === policy.source_revision
       && ['queued','processing','checking','applying','verifying'].includes(marker.state)
     if (!row.automaticQueued) delete unmarked.automaticQueued
     if (!admitted || optionalInspectionOf(row) || workflowStatusOf(unmarked,decisions) !== 'needs-review'

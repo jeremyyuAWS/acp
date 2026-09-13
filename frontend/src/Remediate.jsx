@@ -1076,7 +1076,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // count is the distinct documents among exactly those findings.
   const reviewNeeds = inboxQueue.filter((f) => matchesWorkflow(f, 'needs-review', inboxDecisions))
   const reviewCount = reviewNeeds.length
-  const reviewCounts = remediationReviewCounts(inboxQueue, inboxDecisions)
+  const reviewCounts = remediationReviewCounts(inboxQueue, inboxDecisions, {}, runAiApproval.enabled === true)
   // The Review queue's progress, from the SAME (queue, decisions) pair the inbox pane's own
   // "N of M reviewed" counter reads — RemediationInbox calls progress(queue, decisions) on exactly
   // these props. It used to read `totalHitl`/`hitlProgress`, a session tally of the raw human queue
@@ -1892,7 +1892,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       {planAccepted && <>
         <RemediationAutomationStatus policy={runAiApproval.policy} error={runAiApproval.error} saving={runAiApproval.saving}
           reviewCount={reviewCounts.pendingItems} onOpenReview={() => setWorkspaceRequest({ mode: 'review' })} onRetry={runAiApproval.retry}/>
-        <AutomaticPublicationStatus authorization={acceptedAuthorization} pending={acceptedAuthorization === undefined && !automaticReleaseState?.error} error={automaticReleaseState?.error} compact
+        <AutomaticPublicationStatus authorization={acceptedAuthorization} pending={acceptedAuthorization === undefined && !automaticReleaseState?.error} error={automaticReleaseState?.error} compact collapsed
           destinationLabel={acceptedAuthorization?.destination?.provider} />
       </>}
       <RemediationWorkspaceTabs

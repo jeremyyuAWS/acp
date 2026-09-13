@@ -17,3 +17,26 @@ it('offers recovery when permission is unavailable', () => {
  expect(html).toContain('Setting unavailable')
  expect(html).toContain('Refresh setting')
 })
+it('collapses both cards by default while concise summaries retain permission and human count',()=>{
+ const html=renderToStaticMarkup(createElement(Status,{policy:{enabled:true},reviewCount:2,onOpenReview:()=>{}}))
+ expect((html.match(/<details>/g)||[]).length).toBe(2)
+ expect(html).not.toContain('<details open')
+ expect(html).toContain('2 need your input')
+ expect(html).toContain('Open review items')
+})
+it('native summaries are operable and preserve user expansion across refreshed counts',async()=>{
+ const {act}=await import('react')
+ const {createTestRoot,unmountAll}=await import('./testRoots.js')
+ const {root,container}=createTestRoot()
+ try {
+  await act(async()=>root.render(createElement(Status,{policy:{enabled:true},reviewCount:2,onOpenReview:()=>{}})))
+  const details=container.querySelectorAll('details')
+  expect([...details].every(d=>!d.open)).toBe(true)
+  await act(async()=>details[1].querySelector('summary').click())
+  expect(details[1].open).toBe(true)
+  expect(details[1].querySelector('button').textContent).toBe('Open review items')
+  await act(async()=>root.render(createElement(Status,{policy:{enabled:true},reviewCount:3,onOpenReview:()=>{}})))
+  expect(container.querySelectorAll('details')[1].open).toBe(true)
+  expect(container.querySelectorAll('details')[1].querySelector('summary').textContent).toContain('3 need your input')
+ } finally {await unmountAll()}
+})

@@ -1,3 +1,4 @@
+import useRemediationFreshness from './useRemediationFreshness.js'
 import { useEffect, useRef, useState } from 'react'
 import useConfirmedRemediationActivity from './useConfirmedRemediationActivity.js'
 import LiveCounter from './LiveCounter.jsx'
@@ -261,6 +262,7 @@ export function Activity({ events = [], status = 'ready', terminal = false, comp
 // them ACP may act on. See RemediationExceptions.jsx.
 
 export default function RemediationOpsPanel({ snapshot = null, connected = false, receivedAt = null, events = [], activityStatus = 'ready', updateMode = 'idle', onViewMonitor = null, compactLayout = null, exceptions = null, assessmentContext = null, streamlined = false, hideActivity = false }) {
+  const fresh = useRemediationFreshness({ snapshot, connected, receivedAt })
   const activityConfirmed = useConfirmedRemediationActivity(snapshot)
   const [paused, setPaused] = useState(false)
   const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.hidden)
@@ -290,7 +292,6 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   const line = headline(snapshot)
   useEffect(() => { setAnnouncement('') }, [line])
   if (!snapshot || snapshot.state === 'draft') return assessmentContext?.scanId ? <PlannedRemediationWaterfall /> : null
-  const fresh = freshness({ snapshot, connected, receivedAt })
   const suspect = snapshot.integrity?.ok === false
   const documentCountsSuspect = integrityAffects(snapshot, 'documents')
   // The count comes from the exception ENDPOINT, which groups by response and knows which rows
@@ -332,8 +333,8 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
 }
 
 export function RemediationActivityPanel({ snapshot, rows = [], decisions = {}, events = [], connected = false, receivedAt = null, activityStatus = 'ready', updateMode = 'idle' }) {
+  const fresh = useRemediationFreshness({snapshot, connected, receivedAt})
   if (!snapshot?.batch_id && !events.length) return null
-  const fresh = freshness({snapshot, connected, receivedAt})
   return <section className="panel remops" aria-label="Remediation live activity">
     <div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /></div>
     <RemainingWorkStatus snapshot={snapshot} events={events} rows={rows} decisions={decisions} />

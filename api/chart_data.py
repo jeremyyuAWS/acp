@@ -75,6 +75,22 @@ def _cache_points(ref) -> list[str]:
     return [pts.get(i, "") for i in range(max(pts) + 1)] if pts else []
 
 
+def _cache_extent_complete(axis, actual_count):
+    if axis is None:
+        return False
+    for cache in list(axis.iter(f'{{{_C}}}strCache')) + list(axis.iter(f'{{{_C}}}numCache')):
+        if not cache.findall(f'{{{_C}}}pt'):
+            continue  # An empty cache can be fully resolved from cell references.
+        count = cache.find(f'{{{_C}}}ptCount')
+        if count is not None:
+            try:
+                if int(count.get('val', '-1')) != actual_count:
+                    return False
+            except ValueError:
+                return False
+    return True
+
+
 def _parse_chart(xml: bytes, entries: dict | None = None, part_name: str | None = None) -> dict | None:
     root = ET.fromstring(xml)
     chart = root.find(f"{{{_C}}}chart")
@@ -120,7 +136,10 @@ def _parse_chart(xml: bytes, entries: dict | None = None, part_name: str | None 
                 pts = [(cats[i] if i < len(cats) and cats[i] else f"item {i + 1}", vals[i])
                        for i in range(len(vals)) if vals[i] != ""]
                 if pts:
-                    series.append({"name": name, "points": pts})
+                    series.append({"name": name, "points": pts,
+                                   "complete": len(cats) == len(vals) and all(cats) and all(v != "" for v in vals)
+                                   and _cache_extent_complete(ser.find(f"{{{_C}}}cat"), len(cats))
+                                   and _cache_extent_complete(ser.find(f"{{{_C}}}val"), len(vals))})
     if not ctype or not series:
         return None
     return {"type": ctype, "title": title, "series": series}
@@ -167,6 +186,10 @@ def _expand_range(rng: str) -> list[str]:
         return []
     c1, r1 = _col_to_num(ma.group(1)), int(ma.group(2))
     c2, r2 = _col_to_num(mb.group(1)), int(mb.group(2))
+    # Read the entire bounded reference or refuse it; never describe only a
+    # silent 64-cell prefix as the full plotted range.
+    if (abs(c2-c1)+1) * (abs(r2-r1)+1) > 4096:
+        return []
     out = []
     for c in range(min(c1, c2), max(c1, c2) + 1):
         col = ""
@@ -176,7 +199,7 @@ def _expand_range(rng: str) -> list[str]:
             col = chr(65 + rem) + col
         for r in range(min(r1, r2), max(r1, r2) + 1):
             out.append(f"{col}{r}")
-    return out[:64]                                         # bound — an alt needs a handful, not a sheet
+    return out
 
 
 def _resolve_ref(formula: str, entries: dict) -> list[str]:
@@ -311,6 +334,9 @@ def describe_chart(chart: dict) -> str:
     """A concise, ACCURATE alt sentence from the chart's real data — the exact values, because they
     were read from the file, not guessed. Multi-series charts state the series; single-series charts
     state the high/low. Bounded so it stays alt-text, not a data dump."""
+    exact = exact_numeric_chart_description(chart)
+    if exact:
+        return exact
     ctype = chart.get("type", "Chart")
     title = chart.get("title", "")
     lead = f"{ctype} titled '{title}'" if title else ctype
@@ -328,6 +354,80 @@ def describe_chart(chart: dict) -> str:
     names = ", ".join(s["name"] or f"series {i + 1}" for i, s in enumerate(series[:5]))
     cats = ", ".join(c for c, _ in series[0]["points"][:8])
     return f"{lead} comparing {names} across {cats}."[:300]
+
+
+def exact_numeric_chart_description(chart: dict) -> str | None:
+    """Conservative admission for an already-written deterministic data alternative.
+
+    This is not AI provenance. Ambiguous categories, non-finite/mixed-unit values,
+    and multi-series comparisons stay in the ordinary review lane.
+    """
+    from decimal import Decimal, InvalidOperation
+    series = chart.get('series') or []
+    if len(series) != 1:
+        return None
+    if series[0].get('complete') is False:
+        return None
+    points = series[0].get('points') or []
+    if len(points) < 2 or any(not isinstance(cat, str) or not cat.strip()
+                             or len(cat) > 120 or re.fullmatch(r'item \d+', cat) for cat, _ in points):
+        return None
+    if len({cat.strip() for cat, _ in points}) != len(points):
+        return None
+    try:
+        nums = [Decimal(str(val)) for _, val in points]
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    if any(not value.is_finite() or abs(value.as_tuple().exponent) > 100 for value in nums):
+        return None
+    def number(value):
+        text = format(value, 'f')
+        return text.rstrip('0').rstrip('.') if '.' in text else text
+    title = chart.get('title') or ''
+    ctype = chart.get('type') or 'Chart'
+    if len(title) > 120 or len(ctype) > 50:
+        return None
+    lead = f"{ctype} titled '{title}'" if title else ctype
+    hi = max(range(len(nums)), key=nums.__getitem__)
+    lo = min(range(len(nums)), key=nums.__getitem__)
+    return (f"{lead} across {points[0][0]}–{points[-1][0]} ({len(points)} categories). "
+            f"Highest is {points[hi][0]} at {number(nums[hi])}, "
+            f"lowest is {points[lo][0]} at {number(nums[lo])}.")
+
+
+def has_exact_chart_data_alt(entries: dict, ext: str, chart_part: str) -> bool:
+    """All actual chart references already carry the exact current numeric description.
+
+    Checking the drawing attribute and relationships against current chart bytes
+    prevents an old generic caption from being treated as a completed repair.
+    """
+    import html
+    chart = parse_chart_part(entries.get(chart_part, b''), entries, chart_part)
+    expected = exact_numeric_chart_description(chart or {})
+    cfg = _CHART_CFG.get(ext)
+    if not expected or not cfg:
+        return False
+    part_re, block_tags, descr_tag = cfg
+    found = False
+    for name, raw in entries.items():
+        if not part_re.match(name):
+            continue
+        try:
+            xml = raw.decode('utf-8')
+        except (AttributeError, UnicodeDecodeError):
+            return False
+        rels = _rel_targets(entries, name)
+        for btag in block_tags:
+            for block in re.finditer(rf'<({btag})\b.*?</\1>', xml, re.S):
+                rid = _CHART_RID.search(block.group(0))
+                if not rid or rels.get(rid.group(1)) != chart_part:
+                    continue
+                found = True
+                carrier = re.search(rf'<(?:{descr_tag})\b([^>]*)>', block.group(0))
+                alt = re.search(r'\bdescr="([^"]*)"', carrier.group(1)) if carrier else None
+                if not alt or html.unescape(alt.group(1)) != expected:
+                    return False
+    return found
 
 
 def _to_float(v):

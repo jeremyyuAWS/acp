@@ -637,3 +637,36 @@ it('explains individual judgment with auto-apply on and preserves its manual act
  expect(apply).toBeTruthy()
  expect(apply.disabled).toBe(false)
 })
+
+describe('exceptions-only automatic review',()=>{
+ it('defaults to real human authoring and keeps unknown AI items reachable without claiming fixed',async()=>{
+  const queue=[{id:90,file:'manual-crop.docx',rule_id:'1.4.5',title:'Crop needs your description',status:'pending'},
+   {id:91,file:'waiting-alt.docx',rule_id:'1.1.1',title:'Caption needs status check',status:'pending'}]
+  await render({queue,legacyApprovalControls:false,autoApprove:true,initialTab:'review'})
+  expect(container.querySelector('option[value="review"]').textContent).toBe('Needs your input (1)')
+  expect(container.querySelector('.rinbox-queuepane').textContent).toContain('manual-crop.docx')
+  expect(container.querySelector('.rinbox-queuepane').textContent).not.toContain('waiting-alt.docx')
+  const filter=container.querySelector('select[aria-label="Filter by status"]')
+  await act(async()=>{filter.value='status-check';filter.dispatchEvent(new Event('change',{bubbles:true}))})
+  expect(container.querySelector('.rinbox-queuepane').textContent).toContain('waiting-alt.docx')
+  expect(container.textContent).toContain('no confirmed automatic admission')
+ })
+})
+it('does not infer human confirmation from missing recheck action for applied unverified automatic work',async()=>{
+ await render({queue:[{id:95,file:'applied.docx',rule_id:'1.1.1',status:'approved',applied:true,validated:false,hasProposal:true,after:'Caption',automaticDisposition:{state:'blocked',responsibility:'check'}}],legacyApprovalControls:false,autoApprove:true,initialTab:'status-check',onRecheck:undefined})
+ expect(container.textContent).toContain('Applied · verification incomplete')
+ expect(container.textContent).toContain('No additional approval is needed')
+ expect(container.textContent).not.toContain('This change requires human confirmation')
+ expect(container.textContent).not.toContain('Human confirmation required')
+ expect(container.textContent).not.toContain('This finding is verified')
+})
+it('genuine manual crop authoring remains explicitly a human task',async()=>{
+ await render({queue:[{id:96,file:'crop.docx',rule_id:'1.4.5',status:'pending',title:'Describe visible crop'}],legacyApprovalControls:false,autoApprove:true,initialTab:'review',onRecheck:undefined})
+ expect(container.textContent).toContain('fix it by hand in the source app')
+})
+it('admitted automatic fixes do not request human confirmation when no recheck callback is rendered',async()=>{
+ const row={id:97,file:'queued.docx',scanId:'scan',rule_id:'1.1.1',status:'pending',hasProposal:true,after:'Caption',proposals:[{proposed_value:'Caption',source:'AI',model:'vision',model_call_id:'call'}],_raw:{finding_count:1,proposal_snapshot_ids:['snap'],source_revision:'source',decision_version:0,automatic_approval:{state:'checking',run_id:'run',source_revision:'source',proposal_snapshot_ids:['snap']}}}
+ await render({queue:[row],automaticApprovalPolicy:{enabled:true,run_id:'run',source_revision:'source'},legacyApprovalControls:false,autoApprove:true,initialTab:'awaiting-validation',onRecheck:undefined})
+ expect(container.textContent).toContain('No individual approval or human confirmation is needed now')
+ expect(container.textContent).not.toContain('Human confirmation required')
+})

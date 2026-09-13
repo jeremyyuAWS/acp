@@ -1,5 +1,5 @@
 import useWaterfallDrawerMetrics from './useWaterfallDrawerMetrics.js'
-import WaterfallDrawerCharts, { ContributionBars, SettledSpend } from './WaterfallDrawerCharts.jsx'
+import { ActivityTrend, ProcessingPace, ContributionBars, SettledSpend } from './WaterfallDrawerCharts.jsx'
 import './waterfall-drawer-charts.css'
 
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0
@@ -12,7 +12,9 @@ export function observedPaceScale(pace, trend) {
 export function AIActivityCharts({ data }) {
   const models = data.models?.rows || []
   return <div className="wd-charts wd-ai-dashboard">
-    <WaterfallDrawerCharts contribution={data.models} pace={observedPaceScale(data.pace, data.trend)} trend={data.trend} />
+    <ContributionBars data={data.models} />
+    <ProcessingPace data={observedPaceScale(data.pace, data.trend)} />
+    <ActivityTrend data={data.trend} />
     <SettledSpend data={data.spend} />
     <ContributionBars data={data.contribution} />
     <section className="wd-chart wd-model-details" aria-label="Individual model usage">
@@ -29,7 +31,7 @@ export function AIActivityCharts({ data }) {
 export default function CloudAIActivity({ scanId, batchId, live, paused, aiEnabled }) {
   const metrics = useWaterfallDrawerMetrics({ scanId, batchId, scope: {}, live: live && !paused, enabled: aiEnabled !== false })
   if (aiEnabled === false) return null
-  return <section aria-label="AI usage for this remediation run">
+  return <section className="wd-ai-usage" aria-label="AI usage for this remediation run">
     <h3>AI usage · this run</h3>
     <p>Actual local and cloud model activity, including fallback attempts. Select a waterfall model below for its individual evidence.</p>
     {metrics.loading && !metrics.data && <p role="status">Loading AI usage…</p>}

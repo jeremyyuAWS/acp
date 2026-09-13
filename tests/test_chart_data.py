@@ -250,3 +250,39 @@ def test_corrupt_embedding_is_survived_not_raised():
     entries = docx_chart_entries(["North", "South"], [1, 2])
     entries["word/embeddings/data.xlsx"] = b"not a zip at all"
     assert chart_data.charts_in(rezip(entries), ".docx") == []
+
+
+def test_exact_numeric_summary_preserves_precision_and_full_extent():
+    chart = {'type': 'Line chart', 'title': 'Precise values', 'series': [{'name':'Revenue', 'points': [(str(i), str(i)) for i in range(29)] + [('29', '9007199254740993.123456789')]}]}
+    summary = chart_data.exact_numeric_chart_description(chart)
+    assert '0–29 (30 categories)' in summary
+    assert '9007199254740993.123456789' in summary
+
+
+@pytest.mark.parametrize('series', [[], [{'points':[]}], [{'points':[('A','nan'),('B','2')]}], [{'points':[('A','$10'),('B','12%')]}], [{'points':[('A','1'),('B','2')]}, {'points':[('A','3'),('B','4')]}], [{'points':[('item 1','1'),('item 2','2')]}]])
+def test_ambiguous_chart_data_never_admits_an_exact_completed_alternative(series):
+    assert chart_data.exact_numeric_chart_description({'type':'Chart','series':series}) is None
+
+
+def test_duplicate_categories_and_incomplete_cache_require_review():
+    assert chart_data.exact_numeric_chart_description({'series':[{'points':[('A','1'),('A','2')]}]}) is None
+    assert chart_data.exact_numeric_chart_description({'series':[{'points':[('A','1'),('B','2')],'complete':False}]}) is None
+
+
+def test_long_labels_keep_numeric_evidence_in_full_without_truncation():
+    chart = {'title':'T'*120, 'type':'Line chart', 'series':[{'points':[('A'*120,'1.0000000000000000001'),('B'*120,'999.9999999999999999999')]}]}
+    summary = chart_data.exact_numeric_chart_description(chart)
+    assert summary.endswith('lowest is ' + 'A'*120 + ' at 1.0000000000000000001.')
+    assert '999.9999999999999999999' in summary
+    assert len(summary) > 300
+
+
+def test_reference_bound_refuses_whole_oversize_range_instead_of_silent_prefix():
+    assert len(chart_data._expand_range('A1:A80')) == 80
+    assert chart_data._expand_range('A1:A5000') == []
+
+
+def test_declared_cache_tail_missing_does_not_admit_exact_completion():
+    import xml.etree.ElementTree as ET
+    axis = ET.fromstring('<cat xmlns="http://schemas.openxmlformats.org/drawingml/2006/chart"><strRef><strCache><ptCount val="3"/><pt idx="0"><v>A</v></pt><pt idx="1"><v>B</v></pt></strCache></strRef></cat>')
+    assert chart_data._cache_extent_complete(axis,2) is False
