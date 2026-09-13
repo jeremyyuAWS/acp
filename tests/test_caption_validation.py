@@ -1,6 +1,7 @@
 from io import BytesIO
 from PIL import Image, ImageDraw
 from caption_validation import validate_caption
+import pytest
 
 
 def png(image):
@@ -92,6 +93,56 @@ def test_muted_or_near_primary_palette_does_not_authorize_semantic_writes():
     for color in [(160, 120, 120), (180, 100, 60), (254, 0, 0), (220, 38, 38)]:
         data = png(Image.new('RGB', (32, 32), color))
         assert validate_caption('The image is a solid red color.', data)['status'] == 'needs_manual'
+
+
+def test_real_icc_profile_png_never_authorizes_raw_channel_color():
+    from PIL import ImageCms
+    image = Image.new('RGB', (32, 32), 'red')
+    profile = ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes()
+    output = BytesIO(); image.save(output, format='PNG', icc_profile=profile)
+    assert Image.open(BytesIO(output.getvalue())).info['icc_profile'] == profile
+    outcome = validate_caption('The image is a solid red color.', output.getvalue())
+    assert outcome['status'] == 'needs_manual' and not outcome['approved']
+    assert validate_caption('The image is a solid red color.', png(image))['approved']
+
+
+def test_real_exif_mirrored_png_never_authorizes_source_left_right_facts():
+    image = Image.open(BytesIO(objects()))
+    exif = Image.Exif(); exif[274] = 2  # Display orientation mirrors left/right.
+    output = BytesIO(); image.save(output, format='PNG', exif=exif)
+    assert Image.open(BytesIO(output.getvalue())).getexif()[274] == 2
+    caption = 'A red circle on the left and a blue square on the right on a white background.'
+    assert validate_caption(caption, output.getvalue())['status'] == 'needs_manual'
+    assert validate_caption(caption, objects())['approved']
+
+
+@pytest.mark.parametrize('chunk,payload', [
+    (b'cICP', bytes([1, 13, 0, 1])), (b'gAMA', (45455).to_bytes(4, 'big')),
+    (b'cHRM', b'\x00' * 32), (b'sRGB', b'\x00'),
+    (b'mDCV', b'\x00' * 24), (b'cLLI', b'\x00' * 8),
+])
+def test_real_png_color_metadata_requires_manual_even_if_pillow_ignores_chunk(chunk, payload):
+    import zlib
+    plain = png(Image.new('RGB', (32, 32), 'red'))
+    # Pillow's encoder drops some newer color chunks; inject a CRC-valid chunk
+    # after IHDR so this tests actual encoded metadata, including ignored keys.
+    encoded_chunk = (len(payload).to_bytes(4, 'big') + chunk + payload
+                     + (zlib.crc32(chunk + payload) & 0xffffffff).to_bytes(4, 'big'))
+    data = plain[:33] + encoded_chunk + plain[33:]
+    with Image.open(BytesIO(data)) as decoded:
+        decoded.load()
+        assert decoded.getpixel((0, 0)) == (255, 0, 0)
+    assert validate_caption('The image is a solid red color.', data)['status'] == 'needs_manual'
+
+
+def test_real_exif_jpeg_requires_manual_and_unprofiled_jpeg_control_passes():
+    image = Image.new('RGB', (32, 32), 'black')
+    plain = BytesIO(); image.save(plain, format='JPEG')
+    assert validate_caption('The image is a solid black color.', plain.getvalue())['approved']
+    exif = Image.Exif(); exif[274] = 6
+    tagged = BytesIO(); image.save(tagged, format='JPEG', exif=exif)
+    assert Image.open(BytesIO(tagged.getvalue())).getexif()[274] == 6
+    assert validate_caption('The image is a solid black color.', tagged.getvalue())['status'] == 'needs_manual'
 
 
 def test_complete_wrong_shape_claim_is_still_a_proven_contradiction():

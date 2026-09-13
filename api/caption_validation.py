@@ -21,12 +21,37 @@ def _color(rgb):
             (255, 255, 255): 'white', (128, 128, 128): 'gray'}.get(rgb)
 
 
+def _render_metadata_supported(data, source):
+    # Channel values do not prove displayed colors/orientation when a renderer
+    # applies a profile or metadata transform. Do not silently discard them.
+    metadata = {str(key).lower() for key in source.info}
+    if metadata & {'icc_profile', 'exif', 'cicp', 'gamma', 'chromaticity',
+                   'srgb', 'transparency'} or source.getexif():
+        return False
+    if data.startswith(b'\x89PNG\r\n\x1a\n'):
+        offset = 8
+        while offset + 12 <= len(data):
+            size = int.from_bytes(data[offset:offset + 4], 'big')
+            kind = data[offset + 4:offset + 8]
+            if kind in {b'iCCP', b'eXIf', b'cICP', b'gAMA', b'cHRM', b'sRGB',
+                        b'mDCV', b'cLLI', b'tRNS'}:
+                return False
+            if size > len(data) - offset - 12:
+                return False
+            offset += size + 12
+            if kind == b'IEND':
+                break
+    return True
+
+
 def _facts(data):
     from PIL import Image, ImageChops, ImageDraw
     if not isinstance(data, bytes) or not data or len(data) > MAX_BYTES:
         return None
     try:
         with Image.open(BytesIO(data)) as source:
+            if not _render_metadata_supported(data, source):
+                return None
             w, h = source.size
             if min(w, h) < 16 or w * h > MAX_PIXELS or getattr(source, 'n_frames', 1) != 1:
                 return None
