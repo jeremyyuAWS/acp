@@ -44,7 +44,7 @@ def test_ambiguous_shared_graphic_is_not_changed():
     assert write_descriptions(shared, plan(original)) == shared
 
 
-def test_real_ocr_still_reports_raster_text_after_reviewed_description():
+def test_real_ocr_still_reports_raster_text_after_reviewed_description(tmp_path):
     import pytest, ocr
     from lxml import etree as ET
     from test_remediation_verified_office_image_replacement import document, mutate
@@ -55,8 +55,12 @@ def test_real_ocr_still_reports_raster_text_after_reviewed_description():
         fill = root.xpath('//*[local-name()="blipFill"]')[0]
         ET.SubElement(fill, '{' + NS['a'] + '}srcRect', t='19861')
     original = mutate(document('docx'), 'word/document.xml', crop)
-    before = ocr.images_of_text(original,'.docx')
+    source = tmp_path / 'source.docx'
+    source.write_bytes(original)
+    before = ocr.images_of_text(source,'.docx')
     assert before
     candidate = write_descriptions(original, plan(original))
     assert candidate != original
-    assert ocr.images_of_text(candidate,'.docx') == before
+    saved = tmp_path / 'candidate.docx'
+    saved.write_bytes(candidate)
+    assert ocr.images_of_text(saved,'.docx') == before

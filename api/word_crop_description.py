@@ -63,7 +63,8 @@ def write_descriptions(data, plans):
             if len(blips) != 1:
                 continue
             paragraphs = [p for p in blips[0].iterancestors() if p.tag == W + 'p']
-            if not paragraphs or paragraphs[0].getparent().tag not in (W + 'body', W + 'tc'):
+            if (not paragraphs or paragraphs[0].getparent().tag not in (W + 'body', W + 'tc')
+                    or len(paragraphs[0].xpath('.//a:blip', namespaces=NS)) != 1):
                 continue
             paragraph = ET.Element(W + 'p')
             ET.SubElement(paragraph, W + 'bookmarkStart', {W + 'id':str(next_id), W + 'name':marker})
