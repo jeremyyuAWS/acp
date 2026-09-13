@@ -30,6 +30,9 @@ class AzureOperationError(RuntimeError):
 def canonical_connection(value):
     try:
         from psycopg2.extensions import parse_dsn
+    except ImportError:
+        raise ValueError('PostgreSQL scaler parser dependency is unavailable') from None
+    try:
         parts = parse_dsn(value)
         if not {'host', 'dbname', 'user', 'password'} <= parts.keys():
             raise ValueError()
@@ -186,6 +189,29 @@ def repair(resource_group, name):
     print(name + ': dedicated PostgreSQL scaler credential reference verified')
 
 
+VALIDATION_REASON_CODES = {
+    'PostgreSQL scaler parser dependency is unavailable': 'dsn_parser_unavailable',
+    'PostgreSQL scaler connection could not be normalized safely': 'dsn_normalization_invalid',
+    'Application secret names are missing or ambiguous': 'secret_names_ambiguous',
+    'PostgreSQL scaler connection secret is missing': 'scaler_secret_missing',
+    'Worker application database secret is ambiguous or missing': 'database_secret_reference_invalid',
+    'PostgreSQL scaler secret value cannot be resolved safely': 'database_secret_value_unavailable',
+    'Existing application secret cannot be preserved safely': 'preserved_secret_value_unavailable',
+    'Supply resource group and worker app names': 'worker_targets_missing',
+}
+
+
+def report_failure(error):
+    # Only exact developer-authored messages become retained diagnostic codes.
+    # Never forward a DSN parser/provider message, credential or arbitrary exception text.
+    reason_code = VALIDATION_REASON_CODES.get(str(error)) if isinstance(error, ValueError) else None
+    if isinstance(error, AzureOperationError) and re.fullmatch(
+            r'(?:rest_(?:get|patch)|secret_read|app_read):(?:http_[45][0-9]{2}|provider_failure)', str(error)):
+        reason_code = str(error)
+    detail = ':' + reason_code if reason_code else ''
+    print('PostgreSQL scaler repair failed (' + type(error).__name__ + detail + ')', file=sys.stderr)
+
+
 if __name__ == '__main__':
     try:
         group, *apps = sys.argv[1:]
@@ -194,7 +220,5 @@ if __name__ == '__main__':
         for app_name in apps:
             repair(group, app_name)
     except Exception as error:
-        # Never echo URL parser, Azure response, or secret-containing exception text.
-        detail = ':' + str(error) if isinstance(error, AzureOperationError) else ''
-        print('PostgreSQL scaler repair failed (' + type(error).__name__ + detail + ')', file=sys.stderr)
+        report_failure(error)
         sys.exit(1)

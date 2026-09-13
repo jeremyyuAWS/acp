@@ -101,6 +101,16 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      # The scaler credential repair uses libpq's authoritative DSN parser.
+      # Match production: runner system Python does not provide psycopg2 by default.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PostgreSQL scaler parser
+        timeout-minutes: 3
+        run: python3 -m pip install 'psycopg2-binary>=2.9,<3'
+
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
