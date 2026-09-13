@@ -5298,6 +5298,45 @@ def _apply_one_value_kind(
     baseline = (residual_state or {}).get("verification")
     regressions = (sorted(verification.residual - baseline.residual)
                    if verification.ok and baseline is not None and baseline.ok else None)
+    # A presence-only 1.1.1 pass is not caption accuracy. A single exact Office
+    # contradiction can try only the next already-consented tier under standing approval.
+    if (residual_state or {}).get('office_retry_allowed') and baseline is not None and not unresolved:
+        from office_verified_retry import attempt as retry_office_caption
+        try:
+            retry = retry_office_caption(core.store, scan_id=scan_id, filename=filename,
+                original=working, failed=fixed, values=values, applied=applied,
+                baseline=baseline, failed_check=verification, tickets=exact_tickets,
+                verify=lambda candidate: _verify_residual(candidate, filename, scan_id=scan_id))
+        except ValueError:
+            retry = None  # Missing/frozen/replayed authority never opens another paid attempt.
+        if retry:
+            retry_bytes, retry_check, retry_changes, retry_proof = retry
+            residual_state['verification'] = retry_check
+            residual_state['office_retry'] = retry_proof
+            def commit_retry():
+                record = core.store.get_file_record(scan_id, filename) or {}
+                if record.get('corrected_sha256') != retry_proof['replacement_sha256']:
+                    raise ValueError('office_retry_artifact_mismatch')
+                existing = core.store.get_remediation_diffs(scan_id, filename) or []
+                core.store.record_remediation_diffs(scan_id, filename, existing + [
+                    {'rule_id': '1.1.1', 'before': a['before'], 'after': a['after'],
+                     'note': retry_proof['writer_identity']} for a in retry_changes])
+                from office_verified_retry import persist_replacement_approval
+                replacement_ticket = persist_replacement_approval(core.store, retry_proof)
+                record_writer_result(core.store, [replacement_ticket], outcome='verified_cleared',
+                    artifact_sha256=record['corrected_sha256'],
+                    reference='Independent caption validation and actual Office reassessment',
+                    writer_attempt_id=retry_proof['writer_identity'])
+                core.store.mark_row_applied(retry_proof['item_id'])
+                import json
+                core.store.log_decision('system', 'office_retry.saved', scan_id=scan_id,
+                    file=filename, rule_id='1.1.1', detail=json.dumps({**retry_proof,
+                        'artifact_sha256': record['corrected_sha256'], 'changes': retry_changes,
+                        'verification': 'independent_caption_and_actual_reassessment',
+                        'original_outcome': 'superseded_not_verified'}, sort_keys=True))
+            pending_credits.append(commit_retry)
+            return retry_bytes, True
+
     def preserve_unverified(outcome, reason):
         if not (residual_state or {}).get('retain_unverified') or regressions:
             return working, False
@@ -5522,6 +5561,11 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     residual_state = {"verification": _verify_residual(working, filename, scan_id=scan_id),
                       "retain_unverified": bool(payload.get("standing_approval"))}
     pending_credits = []
+    residual_state['office_retry_allowed'] = bool(
+        payload.get('standing_approval') and ext in _OFFICE_ALT_MIME
+        and len(alt_values) == 1 and not (deco_locators or link_values or field_values
+        or sensory_values or language_values or structure_label_values or image_of_text_values
+        or any(pdf_structure_groups.values())))
 
     # ADR 0055: a described-not-replaced row carries the 1.4.5 card's own 'image N' locator — a
     # media index, which apply_alt cannot read at all (parse_locator requires a '#'). Translate
@@ -5712,18 +5756,43 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         check_standing_application(core.store, payload)
     check_file_approvals(core.store, scan_id, filename)
     _phase(job, "storing the corrected copy")
-    blob_url = _blob.upload_remediated(
-        owner, scan_id, filename, working, _OFFICE_ALT_MIME.get(ext, "application/pdf"))
+    retry_proof = residual_state.get('office_retry')
+    blob_url = (_blob.upload_immutable_retry(owner, scan_id, filename, working,
+                    _OFFICE_ALT_MIME.get(ext, 'application/pdf')) if retry_proof
+                else _blob.upload_remediated(owner, scan_id, filename, working,
+                    _OFFICE_ALT_MIME.get(ext, 'application/pdf')))
     if not blob_url:
         raise RuntimeError("approved values were verified but durable storage is unavailable")
     # Upload first: failed storage must leave every approval retryable. The database commit
     # then binds its evidence to these exact bytes; no credit survives a metadata failure.
     record = core.store.get_remediation_urls(scan_id, filename) or {}
     with core.store.transaction():
-        core.store.record_remediation(
-            scan_id, filename, drive_write_url=record.get("drive_write_url"),
-            blob_url=blob_url, corrected_sha256=_hashlib.sha256(working).hexdigest(),
-            corrected_bytes=len(working))
+        if retry_proof:
+            from ai_standing_approval import authorization as retry_authorization, _source as retry_source
+            revision = retry_authorization(core.store, owner, scan_id, retry_proof['run_id'])
+            stage = core.store.get_stage_execution(retry_proof['run_id'], owner=owner) or {}
+            from ai_run_approval_override import read as read_retry_consent
+            if read_retry_consent(core.store, owner, scan_id, retry_proof['run_id'])['revision'] != retry_proof['consent_revision']:
+                raise ValueError('office_retry_consent_changed')
+            from worker import check_cancel as check_retry_cancel
+            check_retry_cancel()
+            if (revision != retry_proof['source_revision'] or not stage.get('is_current')
+                    or stage.get('cancel_requested_at')
+                    or stage.get('state') not in {'accepted', 'queued', 'processing', 'processing_complete', 'succeeded'}
+                    or stage.get('input_snapshot_id') != revision):
+                raise ValueError('office_retry_run_changed')
+            retry_source(core.store, owner, scan_id, filename, retry_proof['run_id'])
+            if not core.store.compare_and_set_retry_artifact(owner, scan_id, filename,
+                    previous_sha256=retry_proof['previous_artifact_sha256'],
+                    source_identity=retry_proof['source_identity'], run_id=retry_proof['run_id'],
+                    source_revision=retry_proof['source_revision'], blob_url=blob_url,
+                    corrected_sha256=_hashlib.sha256(working).hexdigest(), corrected_bytes=len(working)):
+                raise ValueError('office_retry_source_or_artifact_changed')
+        else:
+            core.store.record_remediation(
+                scan_id, filename, drive_write_url=record.get("drive_write_url"),
+                blob_url=blob_url, corrected_sha256=_hashlib.sha256(working).hexdigest(),
+                corrected_bytes=len(working))
         for commit_credit in pending_credits:
             commit_credit()
         if payload.get("release_intent_id"):

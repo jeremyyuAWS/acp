@@ -303,7 +303,7 @@ def managed_text_generate(prompt: str) -> dict:
 
 
 def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
-                              tier_indices=None, operation_id=None, image_prefix=False):
+                              tier_indices=None, operation_id=None, image_prefix=False, verified_retry=None):
     """One bounded generation operation, also usable for explicit review stages.
 
     The caller supplies a trusted configured generator and immutable run context.
@@ -351,6 +351,14 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
         adapter = current_generation_adapter()
         if (adapter is None and not image_prefix) or not getattr(ctx, 'scan_id', None) or not getattr(ctx, 'file', None):
             return defer_managed('supported_generation_adapter_required')
+    if verified_retry is not None:
+        from office_verified_retry import RetryAuthority
+        if (type(verified_retry) is not RetryAuthority or purpose != 'review'
+                or tuple(tier_indices) != (2,) or not chain
+                or (verified_retry.owner_id, verified_retry.run_id, verified_retry.scan_id, verified_retry.file)
+                != (ctx.owner_id, ctx.run_id, ctx.scan_id, ctx.file)
+                or verified_retry.check() is not True):
+            return defer_managed('verified_retry_authority_unavailable')
     budget = BudgetAdapter(ctx.ledger, ctx.owner_id, ctx.run_id, generator.pricing_refs)
     input_hash = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
     operation = operation_id or (input_hash if purpose == 'draft' else
@@ -444,7 +452,10 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
                         WHERE execution_id=%s AND scan_id=%s AND owner_email=%s''',
                         (ctx.run_id, ctx.scan_id, ctx.owner_id))
                     execution = ctx.ledger.db.fetchone(cur)
-                if execution is None or execution['cancel_requested_at'] or execution['state'] not in ('accepted', 'queued', 'processing'):
+                allowed_states = ('accepted', 'queued', 'processing')
+                if verified_retry is not None and verified_retry.check() is True:
+                    allowed_states += ('processing_complete', 'succeeded')
+                if execution is None or execution['cancel_requested_at'] or execution['state'] not in allowed_states:
                     return defer_managed('run_stopped_or_unavailable', attempts=attempts)
             except Exception:
                 return defer_managed('run_dispatch_permission_unavailable', attempts=attempts)
