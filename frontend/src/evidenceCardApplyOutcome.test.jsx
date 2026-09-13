@@ -62,6 +62,22 @@ describe('EvidenceCard — a refused write is visible on the card', () => {
     expect(text).not.toContain('Written to document')
   })
 
+  it('shows a cropped-image refusal without claiming the image was written or re-scanned', async () => {
+    await mount({ ...refused,
+      apply_outcome: { outcome: 'nothing_written', criteria: ['2.4.6'],
+        reason: 'The image is cropped in Word. Review a transcription of the visible crop and confirm no useful diagram content would be lost before replacing it.', ts: 't' },
+    })
+    const note = container.querySelector('.evcard-apply-outcome')
+    expect(note).not.toBeNull()
+    expect(note.textContent).toContain('The approved fix could not be written.')
+    expect(note.textContent).toContain('The image is cropped in Word.')
+    expect(note.textContent).toContain('no useful diagram content would be lost')
+    const ladder = container.querySelector('.evcard-ladder').textContent
+    expect(ladder).toContain('✗ Write blocked')
+    expect(ladder).not.toContain('✓ Written')
+    expect(ladder).not.toContain('✗ Re-scan verified')
+  })
+
   it('a pending row renders no outcome — nothing has been written yet', async () => {
     await mount(pending)
     expect(container.querySelector('.evcard-apply-outcome')).toBeNull()

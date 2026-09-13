@@ -44,6 +44,11 @@ def test_crop_block_explained_in_actual_approved_apply_activity(monkeypatch, sto
     assert "no useful diagram content would be lost" in notes[0]
     assert "original image is kept unchanged" in notes[0]
     assert 'reach no image' not in notes[0]
+    rows = store.list_hitl_queue(scan_id=lane.SID)
+    blocked = [row for row in rows if row.get('apply_outcome')]
+    assert len(blocked) == 1
+    assert blocked[0]['apply_outcome']['outcome'] == 'nothing_written'
+    assert 'visible crop' in blocked[0]['apply_outcome']['reason']
     assert not blob.uploads
     assert blob.data == original
     assert store.count_unapplied_approved_values(lane.SID, lane.FILE) > 0

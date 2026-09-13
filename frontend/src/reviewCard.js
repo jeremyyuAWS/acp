@@ -290,7 +290,7 @@ const dirOf = (p) => {
 // APPROVED, unapplied row from the newest apply.unverified decision for that scan + file whose
 // criteria include this row's SC (api/apply_outcome.py). Anything else → null: the card must not
 // invent a post-write story for a row nothing has been written for.
-export const APPLY_OUTCOME_STATES = new Set(['still_failing', 'could_not_verify'])
+export const APPLY_OUTCOME_STATES = new Set(['still_failing', 'could_not_verify', 'nothing_written'])
 export function applyOutcomeOf(item) {
   const o = item?.apply_outcome
   if (!o || !APPLY_OUTCOME_STATES.has(o.outcome)) return null
@@ -318,6 +318,13 @@ export function applyOutcomeCopy(card) {
   const o = card?.applyOutcome
   if (!o) return null
   const scs = o.criteria.length ? o.criteria.join(', ') : (card.sc || 'the criterion')
+  if (o.state === 'nothing_written') {
+    return {
+      headline: 'The approved fix could not be written.',
+      body: 'The original document is unchanged and nothing was credited. '
+        + 'Your approved value is preserved.' + (o.reason ? ` ${o.reason}` : ' This image needs a different fix before it can be replaced.'),
+    }
+  }
   if (o.state === 'could_not_verify') {
     return {
       headline: 'Written, but the re-scan could not verify it.',
@@ -428,6 +435,15 @@ export function verificationLadder(card) {
   // criterion (or could not run), and that copy was discarded — so the label says "working copy",
   // never "document": the document the reviewer has is unchanged. The pipeline stopped at re-scan.
   // Checked first: an outcome exists only when a write happened, which only a value-fix does.
+  if (c.applyOutcome?.state === 'nothing_written') {
+    return [
+      { label: hasProposal ? 'AI draft generated' : 'Detected', state: 'done' },
+      { label: 'Human review', state: 'done' },
+      { label: 'Write blocked', state: 'failed' },
+      { label: 'Re-scan verified', state: 'todo' },
+      { label: 'Certified', state: 'todo' },
+    ]
+  }
   if (c.applyOutcome) {
     return [
       { label: hasProposal ? 'AI draft generated' : 'Detected', state: 'done' },
