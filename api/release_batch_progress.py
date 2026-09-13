@@ -38,6 +38,8 @@ def _read(store, execution):
             or parent.get('workflow_revision') != execution.get('workflow_revision')):
         return {'available': False}
     files = row['intent'].get('files')
+    if isinstance(files, dict):
+        files = list(files)  # Current authorizations freeze per-file source identities.
     if not isinstance(files, list) or not files or any(not isinstance(f, str) or not f for f in files):
         return {'available': False}
     if len(set(files)) != len(files):

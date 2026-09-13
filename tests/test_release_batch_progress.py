@@ -11,7 +11,8 @@ def setup(store, scope=147):
     release = store.ensure_release_execution('scan', 'owner', 'local', scope,
         preferred_folder_name='Authorized batch')
     authorization = automatic_release_store.create(store, 'owner', 'scan', run, 'batch',
-        {'files': files, 'release_parent_id': None, 'release_folder_name': release['folder_name']})
+        {'files': {file: {'checksum': 'frozen-source'} for file in files},
+         'release_parent_id': None, 'release_folder_name': release['folder_name']})
     entries = {file: {'state': 'waiting'} for file in files}
     for file in files[:9]:
         digest = 'sha256:' + 'a' * 64
