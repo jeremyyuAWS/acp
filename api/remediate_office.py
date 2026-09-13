@@ -231,19 +231,25 @@ def _media_path(rels_bytes: bytes, d: str, rid: str) -> str | None:
     Split out of _resolve_media so a caller holding a zip (rather than a dict of every part)
     can resolve one image without inflating the whole package."""
     try:
-        txt = rels_bytes.decode("utf-8", "ignore")
-    except Exception:
+        root = ET.fromstring(rels_bytes)
+    except (ET.ParseError, TypeError, ValueError):
         return None
-    rel = re.search(rf'<Relationship\b[^>]*\bId="{re.escape(rid)}"[^>]*?/?>', txt)
-    if not rel:
+    # OPC namespace prefixes are arbitrary. Resolve an exact relationship element,
+    # never a substring in unrelated metadata or a neighboring image relationship.
+    namespace = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+    if root.tag not in (namespace + "Relationships", "Relationships"):
         return None
-    tag = rel.group(0)
-    if 'TargetMode="External"' in tag:
+    matches = [rel for rel in root
+               if rel.tag in (namespace + "Relationship", "Relationship")
+               and rel.get("Id") == rid]
+    if len(matches) != 1:
         return None
-    tm = re.search(r'Target="([^"]*)"', tag)
-    if not tm:
+    rel = matches[0]
+    if rel.get("TargetMode") == "External":
         return None
-    target = tm.group(1)
+    target = rel.get("Target")
+    if not target:
+        return None
     if target.startswith(("http:", "https:", "file:")):
         return None
     if target.startswith("/"):

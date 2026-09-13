@@ -86,3 +86,64 @@ def test_missing_container_close_cannot_borrow_pixels_after_next_docpr():
     parts['word/document.xml'] = xml.encode()
     assert lookup(parts) is None
     assert lookup(parts, 1)[1] == pixels[1]
+
+
+def prefixed_relationships(parts, *, opaque=False, external=False):
+    """Reserialize a real package's relationships with valid arbitrary namespace prefix."""
+    name = 'word/_rels/document.xml.rels'
+    root = etree.fromstring(parts[name])
+    namespace = 'http://schemas.openxmlformats.org/package/2006/relationships'
+    replacement = etree.Element(f'{{{namespace}}}Relationships', nsmap={'pkg': namespace})
+    first_rid = re.search(r'r:embed="([^"]+)"', parts['word/document.xml'].decode())[1]
+    for relationship in root:
+        attrs = dict(relationship.attrib)
+        if attrs['Id'] == first_rid:
+            if opaque:
+                attrs['Id'] = 'opaque-image-guid'
+            if external:
+                attrs.update(TargetMode='External', Target='https://example.invalid/image.png')
+        etree.SubElement(replacement, f'{{{namespace}}}Relationship', **attrs)
+    if opaque:
+        parts['word/document.xml'] = parts['word/document.xml'].replace(
+            f'r:embed="{first_rid}"'.encode(), b'r:embed="opaque-image-guid"')
+    parts[name] = etree.tostring(replacement)
+
+
+def test_prefixed_relationship_namespace_reaches_exact_images_and_evidence():
+    parts, pixels = image_package()
+    prefixed_relationships(parts, opaque=True)
+    assert len(undescribed_images(parts)) == 2
+    assert lookup(parts) == ('opaque-image-guid', pixels[0])
+    assert lookup(parts, 1)[1] == pixels[1]
+    evidence = []
+    applied, deferred = office._fix_image_alt(parts, vision_enabled=False, evidence=evidence)
+    assert not applied and deferred == 2
+    assert all(entry.get('thumb') for entry in evidence)
+
+
+def test_prefixed_external_relationship_does_not_borrow_internal_sibling():
+    parts, pixels = image_package()
+    prefixed_relationships(parts, external=True)
+    assert lookup(parts) is None
+    assert lookup(parts, 1)[1] == pixels[1]
+
+
+def test_malformed_relationships_cannot_resolve_partial_xml():
+    parts, _ = image_package()
+    name = 'word/_rels/document.xml.rels'
+    parts[name] = parts[name].replace(b'</Relationships>', b'')
+    assert lookup(parts) is None
+    assert lookup(parts, 1) is None
+
+
+def test_duplicate_relationship_id_is_ambiguous_and_not_resolved():
+    parts, pixels = image_package()
+    name = 'word/_rels/document.xml.rels'
+    root = etree.fromstring(parts[name])
+    rid = re.search(r'r:embed="([^"]+)"', parts['word/document.xml'].decode())[1]
+    first = next(rel for rel in root if rel.get('Id') == rid)
+    duplicate = etree.SubElement(root, first.tag, **dict(first.attrib))
+    duplicate.set('Target', 'media/image2.png')
+    parts[name] = etree.tostring(root)
+    assert lookup(parts) is None
+    assert lookup(parts, 1)[1] == pixels[1]
