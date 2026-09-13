@@ -42,9 +42,10 @@ def test_proposer_does_not_offer_exact_observed_non_answer(monkeypatch):
 
 
 @pytest.mark.parametrize('ext',['docx','pptx','xlsx'])
-def test_writer_preserves_original_bytes_when_approved_value_is_model_non_answer(ext):
+@pytest.mark.parametrize('value',[REFUSAL,'"'+REFUSAL+'"','```text\n'+REFUSAL+'\n```'])
+def test_writer_preserves_original_bytes_when_approved_value_is_model_non_answer(ext,value):
     original=office(INSTRUCTION,ext)
-    result,applied,unresolved=apply_sensory_rewrite(original,ext,{INSTRUCTION:REFUSAL})
+    result,applied,unresolved=apply_sensory_rewrite(original,ext,{INSTRUCTION:value})
     assert result==original and not applied and unresolved==[INSTRUCTION]
 
 
@@ -102,6 +103,25 @@ def test_obvious_model_non_answers_are_rejected(value):
     'If you cannot see the screen, ask the nurse for assistance.', REWRITE])
 def test_legitimate_instructions_are_not_banned(value):
     assert sensory_non_answer_reason(value) is None
+
+
+@pytest.mark.parametrize('wrapper',[lambda text:'"'+text+'"',lambda text:"'"+text+"'",
+    lambda text:'“'+text+'”',lambda text:'```text\n'+text+'\n```',
+    lambda text:'```\n'+text+'\n```',lambda text:'~~~plaintext\n'+text+'\n~~~',
+    lambda text:'```text\n"'+text+'"\n```'])
+def test_whole_transport_wrappers_cannot_hide_non_answer(wrapper):
+    assert sensory_non_answer_reason(wrapper(REFUSAL))==NON_ANSWER_REASON
+    assert sensory_non_answer_reason(wrapper('Please provide your patient ID to the nurse.')) is None
+    assert sensory_non_answer_reason(wrapper('Select the field labeled "Please provide the original text".')) is None
+
+
+def test_valid_quoted_instruction_is_preserved_exactly_by_writer():
+    original=word(INSTRUCTION)
+    valid='"Please provide your patient ID to the nurse."'
+    result,applied,unresolved=apply_sensory_rewrite(original,'docx',{INSTRUCTION:valid})
+    from docx import Document
+    assert Document(io.BytesIO(result)).paragraphs[0].text==valid
+    assert len(applied)==1 and not unresolved
 
 
 def test_mixed_writer_batch_never_inserts_refusal_but_retains_valid_rewrite():

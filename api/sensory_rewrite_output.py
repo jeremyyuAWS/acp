@@ -14,9 +14,26 @@ _NON_ANSWER = tuple(re.compile(pattern, re.I) for pattern in (
     r"^i (?:need|require)\b.{0,100}\b(?:original|source) (?:text|instruction|sentence|passage|content)\b",
 ))
 
+_WHOLE_FENCE = re.compile(r'\A(`{3,}|~{3,})[\w+-]*[ \t]*\r?\n(.*?)\r?\n\1[ \t]*\Z', re.S)
+
+
+def _match_text(value):
+    # Transport wrappers are removed only for rejection matching. The approved
+    # document value itself is never modified, including legitimate quotations.
+    text = value.strip()
+    for _ in range(3):
+        fenced = _WHOLE_FENCE.fullmatch(text)
+        if fenced:
+            text = fenced[2].strip()
+        elif len(text) >= 2 and (text[0], text[-1]) in {('"', '"'), ("'", "'"), ('“', '”'), ('‘', '’'), ('`', '`')}:
+            text = text[1:-1].strip()
+        else:
+            break
+    return text
+
 
 def sensory_non_answer_reason(value):
     if not isinstance(value, str) or not value.strip():
         return NON_ANSWER_REASON
-    normalized = re.sub(r'\s+', ' ', value).strip().replace('’', "'").replace('‘', "'")
-    return NON_ANSWER_REASON if any(pattern.search(normalized) for pattern in _NON_ANSWER) else None
+    normalized = re.sub(r'\s+', ' ', _match_text(value)).replace('’', "'").replace('‘', "'")
+    return NON_ANSWER_REASON if not normalized or any(pattern.search(normalized) for pattern in _NON_ANSWER) else None
