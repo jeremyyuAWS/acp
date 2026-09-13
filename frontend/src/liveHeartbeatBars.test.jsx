@@ -40,6 +40,7 @@ describe('rolling canonical snapshot refresh bars', () => {
   it('locks the strip dimensions and maps the approved stage colors', () => {
     const css = readFileSync(join(here, 'live-heartbeat-bars.css'), 'utf8')
     expect(css).toContain('flex-direction:column;align-items:flex-end;gap:3px')
+    expect(css).toContain('.live-heartbeat[data-show-text="true"] .live-heartbeat-bars{flex:0 0 18px}')
     expect(css).toContain('border:1px solid var(--heartbeat-line)')
     expect(css).toContain('background:var(--heartbeat-bg);color:var(--heartbeat-color)')
     expect(css).toMatch(/width:44px;height:18px;flex:0 0 44px/)
