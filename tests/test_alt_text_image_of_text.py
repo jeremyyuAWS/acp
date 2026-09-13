@@ -14,9 +14,9 @@ model (moondream, the only one baked into acp-ollama):
 
 The guard has to stay conservative in both directions, which is what these tests pin: a CHART
 still wants a description ('bar chart comparing …'), because transcribing its axis labels would
-be worse than a paraphrase; and the PDF remediator must never transcribe, because it OCRs a
-render of the whole PAGE — prose there means "the page has paragraphs", not "this figure is an
-image of text".
+be worse than a paraphrase. Whole-page prose cannot become a PDF figure caption. An exact
+associated raster may be transcribed as a draft, but OCR presence alone cannot establish
+caption semantics or authorize automatic writing.
 """
 from __future__ import annotations
 
@@ -124,7 +124,68 @@ def test_office_provenance_does_not_claim_a_vision_model_for_a_transcription():
     assert "transcribed" in block
 
 
-def test_office_remediator_opts_into_transcription_and_pdf_does_not():
+def test_office_remediator_opts_into_transcription():
     api = Path(__file__).resolve().parent.parent / "api"
     assert "allow_transcription=True" in (api / "remediate_office.py").read_text()
-    assert "allow_transcription" not in (api / "remediate_pdf.py").read_text()
+
+
+def test_pdf_whole_page_body_content_never_reaches_transcription_or_writes_alt(monkeypatch, tmp_path):
+    import remediate_pdf
+    from test_pdf_figure_evidence import raster_pdf, saved_bytes
+    pdf, figure, _ = raster_pdf(size=32,
+        ops='q 80 0 0 80 10 10 cm /Im0 Do Q BT (Quarterly Revenue Report 2026) Tj ET')
+    source = saved_bytes(pdf)
+    path = tmp_path / "body-and-figure.pdf"
+    path.write_bytes(source)
+    forbidden_calls = []
+    def forbidden(*a, **k):
+        forbidden_calls.append(True)
+        raise AssertionError("unmapped page pixels must never be transcribed into figure alt")
+    monkeypatch.setattr(ai, "describe_image_structured", forbidden)
+    monkeypatch.setattr(remediate_pdf, "_render_page_png", forbidden)
+    props, fixes = [], []
+    applied, deferred = remediate_pdf._fix_pdf_figure_alt(pdf, str(path), ai_enabled=True,
+        scan_id=None, file=path.name, proposals=props, applied_fixes=fixes)
+    assert applied == fixes == [] and deferred == 1 and "/Alt" not in figure
+    assert forbidden_calls == []
+    assert props[0]["automatic_write_blocked"] is True
+    assert not props[0]["proposed_value"] and not props[0].get("thumb")
+    assert path.read_bytes() == source
+    pdf.close()
+
+
+def test_pdf_exact_raster_transcription_is_only_a_draft_without_semantic_proof(monkeypatch, tmp_path):
+    import io
+    from PIL import Image, ImageDraw
+    import remediate_pdf
+    from formats.pdf.detectors import non_text_content
+    from test_pdf_figure_evidence import raster_pdf, saved_bytes
+    image = Image.new("RGB", (512, 512), "white")
+    ImageDraw.Draw(image).multiline_text((20, 20), "Quarterly Revenue Report 2026\n"
+        "Total revenue increased fourteen percent\nacross every regional business unit", fill="black")
+    pdf, figure, _ = raster_pdf(size=512, pixels=image.tobytes())
+    source = saved_bytes(pdf)
+    path = tmp_path / "exact-text-raster.pdf"
+    path.write_bytes(source)
+    # Only the OCR transport result is synthetic. It sees the exact associated
+    # raster, not a page render. No model or paid provider can be called.
+    import ocr
+    seen = []
+    def read(png, *a, **k):
+        decoded = Image.open(io.BytesIO(png))
+        assert decoded.size == image.size and decoded.tobytes() == image.tobytes()
+        seen.append(png)
+        return PROSE
+    monkeypatch.setattr(ocr, "ocr_text", read)
+    _no_model(monkeypatch)
+    props, fixes = [], []
+    applied, deferred = remediate_pdf._fix_pdf_figure_alt(pdf, str(path), ai_enabled=True,
+        scan_id=None, file=path.name, proposals=props, applied_fixes=fixes)
+    assert len(seen) == 1 and applied == fixes == [] and deferred == 1
+    proposal = props[0]
+    assert proposal["proposed_value"] == PROSE
+    assert proposal["caption_validation"]["status"] == "needs_manual"
+    assert proposal["automatic_write_blocked"] is True and "/Alt" not in figure
+    assert proposal.get("model") is None and proposal.get("model_call_id") is None
+    assert path.read_bytes() == source and non_text_content.detect(path)
+    pdf.close()
