@@ -57,6 +57,7 @@ export default function ReleaseReports({ scanId, publishedCount = 0, readOnly = 
     {!!headerReports.length && <ul>{headerReports.map(reportLink)}</ul>}
     {state?.status === 'not_started' && <button type="button" className="linklike" onClick={() => setRefresh(n => n + 1)}>Refresh reports</button>}
     {state?.status === 'completed' && state.reports?.some(printableLegacyReport) && <button type="button" disabled={busy || readOnly} onClick={retryDelivery}>Generate PDF reports</button>}
+    {state?.status === 'completed' && state.can_regenerate && !state.reports?.some(printableLegacyReport) && <button type="button" disabled={busy || readOnly} onClick={retryDelivery}>Refresh reports</button>}
     {state?.status === 'failed' && <button type="button" className="ghost small" disabled={busy || readOnly} onClick={retryDelivery}>Retry report delivery</button>}
     {error && <p role="alert">{error} <button type="button" className="linklike" onClick={() => setRefresh(n => n + 1)}>Refresh reports</button></p>}
   </section>

@@ -51,6 +51,15 @@ it('offers a report-only PDF refresh for completed legacy reports', async () => 
  expect(retry).toHaveBeenCalledWith('scan')
 })
 
+it('refreshes outdated PDF reports without restarting document publication', async () => {
+ const read=vi.fn().mockResolvedValue({status:'completed',can_regenerate:true,reports:[{name:'changes-doc.pdf',content_type:'application/pdf'}]})
+ const retry=vi.fn().mockResolvedValue({})
+ const c=await mount({read,retry})
+ await act(async()=>[...c.querySelectorAll('button')].find(b=>b.textContent==='Refresh reports').click())
+ expect(retry).toHaveBeenCalledWith('scan')
+ expect(c.textContent).not.toContain('Generate PDF reports')
+})
+
 it('keeps version-matched per-file actions beneath the published copy without duplicating the reports intro', async () => {
  const {default: Documents}=await import('./ReleaseCompletionDocuments.jsx')
  const files=[{file:'a.pdf',remediated_at:'now'},{file:'b.pdf',remediated_at:'now'}]

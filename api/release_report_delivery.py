@@ -54,14 +54,17 @@ def _public(row, store=None):
                             report_kind=asset.get('report_kind'), file=asset.get('file'), artifact_digest=asset.get('artifact_digest'),
                             url=next((r.get('url') for r in receipts if r.get('url')), None),
                             download_url=f"/scans/{quote(row['scan_id'], safe='')}/release/reports/{row['id']}/{index}"))
-    return dict(status=row['status'], bundle_id=row['id'], scan_id=row['scan_id'], release_id=row['release_id'], reports=reports, error=row.get('error'))
+    release = store.release_status(row['release_id'], row['owner_email']) if store else None
+    can_regenerate = bool(row['status'] == 'completed' and release and
+                          _fingerprint(row['release_id'], release)[:24] != row['id'])
+    return dict(status=row['status'], bundle_id=row['id'], scan_id=row['scan_id'], release_id=row['release_id'], reports=reports, error=row.get('error'), can_regenerate=can_regenerate)
 
 
 def _enqueue(store, row):
     return store.enqueue_job('publish_release_reports', dict(bundle_id=row['id'], owner=row['owner_email']), scan_id=row['scan_id'])
 
 
-REPORT_FORMAT = 'pdf-v5-word-native-revision-companion'
+REPORT_FORMAT = 'pdf-v6-word-structural-report-locations'
 
 
 def _fingerprint(release_id, release):
@@ -129,7 +132,7 @@ def retry_release_reports(store, sid, owner):
     latest = get_latest_release_reports(store, sid, owner)
     if not latest['bundle_id']:
         raise KeyError('Report not found')
-    if latest['status'] == 'completed' and (any(report['content_type'].startswith('text/html') for report in latest['reports']) or not any(report['name'].startswith('changes-') for report in latest['reports'])):
+    if latest['status'] == 'completed' and (latest.get('can_regenerate') or any(report['content_type'].startswith('text/html') for report in latest['reports']) or not any(report['name'].startswith('changes-') for report in latest['reports'])):
         result = queue_if_release_settled(store, sid, owner, _get(store, latest['bundle_id'], owner)['release_id'])
         if not result:
             raise ValueError('Wait for publication to finish before generating PDF reports')
