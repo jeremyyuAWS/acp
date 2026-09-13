@@ -944,6 +944,24 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None, in_scope=
     root = etree.fromstring(entries[name])
     applied: list[str] = []
     val_attr = f"{{{W}}}val"
+    # Persist structural locations in the existing diff note. Counts are one-based
+    # OOXML document order, including paragraphs/tables nested in body content;
+    # they are not rendered page numbers, which vary with the document viewer.
+    paragraph_numbers = {p: index for index, p in enumerate(root.iter(f"{{{W}}}p"), 1)}
+    table_numbers = {table: index for index, table in enumerate(root.iter(f"{{{W}}}tbl"), 1)}
+    run_tokens = {}
+    run_counts = {}
+    for run in root.iter(f"{{{W}}}r"):
+        paragraph = next(run.iterancestors(f"{{{W}}}p"), None)
+        if paragraph in paragraph_numbers:
+            run_counts[paragraph] = run_counts.get(paragraph, 0) + 1
+            run_tokens[run] = f"word:p:{paragraph_numbers[paragraph]}:run:{run_counts[paragraph]}"
+    def located(note, token):
+        return f"{note} [location:{token}]" if token else note
+    def paragraph_token(p):
+        return f"word:p:{paragraph_numbers[p]}"
+    def run_token(run):
+        return run_tokens.get(run)
 
     # Pseudo-heading promotion (1.3.1 / 2.4.6): a body-styled paragraph that is visually a
     # heading (large/bold) becomes a real Heading N so assistive tech can navigate to it.
@@ -1031,7 +1049,7 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None, in_scope=
             st.set(val_attr, f"Heading{lvl}")
             _rec(diffs, "1.3.1", f'paragraph “{text[:40]}” was body text styled to look like a heading',
                  f"promoted to Heading {lvl} style",
-                 "so it joins the heading outline assistive tech navigates by")
+                 located("so it joins the heading outline assistive tech navigates by", paragraph_token(p)))
         applied.append(f"Promoted {len(pseudo)} visually-styled pseudo-heading(s) to real headings · 1.3.1")
 
     # Ambiguous candidates are DEFERRED, not dropped. The finding still stands — the scanner
@@ -1071,7 +1089,8 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None, in_scope=
             tbl_fixed += 1
             _rec(diffs, "1.3.1", "first row was ordinary data cells (<w:tr>)",
                  "first row marked as a repeating header row (<w:tblHeader/>)",
-                 "so a screen reader announces the column heading for every data cell")
+                 located("so a screen reader announces the column heading for every data cell",
+                         f"word:table:{table_numbers[tbl]}:row:1"))
     if tbl_fixed:
         applied.append(f"Marked the first row as a header on {tbl_fixed} table(s) · 1.3.1")
 
@@ -1106,14 +1125,15 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None, in_scope=
             applied.append("Promoted the top heading to Heading 1 · 1.3.1")
             _rec(diffs, "1.3.1", f"top heading level was H{level} — document had no Heading 1",
                  "top heading promoted to Heading 1",
-                 "so the outline has a single, unambiguous document title level")
+                 located("so the outline has a single, unambiguous document title level",
+                         paragraph_token((st if st is not None else outline).getparent().getparent())))
         elif len(h1s) > 1 and _sc_ok(in_scope, "1.3.1"):
             for st, outline, _ in h1s[1:]:
                 set_level(st, outline, 2)
             applied.append(f"Demoted {len(h1s) - 1} extra Heading 1(s) to Heading 2 · 1.3.1")
             _rec(diffs, "1.3.1", f"{len(h1s)} separate Heading 1s competed as the document title",
                  f"kept 1 Heading 1; demoted {len(h1s) - 1} to Heading 2",
-                 "so the heading outline nests correctly under one title")
+                 located("so the heading outline nests correctly under one title", "word:document:outline"))
         skip_fixed, prev_lvl = 0, 0
         for st, outline, _ in (headings if _sc_ok(in_scope, "2.4.6") else ()):
             lvl = heading_level(st, outline)
@@ -1160,7 +1180,7 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None, in_scope=
             run_text = "".join(t.text or "" for t in run.iter(f"{{{W}}}t")).strip()
             _rec(diffs, "1.4.3", f"#{fg.upper()} on #{bg.upper()} ({ratio_before:.1f}:1 — fails AA)",
                  f"#{new} on #{bg.upper()} ({ratio_after:.1f}:1 — passes AA)",
-                 f'text run "{run_text[:40]}"' if run_text else "low-contrast text run")
+                 located(f'text run "{run_text[:40]}"' if run_text else "low-contrast text run", run_token(run)))
     if contrast_fixed:
         applied.append(f"Recoloured {contrast_fixed} low-contrast run(s) to ≥4.5:1 · 1.4.3")
 

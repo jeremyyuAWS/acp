@@ -11,6 +11,10 @@ import release_continuation_store as persistence
 from release_artifacts import ReleaseArtifactError, require_current_source
 
 TERMINAL = {'published', 'blocked', 'failed', 'needs_confirmation'}
+PDF_STRUCTURE_MANUAL = 'PDF heading or structure map needs source-document tagging; it is not a writable existing-tag repair'
+PDF_STRUCTURE_REVIEW = 'Existing PDF tag repair needs individual approval; its deterministic draft is not covered by automatic AI-call approval'
+PDF_STRUCTURE_KINDS = {'1.3.1': {'pdf-table-header-scope': 'header-scope'},
+                       '2.4.6': {'pdf-tag-heading': 'heading'}}
 
 
 def proposal_identity(row):
@@ -30,6 +34,22 @@ def eligibility(row, file):
                '2.4.6': handlers._STRUCTURE_LABEL_EXTS, '1.4.5': handlers._IMAGE_OF_TEXT_EXTS}
     if row.get('status') != 'pending' or row.get('superseded') or row.get('applied'):
         return 'Already handled or changed'
+    if ext == 'pdf' and rule in PDF_STRUCTURE_KINDS:
+        import json
+        import re
+        proposals = row.get('proposals') or []
+        for p in proposals:
+            try:
+                plan = json.loads(p.get('proposed_value', ''))
+            except (ValueError, TypeError, AttributeError):
+                return PDF_STRUCTURE_MANUAL
+            if (not isinstance(plan, dict) or p.get('explain_only') or p.get('companion_file')
+                    or p.get('kind') not in PDF_STRUCTURE_KINDS[rule]
+                    or plan.get('op') != PDF_STRUCTURE_KINDS[rule][p['kind']]
+                    or not re.fullmatch(r'pdf:struct:\d+(?:\.\d+)*:[0-9a-f]{64}', str(p.get('locator', '')))):
+                return PDF_STRUCTURE_MANUAL
+        if proposals:
+            writers[rule] = ('pdf',)
     if ext not in writers.get(rule, ()):
         return 'Manual work or no supported proposal writer'
     proposals = row.get('proposals') or []

@@ -7,7 +7,9 @@ def _key(owner, run_id, item_id):
     return 'ai-item-disposition:' + hashlib.sha256(json.dumps([owner, run_id, item_id]).encode()).hexdigest()
 
 
-HUMAN_REASONS = {'Manual work or no supported proposal writer', 'This change requires individual review', 'The draft contradicts visible image evidence; individual review is required', 'Proposal requires individual judgment or has no exact AI provenance'}
+from release_continuation import PDF_STRUCTURE_MANUAL, PDF_STRUCTURE_REVIEW
+
+HUMAN_REASONS = {'Manual work or no supported proposal writer', PDF_STRUCTURE_MANUAL, PDF_STRUCTURE_REVIEW, 'This change requires individual review', 'The draft contradicts visible image evidence; individual review is required', 'Proposal requires individual judgment or has no exact AI provenance'}
 
 
 def record(store, owner, sid, run_id, source_revision, item, state, reason):
