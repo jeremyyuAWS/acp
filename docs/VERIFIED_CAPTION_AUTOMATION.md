@@ -33,9 +33,16 @@ must remain preserved. Existing descriptions must remain untouched.
 
 ## Verification-driven model retry
 
-The Office retry integration targets an exact image caption that fails independent
-pixel verification. An unrelated missing image, unavailable checker, corrupt file
+The Office retry integration targets a single approved image caption in a file
+that fails independent pixel verification. An unrelated missing image, unavailable checker, corrupt file
 or unknown caption meaning does not justify a stronger-model retry.
+
+The initial scope retries the first frozen model with the next distinct model
+already approved for the run. Other model positions and multiple simultaneous
+caption changes remain outside this retry path. Raw image facts must match the
+Office presentation: stretched, cropped, repeated, rotated, flipped, grouped or
+effect-transformed images remain manual. Unsupported storage identities stop
+before generation.
 
 Use at most the next distinct model tier already frozen and approved for the run.
 Restore the original run authority in approved-value workers, preserve budget
