@@ -17,6 +17,7 @@ def setup(store, scope=147):
         preferred_folder_name='Authorized batch')
     authorization = automatic_release_store.create(store, 'owner', 'scan', run, 'batch',
         {'files': {file: {'checksum': 'frozen-source'} for file in files},
+         'destination': {'provider': 'local', 'folder_id': 'root', 'folder_name': 'Download package'},
          'release_parent_id': None, 'release_folder_name': release['folder_name']})
     entries = {file: {'state': 'waiting'} for file in files}
     for file in files[:9]:
@@ -174,3 +175,13 @@ def test_saved_plan_partition_uses_exact_receipts_and_keeps_unknown_states_visib
     assert sum(batch['buckets'].values()) == batch['total']
     assert batch['file_membership'][files[11]] == 'unclassified'
     assert batch['revision'] == 2
+
+
+def test_same_parent_and_folder_receipts_from_other_provider_do_not_count(isolated_store):
+    store = isolated_store
+    execution, authorization, release, _ = setup(store, scope=3)
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "UPDATE release_executions SET source='drive' WHERE id=%s", (release['id'],))
+    batch = progress_evidence.read(store, execution, owner='owner')['release_batch_progress']
+    assert batch['delivered'] == 0
+    assert batch['remaining'] == 3

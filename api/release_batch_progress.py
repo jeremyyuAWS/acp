@@ -66,7 +66,10 @@ def _project(store, row):
     if len(set(files)) != len(files):
         return {'available': False, 'scope': 'automatic'}
     release = store.release_for_scan(scan, owner) or {}
-    destination_matches = (release.get('parent_folder_id') == row['intent'].get('release_parent_id')
+    provider = (row['intent'].get('destination') or {}).get('provider')
+    destination_matches = (provider in {'drive', 'sharepoint', 'local'}
+                           and release.get('source') == provider
+                           and release.get('parent_folder_id') == row['intent'].get('release_parent_id')
                            and release.get('folder_name') == row['intent'].get('release_folder_name'))
     receipts = {r['file']: r for r in release.get('documents', [])} if destination_matches else {}
     entries = row['progress'].get('files', {})
