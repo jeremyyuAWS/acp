@@ -8,12 +8,15 @@ export function automaticReviewQueue(rows = [], policy = {}, decisions = {}) {
   return rows.map(row => {
     const raw = row._raw || row
     const marker = raw.automatic_approval || row.automatic_approval || (raw.auto_approval_status ? {state:raw.auto_approval_status,run_id:raw.auto_approval_run_id,source_revision:raw.auto_approval_source_revision} : null)
-    const unmarked = row.automaticQueued ? {...row,automaticQueued:false} : row
+    const exactSnapshots = !marker?.proposal_snapshot_ids || JSON.stringify(marker.proposal_snapshot_ids) === JSON.stringify(raw.proposal_snapshot_ids || row.proposal_snapshot_ids || [])
+    const disposition = exactSnapshots && marker?.run_id === policy.run_id && marker?.source_revision === policy.source_revision ? marker : null
+    const unmarked = {...row, automaticQueued:false, automaticDisposition:disposition, automaticReason:disposition?.reason || (policy.enabled === true ? 'This suggestion needs individual review or has not been admitted to automatic application.' : null)}
     const admitted = policy.enabled === true && policy.supported !== false && policy.run_id && policy.source_revision != null
-      && marker?.run_id === policy.run_id && marker.source_revision === policy.source_revision
-      && ['queued','processing','checking'].includes(marker.state)
+      && exactSnapshots && marker?.run_id === policy.run_id && marker.source_revision === policy.source_revision
+      && ['queued','processing','checking','applying','verifying'].includes(marker.state)
+    if (!row.automaticQueued) delete unmarked.automaticQueued
     if (!admitted || optionalInspectionOf(row) || workflowStatusOf(unmarked,decisions) !== 'needs-review'
         || !isAiAssistedDraft(row) || exclusionReason(unmarked,decisions)) return unmarked
-    return {...row,automaticQueued:true,automaticQueueLabel:marker.state === 'checking' ? 'Queued for automatic checks' : 'Queued for automatic application'}
+    return {...row,automaticQueued:true,automaticQueueLabel:({checking:'Checking automatic eligibility',queued:'Queued automatically',processing:'Applying…',applying:'Applying…',verifying:'Verifying…'})[marker.state]}
   })
 }

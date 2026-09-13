@@ -225,6 +225,8 @@ def approve_file(store, ctx):
             eligible_item(store, owner, sid, run_id, row)
             selected.append(row)
         except ValueError as exc:
+            from automatic_review_queue import record as record_disposition
+            record_disposition(store, owner, sid, run_id, revision, row, 'review_required', str(exc))
             store.log_decision('system', 'ai.standing_approval.deferred', scan_id=sid, file=file,
                                rule_id=row.get('rule_id'), detail=str(exc))
     if not selected:
@@ -268,6 +270,8 @@ def approve_file(store, ctx):
                 standing_approval_run_id=run_id)
             if not updated or replay:
                 continue
+            from automatic_review_queue import record as record_disposition
+            record_disposition(store, owner, sid, run_id, revision, row, 'queued', 'Automatically approved; application and independent verification are pending.')
             approved.append({'id': row['id'], 'version': updated['decision_version'],
                              'request_id': request_id, 'snapshots': row['proposal_snapshot_ids'],
                              'value_sha256': updated['approved_value_sha256']})

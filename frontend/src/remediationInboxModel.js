@@ -234,7 +234,7 @@ export function tabCounts(list, decisions = {}) {
 export const WORKFLOW_TABS = ['needs-review', 'manual', 'awaiting-validation', 'blocked', 'completed']
 export const WORKFLOW_LABELS = {
   'needs-review': 'Approve AI suggestions', manual: 'Fix manually',
-  'awaiting-validation': 'Awaiting verification', blocked: 'Blocked', completed: 'Completed',
+  'awaiting-validation': 'Awaiting verification', blocked: 'Blocked', completed: 'Results',
 }
 
 /** The pipeline stage a finding sits in, for the workflow top tabs. */

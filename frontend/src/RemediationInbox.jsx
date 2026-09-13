@@ -385,7 +385,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
   const structuralReady = !structuralRow || proposalsFor(f).every(pdfStructuralSummary)
   const automaticState = f._raw?.automatic_approval?.state || f.automatic_approval?.state
     || f._raw?.auto_approval_status || f.auto_approval_status
-  const automaticLabel = automaticState === 'processing' ? 'Applying automatically' : 'Queued automatically'
+  const automaticLabel = f.automaticQueueLabel || ({checking:'Checking…',processing:'Applying…',applying:'Applying…',verifying:'Verifying…'})[automaticState] || 'Queued automatically'
   const canEdit = !structuralRow && !resolved && !isManual && !isAutoFix && f.after != null && f.after !== ''
   const draftValue = draft ?? (f.after ?? '')
   const edited = canEdit && draftValue !== (f.after ?? '')
@@ -503,7 +503,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             <>
               <button className="primary" disabled={saving || !structuralReady || f.automaticQueued}
                       onClick={() => { if (!f.automaticQueued) onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined }) }}>
-                {f.automaticQueued ? automaticLabel : saving ? 'Saving…' : legacyApprovalControls ? 'Yes, apply fix' : 'Apply this fix'}
+                {f.automaticQueued ? automaticLabel : saving ? 'Saving…' : legacyApprovalControls ? 'Yes, apply fix' : f.automaticReason ? 'Review and apply' : 'Apply this fix'}
               </button>
               {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
                   person (the handoff lane), so the label names that outcome rather than leaving the
@@ -879,7 +879,7 @@ export default function RemediationInbox({
   const queueComplete = queue.length > 0 && queue.every((f) => isResolved(f, decisions))
   const automaticCheckingCount = queue.filter(row => row.automaticQueued).length
   const automaticChecksOnly = automaticCheckingCount > 0 && !(counts['needs-review'] || counts.manual || counts.blocked)
-  const reviewCompletion = automaticCheckingCount > 0 ? <><b style={{color:'var(--ink)'}}>Automatic checks are queued.</b><p>{automaticCheckingCount} awaiting automatic checks · {counts.completed || 0} completed. No fix is marked verified by this queue state.</p></> : counts['awaiting-validation'] > 0 ? <><b style={{color:'var(--ink)'}}>Review decisions saved. Changes are still processing.</b><p>{counts['awaiting-validation']} applying or awaiting verification · {counts.completed || 0} completed</p></> : <><b style={{color:'var(--ink)'}}>All review items are complete.</b><p>{prog.resolved} reviewed · {counts.completed || 0} completed</p></>
+  const reviewCompletion = automaticCheckingCount > 0 ? <><b style={{color:'var(--ink)'}}>Automatic checks are queued.</b><p>{automaticCheckingCount} awaiting automatic checks · {counts.completed || 0} recorded results. No fix is marked verified by this queue state.</p></> : counts['awaiting-validation'] > 0 ? <><b style={{color:'var(--ink)'}}>Review decisions saved. Changes are still processing.</b><p>{counts['awaiting-validation']} applying or awaiting verification · {counts.completed || 0} recorded results</p></> : <><b style={{color:'var(--ink)'}}>All review items have recorded outcomes.</b><p>{prog.resolved} reviewed · {counts.completed || 0} recorded results</p></>
   const emptyReviewState = queue.length === 0 || queueComplete || automaticChecksOnly
     ? <div>{reviewCompletion}</div>
     : <p style={{ marginTop: 8 }}>No items are available in {WORKFLOW_LABELS[tab] || 'Review'}. Choose another status from the inbox.</p>
@@ -987,7 +987,7 @@ export default function RemediationInbox({
           </button>
         )}
         <span style={{ fontSize: 13, fontWeight: 700 }}>Guided remediation</span>
-        {selected?.automaticQueued && <p className="automatic-review-queued" role="status">Queued for automatic checks. No individual approval is needed while these checks run. This is not yet an applied or verified fix.</p>}
+        {selected?.automaticReason && <p className="automatic-review-queued" role="status"><b>{selected.automaticDisposition?.owner || 'You'}: </b>{selected.automaticReason}</p>}
       </span>
     </div>
   )
@@ -1022,7 +1022,7 @@ export default function RemediationInbox({
       {/* One review workspace. Status is an optional filter, not a separate approval step. */}
       <div className="rinbox-topbar" style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', padding: '9px 16px', background: '#1f2b3a', color: '#fff', borderRadius: '12px 12px 0 0' }}>
         <strong>Review</strong>
-        <span style={{ flex: 1, fontSize: 12 }}>{queue.length} items · {counts['awaiting-validation'] || 0} awaiting verification · {counts.completed || 0} completed</span>
+        <span style={{ flex: 1, fontSize: 12 }}>{queue.length} items · {counts['awaiting-validation'] || 0} awaiting verification · {counts.completed || 0} recorded results</span>
         <select aria-label="Filter by status" value={tab} disabled={savingId != null}
           onChange={event => { setBulkPreviewOpen(false); setBatchScopeIds(null); setTab(event.target.value) }}>
           <option value="review">Needs review ({(counts['needs-review'] || 0) + (counts.manual || 0) + (counts.blocked || 0)})</option>
@@ -1035,7 +1035,7 @@ export default function RemediationInbox({
         <div><strong>Review and verify changes</strong>
           {/* Keep approval readiness separate from verification and completed counts. */}
           {legacyApprovalControls ? <p>{runCounts.ready} ready review items · {runCounts.individual} need proposal information or individual review · {runCounts.inspection} applied changes available to inspect · {runCounts.manual} manual review items</p> : <p>{runCounts.ready} ready to apply · {runCounts.individual} still need a valid proposal or individual review · {runCounts.manual} need manual work</p>}
-          <p>{runCounts.ready ? 'Approve the ready fixes together. ACP will save the changes and check the results.' : preparingProposals ? 'Please wait for remediation to finish preparing suggestions.' : 'No fixes are ready to apply. Ready AI fixes will apply automatically when auto-apply is on.'}</p>
+          <p>{autoApprove === true ? 'Auto-apply is on. ACP automatically applies eligible AI suggestions. Items needing your judgment remain below.' : runCounts.ready ? 'Approve the ready fixes together. ACP will save the changes and check the results.' : preparingProposals ? 'Please wait for remediation to finish preparing suggestions.' : 'No fixes are ready to apply. Ready AI fixes will apply automatically when auto-apply is on.'}</p>
           {preparingProposals && <p role="status">Preparing proposals — remediation is still processing. Readiness updates as work finishes.</p>}
           {!legacyApprovalControls && Object.keys(unreadyReasons).length > 0 && <details><summary>Why some fixes aren’t ready</summary><ul>{Object.entries(unreadyReasons).map(([reason, count]) => <li key={reason}>{count} · {reason === 'Version unavailable — review individually' ? 'Need fresh proposal versions' : reason === 'Missing proposal' ? 'Need a complete suggestion' : reason}</li>)}</ul>{onOpenPlan && <button type="button" className="linklike" disabled={readOnly} onClick={onOpenPlan}>Refresh suggestions from the remediation plan</button>}</details>}
         </div>
@@ -1059,14 +1059,14 @@ export default function RemediationInbox({
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       {!bulkPreviewOpen && <>
         <p className="remediation-category-help">{{
-          review: 'Approve a suggestion to move it to Processing. Completed contains recorded outcomes; approval alone does not verify a fix.',
-          active: 'Verified fixes move to Completed automatically. Changes awaiting verification remain Pending.',
+          review: 'Approve a suggestion to move it to Processing. Results contain verified fixes and remaining work; approval alone does not verify a fix.',
+          active: 'Verified fixes move to Results automatically. Changes awaiting verification remain Pending.',
           all: 'Select an item to approve a proposal, make a manual correction, or check its result. Items awaiting automatic verification do not need another approval.',
           'needs-review': 'AI suggestions have proposed changes you can approve. Already-applied changes are available for individual review.',
           manual: 'These issues need your input. Select an issue to see the required edit and instructions for fixing the source document.',
           'awaiting-validation': 'These changes are awaiting writing or verification. Another approval is not needed here.',
           blocked: 'These issues cannot continue yet. Select an issue to see what needs attention.',
-          completed: 'These issues are complete. Select an item to inspect its recorded result.',
+          completed: 'Results include verified fixes and remaining work. Select an item to inspect its recorded outcome.',
         }[tab]}</p>
         <WorkspaceProgress queue={queue} decisions={decisions} selected={selected} />
         <ReviewQueueTabs queue={queue} decisions={decisions} scanId={scanId} value={tab} disabled={savingId != null}

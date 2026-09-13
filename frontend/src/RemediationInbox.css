@@ -81,7 +81,7 @@
 .review-queue-tabs .review-queue-pill { position: relative; display: flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 8px; min-height: 36px; padding: 6px 14px; border: 1px solid transparent; border-radius: 999px; font-size: 13px; font-weight: 600; }
 .review-queue-tabs .review-queue-pill--review { background: #fff1cf; color: #714800; }
 .review-queue-tabs .review-queue-pill--awaiting-validation { background: #e0efff; color: #174e7a; }
-.review-queue-tabs .review-queue-pill--completed { background: #dcf4e5; color: #205e39; }
+.review-queue-tabs .review-queue-pill--results { background: var(--subtle, #f5f4f7); color: var(--ink, #2e2734); border-color: var(--line, #e2dce4); }
 .review-queue-tabs .review-queue-pill[aria-pressed="true"] { border-color: currentColor; }
 .review-queue-tabs strong { font-size: 14px; font-variant-numeric: tabular-nums; }
 .review-queue-label { overflow-wrap: anywhere; }

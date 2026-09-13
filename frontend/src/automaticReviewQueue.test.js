@@ -23,3 +23,11 @@ it('does not put optional auto/verify inspections back into the actionable human
  const queue=automaticReviewQueue([{...row,rule_id:'auto/verify',inspectionOnly:true}],policy)
  expect(workflowCounts(queue)).toMatchObject({completed:1,'needs-review':0,'awaiting-validation':0})
 })
+it('keeps server-owned deferral reasons visible without claiming queued or verified work',()=>{
+ const deferred={...row,_raw:{...row._raw,automatic_approval:{run_id:'run',source_revision:'source',state:'review_required',owner:'You',reason:'This change requires individual judgment'}}}
+ const queue=automaticReviewQueue([deferred],policy)
+ expect(queue[0].automaticQueued).toBeUndefined()
+ expect(queue[0].automaticReason).toBe('This change requires individual judgment')
+ expect(workflowCounts(queue)).toMatchObject({'needs-review':1,completed:0})
+ expect(automaticReviewQueue([deferred],{...policy,run_id:'other'})[0].automaticDisposition).toBeNull()
+})

@@ -50,3 +50,37 @@ def test_unadmitted_stale_or_manual_rows_remain_human_input(isolated_store, monk
     projected = annotate(isolated_store, [row], OWNER)[0]
     assert projected.get('auto_approval_status') is None
     assert projected['status'] == 'pending'
+
+
+def test_deferred_reason_survives_finished_coordinator_and_is_exact_scope(isolated_store, monkeypatch):
+    from automatic_review_queue import record
+    item_id, run_id = setup_queue(isolated_store, monkeypatch)
+    row = isolated_store.get_hitl_item(item_id)
+    state = read(isolated_store, OWNER, SID, run_id)
+    record(isolated_store, OWNER, SID, run_id, state['source_revision'], row,
+           'review_required', 'This change requires individual review')
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "UPDATE jobs SET status='done' WHERE scan_id=%s AND type='apply_approved_values'", (SID,))
+    projected = annotate(isolated_store, [row], OWNER)[0]
+    assert projected['automatic_approval']['state'] == 'review_required'
+    assert projected['automatic_approval']['reason'] == 'This change requires individual review'
+    assert projected['automatic_approval']['owner'] == 'You'
+    assert projected['status'] == 'pending' and not projected.get('applied')
+    stale = {**row, 'proposal_snapshot_ids': ['replacement']}
+    assert 'automatic_approval' not in annotate(isolated_store, [stale], OWNER)[0]
+    assert 'automatic_approval' not in annotate(isolated_store, [projected], 'other@example.test')[0]
+
+
+def test_admitted_writer_disposition_reconciles_finished_job(isolated_store, monkeypatch):
+    from ai_run_approval_override import process_pending
+    item_id, run_id = setup_queue(isolated_store, monkeypatch)
+    state = read(isolated_store, OWNER, SID, run_id)
+    process_pending(isolated_store, dict(owner=OWNER, scan_id=SID, run_id=run_id, source_revision=state['source_revision']))
+    row = isolated_store.get_hitl_item(item_id)
+    assert row['status'] == 'approved'
+    projected = annotate(isolated_store, [row], OWNER)[0]
+    assert projected['automatic_approval']['state'] == 'queued'
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "UPDATE jobs SET status='dead' WHERE scan_id=%s AND type='apply_approved_values'", (SID,))
+    assert annotate(isolated_store, [row], OWNER)[0]['automatic_approval']['state'] == 'blocked'
+    assert not isolated_store.get_hitl_item(item_id).get('applied')

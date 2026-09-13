@@ -96,4 +96,10 @@ def process_pending(store, payload):
         try:
             approve_file(store, ctx)
         except ValueError as exc:
+            from automatic_review_queue import record
+            with store._db.cursor() as cur:
+                store._db.execute(cur, "SELECT * FROM hitl_queue WHERE scan_id=%s AND file=%s AND status='pending'", (sid, file))
+                blocked = [store._decode_proposals(row) for row in store._db.fetchall(cur)]
+            for item in blocked:
+                record(store, owner, sid, run_id, current['source_revision'], item, 'blocked', str(exc))
             store.log_decision('system', 'ai.standing_approval.deferred', scan_id=sid, file=file, detail=str(exc))
