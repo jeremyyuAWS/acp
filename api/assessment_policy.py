@@ -64,6 +64,7 @@ RULE_CATALOG: list[dict] = [
     {"id": "2.4.2",  "name": "Page Titled",                 "level": "A",   "fix_mode": "auto",         "plain": "Missing a page or document title"},
     {"id": "2.4.3",  "name": "Focus Order",                 "level": "A",   "fix_mode": "auto",         "plain": "Illogical keyboard navigation order"},
     {"id": "2.4.4",  "name": "Link Purpose (In Context)",   "level": "A",   "fix_mode": "ai-assisted", "plain": "Unclear link text (e.g. 'click here')"},
+    {"id": "2.4.5",  "name": "Multiple Ways",               "level": "AA",  "fix_mode": "human-only",   "plain": "Navigation bookmarks advisory"},
     {"id": "2.4.6",  "name": "Headings and Labels",         "level": "AA",  "fix_mode": "auto",         "plain": "Unclear headings or labels"},
     {"id": "2.4.7",  "name": "Focus Visible",               "level": "AA",  "fix_mode": "auto",         "plain": "No visible keyboard focus indicator"},
     {"id": "2.4.9",  "name": "Link Purpose (Link Only)",  "level": "AAA", "fix_mode": "ai-assisted", "plain": "Same link text used for different destinations"},
@@ -1002,4 +1003,3 @@ def _extract_sc(wcag: str) -> str:
     import re as _re
     m = _re.search(r'(\d+)[._](\d+)[._](\d+)', wcag or '')
     return f"{m.group(1)}.{m.group(2)}.{m.group(3)}" if m else ""
-

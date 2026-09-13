@@ -105,6 +105,15 @@ def test_stdout_mode_does_not_write():
     assert OUT.read_text() == before
 
 
+def test_bookmark_review_universe_has_canonical_multiple_ways_metadata():
+    from gen_scope_presets import _universe
+    entry = next(row for row in _universe() if row['sc'] == '2.4.5')
+    assert entry == {'sc': '2.4.5', 'name': 'Multiple Ways', 'level': 'AA', 'formats': ['pdf']}
+    import store
+    assert 'pdf' in store.REVIEW_FORMATS['2.4.5']
+    assert 'pdf' not in store.RULE_FORMATS.get('2.4.5', ())
+
+
 def test_every_preset_reaches_the_frontend_intact():
     """Every criterion and format in every preset survives the round trip.
 

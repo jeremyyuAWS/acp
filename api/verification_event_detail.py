@@ -2,6 +2,8 @@
 import io
 import re
 
+from swallowed import swallowed
+
 
 def verification_event_detail(verification, diffs, data, filename):
     manual = []
@@ -13,7 +15,7 @@ def verification_event_detail(verification, diffs, data, filename):
                     manual.append({'criterion': '1.3.1', 'reason_code': 'pdf_structure_tagging_required'})
         except Exception:
             # Unreadable bytes establish no structural diagnosis.
-            pass
+            swallowed("verification_event_detail: reading PDF structure failed")
     manual_ids = {row['criterion'] for row in manual}
     failed = []
     for criterion in sorted({str(d.get('rule_id', '')) for d in diffs}):

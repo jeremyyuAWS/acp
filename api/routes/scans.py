@@ -4971,9 +4971,10 @@ def get_file_content(scan_id: str, filename: str, request: Request):
 def _source_bytes_for_render(request: Request, scan_id: str, filename: str, owner: str) -> bytes | None:
     """Best-effort original bytes to rasterize for a preview (ADR 0015), tried cheapest-first
     and preferring the *original* the reviewer is looking at over the remediated copy:
-      1. local corpus file  (source=local — the demo default; no token, on disk)
-      2. Drive original      (via drive_file_id + a live x-drive-token)
-      3. remediated blob copy (post-remediation fallback; accessibility fixes are structurally
+      1. exact assessed source cache (owner-scoped)
+      2. local corpus file  (source=local — the demo default; no token, on disk)
+      3. Drive original      (via drive_file_id + a live x-drive-token)
+      4. remediated blob copy (post-remediation fallback; accessibility fixes are structurally
          near-identical to the original page, so it's an acceptable last resort)
     Returns None if none are reachable — the caller then 404s. Never raises."""
     scan = core.store.get_scan(scan_id, owner=owner)
@@ -5001,7 +5002,9 @@ def _source_bytes_for_render(request: Request, scan_id: str, filename: str, owne
             swallowed("routes.scans._source_bytes_for_render: reading the source bytes from the "
                       "local path failed", scan_id)
 
-    drive_file_id = core.store.get_file_drive_id(scan_id, filename)
+    # SharePoint also stores its provider item ID in drive_file_id. That identifier
+    # alone never authorizes a Google request or a Google sign-in prompt.
+    drive_file_id = core.store.get_file_drive_id(scan_id, filename) if source == "drive" else None
     if drive_file_id:
         try:
             svc = core.drive_service(request)

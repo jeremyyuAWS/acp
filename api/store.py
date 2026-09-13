@@ -8126,7 +8126,9 @@ class Store:
                 # transition (retrying Remediate is the production example). Include the source
                 # revision so that return creates a new append-only event instead of colliding
                 # with the producer's earlier event for this finding.
-                event_id=f"{event_key}:r{int(row.get('revision') or 0)}:{row['finding_id']}",
+                # Exact detector locations deliberately retain finding identities across
+                # reassessments. The globally unique event also needs its scan and batch.
+                event_id=f"{event_key}:scan:{scan_id}:batch:{batch_id}:r{int(row.get('revision') or 0)}:{row['finding_id']}",
                 review_item_id=review_item_id, fix_evidence_ids=fix_evidence_ids,
                 verified_at=verified_at)
             moved += 1

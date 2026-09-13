@@ -24,6 +24,7 @@ export function remainingWorkStatus({ events = [], rows = [], decisions = {}, sn
         notices.push({ key: event.key, label: withinChecks ? 'AI usage confirmation pending' : 'AI usage confirmation needs attention', responsibility: 'ACP checks previous usage only while a reconciliation retry is scheduled (up to eight checks). Another paid request waits for confirmation; unresolved spending may need attention.', tone: 'waiting' })
       }
       else if (event.reasonCode === 'vision_permission_or_budget_blocked') notices.push({ key: event.key, label: 'AI permission or spending limit needs attention', responsibility: 'Check the saved AI permission and available spending limit. ACP cannot send another request yet.', tone: 'review' })
+      else if (event.reasonCode === 'vision_generated_output_unusable') notices.push({ key: event.key, label: 'AI response could not be used', responsibility: 'Automatic generation attempts have stopped. Check AI activity for the validation reason; review an available suggestion or provide the missing content.', tone: 'review' })
       else notices.push({ key: event.key, label: 'Your review needed', responsibility: 'Automatic image-description attempts have stopped. Review the suggestion or provide an authored description.', tone: 'review' })
     }
   }

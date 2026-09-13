@@ -228,3 +228,36 @@ def test_activity_detail_has_no_document_content_or_raw_error(isolated_store):
     assert event['document'] == 'sensitive-filename.docx'
     assert event['detail'] == {'retry': 2, 'reason_code': 'vision_recovery_unresolved'}
     assert event['correlation_id'] == 'run-private'
+
+
+@pytest.mark.parametrize('reasons,blocked,available,expected', [
+    ([{'reason': 'attempts_exhausted', 'kind': 'text'}], False, 100, 'vision_generated_output_unusable'),
+    ([{'reason': 'attempts_exhausted'}, {'reason': 'provider_usage_unknown'}], False, 100, 'vision_spending_reconciliation_required'),
+    ([{'reason': 'attempts_exhausted'}], True, 100, 'vision_spending_reconciliation_required'),
+    ([{'reason': 'attempts_exhausted'}], False, 0, 'vision_permission_or_budget_blocked'),
+    ([{'reason': 'vision_timeout'}], False, 100, None),
+])
+def test_settled_unusable_generation_is_not_a_spending_block(reasons, blocked, available, expected):
+    from types import SimpleNamespace
+    context = SimpleNamespace(deferred=reasons, enabled=True, owner_id=OWNER, run_id='run',
+        ledger=SimpleNamespace(snapshot=lambda *_: {'blocked': blocked, 'available_units': available}))
+    assert recovery._recovery_block(context) == expected
+
+
+def test_unusable_generation_event_is_sanitized(isolated_store):
+    seed(isolated_store)
+    recovery._decision(isolated_store, SID, FILE, 'blocked',
+        reason_code='vision_generated_output_unusable', reason='private provider output')
+    events = isolated_store.list_scan_events(SID)
+    assert events[-1]['detail'] == {'reason_code': 'vision_generated_output_unusable'}
+
+
+def test_unusable_generation_stops_without_dispatching_another_retry(isolated_store):
+    job, _ = seed(isolated_store)
+    before = len(isolated_store.list_scan_jobs_of_type(SID, 'vision_proposal_retry'))
+    with run_context(isolated_store, job['payload'], job) as context:
+        context.deferred.append({'reason': 'attempts_exhausted', 'kind': 'text'})
+        recovery.schedule(isolated_store, context, job, ['vision_timeout'])
+    assert len(isolated_store.list_scan_jobs_of_type(SID, 'vision_proposal_retry')) == before
+    assert isolated_store.list_scan_events(SID)[-1]['detail'] == {
+        'reason_code': 'vision_generated_output_unusable'}

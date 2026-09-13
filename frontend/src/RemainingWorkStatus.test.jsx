@@ -5,6 +5,17 @@ import { remainingWorkStatus } from './remainingWorkStatus.js'
 import { addRemediationEvent } from './remediationEventFeed.js'
 const event = (id, kind, reasonCode) => ({id:String(id),key:String(id),kind,documentKey:'private-ref',reasonCode})
 describe('remaining work responsibility', () => {
+  it('reports rejected generated output without a false spending or permission blocker', () => {
+    const [row] = addRemediationEvent([], {kind:'remediate.vision_retry_blocked', document:'report.docx', document_ref:'private-ref', detail:{reason_code:'vision_generated_output_unusable', output:'private provider text'}}, 7)
+    expect(row.reasonCode).toBe('vision_generated_output_unusable')
+    expect(row.line).toContain('automatic generation attempts stopped')
+    expect(JSON.stringify(row)).not.toContain('private provider text')
+    const result = remainingWorkStatus({events:[row], rows:[{id:1,file:'report.docx',rule_id:'1.1.1',aiDraftable:true,status:'pending',hasProposal:false}]})
+    expect(result.notices[0].label).toBe('AI response could not be used')
+    expect(result.notices[0].responsibility).not.toMatch(/permission|spending limit/)
+    expect(result.counts['blocked-ai']).toBe(0)
+    expect(result.counts['missing-proposals']).toBe(1)
+  })
   it('separates missing drafts, failed checks and genuine decisions instead of merging them as human review', () => {
     const result=remainingWorkStatus({rows:[
       {id:1,file:'a.docx',rule_id:'1.1.1',aiDraftable:true,status:'pending',hasProposal:false},
