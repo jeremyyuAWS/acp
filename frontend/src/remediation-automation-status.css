@@ -11,3 +11,8 @@
 
 .automatic-publication-disclosure summary {cursor:pointer;font-size:12.5px;line-height:1.6;}
 .automatic-publication-disclosure summary:focus-visible {outline:2px solid var(--accent,#3464ad);outline-offset:4px;}
+.remediation-automation-combined summary {cursor:pointer;font-size:12.5px;line-height:1.6;}
+.remediation-automation-combined h3 {font-size:13px;}
+.remediation-automation-combined p {font-size:12px;color:var(--muted);}
+.remediation-automation-combined > .panel {padding:0;border:0;margin:12px 0 0;}
+.remediation-review-workspace-fallback {max-width:380px;margin:12px 0;}

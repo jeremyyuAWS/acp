@@ -110,3 +110,10 @@
 .run-auto-approve-toast { position:fixed; right:14px; top:14px; z-index:10000; width:min(360px,calc(100vw - 28px)); padding:14px; border:1px solid var(--success-fg); border-left:4px solid var(--success-fg-strong); border-radius:9px; background:var(--success-bg); color:var(--success-fg-strong); box-shadow:0 10px 26px #20182425; font-family:var(--font-ui); font-size:13px; text-align:left; }
 .run-auto-approve-toast > button { float:right; margin-left:8px; color:inherit; }
 .run-auto-approve-toast p { margin:7px 0 0; }
+
+/* Match the review/manual header palette; action labels carry meaning without color. */
+.rinbox-action-chip { display:inline-flex; padding:2px 7px; border-radius:999px; font-size:10px; font-weight:700; line-height:1.4; white-space:nowrap; }
+.rinbox-action-chip--edit { background:var(--error-bg,#fff4f3); color:var(--error-fg,#b13226); }
+.rinbox-action-chip--review { background:var(--warn-bg,#fff8e6); color:var(--warn-fg,#986300); }
+.rinbox-action-chip--processing,.rinbox-action-chip--check { background:#e0efff; color:#174e7a; }
+.rinbox-action-chip--results { background:#e8f5e9; color:#176329; }

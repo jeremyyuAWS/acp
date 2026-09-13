@@ -21,6 +21,7 @@ import MatchingReviewPreview from './MatchingReviewPreview.jsx'
 import BatchReviewSelection from './BatchReviewSelection.jsx'
 import { remediationReviewCounts } from './remediationCountSummary.js'
 import { exclusionReason } from './batchReviewSelection.js'
+import { reviewQueueAction, reviewQueueActions } from './reviewQueueAction.js'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is a TWO-column split: a 35% work queue on the left to find and
@@ -111,7 +112,8 @@ function ChangedValue({ from, to }) {
 // `showFile` is false for rows sitting under a document group header (the header already names the
 // file) and true for a standalone single-finding row (no header, so the row carries the filename).
 // Either way the filename appears exactly once on screen for a given finding.
-function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
+function QueueRow({ f, decisions, selected, onSelect, showFile = true, automatic = false }) {
+  const action = reviewQueueAction(f, decisions, automatic)
   const r = rowModel(f, decisions)
   const railed = railColorOf(r.lane)
   const subline = showFile ? `${r.file}${r.location ? ` · ${r.location}` : ''}` : r.location
@@ -162,7 +164,7 @@ function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
           )}
           {r.laneShort && <span className="muted" style={{ fontSize: 11 }}>{r.laneShort}</span>}
           {r.effort !== '—' && <span className="muted" style={{ fontSize: 11 }}>{r.effort}</span>}
-          {r.severity && <span className={`revcard-sev sev-${String(r.severity).toLowerCase()}`} style={{ fontSize: 10 }}>{r.severity}</span>}
+          <span className={`rinbox-action-chip rinbox-action-chip--${action.key}`}>{action.label}</span>
           {f?.status === 'in_review' && !r.resolved && (
             <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '.04em',
                            background: 'var(--accent-subtle,#e8f0fe)', color: 'var(--accent,#3b6fd6)',
@@ -202,10 +204,11 @@ function severityLine(severities) {
   return parts.join(' · ')
 }
 
-function ClusterRow({ row, shown, decisions, selectedId, onSelect, expanded, onToggle }) {
+function ClusterRow({ row, shown, decisions, selectedId, onSelect, expanded, onToggle, automatic = false }) {
+  const actions = reviewQueueActions(row.items, decisions, automatic)
   const r = rowModel(shown, decisions)
   const railed = railColorOf(row.lane)
-  const sevLine = severityLine(row.severities)
+
   const remaining = row.unresolved.length
   const listId = `rinbox-cluster-${row.key.replace(/[^\w-]/g, '_')}`
   // When collapsed the header IS the selected member's row, so it carries the selection. When
@@ -253,10 +256,9 @@ function ClusterRow({ row, shown, decisions, selectedId, onSelect, expanded, onT
               )}
               <span className="muted" style={{ fontSize: 11 }}>{formatList(row.formats)}</span>
               {row.lane?.short && <span className="muted" style={{ fontSize: 11 }}>{row.lane.short}</span>}
-              {/* The severity MIX, stated rather than hidden: severity is not part of the cluster key
-                  (it would fragment every large group), so the reviewer must be able to see that a
-                  batch spans a critical and a minor finding before they decide it. */}
-              {sevLine && <span className="muted" style={{ fontSize: 11 }}>{sevLine}</span>}
+              {/* Show the action mix for this group; severity remains available in priority filters
+                  and the selected group detail, independently of who owns the next step. */}
+              {actions.map(action => <span key={action.key} className={`rinbox-action-chip rinbox-action-chip--${action.key}`}>{actions.length > 1 ? `${action.count} ` : ''}{action.label}</span>)}
               {row.resolvedCount > 0 && (
                 <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>
                   {row.resolvedCount} of {row.count} decided
@@ -281,7 +283,7 @@ function ClusterRow({ row, shown, decisions, selectedId, onSelect, expanded, onT
       {expanded && (
         <div id={listId} style={{ background: 'var(--surface-2,#faf9fb)' }}>
           {row.items.map((f) => (
-            <QueueRow key={f.id} f={f} decisions={decisions} selected={f.id === selectedId}
+            <QueueRow key={f.id} f={f} decisions={decisions} automatic={automatic} selected={f.id === selectedId}
                       onSelect={onSelect} showFile />
           ))}
         </div>
@@ -1188,9 +1190,9 @@ export default function RemediationInbox({
             </div>
           ) : group === 'issue' ? clusters.map((row) => (
             row.type === 'single'
-              ? <QueueRow key={row.key} f={row.finding} decisions={decisions}
+              ? <QueueRow key={row.key} f={row.finding} decisions={decisions} automatic={autoApprove === true}
                           selected={row.finding.id === selectedId} onSelect={selectRow} showFile />
-              : <ClusterRow key={row.key} row={row} shown={shownOf(row)} decisions={decisions}
+              : <ClusterRow key={row.key} row={row} shown={shownOf(row)} decisions={decisions} automatic={autoApprove === true}
                             selectedId={selectedId} onSelect={selectRow}
                             expanded={!!expandedClusters[row.key]} onToggle={toggleCluster} />
           )) : groups.map((g) => (
@@ -1198,7 +1200,7 @@ export default function RemediationInbox({
             // names the file. Only multi-finding documents get the collapsible 📄 header, so the file
             // is stated once either way.
             g.items.length === 1 ? (
-              <QueueRow key={g.items[0].id} f={g.items[0]} decisions={decisions}
+              <QueueRow key={g.items[0].id} f={g.items[0]} decisions={decisions} automatic={autoApprove === true}
                         selected={g.items[0].id === selectedId} onSelect={selectRow} showFile />
             ) : (
               <div key={g.file}>
@@ -1210,7 +1212,7 @@ export default function RemediationInbox({
                   <span className="muted" style={{ fontWeight: 400 }}>{g.items.length}</span>
                 </button>
                 {!documentCollapsed(g.file) && g.items.map((f) => (
-                  <QueueRow key={f.id} f={f} decisions={decisions} selected={f.id === selectedId} onSelect={selectRow} showFile={false} />
+                  <QueueRow key={f.id} f={f} decisions={decisions} automatic={autoApprove === true} selected={f.id === selectedId} onSelect={selectRow} showFile={false} />
                 ))}
               </div>
             )

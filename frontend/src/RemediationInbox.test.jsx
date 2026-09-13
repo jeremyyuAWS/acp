@@ -64,9 +64,9 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(cluster).toBeTruthy()
     expect(cluster.textContent).toContain('4 documents')   // a, b, c (twice), e → 4 distinct files
     expect(cluster.textContent).toContain('1.1.1')
-    // Severity is NOT what groups a cluster, so the mix it spans is stated rather than hidden.
-    expect(cluster.textContent).toContain('1 critical')
-    expect(cluster.textContent).toContain('4 serious')
+    // Queue chips explain the action; severity remains in priority filters and group detail.
+    expect(cluster.textContent).toContain('Review needed')
+    expect(cluster.textContent).not.toContain('1 critical')
   })
 
   it('spans document formats, and says on the row that it does', async () => {
