@@ -7,6 +7,7 @@ KINDS = (
     'remediate.review_requested', 'remediate.document_completed', 'scan.interrupted',
     'scan.retrying', 'remediate.delivery_retry_requested', 'remediate.delivery_retry_refused',
     'remediate.cancel_requested', 'remediate.paused', 'remediate.resumed',
+    'remediate.vision_retry_pending', 'remediate.vision_retry_recovered', 'remediate.vision_retry_blocked',
 )
 
 

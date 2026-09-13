@@ -9,5 +9,11 @@ set -e
 # for every create, image update and revision restart, so Ollama always remains loopback-only.
 export OLLAMA_HOST=127.0.0.1:11500
 export ACP_OLLAMA_UPSTREAM=http://127.0.0.1:11500
+export OLLAMA_NUM_PARALLEL="${ACP_OLLAMA_NUM_PARALLEL:-1}"
+export OLLAMA_KEEP_ALIVE="${ACP_OLLAMA_KEEP_ALIVE:-30m}"
 ollama serve &
+# Empty-prompt loading warms only already-installed models; the auth gate remains responsive.
+if [ "${ACP_OLLAMA_KEEPALIVE:-1}" != "0" ]; then
+  python3 /usr/local/bin/acp-ollama-warm.py &
+fi
 exec python3 /usr/local/bin/acp-ollama-gate.py

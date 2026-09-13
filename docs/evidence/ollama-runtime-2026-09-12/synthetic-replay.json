@@ -1,0 +1,63 @@
+{
+  "mode": "synthetic_replay",
+  "model": "llava:13b",
+  "samples": [
+    {
+      "phase": "first_observed",
+      "elapsed_ms": 24500,
+      "completed": true,
+      "nonempty": true,
+      "truncated": false,
+      "total_ms": 24000.0,
+      "model_load_ms": 20000.0,
+      "prompt_eval_ms": 1000.0,
+      "inference_ms": 3000.0,
+      "output_tokens_per_second": 4.0
+    },
+    {
+      "phase": "repeated",
+      "elapsed_ms": 4500,
+      "completed": true,
+      "nonempty": true,
+      "truncated": false,
+      "total_ms": 4000.0,
+      "model_load_ms": 10.0,
+      "prompt_eval_ms": 990.0,
+      "inference_ms": 3000.0,
+      "output_tokens_per_second": 4.0
+    },
+    {
+      "phase": "repeated",
+      "elapsed_ms": 4250,
+      "completed": true,
+      "nonempty": true,
+      "truncated": false,
+      "total_ms": 3750.0,
+      "model_load_ms": 5.0,
+      "prompt_eval_ms": 745.0,
+      "inference_ms": 3000.0,
+      "output_tokens_per_second": 4.0
+    }
+  ],
+  "phases": {
+    "first_observed": {
+      "samples": 1,
+      "elapsed_ms_median": 24500,
+      "total_ms_median": 24000.0,
+      "model_load_ms_median": 20000.0,
+      "prompt_eval_ms_median": 1000.0,
+      "inference_ms_median": 3000.0,
+      "output_tokens_per_second_median": 4.0
+    },
+    "repeated": {
+      "samples": 2,
+      "elapsed_ms_median": 4375.0,
+      "total_ms_median": 3875.0,
+      "model_load_ms_median": 7.5,
+      "prompt_eval_ms_median": 867.5,
+      "inference_ms_median": 3000.0,
+      "output_tokens_per_second_median": 4.0
+    }
+  },
+  "note": "Model-load time, prompt evaluation and token inference are separate observations. First observed does not prove a forced cold start. No remediation quality or accessibility pass is inferred."
+}

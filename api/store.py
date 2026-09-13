@@ -12480,6 +12480,8 @@ class Store:
         # of it is how a delivered document looks undelivered to whichever reader knows only one.
         "remediate.delivery_retry_requested", "remediate.delivery_retry_refused",
         "remediate.cancel_requested", "remediate.paused", "remediate.resumed",
+        "remediate.vision_retry_pending", "remediate.vision_retry_recovered",
+        "remediate.vision_retry_blocked",
     })
 
     #: The kinds that mean THE RUN MOVED. Every one is written after a durable change to a

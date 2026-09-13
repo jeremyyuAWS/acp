@@ -514,10 +514,12 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
                                             allow_transcription=True, guidance=guidance)
     except Exception:
         res = None
+    if vision_budget is not None:
+        # Failed inference consumes capacity too. A timeout must not allow every
+        # remaining image to bypass the document's attempted-call bound.
+        vision_budget[0] -= 1
     if not res:
         return None
-    if vision_budget is not None:
-        vision_budget[0] -= 1
     if res.get("grounded"):
         # An image of text is transcribed, not described — no model ran, so the provenance must
         # not claim one (it used to interpolate res['model'], which is None on that path and
@@ -526,6 +528,9 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
         if applied_fixes is not None:
             applied_fixes.append({
                 "rule_id": "SC_1_1_1",
+                "locator": f"{part_name}#{rid}",
+                "model": res.get('model'),
+                "model_call_id": res.get('ai_call_id'),
                 "value": res["alt"],
                 "source": ("the image's own text, read by OCR and transcribed verbatim"
                            if transcribed
@@ -1254,7 +1259,7 @@ def _remediate_xlsx_structure(entries: dict, diffs=None, in_scope=None) -> list[
 
 def alt_proposals_for_office(doc_bytes: bytes, ext: str, *, ai_enabled: bool = True,
                              scan_id: str | None = None, context_file: str = "",
-                             guidance: str = "") -> tuple[list, list]:
+                             guidance: str = "", include_grounded: bool = False) -> tuple[list, list]:
     """Assess-time WCAG 1.1.1: enumerate every unlabelled image and return
     (proposals, evidence) WITHOUT writing the file — so the review card can show a per-image
     thumbnail and, when a vision model is reachable, a PRE-FILLED AI description for each
@@ -1310,6 +1315,15 @@ def alt_proposals_for_office(doc_bytes: bytes, ext: str, *, ai_enabled: bool = T
                               guidance=guidance)  # rewritten XML discarded
             except Exception:
                 continue
+    if include_grounded:
+        # Recovery discards the XML rewrite. Grounded captions are proposals here,
+        # rather than pretending the throwaway document was saved or verified.
+        for fix in _throwaway_fixes:
+            if fix.get('locator') and fix.get('value'):
+                proposals.append({'locator': fix['locator'], 'before': '(no alt text)',
+                    'proposed_value': fix['value'], 'rationale': 'Recovered image description; save and verify through the existing review workflow.',
+                    'source': fix.get('source'), 'thumb': fix.get('thumb'),
+                    'model': fix.get('model'), 'model_call_id': fix.get('model_call_id')})
     return proposals, evidence
 
 

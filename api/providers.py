@@ -509,6 +509,7 @@ class OllamaVisionProvider:
         if deferred is not None:
             return deferred
         import base64
+        from ollama_runtime import keep_alive, timings
         mdl = model or self.model
         t0 = time.monotonic()
 
@@ -523,7 +524,8 @@ class OllamaVisionProvider:
             r = httpx.post(
                 f"{self.base_url}/api/generate",
                 json={"model": mdl, "prompt": prompt, "images": [b64],
-                      "stream": False, "options": {"temperature": 0.2, "num_predict": 200}},
+                      "stream": False, "keep_alive": keep_alive(),
+                      "options": {"temperature": 0.2, "num_predict": 200}},
                 headers=_ai._OLLAMA_HEADERS,
                 timeout=timeout,
             )
@@ -543,11 +545,12 @@ class OllamaVisionProvider:
                          f"(done_reason={data.get('done_reason')!r}, "
                          f"eval_count={data.get('eval_count')!r}). The model is healthy; it "
                          "declined to answer THIS prompt.")
-            return _fail(REASON_EMPTY)
-        return _result(text=raw, model=mdl, provider=self.name, zone=self.zone,
-                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True,
-                       prompt_tokens=data.get("prompt_eval_count"),
-                       completion_tokens=data.get("eval_count"))
+            return {**_fail(REASON_EMPTY), "timing": timings(data)}
+        return {**_result(text=raw, model=mdl, provider=self.name, zone=self.zone,
+                          latency_ms=int((time.monotonic() - t0) * 1000), ok=True,
+                          prompt_tokens=data.get("prompt_eval_count"),
+                          completion_tokens=data.get("eval_count")),
+                "timing": timings(data)}
 
 
 # ── Provider configuration (ADR 0019 §6, secret-ref design) ────────────────────

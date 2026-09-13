@@ -1,0 +1,9 @@
+{
+  "synthetic": true,
+  "model": "llava:13b",
+  "samples": [
+    {"phase":"first_observed","elapsed_ms":24500,"response":{"done":true,"response":"A blue rectangle.","total_duration":24000000000,"load_duration":20000000000,"prompt_eval_duration":1000000000,"eval_duration":3000000000,"eval_count":12}},
+    {"phase":"repeated","elapsed_ms":4500,"response":{"done":true,"response":"A blue rectangle.","total_duration":4000000000,"load_duration":10000000,"prompt_eval_duration":990000000,"eval_duration":3000000000,"eval_count":12}},
+    {"phase":"repeated","elapsed_ms":4250,"response":{"done":true,"response":"A blue rectangle.","total_duration":3750000000,"load_duration":5000000,"prompt_eval_duration":745000000,"eval_duration":3000000000,"eval_count":12}}
+  ]
+}

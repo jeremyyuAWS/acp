@@ -1886,6 +1886,7 @@ ASSESS_LANE_JOB_TYPES = (
 # it anywhere else would let a Remediate backlog and its own recovery queue behind different
 # capacity — the exact cross-lane stall these disjoint tuples exist to prevent.
 REMEDIATE_LANE_JOB_TYPES = (
+    "vision_proposal_retry",
     "remediate_file", "deliver_corrected_copy", "rescore_file", "apply_approved_values",
     "publish_file", "prepare_release_package", "release_continue", "publish_release_reports",
 )
