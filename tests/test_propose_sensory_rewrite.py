@@ -110,3 +110,40 @@ def test_disabled_ai_yields_no_proposal(_model_stub):
     props = proposals.propose_sensory_rewrite(SENSORY, filename="f.xlsx", ai_enabled=False)
     assert props == []
     assert _model_stub == []
+
+
+@pytest.mark.parametrize('advance_consent', [True, False])
+@pytest.mark.parametrize('call_field', ['ai_call_id', 'model_call_id', 'call_id', None])
+def test_sensory_draft_retains_real_call_for_frozen_run_approval(isolated_store, monkeypatch, advance_consent, call_field):
+    """A recorded successful draft enters the normal durable approval path.
+
+    Exact model/call provenance is retained; consent-off stays pending, and
+    approval alone neither writes an artifact nor grants verified credit.
+    """
+    from test_ai_standing_approval import seed, OWNER, SID, FILE, apply_jobs
+    from ai_run_policy import run_context
+    from ai_standing_approval import approve_file
+    s = isolated_store
+    job = seed(s, monkeypatch, enabled=advance_consent)
+    with run_context(s, job['payload'], job) as ctx:
+        call_id = s.record_ai_call(surface='synthetic', provider='synthetic', model='fixture-text',
+            zone='local', latency_ms=0, ok=True, scan_id=SID, file=FILE)
+        monkeypatch.setattr(ai, 'model_is_available', lambda: True)
+        monkeypatch.setattr(ai, 'suggest_fix', lambda *a, **k: {
+            'suggestion': 'Click the Approve button.', 'model': 'fixture-text',
+            **({call_field: call_id} if call_field else {})})
+        draft = proposals.propose_sensory_rewrite(SENSORY, filename=FILE)
+        item_id = s.enqueue_proposals(SID, FILE, '1.3.3', draft)
+        approve_file(s, ctx)
+    row = s.get_hitl_item(item_id)
+    can_approve = advance_consent and call_field is not None
+    assert row['status'] == ('approved' if can_approve else 'pending')
+    assert row['proposals'][0]['model'] == 'fixture-text'
+    assert row['proposals'][0].get('model_call_id') == (call_id if call_field else None)
+    assert not row['applied']
+    assert len(apply_jobs(s)) == int(can_approve)
+    with s._db.cursor() as cur:
+        s._db.execute(cur, 'SELECT model_call_id,proposal_json FROM ai_proposal_snapshots WHERE item_id=%s', (item_id,))
+        retained = s._db.fetchone(cur)
+    assert retained['model_call_id'] == (call_id if call_field else None)
+    assert retained['proposal_json'] and 'fixture-text' in retained['proposal_json']
