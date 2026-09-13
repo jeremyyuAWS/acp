@@ -9,11 +9,22 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import quote, urlencode
+
+# This supported schema includes imageType/customMetricsSettings emitted by the
+# current CLI. Pin reads and writes together so a future CLI cannot silently
+# submit a newer template to an older API (which rejects unknown fields).
+ARM_API_VERSION = '2025-10-02-preview'
+
+
+class AzureOperationError(RuntimeError):
+    """Only allowlisted operation/category fields; never provider messages."""
 
 
 def canonical_connection(value):
@@ -41,6 +52,11 @@ def canonical_connection(value):
 
 
 def repair_patch(app, secrets):
+    names = [s.get('name') for s in secrets]
+    configured_names = [s.get('name') for s in app['properties']['configuration'].get('secrets', [])]
+    if (not all(names) or len(set(names)) != len(names) or not all(configured_names)
+            or len(set(configured_names)) != len(configured_names)):
+        raise ValueError('Application secret names are missing or ambiguous')
     template = deepcopy(app['properties']['template'])
     rules = template.get('scale', {}).get('rules', [])
     replacements = {}
@@ -73,6 +89,16 @@ def repair_patch(app, secrets):
         return None
     preserved = deepcopy(app['properties']['configuration'].get('secrets', []))
     preserved = [s for s in preserved if s.get('name') not in replacements]
+    resolved = {s['name']: s for s in secrets}
+    for entry in preserved:
+        if entry.get('keyVaultUrl'):
+            continue
+        value = resolved.get(entry['name'], {}).get('value')
+        if value is None:
+            raise ValueError('Existing application secret cannot be preserved safely')
+        # ARM requires values on full secret-list updates; show omits them.
+        # Resolve privately and retain every original value unchanged.
+        entry['value'] = value
     preserved.extend(replacements.values())
     return {'properties': {'configuration': {'secrets': preserved}, 'template': template}}
 
@@ -82,12 +108,58 @@ def azure(*args):
     result = subprocess.run(['az', *args, '--subscription', subscription, '-o', 'json', '--only-show-errors'],
                             text=True, capture_output=True)
     if result.returncode:
-        raise RuntimeError('Azure scaler operation failed; provider output withheld to protect credentials')
+        stage = ('rest_' + args[2]) if args[:2] == ('rest', '--method') else ('secret_read' if args[:3] == ('containerapp', 'secret', 'list') else 'app_read')
+        status = re.search(r'\b([45][0-9]{2})\b', result.stderr)
+        category = 'http_' + status.group(1) if status else 'provider_failure'
+        raise AzureOperationError(stage + ':' + category)
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
+def read_app(resource_group, name):
+    identity = azure('containerapp', 'show', '-g', resource_group, '-n', name)
+    return azure('rest', '--method', 'get', '--url',
+                 'https://management.azure.com' + identity['id'] + '?api-version=' + ARM_API_VERSION)
+
+
+def secrets_match(actual, actual_secrets, desired):
+    actual_values = {s['name']: s.get('value') for s in actual_secrets}
+    actual_config = {s['name']: s for s in actual['properties']['configuration'].get('secrets', [])}
+    if set(actual_config) != {s['name'] for s in desired}:
+        return False
+    for entry in desired:
+        configured = actual_config[entry['name']]
+        if entry.get('keyVaultUrl'):
+            valid = all(configured.get(k) == entry.get(k) for k in ('keyVaultUrl', 'identity'))
+        else:
+            valid = actual_values.get(entry['name']) == entry['value'] and not configured.get('keyVaultUrl')
+        if not valid:
+            return False
+    return True
+
+
+def verified_template(resource_group, name, desired, desired_secrets=None):
+    # ARM accepts updates before subsequent GETs expose their new revision.
+    # Read-only bounded polling prevents a successful PATCH being reported as
+    # failed while preserving an exact comparison of all template fields.
+    for attempt in range(12):
+        actual = read_app(resource_group, name)
+        if actual['properties'].get('provisioningState') == 'Failed':
+            raise RuntimeError('PostgreSQL scaler provisioning failed')
+        state = actual['properties'].get('provisioningState')
+        if state in (None, 'Succeeded') and actual['properties']['template'] == desired:
+            if desired_secrets is None:
+                return actual
+            actual_secrets = azure('containerapp', 'secret', 'list', '-g', resource_group, '-n', name,
+                                   '--show-values')
+            if secrets_match(actual, actual_secrets, desired_secrets):
+                return actual
+        if attempt < 11:
+            time.sleep(5)
+    raise RuntimeError('PostgreSQL scaler repair verification failed')
+
+
 def repair(resource_group, name):
-    app = azure('containerapp', 'show', '-g', resource_group, '-n', name)
+    app = read_app(resource_group, name)
     secrets = azure('containerapp', 'secret', 'list', '-g', resource_group, '-n', name,
                    '--show-values')
     patch = repair_patch(app, secrets)
@@ -107,11 +179,10 @@ def repair(resource_group, name):
         with os.fdopen(fd, 'w') as stream:
             json.dump(patch, stream)
         azure('rest', '--method', 'patch', '--url',
-              'https://management.azure.com' + app['id'] + '?api-version=2025-07-01',
+              'https://management.azure.com' + app['id'] + '?api-version=' + ARM_API_VERSION,
               '--body', '@' + str(path))
-    actual = azure('containerapp', 'show', '-g', resource_group, '-n', name)
-    if actual['properties']['template']['scale'] != patch['properties']['template']['scale']:
-        raise RuntimeError('PostgreSQL scaler repair verification failed')
+    verified_template(resource_group, name, patch['properties']['template'],
+                      patch['properties']['configuration']['secrets'])
     print(name + ': dedicated PostgreSQL scaler credential reference verified')
 
 
@@ -124,5 +195,6 @@ if __name__ == '__main__':
             repair(group, app_name)
     except Exception as error:
         # Never echo URL parser, Azure response, or secret-containing exception text.
-        print('PostgreSQL scaler repair failed (' + type(error).__name__ + ')', file=sys.stderr)
+        detail = ':' + str(error) if isinstance(error, AzureOperationError) else ''
+        print('PostgreSQL scaler repair failed (' + type(error).__name__ + detail + ')', file=sys.stderr)
         sys.exit(1)
