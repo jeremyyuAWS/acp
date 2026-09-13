@@ -302,7 +302,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
     {['failed', 'cancelled', 'paused', 'stalled'].includes(snapshot.state) && <p role="status" className="remops-error">{line}{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>View in Monitor →</button>}</p>}
     <RemediationWaterfallCard key={`${snapshot.scan_id || snapshot.run_id}:${snapshot.batch_id || "legacy"}`} snapshot={snapshot} paused={hidden} assessmentContext={assessmentContext} streamlined />
     {!hideActivity && <><div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /></div>
-    <Activity events={events} status={activityStatus} terminal={snapshot.terminal} /></>}
+    <Activity key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot.terminal} /></>}
     <p aria-live="polite" className="sr-only" data-testid="rem-ops-announce">{line}</p>
   </section>
   return <section className={`panel remops${paused || hidden ? ' remops-motion-paused' : ''}`} aria-label="Remediation run status">
@@ -324,7 +324,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
         run that is going well, and a heading that only appears once something is wrong is one
         nobody has learned where to look for. The Disclosure's summary is this region's name, so
         the region itself renders no second heading under it. */}
-    <div className={`remops-bottom${events.length ? '' : ' remops-bottom-empty'}`}><Disclosure title="Live activity" compact={compact}><Activity events={events} status={activityStatus} terminal={snapshot.terminal} compact={compact} /></Disclosure><Disclosure title={`Needs attention${exceptionTotal ? ` · ${exceptionTotal}` : ''}`} compact={compact}><RemediationExceptions view={exceptionState.view} error={exceptionState.error} onReload={exceptionState.reload} runId={snapshot.run_id} onAnnounce={setAnnouncement} heading={null} /></Disclosure></div>
+    <div className={`remops-bottom${events.length ? '' : ' remops-bottom-empty'}`}><Disclosure title="Live activity" compact={compact}><Activity key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot.terminal} compact={compact} /></Disclosure><Disclosure title={`Needs attention${exceptionTotal ? ` · ${exceptionTotal}` : ''}`} compact={compact}><RemediationExceptions view={exceptionState.view} error={exceptionState.error} onReload={exceptionState.reload} runId={snapshot.run_id} onAnnounce={setAnnouncement} heading={null} /></Disclosure></div>
     <p aria-live="polite" className="sr-only" data-testid="rem-ops-announce">{announcement || line}</p>
   </section>
 }
@@ -334,6 +334,6 @@ export function RemediationActivityPanel({ snapshot, events = [], connected = fa
   const fresh = freshness({snapshot, connected, receivedAt})
   return <section className="panel remops" aria-label="Remediation live activity">
     <div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /></div>
-    <Activity events={events} status={activityStatus} terminal={snapshot?.terminal} />
+    <Activity key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot?.terminal} />
   </section>
 }

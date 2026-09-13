@@ -21,3 +21,11 @@ it('does not animate the first saved history loaded after an empty initial rende
   await act(async () => root.render(<Activity events={[event('1')]} />))
   expect(container.querySelector('.remops-activity-fresh')).toBeNull()
 })
+it('resets activity history and motion when the run scope changes', async () => {
+  const { root, container } = createTestRoot()
+  await act(async () => root.render(<Activity key="run:1" events={[event('2'), event('1')]} />))
+  container.querySelector('details').open = true
+  await act(async () => root.render(<Activity key="run:2" events={[event('4'), event('3')]} />))
+  expect(container.querySelector('details').open).toBe(false)
+  expect(container.querySelector('.remops-activity-fresh')).toBeNull()
+})
