@@ -1,0 +1,9 @@
+.remaining-work-status { margin: 12px 0; }
+.remaining-work-status h3 { margin: 0 0 8px; font-size: 14px; }
+.remaining-work-status p { font-size: 12.5px; margin: 6px 0; }
+.remaining-work-status ul { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 1px; }
+.remaining-work-status li { padding: 10px 12px; border-bottom: 1px solid var(--border, #e6e0eb); border-left: 3px solid var(--info-fg, #3464ad); background: var(--info-bg, #f2f6fc); display: grid; grid-template-columns: minmax(150px, 1fr) 3fr; gap: 12px; font-size: 12.5px; }
+.remaining-work-status .remaining-work-review, .remaining-work-status .remaining-work-waiting { border-left-color: var(--warn-fg, #986300); background: var(--warn-bg, #fff8e6); }
+.remaining-work-status .remaining-work-manual { border-left-color: var(--error-fg, #b13226); background: var(--error-bg, #fff4f3); }
+.remaining-work-stalled { color: var(--warn-fg, #986300); }
+@media (max-width: 650px) { .remaining-work-status li { grid-template-columns: 1fr; gap: 4px; } }

@@ -1,0 +1,10 @@
+.crop-review-context { display: flex; gap: 16px; align-items: flex-start; padding: 12px; margin-bottom: 12px; border: 1px solid var(--line); border-left: 3px solid var(--warn-fg, #946200); border-radius: 6px; background: var(--warn-bg, #fff8e8); font-size: 13px; }
+.crop-review-context figure { flex: 0 0 130px; margin: 0; }
+.crop-review-context figcaption { margin-top: 6px; font-size: 11px; color: var(--muted, #635c6a); }
+.crop-review-context p { margin: 6px 0; }
+.crop-review-context-warning { color: var(--warn-fg, #946200); }
+@media (max-width: 600px) { .crop-review-context { flex-direction: column; } .crop-review-context figure { flex-basis: auto; } }
+
+.crop-review-context > div { min-width: 0; flex: 1; }
+.crop-review-context-draft { margin-bottom: 12px; }
+.crop-review-context-draft pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; padding: 8px; border: 1px solid var(--line); background: var(--surface, #fff); font-size: 12px; }
