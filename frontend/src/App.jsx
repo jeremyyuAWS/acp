@@ -63,6 +63,7 @@ import { documentRows } from './assessMetrics.js'
 import RunDetails from './RunDetails.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
+import { priorStageResults, guardStageAction } from './priorStageResults.js'
 import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 // Dashboard import removed — component retired from Assess tab (kept on disk)
 import { CAPABILITY_FALLBACK, ASSESSMENT_FALLBACK, fmtOf } from './capability.js'
@@ -283,12 +284,14 @@ export default function App() {
   // AssessRunner still owns the run; AssessSetup owns the button that starts it. The runner hands
   // its start function here on mount. Stable identity via useCallback, so registering does not
   // re-fire on every render of this very large component.
+  const priorResultsRef = useRef({})
   const assessStart = useRef(null)
   const registerAssessStart = useCallback((fn) => { assessStart.current = fn }, [])
   // Hide any prior completed dashboard in the SAME click that starts the new run. AssessRunner
   // also reports `starting` synchronously for its internal re-run paths; this wrapper covers the
   // separate AssessSetup button owned by App.
   const startAssessment = useCallback((decided) => {
+    if (priorResultsRef.current.assess) return
     setAssessPhase('starting'); setRunDetails(false); setAssessFile(null)
     assessStart.current?.(decided)
   }, [])
@@ -305,7 +308,7 @@ export default function App() {
   // return, supplies run.id explicitly instead.
   const [bulkFixBusy, setBulkFixBusy] = useState(false)
   const handleBulkFix = useCallback(async (scanId, rows) => {
-    if (!scanId || bulkFixBusy || !rows?.length) return
+    if (!scanId || bulkFixBusy || !rows?.length || priorResultsRef.current.assess || scanId !== priorResultsRef.current.scanId) return
     setBulkFixBusy(true); setErr(null)
     try {
       const r = await remediateScan(scanId, rows.map((row) => row.file))
@@ -566,6 +569,10 @@ export default function App() {
   const canonicalRun = useCanonicalStageLineage(primaryWorkflow?.scan_id || scan?.run?.id || null,
     getStageLineage)
   const canonicalStage = currentCanonicalStage(canonicalRun.lineage)
+  const priorResults = priorStageResults(canonicalRun.lineage, scan?.run?.id, {
+    awaitingLineage: Boolean(scan?.run?.completed_at && canonicalRun.lineage?.scan_id !== scan?.run?.id),
+  })
+  priorResultsRef.current = { ...priorResults, scanId: scan?.run?.id }
   const remediationStage = canonicalWorkflowStages(canonicalRun.lineage).find(stage => stage.stage === 'remediate')
   const remediationProgressHostId = view === 'remediate' && isVisible(access, 'remediate') && remediationStage?.execution_id
     ? `remediation-document-progress-${remediationStage.execution_id}` : null
@@ -1739,7 +1746,7 @@ export default function App() {
   // dashboard on screen until the first live poll lands — a few seconds in production, long
   // enough to make the new run look as though it returned stale results. `starting` closes the
   // click-to-child-effect gap; `running` keeps the old snapshot hidden for the whole new run.
-  const resultsReady = assessPhase === 'done'
+  const resultsReady = assessPhase === 'done' || (priorResults.assess && assessed)
     || (assessPhase === 'idle' && !!run?.assessed_at && justAssessed !== run?.id)
   // runIntegrity is a plain function, not a hook, so it is safe here — below the `if (!me)`
   // early return. The FETCH is not, and lives above it; see useScanManifest's call site.
@@ -2334,7 +2341,7 @@ export default function App() {
           openSourceKey={pendingSourceOpen} onOpenSourceHandled={() => setPendingSourceOpen(null)}
           onOpenAssess={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} rawFiles={scan?.files ?? []} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} preflightDegraded={preflightDegraded} preflightCapacityState={preflightCapacityState} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} activeScanId={liveScanId} jobId={discoverJobId} scope={run?.scope || null} run={run} scanList={scanList} runAt={inventorySnapshot({ run, inventory: run?.scope?.inventory || null })} decisions={decisions} setDecisions={setDecisions} showRunProgress={false}
+        {view === 'discover' && <Discover sources={sources} files={files} rawFiles={scan?.files ?? []} busy={busy} resultsOnly={priorResults.discover || isTimeTravel} onScan={guardStageAction(priorResultsRef, 'discover', requestScan)} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={guardStageAction(priorResultsRef, 'discover', () => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) })} progress={progress} preflightDegraded={preflightDegraded} preflightCapacityState={preflightCapacityState} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} activeScanId={liveScanId} jobId={discoverJobId} scope={run?.scope || null} run={run} scanList={scanList} runAt={inventorySnapshot({ run, inventory: run?.scope?.inventory || null })} decisions={decisions} setDecisions={setDecisions} showRunProgress={false}
           // Bootstrap already confirmed a scan exists (its cached snapshot arrived) but the full
           // getScan() payload hasn't yet — the same `run`-is-null window Overview/Assess show a
           // preview card for. Discover's own `files`/`scope` fall back to `[]`/`null` in exactly
@@ -2388,12 +2395,12 @@ export default function App() {
                 run.completed_at printed an ISO timestamp across the top of the screen. fmtStamp
                 also returns null for a missing value, which is exactly the prop's "omit rather
                 than invent" contract — so the `|| null` this used to carry is redundant. */}
-            {!busy && assessPhase === 'idle' && !assessed && (
+            {!busy && assessPhase === 'idle' && !assessed && !priorResults.assess && (
               <AssessSetup scanId={run.id} discoveredAt={fmtStamp(run?.completed_at)} busy={busy}
                            onSaved={(scope) => adoptScopeConfig({ scope: { name: 'Selected criteria', criteria: scope } })}
                            onRun={startAssessment} />
             )}
-            {assessPhase === 'starting' && (
+            {!priorResults.assess && assessPhase === 'starting' && (
               <section className="panel" role="status" aria-live="polite"
                        style={{ textAlign: 'center', padding: '52px 24px' }}>
                 <div className="spinner" aria-hidden="true" style={{ margin: '0 auto 14px' }} />
@@ -2403,7 +2410,7 @@ export default function App() {
                 </p>
               </section>
             )}
-            {!(busy && !run?.completed_at) && (
+            {!priorResults.assess && !(busy && !run?.completed_at) && (
               <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy}
                             controlled onReady={registerAssessStart}
                             onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase}
@@ -2455,17 +2462,17 @@ export default function App() {
                                   onBack={() => { setAssessFile(null); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
                                   onNext={assessFileNext ? () => { setAssessFile(assessFileNext); window.scrollTo({ top: 0, behavior: 'smooth' }) } : undefined}
                                   nextName={assessFileNext?.name}
-                                  onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+                                  onRemediate={priorResults.assess ? undefined : guardStageAction(priorResultsRef, 'assess', () => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) })} />
             )}
             {assessed && resultsReady && runDetails && (
               <RunDetails scanId={run.id} files={files} cap={cap} assessment={assessment}
                           onBack={() => { setRunDetails(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
             )}
-            {assessed && resultsReady && !runDetails && !assessFile && <><AssessSummary files={files} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} run={run} notStarted={run?.not_assessed?.count} integrityCaveat={integrityCaveat(runVerdict)} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onChangeScope={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessRunIntegrity key={run.id} verdict={runVerdict} manifest={runManifest.manifest} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} onBulkFix={(rows) => handleBulkFix(run.id, rows)} /><RuleBreakdown scanId={run.id} files={files} /></>}
+            {assessed && resultsReady && !runDetails && !assessFile && <><AssessSummary files={files} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} run={run} notStarted={run?.not_assessed?.count} integrityCaveat={integrityCaveat(runVerdict)} onRemediate={priorResults.assess ? undefined : guardStageAction(priorResultsRef, 'assess', () => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) })} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onChangeScope={priorResults.assess ? undefined : guardStageAction(priorResultsRef, 'assess', () => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) })} /><AssessRunIntegrity key={run.id} verdict={runVerdict} manifest={runManifest.manifest} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} onBulkFix={priorResults.assess ? undefined : (rows) => handleBulkFix(run.id, rows)} /><RuleBreakdown scanId={run.id} files={files} /></>}
           </>
         ) : (overviewPreview ? <AssessPreviewCard preview={overviewPreview} /> : placeholder))}
 
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} runStream={remRun} progressHostId={remediationProgressHostId} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} delivery={deliveryAccess(access, isTimeTravel).visible ? <Publish embedded run={run} files={files} cap={cap} assessment={assessment} certified={certifiedDocs} readOnly={deliveryAccess(access, isTimeTravel).readOnly} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} onOpenDetails={() => setView('publish')} /> : null} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} resultsOnly={priorResults.remediate} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} runStream={remRun} progressHostId={remediationProgressHostId} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} delivery={deliveryAccess(access, isTimeTravel).visible ? <Publish embedded run={run} files={files} cap={cap} assessment={assessment} certified={certifiedDocs} readOnly={deliveryAccess(access, isTimeTravel || priorResults.remediate).readOnly} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} onOpenDetails={() => setView('publish')} /> : null} /> : placeholder)}
 
         {view === 'publish' && (run ? <Publish run={run} files={files} cap={cap} assessment={assessment} certified={certifiedDocs} readOnly={isTimeTravel} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
@@ -2508,7 +2515,7 @@ export default function App() {
 
         {/* Guided workflow: a "next step" CTA on each workflow tab once a scan exists.
             'discover' is excluded — it owns a sub-step CTA (Inventory → Classify → Actions → Assess). */}
-        {run && ['assess', 'remediate', 'publish'].includes(view) && (() => {
+        {run && !priorResults[view === 'publish' ? 'release' : view] && ['assess', 'remediate', 'publish'].includes(view) && (() => {
           const flow = ['integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor']
           const label = { discover: '1 · Discover — classify the estate', assess: '2 · Assess — score vs WCAG',
                           remediate: '3 · Remediate — fix the issues', publish: '4 · Publish — certify what passes',
