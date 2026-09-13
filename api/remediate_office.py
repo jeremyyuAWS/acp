@@ -503,7 +503,9 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
     returned like a faithful source. An UNGROUNDED description — a pure vision guess on a
     textless image — is NOT written inline; it is collected into `proposals` (Medium) so the
     finding stays open and the reviewer approves the machine's guess in one click rather than
-    the platform silently asserting alt a human never confirmed conveys the intended meaning."""
+    the platform silently asserting alt a human never confirmed conveys the intended meaning.
+    Explicit evidence contradictions remain drafts and cannot use either automatic
+    grounding or the optional consistency-policy write path."""
     if not (vision_enabled and entries is not None and part_name):
         return None
     if vision_budget is not None and vision_budget[0] <= 0:
@@ -531,7 +533,8 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
         vision_budget[0] -= 1
     if not res:
         return None
-    if res.get("grounded"):
+    automatic_write_blocked = res.get("automatic_write_blocked") is True
+    if res.get("grounded") and not automatic_write_blocked:
         # An image of text is transcribed, not described — no model ran, so the provenance must
         # not claim one (it used to interpolate res['model'], which is None on that path and
         # rendered as "AI vision model (None)").
@@ -559,7 +562,7 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
     # still decides whether the criterion actually cleared.
     try:
         import core as _core
-        if _core.store.get_auto_apply_validated():
+        if not automatic_write_blocked and _core.store.get_auto_apply_validated():
             v = _ai.validate_alt_text(img, res["alt"], filename=context_file,
                                       scan_id=scan_id, file=context_file)
             if v and v.get("verdict") == "consistent":
@@ -582,7 +585,7 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
     # second model agrees — automatic transparency, no reviewer click. Real model agreement,
     # never a fabricated score (ADR 0016). Best-effort: no validator / a failure → no badge.
     agreement = None
-    if getattr(_ai, "_ALT_VALIDATOR_MODEL", ""):
+    if not automatic_write_blocked and getattr(_ai, "_ALT_VALIDATOR_MODEL", ""):
         try:
             v = _ai.validate_alt_text(img, res["alt"], filename=context_file,
                                       scan_id=scan_id, file=context_file)
@@ -614,6 +617,9 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
                         "and cannot be checked automatically. Confirm it conveys what the image "
                         "is FOR, not merely what it shows."),
             context=caption or None)
+        if automatic_write_blocked:
+            p.update(automatic_write_blocked=True, reason_code=res.get("reason_code"),
+                     why_review=res.get("evidence") or "The draft contradicts visible image evidence; review it individually.")
         if agreement:
             p["agreement"] = agreement          # {verdict, second_opinion, validator_model}
         proposals.append(p)

@@ -33,6 +33,8 @@ def eligibility(row, file):
     if ext not in writers.get(rule, ()):
         return 'Manual work or no supported proposal writer'
     proposals = row.get('proposals') or []
+    if any(isinstance(p, dict) and p.get("automatic_write_blocked") is True for p in proposals):
+        return "The draft contradicts visible image evidence; individual review is required"
     snapshots = row.get('proposal_snapshot_ids') or []
     if (not proposals or (row.get('finding_count') or 0) > len(proposals)
             or not all(isinstance(p, dict) and isinstance(p.get('proposed_value'), str)

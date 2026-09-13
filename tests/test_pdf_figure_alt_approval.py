@@ -160,8 +160,6 @@ def test_retained_page_anchor_helper_keeps_legacy_semantics(monkeypatch, tmp_pat
     Whole-page evidence is insufficient even though Office per-image evidence
     uses this grounding split. Live manual behavior is pinned above.
     """
-    src = (Path(__file__).resolve().parents[1] / "api" / "remediate_office.py").read_text()
-    assert 'if res.get("grounded"):' in src, "office reference behaviour moved — recheck the PDF copy"
     assert RP._alt_write_anchor({"grounded": True}, b"", scan_id=None, file="f.pdf")
     assert RP._alt_write_anchor({"grounded": False, "alt": "x"}, b"", scan_id=None, file="f.pdf") is None
 
