@@ -43,3 +43,10 @@ def test_review_all_does_not_disable_generation_or_claim_unsupported_work_automa
     assert not controls['allowed_rules']
     assert controls['draft_ai'] is True
     assert _route({'rule_id':'1.3.1','human_only':True}, policy) == ('manual','accessibility_judgment')
+
+def test_review_only_scope_criterion_can_be_selected_without_granting_a_writer():
+    choice = {'mode': 'custom', 'review_scs': ['2.4.5']}
+    assert normalize(choice) == choice
+    policy = {'rule_based': 2, 'ai': 1, 'fix_approval_policy': choice}
+    assert requires_review(policy, '2.4.5')
+    assert _route({'rule_id': '2.4.5', 'human_only': True}, policy) == ('manual', 'accessibility_judgment')

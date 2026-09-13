@@ -13,8 +13,8 @@ def normalize(value):
     selected = value.get('review_scs', [])
     if not isinstance(selected, list) or any(type(code) is not str for code in selected):
         raise ValueError('Review criteria must be a list of success criterion IDs')
-    from assessment_policy import RULE_CATALOG
-    known = {rule['id'] for rule in RULE_CATALOG}
+    from assessment_policy import RULE_CATALOG, REVIEW_FORMATS
+    known = {rule['id'] for rule in RULE_CATALOG} | set(REVIEW_FORMATS)
     codes = []
     for code in selected:
         code = re.sub(r'^(?:WCAG_?|SC_)', '', code).replace('_', '.')

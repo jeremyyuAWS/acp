@@ -137,6 +137,11 @@ def _universe() -> list[dict]:
         registered.setdefault(r.rule, set()).add(r.fmt)
 
     names = {r["id"]: (r["name"], r["level"]) for r in store.RULE_CATALOG}
+    # Review-only criteria need canonical display metadata without becoming
+    # validators in RULE_CATALOG. This catalog supplies labels, not capability.
+    wcag = json.loads((ROOT / "config" / "wcag-2.2-aa.json").read_text())
+    for criterion in wcag["criteria"]:
+        names.setdefault(criterion["num"], (criterion["name"], criterion["level"]))
     out = []
     for sc in sorted(set(store.RULE_FORMATS) | set(store.REVIEW_FORMATS) | set(registered),
                      key=lambda x: [int(n) for n in x.split(".")]):

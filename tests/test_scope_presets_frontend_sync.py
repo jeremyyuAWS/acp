@@ -112,6 +112,7 @@ def test_bookmark_review_universe_has_canonical_multiple_ways_metadata():
     import store
     assert 'pdf' in store.REVIEW_FORMATS['2.4.5']
     assert 'pdf' not in store.RULE_FORMATS.get('2.4.5', ())
+    assert not any(rule['id'] == '2.4.5' for rule in store.RULE_CATALOG)
 
 
 def test_every_preset_reaches_the_frontend_intact():
