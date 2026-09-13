@@ -1,9 +1,8 @@
-"""Performance regressions for the production PDF remediation path.
+"""Manual PDF figure context renders each page once and never dispatches page vision.
 
-These are call-count benchmarks, not wall-clock thresholds: CI speed varies, while each
-duplicate page call costs one OCR pass plus a 30-90 second CPU vision wait in production.
-The fixture deliberately puts several /Figure elements on the same page because the PDF
-remediator captions a whole-page render, making their expensive inputs byte-identical.
+A page image is useful browsing context, but it cannot provide an automatic caption
+for an unmapped Figure. These real tagged-PDF fixtures preserve render caching and
+page isolation while pinning zero OCR/vision work and zero written/applied alt text.
 """
 from __future__ import annotations
 
@@ -34,8 +33,8 @@ def _png() -> bytes:
      "evidence": "stub", "model": "stub-vision"},
     None,
 ])
-def test_same_page_figures_share_one_ocr_and_vision_result(tmp_path, monkeypatch, result):
-    """A successful description and a miss are both reusable page-level results."""
+def test_same_page_manual_figures_share_context_render_without_vision(tmp_path, monkeypatch, result):
+    """Even an available grounded model must not caption whole-page context."""
     src = tmp_path / "three-figures-one-page.pdf"
     _tagged_pdf(src, n_figs=3)
     calls = {"render": 0, "ocr_and_vision": 0}
@@ -52,17 +51,22 @@ def test_same_page_figures_share_one_ocr_and_vision_result(tmp_path, monkeypatch
     monkeypatch.setattr(ai, "vision_is_available", lambda: True)
     monkeypatch.setattr(ai, "describe_image_structured", describe)
 
+    props, fixes = [], []
     with pikepdf.open(str(src)) as pdf:
         applied, deferred = rp._fix_pdf_figure_alt(
             pdf, str(src), ai_enabled=True, scan_id=None, file=src.name,
-            proposals=[], applied_fixes=[])
+            proposals=props, applied_fixes=fixes)
+        assert all(rp._fig_alt(f) is None for f in rp._collect_figures(pdf.Root.StructTreeRoot))
 
-    assert calls == {"render": 1, "ocr_and_vision": 1}
-    assert (len(applied), deferred) == ((3, 0) if result else (0, 3))
+    assert calls == {"render": 1, "ocr_and_vision": 0}
+    assert applied == [] and fixes == [] and deferred == 3
+    assert [p["locator"] for p in props] == ["pdf:fig:1:0", "pdf:fig:1:1", "pdf:fig:1:2"]
+    assert len({p["thumb"] for p in props}) == 1
+    assert all(not p["proposed_value"] for p in props)
 
 
-def test_different_pages_do_not_share_vision_evidence(tmp_path, monkeypatch):
-    """The cache boundary is the page: evidence must never leak across page renders."""
+def test_different_pages_keep_distinct_manual_context_thumbnails(tmp_path, monkeypatch):
+    """Page thumbnails cannot be reused for a figure belonging to another page."""
     src = tmp_path / "two-pages.pdf"
     _tagged_pdf(src, n_figs=2)
     with pikepdf.open(str(src), allow_overwriting_input=True) as pdf:
@@ -71,19 +75,33 @@ def test_different_pages_do_not_share_vision_evidence(tmp_path, monkeypatch):
         figures[1]["/Pg"] = pdf.pages[1].obj
         pdf.save(str(src))
 
-    seen = []
-    monkeypatch.setattr(rp, "_render_page_png", lambda _p, page: bytes([page]) + _png())
+    import base64
+    rendered, described = [], []
+
+    def render(_path, page):
+        rendered.append(page)
+        out = io.BytesIO()
+        Image.new("RGB", (600, 800), (page, 0, 0)).save(out, format="PNG")
+        return out.getvalue()
+
+    def describe(image, **kwargs):
+        described.append(image)
+        return {"alt": "Unrelated page caption", "grounded": True, "model": "stub"}
+
+    monkeypatch.setattr(rp, "_render_page_png", render)
     monkeypatch.setattr(ai, "vision_is_available", lambda: True)
-
-    def describe(image, **_kwargs):
-        seen.append(image[0])
-        return {"alt": f"Description for page {image[0]}", "grounded": True,
-                "evidence": "stub", "model": "stub-vision"}
-
     monkeypatch.setattr(ai, "describe_image_structured", describe)
+    props, fixes = [], []
     with pikepdf.open(str(src)) as pdf:
         applied, deferred = rp._fix_pdf_figure_alt(
-            pdf, str(src), ai_enabled=True, scan_id=None, file=src.name)
+            pdf, str(src), ai_enabled=True, scan_id=None, file=src.name,
+            proposals=props, applied_fixes=fixes)
+        assert all(rp._fig_alt(f) is None for f in rp._collect_figures(pdf.Root.StructTreeRoot))
 
-    assert seen == [1, 2]
-    assert len(applied) == 2 and deferred == 0
+    assert rendered == [1, 2] and described == []
+    assert applied == [] and fixes == [] and deferred == 2
+    assert [p["locator"] for p in props] == ["pdf:fig:1:0", "pdf:fig:2:0"]
+    pixels = [Image.open(io.BytesIO(base64.b64decode(p["thumb"].split(",", 1)[1]))).getpixel((0, 0))
+              for p in props]
+    assert pixels == [(1, 0, 0), (2, 0, 0)]
+    assert all(not p["proposed_value"] for p in props)
