@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getWorkerRevisions } from './api.js'
 
 // The Container App deploy history — every revision GET /control/workers/revisions returns, not
@@ -32,14 +32,15 @@ const shortName = (name) => {
 export default function RevisionHistoryPanel() {
   const [state, setState] = useState({ loading: true, configured: null, revisions: [], error: null })
 
+  const mounted = useRef(false)
   const load = () => {
     setState((s) => ({ ...s, loading: true, error: null }))
     getWorkerRevisions()
-      .then((r) => setState({ loading: false, configured: r.configured, revisions: r.revisions || [], error: null }))
-      .catch(() => setState((s) => ({ ...s, loading: false, error: 'Could not load revision history.' })))
+      .then((r) => { if (mounted.current) setState({ loading: false, configured: r.configured, revisions: r.revisions || [], error: null }) })
+      .catch(() => { if (mounted.current) setState((s) => ({ ...s, loading: false, error: 'Could not load revision history.' })) })
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { mounted.current = true; load(); return () => { mounted.current = false } }, [])
 
   if (state.configured === false) return null   // no Azure configured — nothing to show
 
