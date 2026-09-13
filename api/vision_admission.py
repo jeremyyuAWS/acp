@@ -175,6 +175,7 @@ separate from job-state Redis so a GPU queue cannot reconfigure that dependency.
                                               socket_timeout=1, socket_connect_timeout=1,
                                               retry_on_timeout=False)
             except Exception:
-                pass
+                import logging
+                logging.getLogger(__name__).warning("Vision coordinator configuration unavailable; shared dispatch remains disabled")
         _CONFIGURED = VisionAdmission(client, capacity=capacity, required=required)
         return _CONFIGURED

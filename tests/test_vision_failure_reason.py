@@ -242,8 +242,13 @@ def test_result_keys_are_unchanged_plus_reason(monkeypatch, build, good, empty):
     res = build().generate("describe", b"IMG")
     # prompt_tokens/completion_tokens joined the normalized result in the Langfuse audit N1 change,
     # so cloud generations carry real `usage` — counts only, never any prompt/completion text.
-    assert set(res) == {"text", "model", "provider", "zone", "latency_ms", "ok", "cost_usd",
-                        "reason", "prompt_tokens", "completion_tokens"}
+    expected = {"text", "model", "provider", "zone", "latency_ms", "ok", "cost_usd",
+                "reason", "prompt_tokens", "completion_tokens"}
+    # Ollama additionally reports measured loading/inference counters, never content.
+    if res["provider"] == "ollama":
+        expected.add("timing")
+        assert isinstance(res["timing"], dict)
+    assert set(res) == expected
 
 
 def test_azure_cost_still_computed_from_real_usage(monkeypatch):
