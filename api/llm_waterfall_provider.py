@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_CEILING
 import hashlib
 import json
+import logging
 import os
 import time
 from uuid import uuid4
@@ -507,8 +508,10 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
                          position=index-1, model=model.name, status=status,
                          reason_code=('independent_caption_verification_failed' if verified_retry is not None
                                       else 'approved_model_fallback'))
-                except Exception:
-                    pass  # Narration cannot change admitted work or spending reconciliation.
+                except Exception as error:
+                    # Narration cannot change admitted work or spending reconciliation.
+                    logging.getLogger(__name__).warning('ai_escalation_narration_unavailable error_type=%s',
+                                                       type(error).__name__)
         narrate('dispatched')
         try:
             result = generator.generate_text(model.name, prompt)

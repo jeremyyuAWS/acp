@@ -1,5 +1,6 @@
 """Content-free narration for an admitted, frozen next-model attempt."""
 import json
+import logging
 
 
 def emit(store, *, scan_id, owner_id, run_id, file, operation_id, position=1,
@@ -36,6 +37,7 @@ def emit(store, *, scan_id, owner_id, run_id, file, operation_id, position=1,
                detail=('May take longer' if status == 'dispatched' else
                        'Saved-file verification is next' if status == 'candidate_caption_validated' else None),
                phase='remediate', force=True)
-    except Exception:
+    except Exception as error:
         # Narration must not change model admission, billing, or artifact authority.
-        pass
+        logging.getLogger(__name__).warning('ai_escalation_activity_unavailable error_type=%s',
+                                            type(error).__name__)
