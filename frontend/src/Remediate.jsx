@@ -5,6 +5,8 @@ import AcceptedRemediationPlanSummary from './AcceptedRemediationPlanSummary.jsx
 import { getAcceptedRemediationPlan } from './api.js'
 import { automaticReviewQueue } from './automaticReviewQueue.js'
 import useRunAiApproval from './useRunAiApproval.js'
+import useReviewQueueRefresh from './useReviewQueueRefresh.js'
+import { authEpoch } from './apiIdentity.js'
 import { assessMetrics } from './assessMetrics.js'
 import { reviewableRemediationItems } from './remediationReviewAvailability.js'
 import RemediationLiveDocuments from './RemediationLiveDocuments.jsx'
@@ -38,12 +40,12 @@ import ReviewDetails from './ReviewDetails.jsx'
 import DueDate from './DueDate.jsx'
 import UndoFix from './UndoFix.jsx'
 import FixOutcomes from './FixOutcomes.jsx'
-import { autoFixRows, matchesWorkflow, progress } from './remediationInboxModel.js'
+import { autoFixRows, matchesWorkflow, progress, isAiAssistedDraft } from './remediationInboxModel.js'
 import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, getRemediationExceptions, downloadRemediated, listHitlQueue, listAllHitl, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
+import { remediateScan, getRemediationStatus, getRemediationExceptions, downloadRemediated, listAllHitl, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
 import { stageExecutionNotice } from './stageExecutionNotice.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
@@ -470,15 +472,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const fixRequest = useRef(0)
   const fetchFixes = () => {
     const request = ++fixRequest.current
+    const epoch = authEpoch()
     if (!runId) { setScanDiffs([]); setDiffTotals(null); setAppliedFixes([]); setAiZoneByFile({}); return }
     Promise.all([getScanRemediationDiffs(runId, true), getAppliedFixes(runId), getScanAiCalls(runId),
       getRemediationExceptions(runId).then(exceptions => {
-        if (request === fixRequest.current) setReviewExceptions(exceptions)
+        if (request === fixRequest.current && authEpoch() === epoch) setReviewExceptions(exceptions)
       }).catch(() => {
-        if (request === fixRequest.current) setActError('Review exceptions could not be loaded. Some review items may be unavailable.')
+        if (request === fixRequest.current && authEpoch() === epoch) setActError('Review exceptions could not be loaded. Some review items may be unavailable.')
       })])
       .then(([d, a, calls]) => {
-        if (request !== fixRequest.current) return
+        if (request !== fixRequest.current || authEpoch() !== epoch) return
         const page = remediationDiffPage(d)
         setScanDiffs(page.items); setDiffTotals(page); setAppliedFixes(Array.isArray(a) ? a : [])
         const byFile = {}
@@ -523,36 +526,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     fetchFixes()
     if (!runId) { setQueue(SIM ? buildHumanQueue(files, {}) : []); return }
     if (SIM) { setQueue(buildHumanQueue(files, {})); return }
-    // Opening Plan only reads existing work; it must not create approvals from findings.
-    listHitlQueue(runId)
-      .then((items) => {
-        const seeded = {}
-        applyHitlRows(items).forEach((it) => { if (it.assignee) seeded[it.file] = it.assignee })
-        if (Object.keys(seeded).length) setAssignees?.((a) => ({ ...seeded, ...a }))
-      })
-      .catch(() => { setQueue([]); setDecidedItems([]); setActError('Review items could not be loaded. Try opening this run again.') })
+    // The scoped queue reader below loads recorded rows; opening Plan never approves work.
+    setQueue([])
   }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Drain in sync with the unified inbox: when an item is approved/rejected in the popup
-  // (or anywhere), re-read the queue so "N remaining", the review banner and the recorded
-  // decisions all update, and re-pull the applied-fix evidence so the counts move with real
-  // progress.
-  useEffect(() => {
-    if (!runId || SIM) return
-    const reload = () => {
-      listHitlQueue(runId).then(applyHitlRows).catch(() => {})
-      fetchFixes()
-    }
-    window.addEventListener('acp:hitl-changed', reload)
-    return () => window.removeEventListener('acp:hitl-changed', reload)
-  }, [runId, files]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Pull durable file evidence as the shared stream reports completed work.
-  useEffect(() => {
-    if (!runId || !runStream?.snapshot?.batch_id) return
-    const timer = setTimeout(fetchFixes, 800)
-    return () => clearTimeout(timer)
-  }, [runId, runStream?.snapshot?.fixes?.applied, runStream?.snapshot?.documents?.completed])
 
   // Derive fix-type breakdown from auto-action files in the corpus
   const fixTypesDisplay = useMemo(() => {
@@ -647,7 +623,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${failed ? `, ${failed} failed` : ''}.`)
     try { sessionStorage.removeItem(REMKEY(runId)) } catch { /* ignore */ }
     onRefresh?.(); fetchFixes()
-    if (!SIM) listHitlQueue(runId).then(applyHitlRows).catch(() => {})
+    if (!SIM) refreshReviewQueue()
   }
 
   // THE SNAPSHOT AND THE STREAM ARE NO LONGER OWNED HERE. `useRemediationRun` holds both, at App
@@ -1070,6 +1046,22 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const reviewQueue = reviewableRemediationItems(dedupeById([...queue, ...rejectedItems, ...decidedItems, ...autoFixItems]),
     { files, exceptions: reviewExceptions?.run_id === runId ? reviewExceptions : null })
   const inboxQueue = automaticReviewQueue(reviewQueue, runAiApproval.policy, { ...decisions, ...ackd })
+  const refreshReviewQueue = useReviewQueueRefresh({
+    scanId: runId, batchId: acceptedBatchId, approval: runAiApproval.policy, disabled: SIM,
+    progressKey: `${runStream?.snapshot?.revision ?? ''}:${runStream?.snapshot?.review?.items ?? ''}:${runStream?.snapshot?.fixes?.applied ?? ''}:${runStream?.snapshot?.documents?.completed ?? ''}:${runStream?.status?.queued ?? ''}:${runStream?.status?.running ?? ''}:${runStream?.events?.[0]?.id ?? ''}`,
+    active: runAiApproval.enabled === true && inboxQueue.some(row =>
+      row.automaticQueued || (isAiAssistedDraft(row) && !row.inspectionOnly
+        && (matchesWorkflow(row, 'needs-review', { ...decisions, ...ackd })
+          || matchesWorkflow(row, 'awaiting-validation', { ...decisions, ...ackd })))),
+    onRows: items => {
+      setActError(previous => previous === 'Review updates could not be refreshed. Recorded counts are retained.' ? '' : previous)
+      const seeded = {}
+      applyHitlRows(items).forEach(item => { if (item.assignee) seeded[item.file] = item.assignee })
+      if (Object.keys(seeded).length) setAssignees?.(previous => ({ ...seeded, ...previous }))
+      fetchFixes()
+    },
+    onError: () => setActError('Review updates could not be refreshed. Recorded counts are retained.'),
+  })
   const hasRemediationResults = inboxQueue.length > 0 || files.some(file => file.remediated_at || file.drive_write_url)
     || (runStream?.snapshot?.terminal === true && runStream.snapshot.total_documents > 0)
   const inboxDecisions = { ...decisions, ...ackd }
