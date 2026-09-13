@@ -5140,7 +5140,8 @@ def _apply_one_value_kind(
         values: dict[str, str], scs_to_clear: set[str],
         write_fn, diff_rule_id: str, credit_rule_ids: tuple[str, ...],
         noun: str, job: dict, pending_credits: list, extra_work: bool = False,
-        residual_state: dict | None = None, diff_rule_ids: dict | None = None) -> tuple[bytes, bool]:
+        residual_state: dict | None = None, diff_rule_ids: dict | None = None,
+        refusal_reason_fn=None) -> tuple[bytes, bool]:
     """Shared write → verify → credit sequence for one kind of approved value (alt text or
     link text) applied on top of `working`. Returns (new_working, uploaded_this_kind).
 
@@ -5235,12 +5236,15 @@ def _apply_one_value_kind(
 
     _phase(job, f"writing the approved {noun}")
     fixed, applied, unresolved = write_fn(working, values)
+    crop_refusal = (refusal_reason_fn is not None and any(
+        refusal_reason_fn(working, locator) == 'cropped_image_requires_visible_transcription'
+        for locator in unresolved))
     if unresolved:
         # A locator that no longer resolves means the reviewer approved a value for content
         # this document no longer has. Never guess at different content — record and move on.
         core.store.log_decision(
             "system", "apply.unresolved", scan_id=scan_id, file=filename,
-            detail=f"{len(unresolved)} approved {noun} value(s) had no matching content: "
+            detail=f"{len(unresolved)} approved {noun} value(s) were not written: "
                    + ", ".join(unresolved[:5]))
         # An item whose EVERY locator went unresolved had nothing written for it. That is a
         # post-write outcome of its own — the draft was accepted for content the document no
@@ -5251,7 +5255,7 @@ def _apply_one_value_kind(
                             if item_locators.get(i) and set(item_locators[i]) <= gone]
         if unresolved_items:
             _model_outcome("write_unresolved",
-                           f"{noun} locator(s) no longer resolve: "
+                           f"{noun} locator(s) could not be safely written: "
                            + ", ".join(sorted(gone)[:5]),
                            item_ids=unresolved_items)
             lane_items = [i for i in lane_items if i not in unresolved_items]
@@ -5271,11 +5275,16 @@ def _apply_one_value_kind(
         # Logged only when locators actually went unresolved: a lane with nothing to write is an
         # ordinary no-op and must not manufacture an outcome for a reviewer to read.
         if unresolved:
+            explanation = (
+                "The image is cropped in Word. Review a transcription of the visible crop "
+                "and confirm no useful diagram content would be lost before replacing it. "
+                "The original image is kept unchanged."
+                if crop_refusal else
+                f"All {len(unresolved)} approved locator(s) reach no writable image in this document.")
             core.store.log_decision(
                 "system", "apply.unverified", scan_id=scan_id, file=filename,
-                detail=f"wrote no {noun} value(s) for {sorted(scs_to_clear)}: all "
-                       f"{len(unresolved)} approved locator(s) reach no image in this document. "
-                       f"Credit withheld; the approved value is kept for retry")
+                detail=f"wrote no {noun} value(s) for {sorted(scs_to_clear)}: "
+                       + explanation + " Credit withheld; the approved value is kept for retry")
             _model_outcome("write_unresolved",
                            f"nothing written; every {noun} locator was unresolved"
                            + unresolved_note, regressions=None)
@@ -5758,11 +5767,14 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     # credit for the 1.4.5 the reviewer actually fixed.
     image_of_text_uploaded = False
     if image_of_text_values:
+        image_replacement_refusal = None
         if ext == 'pptx':
             from apply_pptx_image_replacement import apply_pptx_image_replacement
             image_replacement_writer = apply_pptx_image_replacement
         else:
-            from apply_office_image_replacement import apply_office_image_replacement
+            from apply_office_image_replacement import (
+                apply_office_image_replacement, office_image_replacement_refusal)
+            image_replacement_refusal = lambda data, locator: office_image_replacement_refusal(data, ext, locator)
             image_replacement_writer = lambda data, values: apply_office_image_replacement(data, ext, values)
         working, image_of_text_uploaded = _apply_one_value_kind(
             scan_id=scan_id, filename=filename, working=working,
@@ -5770,6 +5782,7 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             write_fn=image_replacement_writer,
             diff_rule_id="1.4.5", credit_rule_ids=_IMAGE_OF_TEXT_SCS,
             noun="image-of-text replacement", job=job,
+            refusal_reason_fn=image_replacement_refusal,
             residual_state=residual_state, pending_credits=pending_credits)
 
     pdf_structure_uploaded = False

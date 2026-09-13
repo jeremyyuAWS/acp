@@ -150,6 +150,39 @@ def _excel(root, rid, text):
     return True
 
 
+def office_image_replacement_refusal(data: bytes, ext: str, locator: str) -> str | None:
+    """Explain a crop refusal without confusing existing content with a missing image.
+
+    This is diagnostic only. Full-raster OCR cannot authorize deleting a cropped
+    picture: the visible crop may contain a diagram or exclude transcribed words.
+    """
+    if ext.lower().lstrip('.') != 'docx':
+        return None
+    match = LOC.fullmatch(str(locator).strip())
+    if not match:
+        return None
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zin:
+            media = _media_index(zin)
+            index = int(match[1]) - 1
+            if not 0 <= index < len(media):
+                return None
+            refs = _references(zin, media[index])
+            if len(refs) != 1 or refs[0][0] != 'word/document.xml':
+                return None
+            root = _read(zin, refs[0][0])
+            blips = root.xpath('.//a:blip[@r:embed=$rid]', namespaces=NS, rid=refs[0][1])
+            if len(blips) != 1:
+                return None
+            inline = next((p for p in blips[0].iterancestors()
+                           if p.tag == _q('wp', 'inline')), None)
+            if inline is not None and inline.xpath('.//a:srcRect', namespaces=NS):
+                return 'cropped_image_requires_visible_transcription'
+    except (zipfile.BadZipFile, ET.XMLSyntaxError, KeyError):
+        return None
+    return None
+
+
 def apply_office_image_replacement(data: bytes, ext: str, values: dict[str, str]):
     """Return (bytes, applied records, unresolved locators), same write contract as PPTX."""
     if not values:
