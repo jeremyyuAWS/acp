@@ -1,9 +1,11 @@
-.live-heartbeat{display:inline-flex;align-items:center;gap:7px;min-width:44px;min-height:18px}
-.live-heartbeat-bars{--heartbeat-color:var(--success-fg,#397521);display:flex;align-items:stretch;gap:4px;width:44px;height:18px;flex:0 0 44px;overflow:hidden}
-.live-heartbeat-bars[data-stage="discover"]{--heartbeat-color:var(--info-fg,#1f5fa8)}
-.live-heartbeat-bars[data-stage="assess"]{--heartbeat-color:var(--success-fg,#397521)}
-.live-heartbeat-bars[data-stage="remediate"]{--heartbeat-color:var(--amber-ink,#8a5a00)}
-.live-heartbeat-bars[data-stage="release"]{--heartbeat-color:var(--purple,#6f4a78)}
+.live-heartbeat{--heartbeat-color:var(--success-fg,#397521);--heartbeat-bg:var(--green-bg,#f0f7e6);--heartbeat-line:var(--green-line,#a8cf7a);display:inline-flex;align-items:center;gap:7px;min-width:44px;min-height:18px}
+.live-heartbeat-bars{display:flex;align-items:stretch;gap:4px;width:44px;height:18px;flex:0 0 44px;overflow:hidden}
+.live-heartbeat[data-stage="discover"]{--heartbeat-color:var(--info-fg,#1f5fa8);--heartbeat-bg:#eef5fc;--heartbeat-line:#a7c8e8}
+.live-heartbeat[data-stage="assess"]{--heartbeat-color:var(--success-fg,#397521)}
+.live-heartbeat[data-stage="remediate"]{--heartbeat-color:var(--amber-ink,#8a5a00);--heartbeat-bg:var(--amber-bg,#fff8e6);--heartbeat-line:var(--amber-line,#e7c46a)}
+.live-heartbeat[data-stage="release"]{--heartbeat-color:var(--purple,#6f4a78);--heartbeat-bg:#f6f0f8;--heartbeat-line:#ccb5d4}
 .live-heartbeat-bars i{display:block;width:8px;flex:0 0 8px;height:18px;border-radius:2px;background:var(--heartbeat-color);transition:opacity .25s ease}
-.live-heartbeat__text{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.live-heartbeat[data-show-text="true"]{flex-direction:column;align-items:flex-end;gap:3px}
+.live-heartbeat__dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:0 0 6px}
+.live-heartbeat__text{display:inline-flex;align-items:center;gap:5px;padding:2px 7px;border:1px solid var(--heartbeat-line);border-radius:4px;background:var(--heartbeat-bg);color:var(--heartbeat-color);font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
 @media(prefers-reduced-motion:reduce){.live-heartbeat-bars i{transition:none}}

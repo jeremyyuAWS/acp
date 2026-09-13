@@ -94,8 +94,8 @@ export default function LiveHeartbeatBars({ measuredAt, stage = 'assess', histor
   const age = refreshedAge(lastSignal, now)
 
   return (
-    <span className="live-heartbeat" data-terminal={terminal ? 'true' : 'false'}>
-      <span className="live-heartbeat-bars" data-stage={stage} aria-hidden="true"
+    <span className="live-heartbeat" data-stage={stage} data-show-text={showText ? 'true' : 'false'} data-terminal={terminal ? 'true' : 'false'}>
+      <span className="live-heartbeat-bars" aria-hidden="true"
         title="Snapshot refreshes in four 15-second windows over the last minute">
         {buckets.map((value, index) => (
           <i key={index} data-active={value ? 'true' : 'false'}
@@ -103,6 +103,7 @@ export default function LiveHeartbeatBars({ measuredAt, stage = 'assess', histor
         ))}
       </span>
       {showText && <span className="live-heartbeat__text">
+        <span className="live-heartbeat__dot" aria-hidden="true" />
         {terminal ? 'Final' : 'Live'} · {age}
       </span>}
       <span className="sr-only">{terminal ? 'Final snapshot refresh history' : 'Snapshot refresh history'}, {age}; {total} successful canonical snapshot refresh{total === 1 ? '' : 'es'} in the last 60 seconds. Four slots represent fifteen seconds each; totals are from the canonical snapshot.</span>

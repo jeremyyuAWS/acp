@@ -25,6 +25,8 @@ describe('rolling canonical snapshot refresh bars', () => {
     expect(html).toContain('canonical snapshot refresh')
     expect(html.match(/<i /g)).toHaveLength(4)
     expect(html).toContain('data-stage="assess"')
+    expect(html).toContain('data-show-text="true"')
+    expect(html).toContain('live-heartbeat__dot" aria-hidden="true"')
     expect(html).not.toContain('polyline')
     expect(html).not.toContain('aria-live')
     expect(html).not.toContain('role="status"')
@@ -37,6 +39,9 @@ describe('rolling canonical snapshot refresh bars', () => {
 
   it('locks the strip dimensions and maps the approved stage colors', () => {
     const css = readFileSync(join(here, 'live-heartbeat-bars.css'), 'utf8')
+    expect(css).toContain('flex-direction:column;align-items:flex-end;gap:3px')
+    expect(css).toContain('border:1px solid var(--heartbeat-line)')
+    expect(css).toContain('background:var(--heartbeat-bg);color:var(--heartbeat-color)')
     expect(css).toMatch(/width:44px;height:18px;flex:0 0 44px/)
     expect(css).toMatch(/width:8px;flex:0 0 8px;height:18px/)
     expect(css).toMatch(/data-stage="discover"[^}]*#1f5fa8/)
