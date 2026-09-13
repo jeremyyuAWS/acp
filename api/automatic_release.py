@@ -151,7 +151,9 @@ def public(row, store=None):
         package = dict(job_id=row['progress']['_package_job_id'], status=job.get('status', 'queued'))
         if status == 'completed' and package['status'] != 'done':
             status = 'failed' if package['status'] in {'dead', 'cancelled'} else 'publishing'
-    return dict(id=row['id'], status=status, package=package, run_id=row['run_id'], files=list(files),
+    from release_batch_progress import read_authorization
+    batch_progress = read_authorization(store, row) if store is not None else {'available': False, 'scope': 'automatic'}
+    return dict(id=row['id'], status=status, package=package, batch_progress=batch_progress, run_id=row['run_id'], files=list(files),
                 request_id=row['request_id'], source_revision=row['intent']['source_revision'],
                 destination_label=destination_label(row['intent']['destination']), destination=row['intent']['destination'],
                 progress=counts, file_progress=details, stopped_at=row.get('stopped_at'),

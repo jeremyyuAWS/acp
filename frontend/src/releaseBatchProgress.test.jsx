@@ -62,3 +62,16 @@ it('shows blocked cumulative delivery as attention even after the latest request
 it('does not declare release complete while the authorization is still finalizing reports or packaging', () => {
   expect(releaseBatchProgress(snapshot({...batch,delivered:147,remaining:0,status:'publishing'}))).toMatchObject({state:'processing',label:'Finalizing automatic release'})
 })
+
+it('keeps saved-plan tiles separate from the latest one-file request', () => {
+  const full = {...batch,scope_id:'approved',revision:1,
+    buckets:{waiting:138,processing:0,published:9,failed:0,skipped:0,unclassified:0},
+    file_membership:Object.fromEntries(Array.from({length:147},(_,i)=>[`file-${i}`,i<9?'published':'waiting']))}
+  container=document.createElement('div');document.body.appendChild(container);root=createRoot(container)
+  act(()=>root.render(<WorkflowStageStack lineage={{scan_id:'scan',workflow_revision:1,stages:[snapshot(full)]}}/>))
+  const tiles=container.querySelector('.workflow-outcome-tiles')
+  expect(tiles.textContent).toContain('147')
+  expect(tiles.querySelector('strong[aria-label="Published: 9"]')).not.toBeNull()
+  expect(tiles.querySelector('strong[aria-label="Published: 1"]')).toBeNull()
+  expect(tiles.querySelector('button.workflow-outcome-tiles__tile')).toBeNull() // Incremental queue endpoint cannot supply plan membership.
+})

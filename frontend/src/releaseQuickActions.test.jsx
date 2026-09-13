@@ -253,9 +253,8 @@ it('keeps consented remaining-work publishing clear and excludes a delivered cop
 it('disables the publish batch covered by durable automatic publication without duplicate authorization', async () => {
  const v = await mount({automaticCoveredFiles:['ready.pdf','changes.pdf','manual.pdf']})
  expect(v.container.textContent).toContain('Automatic publishing is on')
- expect(v.button('Publish batch (1)').disabled).toBe(true)
- await click(v.button('Publish batch (1)'))
- await click(v.button('Approve eligible changes'))
+ expect(v.button('Publish batch (1)')).toBeUndefined()
+ expect(v.button('Approve eligible changes')).toBeUndefined()
  expect(v.props.onReady).not.toHaveBeenCalled()
  expect(api.authorizeReleaseContinuation).not.toHaveBeenCalled()
  await v.render({automaticCoveredFiles:[]})
@@ -271,15 +270,23 @@ it('leaves manual copies outside automatic coverage available', async () => {
 })
 it('blocks an immediate manual action while automatic publication is still being checked', async () => {
  const v = await mount({automaticStatusPending:true})
- expect(v.button('Publish batch (1)').disabled).toBe(true)
+ expect(v.button('Publish batch (1)')).toBeUndefined()
  expect(v.container.textContent).toContain('Checking automatic publication…')
- await click(v.button('Publish batch (1)'));expect(v.props.onReady).not.toHaveBeenCalled()
+ expect(v.props.onReady).not.toHaveBeenCalled()
  await v.render({automaticStatusPending:false})
  expect(v.button('Publish batch (1)').disabled).toBe(false)
 })
 it('explains a saved automatic reconnect instead of suggesting active delivery', async () => {
  const v = await mount({automaticCoveredFiles:['ready.pdf','changes.pdf','manual.pdf'],automaticNeedsReconnect:true})
  expect(v.container.textContent).toContain('Reconnect the destination above to resume')
- expect(v.button('Publish batch (1)').disabled).toBe(true)
+ expect(v.button('Publish batch (1)')).toBeUndefined()
  expect(v.container.textContent).not.toContain('These copies publish automatically after processing')
+})
+
+it('never selects an automatic copy when manual and automatic ready copies share the screen', async () => {
+ const v = await mount({automaticCoveredFiles:['changes.pdf'],ready:[{file:'ready.pdf'},{file:'changes.pdf'}]})
+ expect(v.button('Publish batch (1)')).toBeDefined()
+ await click(v.button('Publish batch (1)'))
+ expect(v.props.onReady).toHaveBeenCalledWith(['ready.pdf'])
+ expect(api.planReleaseContinuation.mock.calls[0][1]).toEqual(['ready.pdf','manual.pdf'])
 })

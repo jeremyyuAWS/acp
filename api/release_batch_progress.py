@@ -12,7 +12,6 @@ def read(store, execution):
 
 def _read(store, execution):
     from automatic_release_store import get
-    from release_artifacts import artifact_tag
     owner, scan = execution['owner_email'], execution['scan_id']
     with store._db.cursor() as cur:
         store._db.execute(cur, 'SELECT COALESCE(j.payload,o.payload) AS payload '
@@ -42,6 +41,23 @@ def _read(store, execution):
             or parent.get('workflow_id') != execution.get('workflow_id')
             or parent.get('workflow_revision') != execution.get('workflow_revision')):
         return {'available': False, 'scope': 'automatic'}
+    return _project(store, row)
+
+
+def read_authorization(store, row):
+    """The same saved-plan snapshot for the authorization observer and stage header."""
+    try:
+        parent = store.get_stage_execution(row['run_id'], owner=row['owner_email'])
+        if not parent or parent.get('stage') != 'remediate' or not parent.get('is_current') or parent.get('scan_id') != row['scan_id']:
+            return {'available': False, 'scope': 'automatic'}
+        return _project(store, row)
+    except Exception:
+        return {'available': False, 'scope': 'automatic'}
+
+
+def _project(store, row):
+    from release_artifacts import artifact_tag
+    owner, scan = row['owner_email'], row['scan_id']
     files = row['intent'].get('files')
     if isinstance(files, dict):
         files = list(files)  # Current authorizations freeze per-file source identities.
@@ -56,6 +72,8 @@ def _read(store, execution):
     entries = row['progress'].get('files', {})
     current_records = store.get_file_records(scan, owner=owner, files=files)
     delivered = 0
+    buckets = dict(waiting=0, processing=0, published=0, failed=0, skipped=0, unclassified=0)
+    membership = {}
     for file in files:
         digest = entries.get(file, {}).get('artifact_digest')
         receipt = receipts.get(file, {})
@@ -69,6 +87,16 @@ def _read(store, execution):
                 and receipt.get('status') == 'published'
                 and receipt.get('artifact_digest') == artifact_tag(raw_digest)):
             delivered += 1
+            category = 'published'
+        else:
+            state = entries.get(file, {}).get('state')
+            category = {'waiting': 'waiting', 'publishing': 'processing',
+                        'blocked': 'failed', 'failed': 'failed', 'stopped': 'failed',
+                        'skipped': 'skipped'}.get(state, 'unclassified')
+            if row['status'] in {'stopped', 'failed'} and category in {'waiting', 'processing'}:
+                category = 'failed'
+        buckets[category] += 1
+        membership[file] = category
     status = row['status']
     if status == 'completed' and row['progress'].get('_package_job_id'):
         package = store.get_job(row['progress']['_package_job_id']) or {}
@@ -76,4 +104,5 @@ def _read(store, execution):
             status = 'failed' if package.get('status') in {'dead', 'cancelled'} else 'publishing'
     return {'available': True, 'authorization_id': row['id'], 'run_id': row['run_id'],
             'total': len(files), 'delivered': delivered, 'remaining': len(files) - delivered,
-            'status': status, 'revision': row['revision']}
+            'status': status, 'revision': row['revision'], 'scope_id': row['id'],
+            'buckets': buckets, 'file_membership': membership}
