@@ -35,6 +35,15 @@ it('never treats the overall scan population as approved scope for a manual or a
 it('keeps stopped delivery visible instead of reviving automatic publication', () => {
   expect(releaseBatchProgress(snapshot({...batch,status:'stopped'}))).toMatchObject({state:'failed',label:'Automatic delivery stopped'})
 })
+it('shows blocked cumulative delivery as attention even after the latest request completes', () => {
+  container=document.createElement('div');document.body.appendChild(container);root=createRoot(container)
+  act(() => root.render(<WorkflowStageStack lineage={{scan_id:'scan',workflow_revision:1,
+    stages:[snapshot({...batch,delivered:45,remaining:102,status:'blocked'})]}}/>))
+  const summary=container.querySelector('.workflow-stage-stack__summary')
+  expect(summary.textContent).toContain('Delivery needs attention')
+  expect(summary.textContent).toContain('45 of 147 authorized files delivered')
+  expect(summary.textContent).not.toContain('Complete')
+})
 it('does not declare release complete while the authorization is still finalizing reports or packaging', () => {
   expect(releaseBatchProgress(snapshot({...batch,delivered:147,remaining:0,status:'publishing'}))).toMatchObject({state:'processing',label:'Finalizing automatic release'})
 })

@@ -12,6 +12,7 @@ def read(store, execution):
 
 def _read(store, execution):
     from automatic_release_store import get
+    from release_artifacts import artifact_tag
     owner, scan = execution['owner_email'], execution['scan_id']
     with store._db.cursor() as cur:
         store._db.execute(cur, 'SELECT COALESCE(j.payload,o.payload) AS payload '
@@ -49,14 +50,26 @@ def _read(store, execution):
                            and release.get('folder_name') == row['intent'].get('release_folder_name'))
     receipts = {r['file']: r for r in release.get('documents', [])} if destination_matches else {}
     entries = row['progress'].get('files', {})
+    current_records = store.get_file_records(scan, owner=owner, files=files)
     delivered = 0
     for file in files:
         digest = entries.get(file, {}).get('artifact_digest')
         receipt = receipts.get(file, {})
-        if (isinstance(digest, str) and digest.startswith('sha256:') and len(digest) == 71
-                and all(c in '0123456789abcdef' for c in digest[7:])
-                and receipt.get('status') == 'published' and receipt.get('artifact_digest') == digest):
+        # The continuation freezes bare corrected_sha256 values; durable provider
+        # receipts use the tagged wire representation. Accept old tagged progress
+        # too, without accepting malformed or partial identities.
+        raw_digest = digest[7:] if isinstance(digest, str) and digest.startswith('sha256:') else digest
+        if (isinstance(raw_digest, str) and len(raw_digest) == 64
+                and all(c in '0123456789abcdef' for c in raw_digest)
+                and current_records.get(file, {}).get('corrected_sha256') == raw_digest
+                and receipt.get('status') == 'published'
+                and receipt.get('artifact_digest') == artifact_tag(raw_digest)):
             delivered += 1
+    status = row['status']
+    if status == 'completed' and row['progress'].get('_package_job_id'):
+        package = store.get_job(row['progress']['_package_job_id']) or {}
+        if package.get('status') != 'done':
+            status = 'failed' if package.get('status') in {'dead', 'cancelled'} else 'publishing'
     return {'available': True, 'authorization_id': row['id'], 'run_id': row['run_id'],
             'total': len(files), 'delivered': delivered, 'remaining': len(files) - delivered,
-            'status': row['status'], 'revision': row['revision']}
+            'status': status, 'revision': row['revision']}
