@@ -120,8 +120,10 @@ describe('the review screens render the proposal, not a template', () => {
     // #122 pager: with many flagged images the hero steps through each one.
     expect(src).toMatch(/instances\.length > 1 &&[\s\S]{0,500}Image \{heroIdx \+ 1\} of \{instances\.length\}/)
     // The offending image still renders as the object beside the text — following the pager, but
-    // suppressed when the hero already IS that image (xlsx isolated-image lead).
-    expect(src).toMatch(/\{heroThumb && !heroIsImage && \([\s\S]{0,80}<ProposalThumb/)
+    // suppressed when the hero already IS that image (xlsx isolated-image lead), or
+    // a disclosed crop has its own thumbnail and crop-specific transcription panel.
+    expect(src).toMatch(/\{heroThumb && !heroIsImage && !heroCrop && \([\s\S]{0,80}<ProposalThumb/)
+    expect(src).toMatch(/<CropReviewContext evidence=\{heroCrop\} thumb=\{heroThumb\} locator=\{heroLocator\}/)
   })
 
   it('both screens draw the thumb from the same helper', () => {

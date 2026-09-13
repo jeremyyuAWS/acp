@@ -178,6 +178,8 @@ describe('EvidenceCard — WCAG-exception toggles', () => {
     await mount(item)
     expect(container.querySelector('[aria-label="Visible crop review for image 1"]')).toBeTruthy()
     expect(container.querySelector('.crop-review-context-draft pre').textContent).toBe('Connect the controller to the power adapter')
+    expect(container.querySelector('.evcard-body > img.evcard-thumb')).toBeNull()
+    expect(container.querySelectorAll('.crop-review-context img')).toHaveLength(1)
     expect(btnWith('Essential')).toBeFalsy()
     expect(btnWith('Keep image and describe').disabled).toBe(true)
     await type('A controller diagram labels the power adapter connection and its visible instructions.')
