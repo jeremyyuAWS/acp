@@ -2709,33 +2709,44 @@ class _PgAdapter:
         if not acquired:
             kind = "critical mutation" if critical else "ordinary database work"
             raise psycopg2.pool.PoolError(f"{kind} admission limit reached")
-        while True:
-            try:
-                conn = pool.getconn()
+        conn = None
+        try:
+            while True:
+                try:
+                    conn = pool.getconn()
+                except psycopg2.pool.PoolError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
+                    continue
                 with self._read_connections_lock:
                     self._connection_gates[id(conn)] = gate
                 return conn
-            except psycopg2.pool.PoolError:
-                if time.monotonic() >= deadline:
-                    gate.release()
-                    raise
-                time.sleep(0.05)
+        except BaseException:
+            # Connection establishment can fail with OperationalError after admission.
+            # Release the permit even when the physical pool failed or retry was cancelled.
+            try:
+                if conn is not None:
+                    with self._read_connections_lock:
+                        self._connection_gates.pop(id(conn), None)
+                    pool.putconn(conn)
+            finally:
+                gate.release()
+            raise
 
     def _putconn(self, conn, pool=None) -> None:
-        """Return a connection and its read-admission permit, when it held one."""
-        # Use the exact pool that issued the connection. Lazy pool initialization can race on
-        # first use: two threads may each construct a pool before one becomes self._pool. Looking
-        # self._pool up again here can therefore return a different pool, which rejects the
-        # connection as unkeyed. Callers that already captured the issuing pool pass it through.
-        (pool or self._get_pool()).putconn(conn)
-        gate = None
-        lock = getattr(self, "_read_connections_lock", None)
-        if lock is None:
-            return
-        with lock:
-            gate = self._connection_gates.pop(id(conn), None)
-        if gate is not None:
-            gate.release()
+        """Return a connection and its admission permit, even if the pool rejects it."""
+        # Return to the exact issuing pool; lazy initialization can race on first use.
+        try:
+            (pool or self._get_pool()).putconn(conn)
+        finally:
+            gate = None
+            lock = getattr(self, "_read_connections_lock", None)
+            if lock is not None:
+                with lock:
+                    gate = self._connection_gates.pop(id(conn), None)
+            if gate is not None:
+                gate.release()
 
     @contextlib.contextmanager
     def cursor(self):

@@ -184,3 +184,80 @@ def test_pool_exhaustion_surfaces_as_a_clean_503_not_a_bare_500(monkeypatch):
     assert body["detail"] == "database_busy"
     assert "capacity" in body["message"].lower()
     assert "no changes were made" in body["message"].lower()
+
+@pytest.mark.parametrize('critical', [False, True])
+def test_connection_establishment_failure_does_not_leak_admission(pg, monkeypatch, critical):
+    """A transient database disconnect must not permanently block future ordinary work."""
+    class EstablishmentFailure(Exception):
+        pass
+    class Pool:
+        fail = True
+        def getconn(self):
+            if self.fail:
+                raise EstablishmentFailure('synthetic connection establishment failure')
+            return object()
+        def putconn(self, conn):
+            pass
+    pool = Pool()
+    pg._MAX_CONN = 2
+    monkeypatch.setattr(pg, '_get_pool', lambda: pool)
+    for _ in range(3):
+        with pytest.raises(EstablishmentFailure):
+            pg._getconn(timeout=0, read_only=not critical)
+    pool.fail = False
+    # Hold both available permits together: merely obtaining one can hide a leaked reserve.
+    ordinary = pg._getconn(timeout=0, read_only=True)
+    mutation = pg._getconn(timeout=0, read_only=False)
+    pg._putconn(ordinary, pool)
+    pg._putconn(mutation, pool)
+    assert not pg._connection_gates
+
+
+def test_cancelled_retry_releases_exactly_one_permit(pg, monkeypatch):
+    pool = _FakePool(fail_times=10**6)
+    pg._MAX_CONN = 2
+    monkeypatch.setattr(pg, '_get_pool', lambda: pool)
+    def cancel(_):
+        raise KeyboardInterrupt()
+    monkeypatch.setattr(store.time, 'sleep', cancel)
+    with pytest.raises(KeyboardInterrupt):
+        pg._getconn(timeout=5, read_only=True)
+    pool.fail_times = 0
+    assert pg._getconn(timeout=0, read_only=True) == 'conn'
+
+
+def test_failed_putconn_releases_permit_without_returning_twice(pg, monkeypatch):
+    class Pool:
+        returns = 0
+        def getconn(self):
+            return object()
+        def putconn(self, conn):
+            self.returns += 1
+            raise RuntimeError('synthetic physical pool rejection')
+    pool = Pool()
+    pg._MAX_CONN = 2
+    monkeypatch.setattr(pg, '_get_pool', lambda: pool)
+    conn = pg._getconn(timeout=0, read_only=True)
+    with pytest.raises(RuntimeError):
+        pg._putconn(conn, pool)
+    assert pool.returns == 1
+    assert not pg._connection_gates
+    # A repeated failed return must not release another semaphore permit.
+    with pytest.raises(RuntimeError):
+        pg._putconn(conn, pool)
+    replacement = pg._getconn(timeout=0, read_only=True)
+    with pytest.raises(_FakePoolError, match='admission limit reached'):
+        pg._getconn(timeout=0, read_only=True)
+    assert replacement is not conn
+
+
+def test_physical_pool_timeout_does_not_release_permit_twice(pg, monkeypatch):
+    pool = _FakePool(fail_times=10**6)
+    pg._MAX_CONN = 2
+    monkeypatch.setattr(pg, '_get_pool', lambda: pool)
+    with pytest.raises(_FakePoolError):
+        pg._getconn(timeout=0, read_only=True)
+    pool.fail_times = 0
+    assert pg._getconn(timeout=0, read_only=True) == 'conn'
+    with pytest.raises(_FakePoolError, match='admission limit reached'):
+        pg._getconn(timeout=0, read_only=True)
