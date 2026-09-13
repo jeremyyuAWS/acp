@@ -10,6 +10,7 @@ finding an alt attribute does not establish that a caption is accurate.
 exact flat raster facts: a solid canonical color, or one/two isolated canonical
 colored circles or squares on white. Colors use an exact palette. Transparent,
 animated, oversized, malformed, muted-color and unsupported images remain manual.
+Embedded color profiles, orientation or other pixel transforms also remain manual.
 Additional, negated or scoped claims remain unverified. Missing OCR observations
 cannot disprove a model's numbers; an explicit global denial of observed numeric
 values is a contradiction.

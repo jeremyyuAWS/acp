@@ -1327,9 +1327,9 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
 
     `allow_transcription` opts into the image-of-text path: when the OCR text reads as prose,
     it is returned verbatim as the alt and no model runs. Only set it when `image_bytes` is the
-    image ITSELF. The PDF remediator must not — it OCRs a render of the whole PAGE, so "this
-    render contains prose" means "the page has paragraphs", not "this figure is an image of
-    text", and transcribing would hand a figure the page's body copy as its alt.
+    image ITSELF. PDF callers may opt in only after uniquely associating and extracting the
+    figure raster; independent caption validation still controls automatic writing. A whole
+    PAGE render must never opt in: its prose may be body copy rather than figure content.
 
     `guidance` is the org house-style block (ADR 0021), and it reaches the two prompts and
     NOTHING ELSE. The transcription path above returns before any prompt is built, which is the
