@@ -202,10 +202,22 @@ def run_restore(runner, **kwargs):
 
 
 def argv_containing(runner, needle) -> list[list[str]]:
-    return [argv for argv in runner.log if needle in " ".join(argv)]
+    tokens = needle.split()
+    return [argv for argv in runner.log
+            if any(argv[index:index + len(tokens)] == tokens
+                   for index in range(len(argv) - len(tokens) + 1))]
 
 
 # ── the fixture's own guard ───────────────────────────────────────────────────
+
+def test_command_matching_ignores_worktree_path_substrings():
+    runner = FakeRunner()
+    template = ['helm', 'template', 'acp', '/tmp/scaler-rest-recovery/chart']
+    scale = ['kubectl', 'scale', 'deployment/acp-worker', '--replicas=0']
+    get = ['kubectl', 'get', 'deployment', '-n', 'acp']
+    runner.log = [template, scale, get]
+    assert argv_containing(runner, 'scale') == [scale]
+    assert argv_containing(runner, 'get deployment') == [get]
 
 def test_the_fixture_makes_the_release_name_and_the_fullname_differ():
     """Otherwise half this file passes for the wrong reason.
