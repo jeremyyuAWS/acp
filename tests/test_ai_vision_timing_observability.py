@@ -79,6 +79,9 @@ def test_postgres_upgrade_and_real_parameterized_timing_write(monkeypatch):
             # Own disposable database only; reproduce a pre-timing table plus retained row.
             cur.execute('DROP TABLE IF EXISTS ai_calls CASCADE')
             cur.execute('DROP TABLE IF EXISTS acp_schema_version')
+            cur.execute('CREATE TABLE acp_schema_version(version INTEGER PRIMARY KEY, checksum TEXT)')
+            cur.execute('INSERT INTO acp_schema_version(version,checksum) VALUES(%s,%s)',
+                        (52, '16c3b2ce6b5b581d9f86dcfe680078d2'))
             cur.execute(next(stmt for stmt in store._SCHEMA if stmt.startswith('CREATE TABLE IF NOT EXISTS ai_calls')))
             cur.execute("INSERT INTO ai_calls(id,surface,provider,model,zone,latency_ms,ok) VALUES('legacy','legacy','ollama','m','local',1,1)")
     monkeypatch.setattr(store, '_DATABASE_URL', url)

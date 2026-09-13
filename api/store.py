@@ -2509,8 +2509,9 @@ class _PgAdapter:
     # in a card's per-draft fan-out. Additive and nullable: a replica still running v50 keeps
     # writing rows without it, and _decision_rows reads NULL as a legacy row rather than as a
     # decision, so a rolling deploy under-counts nothing and double-counts nothing.
-    _SCHEMA_VERSION = 52
-    _SCHEMA_CHECKSUM_AT_VERSION = "16c3b2ce6b5b581d9f86dcfe680078d2"
+    # v53 retains numeric-only GPU timing in nullable ai_calls.timing.
+    _SCHEMA_VERSION = 53
+    _SCHEMA_CHECKSUM_AT_VERSION = "10672a4d7523cb18b78c2add1da271d8"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
