@@ -193,8 +193,8 @@ class StrictTextGenerator:
                 headers = {'Authorization': f'Bearer {key}'}
             else:
                 payload['max_tokens'] = spec.output_token_limit
-                if spec.plain_text_only:
-                    # This adapter accepts text only. Opus 5 defaults to thinking
+                if spec.plain_text_only or spec.model == 'claude-sonnet-5':
+                    # This adapter accepts text only. Sonnet/Opus 5 default to thinking
                     # blocks; its documented disabled mode requires effort <= high.
                     payload['thinking'] = {'type': 'disabled'}
                     payload['output_config'] = {'effort': 'high'}
