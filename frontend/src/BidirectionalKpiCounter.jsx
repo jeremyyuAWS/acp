@@ -1,23 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
+import './kpi-counter-activity.css'
 
-// Signed updates deliberately differ from the discovery counter: draining queues
-// are meaningful progress too, and are shown in the tile's own status color.
-export default function BidirectionalKpiCounter({ value, animate = true }) {
+// Changes are activity; only movement in the caller's successful direction is
+// improvement. Queue reductions and completed-work increases share green deltas.
+export default function BidirectionalKpiCounter({ value, animate = true, positiveDirection = 'neutral' }) {
   const previous = useRef(value)
-  const [display, setDisplay] = useState(value)
   const displayed = useRef(value)
-  const [delta, setDelta] = useState(null)
+  const sequence = useRef(0)
+  const [display, setDisplay] = useState(value)
+  const [activity, setActivity] = useState(null)
   useEffect(() => {
     const from = previous.current
     previous.current = value
     if (!animate || !Number.isFinite(from) || !Number.isFinite(value) || from === value) {
-      setDelta(null)
+      setActivity(null)
       displayed.current = value
       setDisplay(value)
       return undefined
     }
-    setDelta(value - from)
-    const timeout = setTimeout(() => setDelta(null), 2000)
+    setActivity({ delta: value - from, sequence: ++sequence.current })
+    const timeout = setTimeout(() => setActivity(null), 2000)
     const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     if (reduced) { displayed.current = value; setDisplay(value); return () => clearTimeout(timeout) }
     const animationFrom = Number.isFinite(displayed.current) ? displayed.current : from
@@ -32,6 +34,9 @@ export default function BidirectionalKpiCounter({ value, animate = true }) {
     frame = requestAnimationFrame(tick)
     return () => { clearTimeout(timeout); cancelAnimationFrame(frame) }
   }, [value, animate])
-  return <span className="kpi-counter"><span>{Number.isFinite(display) ? display.toLocaleString() : '—'}</span>
-    {delta != null && <span className="kpi-update-delta livecounter-delta" aria-hidden="true">{delta > 0 ? '+' : '−'}{Math.abs(delta).toLocaleString()}</span>}</span>
+  const delta = activity?.delta
+  const improving = positiveDirection === 'increase' ? delta > 0 : positiveDirection === 'decrease' && delta < 0
+  const tone = positiveDirection === 'neutral' ? 'neutral' : improving ? 'positive' : 'warning'
+  return <span className="kpi-counter"><span key={`value-${activity?.sequence ?? 0}`} className={activity ? 'kpi-counter-value kpi-counter-value--activity' : 'kpi-counter-value'}>{Number.isFinite(display) ? display.toLocaleString() : '—'}</span>
+    {activity && <span key={activity.sequence} className={`kpi-update-delta livecounter-delta kpi-update-delta--${tone} kpi-update-delta--${delta > 0 ? 'increase' : 'decrease'}`} aria-hidden="true">{delta > 0 ? '+' : '−'}{Math.abs(delta).toLocaleString()}</span>}</span>
 }

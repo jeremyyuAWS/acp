@@ -1,0 +1,15 @@
+/* The number briefly marks incoming activity; the signed delta explains whether
+   that activity drained a queue or completed work. No layout-changing movement. */
+.kpi-counter .kpi-counter-value--activity { color:var(--green,#267c45); animation:kpi-activity-highlight 2s ease-out both; }
+.kpi-counter .kpi-update-delta { display:inline-block; font-variant-numeric:tabular-nums; }
+.kpi-counter .kpi-update-delta.kpi-update-delta--positive { color:var(--green,#267c45); }
+.kpi-counter .kpi-update-delta.kpi-update-delta--warning { color:var(--amber,#996000); }
+.kpi-counter .kpi-update-delta.kpi-update-delta--neutral { color:var(--muted,#665b70); }
+.kpi-counter .kpi-update-delta.kpi-update-delta--increase { animation:kpi-activity-increase 2s ease-out both; }
+.kpi-counter .kpi-update-delta.kpi-update-delta--decrease { animation:kpi-activity-decrease 2s ease-out both; }
+@keyframes kpi-activity-highlight { 0%,65% { color:var(--green,#267c45); } 100% { color:inherit; } }
+@keyframes kpi-activity-increase { 0% { opacity:0; transform:translateY(6px); } 15%,80% { opacity:1; transform:translateY(0); } 100% { opacity:0; transform:translateY(-6px); } }
+@keyframes kpi-activity-decrease { 0% { opacity:0; transform:translateY(-6px); } 15%,80% { opacity:1; transform:translateY(0); } 100% { opacity:0; transform:translateY(6px); } }
+@media(prefers-reduced-motion:reduce) {
+  .kpi-counter .kpi-counter-value--activity, .kpi-counter .kpi-update-delta.kpi-update-delta--increase, .kpi-counter .kpi-update-delta.kpi-update-delta--decrease { animation:none; transform:none; }
+}

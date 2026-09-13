@@ -11,6 +11,7 @@ export const PROGRESS_STATES = [
 // neither a corrected copy nor an AI approval proves verification or publication.
 export default function RemediationProgressSummary({ documents = [], selected, onSelect, reconciling = false, animate = false, coverage, onCoverageSelect, selectedCoverage, baselineDocumentCounts, startedAt, queueMode = false, variant }) {
   const states = variant === 'release' ? PROGRESS_STATES.filter(([key]) => key !== 'attention') : PROGRESS_STATES
+  const positiveDirections = { processing: 'neutral', verified: 'increase', attention: 'decrease', ready: 'increase', published: 'increase' }
   const known = new Set(PROGRESS_STATES.map(([key]) => key))
   const unknown = documents.filter(document => !known.has(document.progressState)).length
   const selectedLabel = PROGRESS_STATES.find(([key]) => key === selected)?.[1]
@@ -25,7 +26,7 @@ export default function RemediationProgressSummary({ documents = [], selected, o
     <div className={`remediation-progress-summary-counts ${variant === 'release' ? 'remediation-progress-summary-counts--release' : ''}`}>{states.map(([key, label]) => {
       const count = documents.filter(document => document.progressState === key).length
       const fraction = documents.length ? count / documents.length : 0
-      const content = <><span className="kpi-tile-fill" aria-hidden="true" style={{width:`${fraction * 100}%`}}/><span className="progress-tile-label">{label}</span><strong>{animate ? <BidirectionalKpiCounter value={count} /> : count}</strong><KpiComparison value={count} baseline={baselineDocumentCounts?.[key]}/></>
+      const content = <><span className="kpi-tile-fill" aria-hidden="true" style={{width:`${fraction * 100}%`}}/><span className="progress-tile-label">{label}</span><strong>{animate ? <BidirectionalKpiCounter value={count} animate={animate} positiveDirection={positiveDirections[key]} /> : count}</strong><KpiComparison value={count} baseline={baselineDocumentCounts?.[key]}/></>
       return onSelect ? <button type="button" key={key} className={`progress-${key}`} aria-label={`Show documents: ${label} (${count})`} aria-pressed={queueMode ? undefined : selected === key} aria-expanded={queueMode ? selected === key : undefined} aria-haspopup={queueMode ? 'dialog' : undefined} onClick={() => onSelect(key)}>{content}<small>{queueMode ? 'Open file queue' : selected === key ? 'Selected filter' : 'Filter document list'}</small></button>
         : <div key={key} className={`progress-${key}`}>{content}</div>
     })}</div>

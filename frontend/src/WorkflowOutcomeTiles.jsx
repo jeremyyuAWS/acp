@@ -32,6 +32,8 @@ export function outcomeTileModel(stage, domain) {
   })) }
 }
 
+const positiveDirections = { queued: 'decrease', processing: 'neutral', attention: 'decrease', verified: 'increase', published: 'increase', excluded: 'neutral', skipped: 'neutral' }
+
 export default function WorkflowOutcomeTiles({ stage, domain, baseline = null, executionId, onFilter, queueMode = false }) {
   const model = outcomeTileModel(stage, domain)
   if (!model) return null
@@ -51,7 +53,7 @@ export default function WorkflowOutcomeTiles({ stage, domain, baseline = null, e
         const delta = old != null && tile.value != null ? tile.value - old : null
         const content = <>
           <span className="workflow-outcome-tiles__label">{tile.label}</span>
-          <strong aria-label={`${tile.label}: ${tile.value ?? 'unavailable'}`}><span className="workflow-outcome-tiles__now">Now</span>{tile.value == null ? '—' : <BidirectionalKpiCounter value={tile.value} />}</strong>
+          <strong aria-label={`${tile.label}: ${tile.value ?? 'unavailable'}`}><span className="workflow-outcome-tiles__now">Now</span>{tile.value == null ? '—' : <BidirectionalKpiCounter value={tile.value} positiveDirection={positiveDirections[tile.key]} />}</strong>
           <span className="workflow-outcome-tiles__before">{old == null ? 'Before unavailable' : `Before: ${old.toLocaleString()}`}</span>
           {delta != null && <span className="workflow-outcome-tiles__net">{delta > 0 ? '+' : delta < 0 ? '−' : ''}{Math.abs(delta).toLocaleString()} since starting</span>}
           <span className="workflow-outcome-tiles__fill" aria-hidden="true" style={{ transform: `scaleX(${model.total > 0 && tile.value != null ? tile.value / model.total : 0})` }} />

@@ -8,11 +8,11 @@ export function KpiComparison({ value, baseline }) {
 
 export default function FileCoverage({ evidence, animate = false, onSelect, selected, queueMode = false }) {
   const state = fileCoverage(evidence)
-  const tiles = [['withFindings', 'Files with findings', 'attention'], ['processed', 'Files processed', 'verified'], ['remaining', 'Files still to process', 'processing']]
+  const tiles = [['withFindings', 'Files with findings', 'attention', 'neutral'], ['processed', 'Files processed', 'verified', 'increase'], ['remaining', 'Files still to process', 'processing', 'decrease']]
   return <section className="file-coverage" aria-label="File coverage"><h3>File coverage</h3>
-    <div className="remediation-progress-summary-counts file-coverage-counts">{tiles.map(([key, label, color]) => {
+    <div className="remediation-progress-summary-counts file-coverage-counts">{tiles.map(([key, label, color, positiveDirection]) => {
       const fraction = state.withFindings > 0 && state[key] != null ? state[key] / state.withFindings : 0
-      const content = <><span className="kpi-tile-fill" aria-hidden="true" style={{width:`${Math.min(100, fraction * 100)}%`}}/><span className="progress-tile-label">{label}</span><strong><BidirectionalKpiCounter value={state[key]} animate={animate}/></strong>
+      const content = <><span className="kpi-tile-fill" aria-hidden="true" style={{width:`${Math.min(100, fraction * 100)}%`}}/><span className="progress-tile-label">{label}</span><strong><BidirectionalKpiCounter value={state[key]} animate={animate} positiveDirection={positiveDirection}/></strong>
         {key === 'processed' && <small>{state.processed == null ? 'Processing coverage unavailable' : `${state.processed} of ${state.withFindings} files with findings`}</small>}
         <KpiComparison value={state[key]} baseline={evidence?.baseline?.[key]}/></>
       return onSelect ? <button type="button" className={`coverage-${color}`} key={key} title={key === 'processed' ? 'A remediation attempt finished; unresolved findings or failed fixes may remain.' : label} aria-pressed={queueMode ? undefined : selected === key} aria-expanded={queueMode ? selected === key : undefined} aria-haspopup={queueMode ? 'dialog' : undefined} onClick={() => onSelect(key)} aria-label={`${label}: ${state[key] ?? 'unavailable'}`}>{content}</button>
