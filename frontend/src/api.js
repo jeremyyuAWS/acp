@@ -1496,9 +1496,9 @@ export const listAllHitl = (status = null) => (SIM
 const _pendingActs = new Map()
 
 // List HITL items for a scan, optionally filtered by status.
-export const listHitlQueue = (scanId, status = null) => (SIM
+export const listHitlQueue = (scanId, status = null, options = {}) => (SIM
   ? sim([])
-  : fetch(`${BASE}/hitl/queue?scan_id=${encodeURIComponent(scanId)}${status ? `&status=${status}` : ''}`, { headers: headers() }).then(j)
+  : fetch(`${BASE}/hitl/queue?scan_id=${encodeURIComponent(scanId)}${status ? `&status=${status}` : ''}`, { headers: headers(), cache: 'no-store', signal: options.signal }).then(j)
       .then((items) => (items || []).filter((it) => !_pendingActs.has(it.id))))
 // Update a HITL item (approved / rejected / skipped) with an optional reviewer note
 // and/or the reviewer's final (AI-drafted or hand-edited) approved_value.
