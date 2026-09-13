@@ -235,13 +235,13 @@ it('shows admitted automatic checking as Processing while retaining manual human
  const queues=container.querySelector('[aria-label="Review queues"]')
  expect(queues.textContent).toContain('Needs review1')
  expect(queues.textContent).toContain('Processing1')
- expect(queues.textContent).toContain('Completed0')
+ expect(queues.textContent).toContain('Results0')
  await click([...queues.querySelectorAll('button')].find(button=>button.textContent.startsWith('Processing')))
- expect(container.textContent).toContain('Queued for automatic checks')
+ expect(container.textContent).toContain('Checking automatic eligibility')
  expect(container.textContent).toContain('not yet an applied or verified fix')
  await renderInbox({queue:[{...proposal,status:'verification_failed'},manual],autoApprove:true,automaticApprovalPolicy:policy})
  expect(container.querySelector('[aria-label="Review queues"]').textContent).toContain('Needs review2')
- expect(container.querySelector('[aria-label="Review queues"]').textContent).toContain('Completed0')
+ expect(container.querySelector('[aria-label="Review queues"]').textContent).toContain('Results0')
 })
 it('does not claim review decisions or verified fixes when only automatic checks are queued', async () => {
  const policy={enabled:true,supported:true,run_id:'run',source_revision:'source'}

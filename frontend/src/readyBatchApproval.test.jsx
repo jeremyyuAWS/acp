@@ -55,7 +55,7 @@ it.each([
   ['Fix manually', 'Manual issue', { id: 'manual', file: 'manual.docx', title: 'Manual issue' }],
   ['Awaiting verification', 'Writing issue', { ...ready('writing'), title: 'Writing issue', status: 'rechecking' }],
   ['Blocked', 'Blocked issue', { ...ready('blocked'), title: 'Blocked issue', status: 'blocked' }],
-  ['Completed', 'Completed issue', { ...ready('done'), title: 'Completed issue', status: 'verified' }],
+  ['Results', 'Completed issue', { ...ready('done'), title: 'Completed issue', status: 'verified' }],
 ])('exits bulk selection when switching to %s and clears stale approval intent', async (category, title, other) => {
   const onDecide = vi.fn()
   const v = await mount(RemediationInbox, { queue: [ready('pending'), other], decisions: {}, scanId: 'scan', onDecide })

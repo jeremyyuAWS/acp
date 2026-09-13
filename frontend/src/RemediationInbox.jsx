@@ -987,7 +987,7 @@ export default function RemediationInbox({
           </button>
         )}
         <span style={{ fontSize: 13, fontWeight: 700 }}>Guided remediation</span>
-        {selected?.automaticReason && <p className="automatic-review-queued" role="status"><b>{selected.automaticDisposition?.owner || 'You'}: </b>{selected.automaticReason}</p>}
+        {(selected?.automaticReason || selected?.automaticQueued) && <p className="automatic-review-queued" role="status"><b>{selected.automaticQueued ? 'ACP' : selected.automaticDisposition?.owner || 'You'}: </b>{selected.automaticReason || 'Automatic eligibility checks are queued.'}{selected.automaticQueued && <> This is not yet an applied or verified fix.</>}</p>}
       </span>
     </div>
   )

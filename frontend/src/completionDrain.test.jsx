@@ -19,7 +19,7 @@ it('announces a newly completed row briefly, never preexisting completions', asy
   await show([{id:'a',status:'applied',title:'Image alt'}])
   expect(host.textContent).toBe('')
   await show([{id:'a',status:'verified',title:'Image alt'}])
-  expect(host.textContent).toContain('moved to Completed')
+  expect(host.textContent).toContain('moved to Results')
   await act(async()=>vi.advanceTimersByTime(650))
   expect(host.textContent).toBe('')
   await act(async()=>root.unmount());host.remove();vi.useRealTimers()

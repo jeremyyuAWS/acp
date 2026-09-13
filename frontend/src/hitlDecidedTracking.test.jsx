@@ -11,7 +11,7 @@
  *     reach the inbox was classified from an empty status and read as outstanding work.
  *
  * The consequence is the one the report describes: the total shrinks by every decision taken
- * (13 → 12), and the Completed tab — the place an approved AI suggestion is supposed to be
+ * (13 → 12), and the Results tab — the place an approved AI suggestion is supposed to be
  * tracked — is empty after a reload, because the only completed rows it could ever show were
  * the ones decided in the current browser session.
  */
@@ -43,7 +43,7 @@ const SERVER_ROWS = [
 ]
 const ui = (rows) => rows.map((r) => dbItemToUi(r, []))
 
-it('keeps a decided AI suggestion in the run total and tracks it under Completed', () => {
+it('keeps a decided AI suggestion in the run total and tracks it under Results', () => {
   const rows = ui(SERVER_ROWS)
   const counts = workflowCounts(rows)
   expect(rows).toHaveLength(13)
@@ -66,13 +66,13 @@ it.each([
   expect(isResolved(item)).toBe(stage === 'completed' || stage === 'awaiting-validation')
 })
 
-it('shows the decided item in the Completed tab of the inbox', async () => {
+it('shows the decided item in the Results tab of the inbox', async () => {
   const { root, container } = createTestRoot()
   await act(async () => root.render(createElement(Inbox, {
     queue: ui(SERVER_ROWS), decisions: {}, scanId: 'scan-1', initialTab: 'completed',
   })))
-  const tab = [...container.querySelectorAll('select[aria-label="Filter by status"] option:not([value=all])')].find((el) => el.textContent.includes('Completed'))
-  expect(tab.textContent).toBe('Completed 1')
+  const tab = [...container.querySelectorAll('select[aria-label="Filter by status"] option:not([value=all])')].find((el) => el.textContent.includes('Results'))
+  expect(tab.textContent).toBe('Results 1')
   expect(container.textContent).toContain('doc-12.docx')
   // The recorded outcome of an approved item, not a second approval prompt.
   expect(container.textContent).not.toContain('Save and continue')
