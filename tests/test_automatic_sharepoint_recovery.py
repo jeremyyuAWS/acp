@@ -82,3 +82,32 @@ def test_exact_receipt_finishes_without_reviving_dead_job(prepared):
     assert row['status'] == 'completed'
     assert prepared.store.get_job(batch['job_ids'][0])['status'] == 'dead'
     assert not prepared.calls
+
+
+def test_legacy_active_failed_file_is_projected_and_resumed(prepared):
+    row, batch = interrupted(prepared)
+    row = persistence.update_file(prepared.store, row['id'], OWNER, FILE,
+                                 dict(state='failed', message='Delivery job stopped or failed.'))
+    projected = flow.public(row, prepared.store)
+    assert projected['file_progress'][FILE]['state'] == 'blocked'
+    assert projected['can_resume'] and projected['requires_reconnect']
+    assert persistence.get(prepared.store, row['id'], OWNER)['progress']['files'][FILE]['state'] == 'failed'
+    row = tick(prepared, row)
+    assert row['status'] == 'waiting'
+    assert row['progress']['files'][FILE]['state'] == 'blocked'
+    assert prepared.store.get_job(batch['job_ids'][0])['status'] == 'dead'
+    row = flow.resume(prepared.store, row['id'], OWNER, SID)
+    row = tick(prepared, row)
+    assert prepared.store.get_job(batch['job_ids'][0])['status'] == 'queued'
+    assert not prepared.calls
+
+
+def test_legacy_globally_failed_permission_remains_terminal(prepared):
+    row, batch = interrupted(prepared)
+    row = persistence.update_file(prepared.store, row['id'], OWNER, FILE, dict(state='failed'))
+    row = persistence.save(prepared.store, row, status='failed', progress=row['progress'], schedule=False)
+    assert flow.public(row, prepared.store)['file_progress'][FILE]['state'] == 'failed'
+    assert not flow.public(row, prepared.store)['can_resume']
+    with pytest.raises(ValueError, match='cannot be resumed'):
+        flow.resume(prepared.store, row['id'], OWNER, SID)
+    assert prepared.store.get_job(batch['job_ids'][0])['status'] == 'dead'

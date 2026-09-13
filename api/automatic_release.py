@@ -100,6 +100,20 @@ def destination_label(destination):
     return ('SharePoint' if destination['provider']=='sharepoint' else 'Google Drive') + ' / ' + destination['folder_name']
 
 
+def legacy_sharepoint_failure(store, row, file, entry):
+    """Recognize only a still-active, exact legacy dead delivery; never renew consent."""
+    if row['status'] not in ACTIVE or row['intent']['destination']['provider'] != 'sharepoint' or entry.get('state') != 'failed' or entry.get('failure_category') == 'no_corrected_copy' or not entry.get('artifact_digest'):
+        return False
+    try:
+        record = ready(store, row, file)
+        if record['corrected_sha256'] != entry['artifact_digest']:
+            return False
+        original_sharepoint_job(store, row, file, entry['artifact_digest'])
+        return True
+    except (ValueError, KeyError):
+        return False
+
+
 def public(row, store=None):
     if row is None:
         return None
@@ -116,6 +130,8 @@ def public(row, store=None):
             saved = receipt(store, row, file, entry['artifact_digest'])
             if saved:
                 entry = {**entry, 'state': 'published', 'receipt': saved, 'message': 'Delivered', 'requires_reconnect': False}
+        if store is not None and legacy_sharepoint_failure(store, row, file, entry):
+            entry.update(state='blocked', requires_reconnect=True, message='SharePoint delivery stopped. Restore access and resume this saved permission to check its receipt safely.')
         category = {'published':'published', 'failed':'failed', 'blocked':'blocked', 'stopped':'blocked'}.get(entry['state'], 'pending')
         if row['status'] == 'stopped' and category == 'pending':
             category = 'blocked'
@@ -388,6 +404,11 @@ def resume(store, authorization_id, owner, scan_id):
         progress = dict(row['progress'])
         entries = {f: dict(e) for f, e in progress.get('files', {}).items()}
         for file, entry in entries.items():
+            saved = receipt(store, row, file, entry['artifact_digest']) if entry.get('artifact_digest') else None
+            if saved:
+                entry.update(state='published', receipt=saved, requires_reconnect=False, resume_requested=False, message='Delivered')
+            if legacy_sharepoint_failure(store, row, file, entry):
+                entry.update(state='blocked', requires_reconnect=True)
             if entry.get('state') == 'published' or entry.get('failure_category') == 'no_corrected_copy':
                 continue
             if entry.get('artifact_digest'):
@@ -399,6 +420,32 @@ def resume(store, authorization_id, owner, scan_id):
         progress['files'] = entries
         progress.pop('_delivery_watch', None)
         return persistence.save(store, row, status='waiting', progress=progress, schedule=True, delay=0)
+
+
+def original_sharepoint_job(store, row, file, digest, *, lock=False):
+    """Read and validate the original exact queue and destination identity."""
+    with store._db.cursor() as cur:
+        suffix = " FOR UPDATE" if lock and store._db.supports_skip_locked else ""
+        store._db.execute(cur, "SELECT id,payload,status,batch_id FROM jobs WHERE scan_id=%s AND type='publish_file'" + suffix, (row['scan_id'],))
+        matching = []
+        for job in store._db.fetchall(cur):
+            payload = json.loads(job['payload']) if isinstance(job['payload'], str) else job['payload']
+            if payload.get('automatic_release_id') == row['id'] and payload.get('file') == file:
+                if payload.get('owner') != row['owner_email'] or payload.get('artifact_digest') != 'sha256:' + digest:
+                    raise ValueError('The original delivery identity differs. Review a new plan explicitly.')
+                matching.append(job)
+        if len(matching) != 1 or matching[0]['status'] != 'dead':
+            raise ValueError('The original delivery cannot be resumed safely. Check its receipt and stage.')
+        job = matching[0]
+        original = json.loads(job['payload']) if isinstance(job['payload'], str) else job['payload']
+        release = store.release_status(original.get('release_id'), row['owner_email'])
+        if not release or release.get('scan_id') != row['scan_id'] or release.get('parent_folder_id') != row['intent']['release_parent_id'] or release.get('folder_name') != row['intent']['release_folder_name']:
+            raise ValueError('The original release destination differs. Review a new plan explicitly.')
+        store._db.execute(cur, "SELECT owner_email,state,is_current FROM stage_executions WHERE execution_id=%s" + suffix, (job['batch_id'],))
+        stage = store._db.fetchone(cur)
+        if not stage or stage['owner_email'] != row['owner_email'] or not stage['is_current'] or stage['state'] == 'cancelled':
+            raise ValueError('The original release stage changed or was stopped. Review a new plan explicitly.')
+        return job
 
 
 def resume_sharepoint_job(store, row, file, digest):
@@ -415,26 +462,8 @@ def resume_sharepoint_job(store, row, file, digest):
         entry = fresh['progress'].get('files', {}).get(file, {})
         if not entry.get('resume_requested') or entry.get('artifact_digest') != digest:
             raise ValueError('Resume the saved delivery explicitly before retrying.')
+        job = original_sharepoint_job(store, fresh, file, digest, lock=True)
         with store._db.cursor() as cur:
-            store._db.execute(cur, "SELECT id,payload,status,batch_id FROM jobs WHERE scan_id=%s AND type='publish_file'", (row['scan_id'],))
-            matching = []
-            for job in store._db.fetchall(cur):
-                payload = json.loads(job['payload']) if isinstance(job['payload'], str) else job['payload']
-                if payload.get('automatic_release_id') == row['id'] and payload.get('file') == file:
-                    if payload.get('owner') != row['owner_email'] or payload.get('artifact_digest') != 'sha256:' + digest:
-                        raise ValueError('The original delivery identity differs. Review a new plan explicitly.')
-                    matching.append(job)
-            if len(matching) != 1 or matching[0]['status'] != 'dead':
-                raise ValueError('The original delivery cannot be resumed safely. Check its receipt and stage.')
-            job = matching[0]
-            original = json.loads(job['payload']) if isinstance(job['payload'], str) else job['payload']
-            release = store.release_status(original.get('release_id'), row['owner_email'])
-            if not release or release.get('scan_id') != row['scan_id'] or release.get('parent_folder_id') != row['intent']['release_parent_id'] or release.get('folder_name') != row['intent']['release_folder_name']:
-                raise ValueError('The original release destination differs. Review a new plan explicitly.')
-            store._db.execute(cur, "SELECT owner_email,state,is_current FROM stage_executions WHERE execution_id=%s", (job['batch_id'],))
-            stage = store._db.fetchone(cur)
-            if not stage or stage['owner_email'] != row['owner_email'] or not stage['is_current'] or stage['state'] == 'cancelled':
-                raise ValueError('The original release stage changed or was stopped. Review a new plan explicitly.')
             now = store._now()
             store._db.execute(cur, "UPDATE jobs SET status='queued',attempts=0,run_after=%s,locked_at=NULL,locked_by=NULL,lease_expires_at=NULL,last_error=NULL,updated_at=%s WHERE id=%s AND status='dead'", (now, now, job['id']))
             store._db.execute(cur, "UPDATE stage_work_items SET state='queued',revision=revision+1,attempt=0,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,terminal_reason=NULL,updated_at=%s WHERE job_id=%s", (now, job['id']))
@@ -529,6 +558,16 @@ def advance(store, payload, job):
         if row['status'] not in ACTIVE:
             return
         entry = row['progress'].get('files', {}).get(file, {})
+        if entry.get('state') == 'failed' and entry.get('artifact_digest'):
+            saved = receipt(store, row, file, entry['artifact_digest'])
+            if saved:
+                persistence.update_file(store, row['id'], row['owner_email'], file,
+                    dict(state='published', receipt=saved, requires_reconnect=False, resume_requested=False, message='Delivered'))
+                continue
+        if legacy_sharepoint_failure(store, row, file, entry):
+            row = persistence.update_file(store, row['id'], row['owner_email'], file,
+                dict(state='blocked', requires_reconnect=True, message='SharePoint delivery stopped. Restore access and resume this saved permission to check its receipt safely.'))
+            entry = row['progress']['files'][file]
         if entry.get('state') in {'published', 'failed'}:
             continue
         try:
