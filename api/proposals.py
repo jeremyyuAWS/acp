@@ -684,9 +684,10 @@ def propose_sensory_rewrite(text: str, *, filename: str = "", ai_enabled: bool =
     for sm in _tc._SENSORY_RE.finditer(text):
         # widen the match to the whole sentence it sits in, so the rewrite has context
         s = sm.start()
-        left = text.rfind(".", 0, s) + 1
-        right = text.find(".", sm.end())
-        sentence = text[left:(right + 1 if right != -1 else len(text))].strip()
+        from text_sentence_boundaries import sentence_start, sentence_end
+        left = sentence_start(text, s)
+        right = sentence_end(text, sm.end())
+        sentence = text[left:right].strip()
         sentence = re.sub(r"\s+", " ", sentence)[:240]
         if not sentence or sentence in seen:
             continue
@@ -703,6 +704,9 @@ def propose_sensory_rewrite(text: str, *, filename: str = "", ai_enabled: bool =
         except Exception:
             res = None
         if not res or not res.get("suggestion"):
+            continue
+        from sensory_rewrite_output import sensory_non_answer_reason
+        if sensory_non_answer_reason(res['suggestion']):
             continue
         draft = proposal(
             locator=sentence[:60],

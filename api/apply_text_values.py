@@ -316,8 +316,8 @@ def _sentence_end(joined: str, start: int, end: int) -> int:
     approved value applies to the SENTENCE the locator opens, never to the 60 characters that
     merely identify it. Stop at the first "." at or after the span, or the paragraph end.
     """
-    dot = joined.find(".", max(end - 1, start))
-    return len(joined) if dot == -1 else dot + 1
+    from text_sentence_boundaries import sentence_end
+    return sentence_end(joined, max(end - 1, start))
 
 
 def _write(data: bytes, ext: str, values: dict[str, str], *, mode: str) -> tuple[bytes, list[dict], list[str]]:
@@ -392,7 +392,14 @@ def apply_sensory_rewrite(data: bytes, ext: str, values: dict[str, str]) -> tupl
     unresolved) on the same contract as apply_alt / apply_link_text -- ORIGINAL bytes back
     when nothing resolved, and every locator that matched no text reported rather than guessed.
     """
-    return _write(data, ext, values, mode="sensory")
+    from sensory_rewrite_output import sensory_non_answer_reason
+    active = {k: v for k, v in (values or {}).items() if k and v and str(v).strip()}
+    invalid = [locator for locator, value in active.items() if sensory_non_answer_reason(value)]
+    permitted = {locator: value for locator, value in active.items() if locator not in invalid}
+    if not permitted:
+        return data, [], invalid
+    candidate, applied, unresolved = _write(data, ext, permitted, mode="sensory")
+    return candidate, applied, unresolved + invalid
 
 
 def apply_language_parts(data: bytes, ext: str, values: dict[str, str]) -> tuple[bytes, list[dict], list[str]]:
