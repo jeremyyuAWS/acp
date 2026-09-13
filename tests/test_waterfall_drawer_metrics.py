@@ -131,3 +131,25 @@ def test_real_schema_and_http_route_are_owner_scoped(tmp_path, monkeypatch):
     assert 'PRIVATE' not in response.text
     assert client.get('/scans/s/remediation/waterfall/r/metrics', headers={'x-test-owner': 'other'}).status_code == 404
     assert client.get('/scans/other/remediation/waterfall/r/metrics').status_code == 404
+
+
+def test_individual_cloud_usage_retains_tokens_without_private_payload():
+    result = chart([record(result_json=json.dumps({'prompt_tokens': 120, 'completion_tokens': 40, 'text': 'PRIVATE OUTPUT'})),
+                    record(attempt_id='b', provider='anthropic', model='sonnet', result_json=json.dumps({'prompt_tokens': 90, 'completion_tokens': 20})),
+                    record(attempt_id='c', spending_state='released')])
+    rows = {r['label']: r for r in result['models']['rows']}
+    assert rows['openai · model']['input_tokens'] == 120
+    assert rows['openai · model']['output_tokens'] == 40
+    assert rows['openai · model']['average_seconds'] == 585
+    assert rows['anthropic · sonnet']['value'] == 1
+    assert sum(r['value'] for r in rows.values()) == 2
+    assert 'PRIVATE OUTPUT' not in json.dumps(result)
+
+
+def test_unknown_tokens_and_invalid_timing_are_not_zero_or_negative():
+    result = chart([record(), record(attempt_id='b', updated_at='2026-09-09T11:00:00Z')])
+    row = result['models']['rows'][0]
+    assert row['input_tokens'] is None and row['output_tokens'] is None
+    assert row['timed_attempts'] == 1
+    assert row['average_seconds'] == 585
+    assert chart([record(status='started', spending_state='dispatched')])['models']['rows'][0]['active'] == 1

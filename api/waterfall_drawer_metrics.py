@@ -63,7 +63,9 @@ def aggregate_metrics(records, *, stage=None, provider=None, model=None, now, te
             missing_lineage = True
         if stage and key != stage or provider and row.get('provider') != provider or model and row.get('model') != model:
             continue
-        selected.append({**row, 'validation': result.get('validation_outcome')})
+        selected.append({**row, 'validation': result.get('validation_outcome'),
+                         'prompt_tokens': result.get('prompt_tokens'),
+                         'completion_tokens': result.get('completion_tokens')})
     covered = complete and not (stage and missing_lineage)
     completions = [r for r in selected if r.get('status') != 'started' and r.get('spending_state') == 'settled']
     dated = [(r, _time(r.get('updated_at'))) for r in completions]
@@ -97,10 +99,46 @@ def aggregate_metrics(records, *, stage=None, provider=None, model=None, now, te
     usable = sum(r.get('validation') == 'usable' for r in completions)
     no_output = sum(r.get('validation') != 'usable' and r.get('status') in ('empty_response','unusable_response','refused') for r in completions)
     unknown = len(completions) - usable - sum(r.get('validation') != 'usable' and r.get('status') in ('empty_response','unusable_response','refused') for r in completions)
+    model_rows = {}
+    durations = []
+    for row in selected:
+        if row.get('spending_state') in ('reserved', 'released') or not row.get('provider') or not row.get('model'):
+            continue
+        identity = (row['provider'], row['model'])
+        item = model_rows.setdefault(identity, {'id': ':'.join(identity), 'label': ' · '.join(identity),
+            'value': 0, 'input_tokens': 0, 'output_tokens': 0, 'tokens_complete': True,
+            'completed': 0, 'active': 0, 'timed_attempts': 0, 'duration_seconds': 0})
+        item['value'] += 1
+        item['active'] += row.get('status') == 'started' and row.get('spending_state') == 'dispatched'
+        if row.get('status') == 'started':
+            continue
+        item['completed'] += 1
+        for source, target in (('prompt_tokens', 'input_tokens'), ('completion_tokens', 'output_tokens')):
+            tokens = row.get(source)
+            if type(tokens) is int and tokens >= 0:
+                item[target] += tokens
+            else:
+                item['tokens_complete'] = False
+        begin, finish = _time(row.get('created_at')), _time(row.get('updated_at'))
+        if begin is not None and finish is not None and finish >= begin:
+            duration = (finish - begin).total_seconds()
+            durations.append(duration)
+            item['duration_seconds'] += duration
+            item['timed_attempts'] += 1
+    for item in model_rows.values():
+        item['average_seconds'] = item.pop('duration_seconds') / item['timed_attempts'] if item['timed_attempts'] else None
+        if not item['tokens_complete'] or not item['completed']:
+            item['input_tokens'] = item['output_tokens'] = None
     reason = None if covered else 'Complete stage attribution is unavailable for this retained record window.'
     return {'contract_version':'waterfall-drawer-metrics.v1', 'generated_at':now.isoformat(),
         'scope':{'stage':stage,'provider':provider,'model':model}, 'complete':covered, 'record_limit':MAX_RECORDS,
         'mode':'recorded' if terminal else 'live',
+        'models': {'title': 'Recorded calls by model', 'unit': 'attempts',
+                   'basis': 'Recorded dispatches, including retries; reservations are excluded.',
+                   'complete': covered, 'rows': sorted(model_rows.values(), key=lambda r: (-r['value'], r['label'])),
+                   'reason': reason},
+        'timing': {'average_seconds': sum(durations) / len(durations) if durations else None,
+                   'measured_attempts': len(durations), 'basis': 'Attempt lifecycle: dispatch, response, validation and settlement; not pure model latency.'},
         'pace':{'value':sum(end-timedelta(seconds=60) < t <= end for _,t in dated) if rate_available else None,
                 'unit':'recorded completions/min','windowLabel':'Final recorded 60 seconds' if terminal else 'Last 60 seconds',
                 'observedSeconds':observed,'reason':reason or (None if rate_available else 'Collecting pace data; a complete 60-second observation is required.')},
