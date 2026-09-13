@@ -12,6 +12,9 @@ def _document(crop='19861', flip=False, shared=False):
     for y in range(19):
         for x in range(100):
             image.putpixel((x, y), (255, 0, 0))
+    for y in range(50,100):
+        for x in range(100):
+            image.putpixel((x,y), (0,0,0) if (x//10+y//10)%2 else (0,0,255))
     raster = io.BytesIO()
     image.save(raster, format='PNG')
     doc = Document()
@@ -82,3 +85,48 @@ def test_unsupported_crop_never_falls_back_to_full_image_draft(tmp_path, monkeyp
     monkeypatch.setattr(ocr, 'is_available', lambda: True)
     monkeypatch.setattr(ocr, 'ocr_text', lambda *args, **kwargs: pytest.fail('full raster OCR must not run'))
     assert proposals.propose_images_of_text(path, '.docx', ai_enabled=False) == []
+
+
+def test_alt_vision_receives_only_visible_crop_with_original_call_identity(tmp_path, monkeypatch):
+    import ai
+    import remediate_office
+    original = _document()
+    before = bytes(original)
+    seen = []
+    monkeypatch.setattr(ai, 'vision_is_available', lambda: True)
+    def describe(image, *args, **kwargs):
+        seen.append(Image.open(io.BytesIO(image)).size)
+        return {'alt':'A white instruction image.', 'grounded':False, 'model':'fixture-model',
+                'ai_call_id':'fixture-call', 'source':'vision'}
+    monkeypatch.setattr(ai, 'describe_image_structured', describe)
+    result, _ = remediate_office.alt_proposals_for_office(original, 'docx',
+        context_file='cropped.docx', scan_id='fixture-scan')
+    assert seen and set(seen) == {(100,80)}
+    assert result[0]['model_call_id'] == 'fixture-call'
+    assert result[0]['_model'] == 'fixture-model'
+    assert original == before
+
+
+@pytest.mark.parametrize('options', [{'shared':True}, {'crop':'oops'}, {'flip':True}])
+def test_alt_vision_never_receives_hidden_pixels_for_unsupported_crop(monkeypatch, options):
+    import ai
+    import remediate_office
+    monkeypatch.setattr(ai, 'vision_is_available', lambda: True)
+    monkeypatch.setattr(ai, 'describe_image_structured', lambda *a, **k: pytest.fail('unsafe crop must not call vision'))
+    remediate_office.alt_proposals_for_office(_document(**options), 'docx',
+        context_file='cropped.docx', scan_id='fixture-scan')
+
+
+def test_crop_preserves_alpha_instead_of_flattening_onto_black():
+    original = _document()
+    image = Image.new('RGBA', (100,100), (255,255,255,0))
+    raster = io.BytesIO()
+    image.save(raster, format='PNG')
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(original)) as source, zipfile.ZipFile(output, 'w') as target:
+        for entry in source.infolist():
+            target.writestr(entry, raster.getvalue() if entry.filename == 'word/media/image1.png' else source.read(entry.filename))
+    visible = visible_word_image(output.getvalue(), 'image 1')
+    decoded = Image.open(io.BytesIO(visible['image_bytes']))
+    assert decoded.mode == 'RGBA'
+    assert decoded.getpixel((0,0)) == (255,255,255,0)

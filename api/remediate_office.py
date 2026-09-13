@@ -200,6 +200,13 @@ def _image_bytes_for(xml: str, m, tag: str, pic_spans, entries, part_name):
     # the model cannot describe — and it lives with the vision caller. To decorative inference a
     # degenerate image is not noise, it is the signal: a 37-byte 1x1 GIF spacer is the single
     # clearest "this is decorative" a document can offer, and this lookup used to discard it.
+    if part_name.startswith("word/"):
+        from office_visible_image import visible_word_relationship
+        cropped, visible = visible_word_relationship(entries, part_name, rid_m.group(1))
+        if cropped:
+            if visible is None:
+                return None
+            img = visible
     return rid_m.group(1), img
 
 

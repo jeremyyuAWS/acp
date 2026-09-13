@@ -40,7 +40,7 @@ def visible_word_image(data: bytes, locator: str) -> dict | None:
             if len(blips) != 1 or sum(v == rid for e in root.iter() for k, v in e.attrib.items() if k.startswith('{' + NS['r'] + '}')) != 1:
                 return None
             inline = next((p for p in blips[0].iterancestors() if p.tag == '{' + NS['wp'] + '}inline'), None)
-            if inline is None or inline.xpath('.//a:tile', namespaces=NS):
+            if inline is None or inline.xpath('.//a:tile', namespaces=NS) or len(inline.xpath('.//a:blip', namespaces=NS)) != 1:
                 return None
             if not any(p.tag == '{' + NS['w'] + '}body' for p in inline.iterancestors()):
                 return None
@@ -63,7 +63,10 @@ def visible_word_image(data: bytes, locator: str) -> dict | None:
             if box[0] >= box[2] or box[1] >= box[3]:
                 return None
             out = io.BytesIO()
-            image.crop(box).convert('RGB').save(out, format='PNG')
+            visible_image = image.crop(box)
+            # Keep transparency: flattening onto black can change visible text/graphics.
+            mode = 'RGBA' if 'A' in image.getbands() or 'transparency' in image.info else 'RGB'
+            visible_image.convert(mode).save(out, format='PNG')
             visible = out.getvalue()
             return {'image_bytes': visible, 'source_image_sha256': hashlib.sha256(raw).hexdigest(),
                     'crop': crop, 'visible_image_sha256': hashlib.sha256(visible).hexdigest()}
@@ -95,3 +98,37 @@ def has_word_crop(data: bytes, locator: str) -> bool:
     except (ValueError, TypeError, KeyError, OSError, zipfile.BadZipFile, ET.XMLSyntaxError):
         # Unable to establish geometry: don't issue a supposedly uncropped draft.
         return True
+
+
+def visible_word_relationship(entries: dict, part: str, rid: str) -> tuple[bool, bytes | None]:
+    """(is cropped/unknown, safe visible pixels) for the existing alt-image lookup.
+
+    Uncropped images retain the existing lookup bytes. Any unsupported cropped use
+    returns no pixels, so a vision call cannot describe hidden content.
+    """
+    if not part.startswith("word/"):
+        return False, None
+    from apply_office_image_of_text import _rid_map
+    part_xml = entries.get(part, b"")
+    if isinstance(part_xml, str):
+        part_xml = part_xml.encode("utf-8")
+    if b"srcRect" not in part_xml:
+        return False, None
+    try:
+        package = io.BytesIO()
+        with zipfile.ZipFile(package, 'w') as zout:
+            for name, value in entries.items():
+                zout.writestr(name, value)
+        data = package.getvalue()
+        with zipfile.ZipFile(io.BytesIO(data)) as zin:
+            target = _rid_map(zin, part).get(rid)
+            media = _media_index(zin)
+            if target not in media:
+                return True, None
+            locator = f"image {media.index(target) + 1}"
+        if not has_word_crop(data, locator):
+            return False, None
+        visible = visible_word_image(data, locator)
+        return True, visible['image_bytes'] if visible is not None else None
+    except (ValueError, TypeError, KeyError, OSError, zipfile.BadZipFile, ET.XMLSyntaxError):
+        return True, None
