@@ -22,7 +22,7 @@ import re
 ACTION = "apply.unverified"
 STILL_FAILING = "still_failing"
 COULD_NOT_VERIFY = "could_not_verify"
-# Nothing reached the document at all: every approved locator resolved to no element. Distinct
+# Nothing reached the document: approved locators were missing or refused by a safe writer. Distinct
 # from STILL_FAILING (the value went in and the criterion still failed) because the reviewer's
 # next move is different — there is nothing to re-check, the description named an image this
 # document cannot carry alt text for, and re-running the apply job will not change that.
@@ -34,6 +34,10 @@ _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 #   "wrote N <noun> value(s) but could not verify ['1.4.5']: <reason>. Credit withheld; the
 #    approved value is kept for retry"
 _REASON_RE = re.compile(r"could not verify \[[^\]]*\]:\s*(.*?)(?:\.\s*Credit withheld|$)", re.S)
+_NOTHING_REASON_RE = re.compile(
+    r"^wrote no [^\[\]]+ value\(s\) for \[(?P<criteria>[^\]]+)\]:\s*"
+    r"(?P<reason>.+?)\s+Credit withheld; the approved value is kept for retry$", re.S)
+
 
 
 def normalise_sc(rule_id) -> str:
@@ -46,7 +50,7 @@ def normalise_sc(rule_id) -> str:
 def parse_unverified(detail: str | None) -> dict:
     """{outcome, criteria, reason} from an apply.unverified detail string; {} if unrecognised.
 
-    Exactly THREE shapes are written by _apply_one_value_kind. Anything else is not asserted on —
+    Recognised write, verification, and bounded refusal shapes come from the lane. Anything else is not asserted on —
     a decision this code cannot read must never become a claim on the card.
 
     The third — "reach no image in this document" — is the wedge case, and it was silent before
@@ -68,6 +72,10 @@ def parse_unverified(detail: str | None) -> dict:
     # no reason clause, so neither shape above can claim it, and this stays a positive test.
     if "reach no image in this document" in text:
         return {"outcome": NOTHING_WRITTEN, "criteria": criteria, "reason": ""}
+    refused = _NOTHING_REASON_RE.fullmatch(text)
+    if refused and criteria:
+        return {"outcome": NOTHING_WRITTEN, "criteria": criteria,
+                "reason": refused.group('reason').strip()}
     return {}
 
 
