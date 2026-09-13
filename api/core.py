@@ -2071,7 +2071,7 @@ _redis = None
 
 
 class SharedTokenStoreUnavailable(RuntimeError):
-    """A split-worker scan cannot safely start because its shared token was not stored."""
+    """Shared token storage is unavailable; admission or queued work should retry."""
 
 
 def _reset_token_redis() -> None:
@@ -2159,6 +2159,7 @@ def register_scan_tokens(scan_id: str, *, drive: str | None = None, sp: str | No
 
 
 def get_scan_tokens(scan_id: str) -> dict:
+    shared_read_failed = False
     if REDIS_URL:
         import json as _j
         for attempt in range(2):
@@ -2167,13 +2168,21 @@ def get_scan_tokens(scan_id: str) -> dict:
                 v = r.get(f"scantok:{scan_id}") if r is not None else None
                 if v:
                     return _j.loads(v)
+                shared_read_failed = False
                 break
             except Exception:
+                shared_read_failed = True
                 swallowed("core.get_scan_tokens: reading the scan tokens from Redis failed", scan_id)
                 _reset_token_redis()
                 if attempt == 0:
                     _time.sleep(0.05)
-    return SCAN_TOKENS.get(scan_id, {})
+    local = SCAN_TOKENS.get(scan_id, {})
+    if shared_read_failed and not local:
+        # A worker on another replica has no local token mirror. Returning {} here
+        # would misreport this cache outage as an expired provider session, stopping
+        # delivery rather than using the durable queue's bounded transient retries.
+        raise SharedTokenStoreUnavailable('shared token store temporarily unavailable')
+    return local
 
 
 def clear_scan_tokens(scan_id: str) -> None:
