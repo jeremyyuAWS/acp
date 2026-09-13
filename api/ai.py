@@ -1283,6 +1283,29 @@ def _transcribed_alt(ocr_txt: str) -> str:
     return t
 
 
+def _ocr_numeric_values_denied(alt: str, ocr_text: str) -> bool:
+    """Detect only an explicit global denial contradicted by actual OCR digits.
+
+    OCR omissions cannot disprove a model's numbers, colors, or relationships.
+    This guard does not certify other captions or try to infer missing values.
+    """
+    if not re.search(r"(?<![A-Za-z])\d+(?:[.,]\d+)*(?![A-Za-z])", ocr_text or ""):
+        return False
+    denial = re.compile(
+        r"\b(?:no|without|(?:does|do|did)\s+not\s+(?:provide|show|display|include|contain|have))"
+        r"\s+(?:(?:any|explicit|visible|readable|actual|exact|clear)\s+)*"
+        r"(?:numeric(?:al)?\s+(?:values|data|information|amounts)|numbers)\b"
+        r"(?=[,.!;:\s]*(?:$|so\b|and\b|but\b))", re.I)
+    for match in denial.finditer(alt or ""):
+        # A particular axis/category may have no values while other numbers are
+        # visible. Only reject the global absence claim, not those scoped claims.
+        prefix = (alt or "")[max(0, match.start() - 45):match.start()].lower()
+        if re.search(r"\b(?:axis|axes|legend|category|series|row|column)\b", prefix):
+            continue
+        return True
+    return False
+
+
 def describe_image_structured(image_bytes: bytes, *, filename: str = "", context: str = "",
                               scan_id: str | None = None, file: str | None = None,
                               allow_transcription: bool = False,
@@ -1296,6 +1319,11 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     photo) the description is a pure vision guess — `grounded` is False and the caller
     surfaces it as a Medium proposal for human confirmation rather than auto-applying, since
     a machine cannot judge whether a guessed description conveys the author's intent.
+
+    OCR presence is not semantic certification of colors, shapes, or chart
+    relationships. An explicit denial of numeric values when OCR read digits
+    clears `grounded` and sets `automatic_write_blocked`; the draft is retained
+    for individual review rather than given automatic write credit.
 
     `allow_transcription` opts into the image-of-text path: when the OCR text reads as prose,
     it is returned verbatim as the alt and no model runs. Only set it when `image_bytes` is the
@@ -1372,7 +1400,13 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
                     "ground it — confirm it matches the intent")
     else:
         evidence = "vision description only — no text in the image to anchor it; confirm it matches the intent"
+    numeric_denial = _ocr_numeric_values_denied(alt, ocr_txt)
+    if numeric_denial:
+        grounded = False
+        evidence = "OCR read numeric values, but the draft says there are none; review the caption individually."
     out = {"alt": alt, "grounded": grounded, "evidence": evidence, "model": model_used}
+    if numeric_denial:
+        out.update(automatic_write_blocked=True, reason_code="ocr_numeric_values_denied")
     call_id = escalation.get("ai_call_id") if escalation else getattr(alt, "ai_call_id", None)
     if call_id:
         out["ai_call_id"] = call_id
