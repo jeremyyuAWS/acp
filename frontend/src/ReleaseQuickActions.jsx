@@ -4,7 +4,7 @@ import './release-quick-actions.css'
 import DriveReleaseReconnect from './DriveReleaseReconnect.jsx'
 
 export default function ReleaseQuickActions({ runId, files = [], ready = [], destination, folderName = '', destinationLabel,
-  automaticStatusPending = false, automaticNeedsReconnect = false, automaticNeedsAttention = false, automaticCoveredFiles = [], announcement, destinationPicker, destinationContent, destinationLocked = false, destinationPending = false, readOnly, publishing, releaseOptions, allowRemainingIssues = false, readyReasons = [], fileStates = {}, publishedFolders = [], providerLabel = 'the destination', onReady, onProgress }) {
+  automaticStatusPending = false, automaticStatusError = '', automaticNeedsReconnect = false, automaticNeedsAttention = false, automaticCoveredFiles = [], announcement, destinationPicker, destinationContent, destinationLocked = false, destinationPending = false, readOnly, publishing, releaseOptions, allowRemainingIssues = false, readyReasons = [], fileStates = {}, publishedFolders = [], providerLabel = 'the destination', onReady, onProgress }) {
   const reasonId = useId()
   const [excluded, setExcluded] = useState(new Set())
   useEffect(() => { setExcluded(new Set()) }, [runId])
@@ -26,15 +26,15 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
   const lock = useRef(false)
   const progressRef = useRef(onProgress)
   progressRef.current = onProgress
-  const key = JSON.stringify([runId, manualFiles.map(f => [f.file, f.corrected_sha256, f.remediated_at]), destination, folderName])
+  const key = JSON.stringify([runId, automaticStatusError, manualFiles.map(f => [f.file, f.corrected_sha256, f.remediated_at]), destination, folderName])
   const currentKey = useRef(key)
   currentKey.current = key
   useEffect(() => {
     let live = true, settled = false
     const controller = new AbortController()
     setPlan(null); setError('')
-    setChecking(Boolean(runId && manualFiles.length && !readOnly && !automaticStatusPending))
-    if (!runId || !manualFiles.length || readOnly || automaticStatusPending) return
+    setChecking(Boolean(runId && manualFiles.length && !readOnly && !automaticStatusPending && !automaticStatusError))
+    if (!runId || !manualFiles.length || readOnly || automaticStatusPending || automaticStatusError) return
     const deadline = setTimeout(() => {
       if (!live || settled) return
       settled = true; controller.abort(); setChecking(false)
@@ -53,7 +53,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     }
     load()
     return () => { live = false; clearTimeout(deadline); controller.abort() }
-  }, [key, refresh, readOnly, automaticStatusPending])
+  }, [key, refresh, readOnly, automaticStatusPending, automaticStatusError])
   useEffect(() => {
     let live = true, timer
     setActive(null)
@@ -77,7 +77,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
   const activeRunning = active && ['waiting', 'publishing'].includes(active.status)
   async function approve() {
     if (Object.keys(plan?.intent?.files || {}).some(file => automaticCoveredFiles.includes(file))) return
-    if (lock.current || readOnly || !eligible || !plan || plan.key !== currentKey.current || activeRunning || automaticScope || automaticStatusPending) return
+    if (lock.current || readOnly || !eligible || !plan || plan.key !== currentKey.current || activeRunning || automaticScope || automaticStatusPending || automaticStatusError) return
     lock.current = true; setBusy(true); setError('')
     const frozen = plan
     try {
@@ -96,12 +96,12 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     catch (e) { setError(e?.message || 'The same authorized delivery could not be resumed.') }
     finally { lock.current = false; setBusy(false) }
   }
-  const readyReason = automaticStatusPending ? 'Checking automatic publication…' : automaticBatch ? automaticNeedsReconnect ? 'Automatic publishing is on. Reconnect the destination above to resume.' : automaticNeedsAttention ? 'Automatic publishing is on and needs attention. Check the saved delivery status above.' : 'Automatic publishing is on. These copies publish automatically after processing; no extra click is needed.' : readOnly ? 'History is read-only. Switch to the latest scan to publish.'
+  const readyReason = automaticStatusError ? 'Automatic publication status is unavailable. Confirm the saved permission before another delivery.' : automaticStatusPending ? 'Checking automatic publication…' : automaticBatch ? automaticNeedsReconnect ? 'Automatic publishing is on. Reconnect the destination above to resume.' : automaticNeedsAttention ? 'Automatic publishing is on and needs attention. Check the saved delivery status above.' : 'Automatic publishing is on. These copies publish automatically after processing; no extra click is needed.' : readOnly ? 'History is read-only. Switch to the latest scan to publish.'
     : destinationPending ? 'Loading the saved release destination…' : publishing ? 'Publishing is in progress.' : !runId ? 'Choose a scan before releasing files.'
     : !files.length ? 'No files are selected in this scope.'
     : !eligibleReady.length ? 'No unpublished files are currently eligible for publishing.'
     : !selectedReady.length ? 'Select at least one ready file above.' : ''
-  const approveReason = automaticStatusPending ? 'Checking automatic publication…' : automaticScope ? 'Automatic publishing is on. The saved plan already handles these files.' : readOnly ? 'History is read-only. Switch to the latest scan to approve changes.'
+  const approveReason = automaticStatusError ? 'Automatic publication status is unavailable. Confirm the saved permission before approving additional changes.' : automaticStatusPending ? 'Checking automatic publication…' : automaticScope ? 'Automatic publishing is on. The saved plan already handles these files.' : readOnly ? 'History is read-only. Switch to the latest scan to approve changes.'
     : destinationPending ? 'Loading the saved release destination…' : busy ? 'Authorization is in progress.' : activeRunning ? 'An authorized batch is already applying, verifying, and publishing. Follow its progress below.'
     : !runId ? 'Choose a scan before approving changes.' : !files.length ? 'No files are selected in this scope.'
     : checking ? 'Checking which proposals can be approved and published.'
@@ -110,7 +110,7 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
   const outcomes = Object.entries(active?.progress || {}).filter(([file]) => file !== '_deadline')
   const count = state => outcomes.filter(([, result]) => result.state === state).length
   return <section className="panel release-quick" aria-label="Publish ready files and approved changes">
-    <h3 className="release-quick-title">{allDelivered ? 'Publishing complete' : automaticStatusPending ? 'Checking automatic publication' : automaticScope ? 'Automatic publication details' : automaticCoveredFiles.length ? 'Publish additional copies' : 'Publish your documents'}</h3>
+    <h3 className="release-quick-title">{allDelivered ? 'Publishing complete' : automaticStatusError ? 'Automatic publication status unavailable' : automaticStatusPending ? 'Checking automatic publication' : automaticScope ? 'Automatic publication details' : automaticCoveredFiles.length ? 'Publish additional copies' : 'Publish your documents'}</h3>
     {deliveredCount > 0 && <div className="release-published-message" role="status">
       <strong>{allDelivered ? 'All files are already published.' : `${deliveredCount} ${deliveredCount === 1 ? 'file is' : 'files are'} already published.`}</strong>
       <p>{allDelivered ? 'There is nothing more to select for this release.' : 'Already published files are excluded from the new batch.'} Open the saved copies in {providerLabel}. Originals are unchanged.</p>
@@ -119,16 +119,16 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
     </div>}
     <section className="release-quick-step" aria-labelledby={`${reasonId}-files`}>
       <h4 id={`${reasonId}-files`}><span className="release-step-number">1</span> {allDelivered ? 'Published files' : automaticScope ? 'Authorized copies' : 'Publication batch'}</h4>
-      {!allDelivered && !automaticScope && !automaticStatusPending && releaseOptions && <details><summary>Publishing options</summary>{releaseOptions}</details>}
+      {!allDelivered && !automaticScope && !automaticStatusPending && !automaticStatusError && releaseOptions && <details><summary>Publishing options</summary>{releaseOptions}</details>}
       <div className="release-quick-summary"><strong>{allDelivered || automaticScope ? `${deliveredCount} delivered` : `${selectedReady.length} ready to publish`}</strong><span>{files.length} files in this scope</span></div>
       {!allDelivered && !automaticScope && <p className="release-quick-batch-explanation">{excluded.size
         ? `${selectedReady.length} eligible ${selectedReady.length === 1 ? 'copy is' : 'copies are'} included in your custom batch.`
         : 'All unpublished eligible copies are included in one batch.'} {allowRemainingIssues ? 'Includes saved copies with remaining issues, as you chose. Pending suggestions are not applied.' : 'Copies must pass release eligibility checks before joining the batch.'}</p>}
-      {(!automaticScope || allDelivered) && !automaticStatusPending && <details className="release-quick-specific-files"><summary>{allDelivered ? 'View published files' : 'Choose specific files'}{!allDelivered && excluded.size > 0 ? ` · ${selectedReady.length} included` : ''}</summary>
+      {(!automaticScope || allDelivered) && !automaticStatusPending && !automaticStatusError && <details className="release-quick-specific-files"><summary>{allDelivered ? 'View published files' : 'Choose specific files'}{!allDelivered && excluded.size > 0 ? ` · ${selectedReady.length} included` : ''}</summary>
       {!allDelivered && excluded.size > 0 && <button type="button" className="ghost small" disabled={readOnly || publishing} onClick={() => setExcluded(new Set())}>Include all eligible files</button>}
       <div className="release-quick-file-list" role="group" aria-label="Files to publish">
         {files.filter(file => readyNames.has(file.file) || allDelivered).map(file => <label key={file.file} className={`release-quick-file${fileStates[file.file]?.status === 'released' ? ' release-quick-file--delivered' : ''}`}>
-          <input type="checkbox" aria-label={`Publish ${file.file}`} checked={readyNames.has(file.file) && !excluded.has(file.file)} disabled={readOnly || publishing || automaticStatusPending || automaticCoveredFiles.includes(file.file) || !readyNames.has(file.file)}
+          <input type="checkbox" aria-label={`Publish ${file.file}`} checked={readyNames.has(file.file) && !excluded.has(file.file)} disabled={readOnly || publishing || automaticStatusPending || Boolean(automaticStatusError) || automaticCoveredFiles.includes(file.file) || !readyNames.has(file.file)}
             onChange={event => setExcluded(previous => { const next = new Set(previous); event.target.checked ? next.delete(file.file) : next.add(file.file); return next })} />
           <span>{file.file}</span><small>{readyNames.has(file.file) ? 'Ready to publish' : fileStates[file.file]?.label || 'Not available for a new publish'}</small>
           {!readyNames.has(file.file) && fileStates[file.file]?.reason && <span className="release-quick-file-reason">{fileStates[file.file].reason}</span>}
@@ -143,13 +143,13 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
       <h4 id={`${reasonId}-destination`}><span className="release-step-number">2</span> {allDelivered ? 'Published folder' : 'Confirm destination'}</h4>
       {destinationContent || <p><b>Destination:</b> {plan?.intent?.destination?.folder_name ? `${plan.intent.destination.folder_name} / Remediated / ${plan.intent.release_folder_name || folderName || 'Timestamp + user email'}` : destinationLabel}. Originals stay unchanged.</p>}
       {destinationLocked && <p className="muted">This release has started. Further copies and retries use this saved destination.</p>}
-      {!readOnly && !destinationLocked && !automaticScope && !automaticStatusPending && <details><summary>Change destination</summary>{destinationPicker}</details>}
+      {!readOnly && !destinationLocked && !automaticScope && !automaticStatusPending && !automaticStatusError && <details><summary>Change destination</summary>{destinationPicker}</details>}
     </section>
     <section className="release-quick-step" aria-labelledby={`${reasonId}-publish`}>
       <h4 id={`${reasonId}-publish`}><span className="release-step-number">3</span> {allDelivered ? 'Publication complete' : 'Publish copies'}</h4>
       <p>Saved copies are published with a scan summary and a per-file checklist of remaining work. Publishing does not certify accessibility.</p>
       {automaticScope && <p role="status"><b>Automatic publishing is on</b> · {automaticNeedsReconnect ? 'Reconnect the destination above to resume the saved automatic publication.' : automaticNeedsAttention ? 'The saved automatic publication needs attention. Check the destination and delivery status above.' : 'Files publish after automatic processing. No extra click is needed.'}</p>}
-      {!automaticScope && !automaticStatusPending && <div className="release-quick-buttons">
+      {!automaticScope && !automaticStatusPending && !automaticStatusError && <div className="release-quick-buttons">
       <div className="release-quick-action">
         <button disabled={allDelivered || Boolean(readyReason)} aria-describedby={!allDelivered && readyReason ? `${reasonId}-ready` : undefined} onClick={() => onReady(selectedReady.map(f => f.file))}>
           {allDelivered ? 'All files published ✓' : publishing ? 'Publishing copies…' : allowRemainingIssues ? `Publish batch with remaining issues (${selectedReady.length})` : `Publish batch (${selectedReady.length})`}
@@ -160,8 +160,9 @@ export default function ReleaseQuickActions({ runId, files = [], ready = [], des
         </div>}
       </div>
       </div>}
-      {automaticStatusPending && <p role="status">Checking automatic publication… Wait before starting another delivery.</p>}
-      {!allDelivered && !automaticScope && !automaticStatusPending && <details className="release-quick-proposals"><summary>Apply additional AI suggestions and publish (optional)</summary>
+      {automaticStatusError && <p role="status">Automatic publication status is unavailable. ACP must confirm the saved permission before another delivery. {automaticStatusError}</p>}
+      {automaticStatusPending && !automaticStatusError && <p role="status">Checking automatic publication… Wait before starting another delivery.</p>}
+      {!allDelivered && !automaticScope && !automaticStatusPending && !automaticStatusError && <details className="release-quick-proposals"><summary>Apply additional AI suggestions and publish (optional)</summary>
       <strong>Approve additional suggestions in one action</strong>
       <p>Approve the eligible proposals for this scope in one action. ACP applies them and publishes qualifying copies. You do not need to open the HITL panel. This requires fresh approval for additional copies outside the saved automatic plan.</p>
       <div className="release-quick-action">
