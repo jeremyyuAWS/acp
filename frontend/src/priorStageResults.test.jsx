@@ -93,3 +93,8 @@ it('holds existing-scan mutations until durable lineage arrives, while initial d
  ref.current={...priorStageResults(lineage('remediate','saved'),'saved'),scanId:'saved'};click();expect(action).not.toHaveBeenCalled()
  expect(priorStageResults(null,'new',{awaitingLineage:false}).discover).toBe(false)
 })
+
+it('keeps Undo out of historical remediation detail panes', () => {
+ const source=readFileSync(join(dirname(fileURLToPath(import.meta.url)),'Remediate.jsx'),'utf8')
+ expect(source).toContain('!reviewReadOnly && sel.autoApplied && !sel.inspectionOnly')
+})

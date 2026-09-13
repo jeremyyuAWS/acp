@@ -13,3 +13,11 @@ export function criterionCapabilityDescription(sc, formats, capability) {
   const labels = {auto: 'Supported automatic repair', assisted: 'Supported proposal when a valid target is available', human: 'Document edit or unsupported target may need you'}
   return formats.map(format => ({format, label: labels[capability?.[format]?.[sc]] || labels.human}))
 }
+
+export function savedApprovalLabel(policy) {
+  const choice = policy?.fix_approval_policy
+  if (choice?.mode === 'review') return 'Review before applying supported fixes'
+  if (choice?.mode === 'custom') return policy?.auto_approve_ai === true
+    ? 'Automatic except criteria selected for review' : 'AI suggestions need approval · criterion review choices retained'
+  return policy?.auto_approve_ai === true ? 'Automatic application' : 'AI suggestions need approval'
+}

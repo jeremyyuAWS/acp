@@ -1825,7 +1825,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 {/* R15 · only for a row ACP applied itself — a drafted-AI or manually-authored
                     finding was never something ACP claimed to fix on its own, so there is
                     nothing here to un-claim for those rows. */}
-                {sel.autoApplied && !sel.inspectionOnly && (
+                {!reviewReadOnly && sel.autoApplied && !sel.inspectionOnly && (
                   <UndoFix scanId={sel.scanId || run?.id} file={sel.file} ruleId={sel.ruleId}
                            onUndone={onRefresh} />
                 )}
