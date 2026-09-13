@@ -16,7 +16,7 @@ it('separates verified changes, review items, retained charges, and undelivered 
   expect(c.textContent).toContain('$0.12')
   expect(c.textContent).toContain('$0.03 remains reserved')
   expect(c.textContent).toContain('2 corrected copies awaiting Release')
-  expect([...c.querySelectorAll('a')].map(a => a.textContent)).toEqual(['Open Review', 'Inspect Release'])
+  expect([...c.querySelectorAll('a')].map(a => a.textContent)).toEqual(['Open Review'])
 })
 it('never turns unknown or invalidated evidence into zero or a completion claim', async () => {
   const c = await mount({ terminal: true, state: 'cancelled', fixes: { verified: 20 }, review: { items: 10 }, delivery: { awaiting_release: 4 }, integrity: { ok: false, affected: ['fixes', 'review', 'delivery'] } })
@@ -31,4 +31,20 @@ it('does not call a fully charged budget breach an unsettled reservation', async
   expect(c.textContent).toContain('Further AI spending is on hold')
   expect(c.textContent).not.toContain('remains reserved')
   expect(c.textContent).not.toContain('not settled')
+})
+
+it('separates processed files from successful fixes and published copies', async () => {
+  const c = await mount({ terminal: true, total_documents: 8, documents: { waiting: 0, processing: 0, failed: 2 }, fixes: { verified: 12 }, delivery: { delivered: 3 }, review: { items: 2 } })
+  expect(c.textContent).toContain('Files processed · attempt finished8')
+  expect(c.textContent).toContain('Published copies3')
+  expect(c.textContent).toContain('2 failed documents')
+})
+it('does not calculate processed files from incomplete counters', async () => {
+  const c = await mount({ terminal: true, total_documents: 8, documents: { failed: 2 }, delivery: {} })
+  expect(c.textContent).toContain('Files processed · attempt finishedUnavailable')
+  expect(c.textContent).toContain('Published copiesUnavailable')
+})
+it('does not count a cancelled attempt as a processed file', async () => {
+  const c = await mount({ terminal: true, total_documents: 8, documents: { waiting: 0, processing: 0 }, outcome_reasons: { cancelled: 2 } })
+  expect(c.textContent).toContain('Files processed · attempt finished6')
 })

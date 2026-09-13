@@ -1,11 +1,13 @@
 import { useId } from 'react'
 import './ReleaseDeliveryCard.css'
+import { releaseJourneyStatus } from './releaseJourneyStatus.js'
 
 export default function ReleaseDeliveryCard({ ready = [], scopeCount = 0, publishedCount = 0,
   deliveringCount = 0, failedCount = 0, publishing = false, loading = false, readOnly = false,
   allowRemainingIssues = false, onRemainingIssuesChange, onPublish, onOpenDetails,
   destinationLabel, announcement, error, folders = [], children, automaticRelease = null, readyCount = ready.length }) {
   const headingId = useId()
+  const journey = releaseJourneyStatus({ error, automaticRelease, loading, publishing, deliveringCount, publishedCount, scopeCount, readyCount })
   const unavailable = readOnly || loading || publishing
   return <section className="panel release-delivery-card" aria-labelledby={headingId}>
     <div className="release-delivery-card__heading">
@@ -13,6 +15,7 @@ export default function ReleaseDeliveryCard({ ready = [], scopeCount = 0, publis
         <p>Continue from saved fixes to delivery without leaving remediation.</p></div>
       {onOpenDetails && <button className="ghost" type="button" onClick={onOpenDetails}>Release details</button>}
     </div>
+    <p className="release-delivery-card__journey"><strong>{journey.label}</strong> · {journey.detail}</p>
     <div className="release-delivery-card__counts" aria-label="Delivery progress">
       <span><strong>{readyCount}</strong> ready</span>
       <span><strong>{deliveringCount}</strong> delivering</span>
