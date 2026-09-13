@@ -1,0 +1,6 @@
+.release-recovery-banner { position: fixed; left: 0; right: 0; z-index: 9998; display: flex; align-items: center; justify-content: center; gap: 16px; padding: 10px 48px; background: #dbeafe; color: #1e3a8a; box-shadow: 0 2px 8px rgb(0 0 0 / 14%); font-size: 14px; line-height: 1.45; }
+.release-recovery-banner--attention { background: #fef3c7; color: #78350f; }
+.release-recovery-banner button { flex-shrink: 0; padding: 6px 12px; border: 1px solid currentColor; border-radius: 6px; background: #fff; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+.release-recovery-banner button:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 3px; }
+.release-recovery-banner__detail { display: block; font-size: 13px; }
+@media (max-width: 640px) { .release-recovery-banner { padding: 10px 16px; flex-wrap: wrap; justify-content: flex-start; } }

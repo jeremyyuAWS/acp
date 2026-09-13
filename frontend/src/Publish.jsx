@@ -780,9 +780,6 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }
 
   const changeRemainingIssues = value => { partialChoice.current = releaseScopeKey; setAllowRemainingIssues(value); setReleasePreview(null); setPackagePreview(null); setReviewedPlanKey(null); setBuilderStep(1); setDeliveryMethod('publish'); setSelectedFiles(new Set()); selectionInitialized.current = false }
-  const driveReconnect = (automaticAuthorization?.requires_reconnect === true || automaticAuthorization?.can_resume === true) && automaticAuthorization.resumable !== false && ['active', 'waiting', 'processing', 'publishing', 'blocked'].includes(automaticAuthorization.status) && <DriveReleaseReconnect
-        key={`${run?.id}:${automaticAuthorization.id}`} scanId={run?.id} authorizationId={automaticAuthorization.id} provider={automaticAuthorization?.destination?.provider} requiresReconnect={automaticAuthorization.requires_reconnect === true} readOnly={readOnly}
-        onResume={async () => { await resumeAutomaticRelease(run.id, automaticAuthorization.id); setAutomaticAuthorization(previous => previous?.id === automaticAuthorization.id ? {...previous, requires_reconnect:false, can_resume:false} : previous) }} />
   const automaticCoveredFiles = automaticAuthorization?.observedScope === releaseScopeKey
     && automaticAuthorization?.observedOwner === releaseOwner
     && automaticAuthorization?.observedEpoch === authEpoch()
@@ -792,6 +789,14 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     && automaticAuthorization.destination?.provider === releaseProvider
     && (!releaseDestination || ['provider', 'folder_id', 'drive_id', 'site_id'].every(key => (releaseDestination[key] || null) === (automaticAuthorization.destination?.[key] || null)))
       ? automaticAuthorization.files || [] : []
+  const driveReconnect = automaticCoveredFiles.length > 0
+    && (automaticAuthorization.requires_reconnect === true || automaticAuthorization.can_resume === true)
+    && automaticAuthorization.resumable !== false && <DriveReleaseReconnect
+      key={`${run?.id}:${automaticAuthorization.id}`} scanId={run?.id} authorizationId={automaticAuthorization.id}
+      authorization={automaticAuthorization} owner={releaseOwner} provider={automaticAuthorization.destination?.provider}
+      requiresReconnect={automaticAuthorization.requires_reconnect === true} readOnly={readOnly || automaticStatusPending}
+      onRefresh={() => setAutomaticStatusRefresh(value => value + 1)}
+      onResume={() => resumeAutomaticRelease(run.id, automaticAuthorization.id)} />
   const automaticDelivery = !readOnly && ['active', 'waiting', 'processing', 'publishing', 'blocked'].includes(automaticAuthorization?.status)
     ? automaticAuthorization : null
   const manualReady = automaticDelivery

@@ -501,13 +501,17 @@ it('does not apply an old publish response after changing scans', async () => {
   expect(props.onPublish).not.toHaveBeenCalled()
 })
 
-it('Release reconnect resumes the exact saved authorization without publishing or approving again', async () => {
- getAutomaticRelease.mockResolvedValue({authorization:{id:'saved-auth',status:'blocked',requires_reconnect:true,files:['one.pdf'],allow_remaining_issues:true}})
- const c=await mount({run,files:[held('one.pdf')]})
- await click(button(c,'Reconnect Google Drive and resume'))
+it('automatically recovers the durable exact saved Release without publishing or approving again', async () => {
+ const saved={id:'saved-auth',run_id:'accepted-run',revision:1,status:'blocked',can_resume:true,
+   requires_reconnect:false,files:['one.pdf'],allow_remaining_issues:true,
+   destination:{provider:'drive',folder_id:'folder'}}
+ getAutomaticRelease.mockResolvedValue({run_id:'accepted-run',authorization:saved})
+ const c=await mount({run:{...run,source:'drive',owner_email:'owner'},files:[held('one.pdf')]})
  expect(resumeAutomaticRelease).toHaveBeenCalledWith('scan1','saved-auth')
  expect(publishAllFiles).not.toHaveBeenCalled()
- expect(button(c,'Reconnect Google Drive and resume')).toBeUndefined()
+ expect(button(c,'Resume delivery')).toBeUndefined()
+ expect(document.querySelector('.release-recovery-banner').textContent).toContain('Checking saved delivery status')
+ expect(document.querySelector('.release-recovery-banner button')).toBeNull()
 })
 
  it('retires redundant assessment details from the publishing path', async () => {

@@ -1,44 +1,69 @@
 import { useEffect, useRef, useState } from 'react'
-import { reconnectDriveForRelease } from './driveAuth.js'
 import { authEpoch } from './apiIdentity.js'
+import { reconnectDriveForRelease } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import { setDriveToken, setSPToken } from './api.js'
+import useAutomaticDeliveryRecovery, { recoveryKey } from './useAutomaticDeliveryRecovery.js'
+import ReleaseRecoveryBanner from './ReleaseRecoveryBanner.jsx'
 
-export default function DriveReleaseReconnect({ scanId, authorizationId, onResume, readOnly = false, requiresReconnect = true, provider = 'drive' }) {
+export default function DriveReleaseReconnect({ scanId, authorizationId, authorization, owner,
+  onResume, onRefresh, readOnly = false, requiresReconnect = true, provider = 'drive' }) {
   const microsoft = provider === 'sharepoint'
-  const providerName = microsoft ? 'SharePoint' : 'Google Drive'
+  const key = recoveryKey({ scanId, authorization, owner, provider })
+  const enabled = !readOnly && authorization?.id === authorizationId && Boolean(key)
+    && (authorization.can_resume === true || authorization.requires_reconnect === true)
+  const recovery = useAutomaticDeliveryRecovery({ key, enabled, requiresReconnect, microsoft,
+    renew: interactive => microsoft ? refreshSPToken({ interactive, persist: false }) : reconnectDriveForRelease(),
+    install: token => {
+      if (microsoft) setSPToken(token)
+      else setDriveToken(token)
+      try { sessionStorage.setItem(microsoft ? 'sp_token' : 'gd_token', token) } catch { /* Session storage unavailable. */ }
+    }, resume: onResume, refresh: onRefresh,
+  })
+  if (!authorization && scanId && authorizationId && typeof onResume === 'function' && requiresReconnect)
+    return <ManualReleaseReconnect {...{ scanId, authorizationId, onResume, readOnly, microsoft }} />
+  return <ReleaseRecoveryBanner status={enabled ? recovery.status : 'idle'}
+    providerName={microsoft ? 'SharePoint' : 'Google Drive'} error={recovery.error}
+    onReconnect={recovery.reconnect} disabled={readOnly} />
+}
+
+// Compatibility for the existing explicit manual continuation. Only its button can
+// request access and resume; the server revalidates the saved owner's authority.
+// Missing full automatic authorization must never start an automatic operation.
+function ManualReleaseReconnect({ scanId, authorizationId, onResume, readOnly, microsoft }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [resumed, setResumed] = useState(false)
   const lock = useRef(false)
-  const identity = `${scanId}:${authorizationId}:${provider}`
+  const identity = `${scanId}:${authorizationId}:${microsoft}`
   const current = useRef(identity)
-  current.current = identity
-  useEffect(() => () => { current.current = null }, [])
-  useEffect(() => { setError(''); setResumed(false) }, [identity])
+  current.current = readOnly ? null : identity
+  useEffect(() => {
+    current.current = readOnly ? null : identity
+    return () => { current.current = null }
+  }, [])
   async function reconnect() {
-    if (lock.current || readOnly || !scanId || !authorizationId) return
-    const frozen = identity
-    const ownerEpoch = authEpoch()
+    if (lock.current || readOnly) return
+    const frozen = identity, epoch = authEpoch()
     lock.current = true; setBusy(true); setError('')
     try {
-      if (requiresReconnect) {
-        const token = await (microsoft ? refreshSPToken({ persist: false }) : reconnectDriveForRelease())
-        if (current.current !== frozen || authEpoch() !== ownerEpoch) return
-        if (microsoft) setSPToken(token)
-        else setDriveToken(token)
-        try { sessionStorage.setItem(microsoft ? 'sp_token' : 'gd_token', token) } catch { /* Session storage may be unavailable. */ }
-      }
-      if (authEpoch() !== ownerEpoch) return
+      const token = await (microsoft ? refreshSPToken({ interactive: true, persist: false }) : reconnectDriveForRelease())
+      if (current.current !== frozen || authEpoch() !== epoch) return
+      if (microsoft) setSPToken(token)
+      else setDriveToken(token)
+      try { sessionStorage.setItem(microsoft ? 'sp_token' : 'gd_token', token) } catch { /* Session storage unavailable. */ }
       await onResume()
-      if (current.current === frozen && authEpoch() === ownerEpoch) setResumed(true)
+      if (current.current === frozen && authEpoch() === epoch) setResumed(true)
     } catch (e) {
-      if (current.current === frozen && authEpoch() === ownerEpoch) setError(e?.message || 'The saved release could not resume. Refresh status before trying again.')
-    } finally { lock.current = false; setBusy(false) }
+      if (current.current === frozen && authEpoch() === epoch) setError(e?.message || 'Delivery could not resume.')
+    } finally { lock.current = false; if (current.current === frozen) setBusy(false) }
   }
+  const providerName = microsoft ? 'SharePoint' : 'Google Drive'
   return <div className="rem-auto-release-attention">
-    <p>{requiresReconnect ? `${providerName} access needs to be renewed. Sign in with the account that owns this release.` : 'Resume delivery after ACP checks whether a saved copy already exists.'} Saved files, destination, and approval choices stay the same.</p>
-    <button type="button" className="ghost" disabled={readOnly || busy || resumed} onClick={reconnect}>{busy ? (requiresReconnect ? `Reconnecting ${providerName}…` : 'Resuming delivery…') : requiresReconnect ? `Reconnect ${providerName} and resume` : 'Resume delivery'}</button>
+    <p>{providerName} access needs to be renewed for the saved manual release.</p>
+    <button type="button" className="ghost" disabled={readOnly || busy || resumed} onClick={reconnect}>
+      {busy ? `Reconnecting ${providerName}…` : `Reconnect ${providerName} and resume`}
+    </button>
     {resumed && <p role="status">ACP is checking delivery and resuming the saved release.</p>}
     {error && <p role="alert">{error}</p>}
   </div>
