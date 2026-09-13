@@ -15,22 +15,10 @@ SHAPES = ('circle', 'square', 'rectangle', 'triangle')
 
 
 def _color(rgb):
-    r, g, b = rgb
-    if min(rgb) >= 245:
-        return 'white'
-    if max(rgb) <= 15:
-        return 'black'
-    if max(rgb) - min(rgb) <= 8:
-        return 'gray'
-    if r >= 160 and g <= 130 and b <= 130:
-        return 'red'
-    if b >= 160 and r <= 130 and g <= 150:
-        return 'blue'
-    if g >= 100 and r <= 100 and b <= 100:
-        return 'green'
-    if r >= 180 and g >= 180 and b <= 80:
-        return 'yellow'
-    return None
+    # Exact CSS named-color primaries only: no hue threshold establishes semantics.
+    return {(255, 0, 0): 'red', (0, 0, 255): 'blue', (0, 128, 0): 'green',
+            (255, 255, 0): 'yellow', (0, 0, 0): 'black',
+            (255, 255, 255): 'white', (128, 128, 128): 'gray'}.get(rgb)
 
 
 def _facts(data):
@@ -138,11 +126,14 @@ def validate_caption(caption, image_bytes, *, ocr_tokens=None):
         visible_numbers = {token for item in ocr_tokens if isinstance(item, str)
                            for token in re.findall(r'\b\d+(?:\.\d+)?\b', item)}
         evidence['ocr_number_count'] = len(visible_numbers)
-        if visible_numbers and re.search(r'(?:no |not any |without |does not (?:provide|show|contain) (?:any )?)(?:numerical |numeric )?(?:values|numbers)', text):
+        global_denials = {'the chart does not provide any numerical values',
+                          'the chart has no numerical values',
+                          'the image has no numbers', 'there are no numbers in the image'}
+        if visible_numbers and text in global_denials:
             return result('rejected', 'visible_numbers_denied')
         claimed_numbers = set(re.findall(r'\b\d+(?:\.\d+)?\b', text))
         if claimed_numbers - visible_numbers:
-            return result('rejected', 'number_claim_not_supported_by_ocr')
+            return result('needs_manual', 'number_claim_unverified_by_ocr')
     facts = _facts(image_bytes)
     if facts is None:
         return result('needs_manual', 'pixel_semantics_unsupported')
@@ -150,16 +141,30 @@ def validate_caption(caption, image_bytes, *, ocr_tokens=None):
     templates, canonical = _approved_templates(facts)
     if text in templates:
         return result('validated', 'exact_pixel_facts_match', canonical)
+    # Reject only complete finite factual statements. Free regex extraction would
+    # misread negation, scope or extra assertions as facts that the caption claims.
+    color_pattern = '(' + '|'.join(COLORS) + ')'
+    shape_pattern = '(' + '|'.join(SHAPES) + ')'
     if facts['kind'] == 'solid_fill':
-        mentions = set(re.findall(r'\b(?:'+'|'.join(COLORS)+r')\b', text))
-        if mentions - {facts['color']}:
+        match = re.fullmatch(r'(?:the image is a solid|a solid) ' + color_pattern + r' (?:color|image)', text)
+        if match and match[1] != facts['color']:
             return result('rejected', 'pixel_color_contradiction', canonical)
     else:
-        known = {(obj['color'], obj['shape']) for obj in facts['objects']}
-        claims = re.findall(r'\b('+'|'.join(COLORS)+r') ('+'|'.join(SHAPES)+r')\b', text)
-        if any(pair not in known for pair in claims):
-            return result('rejected', 'pixel_shape_or_color_contradiction', canonical)
-        background = re.search(r'\b('+'|'.join(COLORS)+r') background\b', text)
-        if background and background[1] != 'white':
-            return result('rejected', 'pixel_background_contradiction', canonical)
+        prefix = r'(?:the image (?:shows|displays|contains) )?'
+        if len(facts['objects']) == 1:
+            pattern = prefix + r'a ' + color_pattern + ' ' + shape_pattern + r' on a ' + color_pattern + r' background'
+            match = re.fullmatch(pattern, text)
+            if match:
+                obj = facts['objects'][0]
+                if (match[1], match[2], match[3]) != (obj['color'], obj['shape'], 'white'):
+                    return result('rejected', 'pixel_shape_or_color_contradiction', canonical)
+        else:
+            pattern = (prefix + r'a ' + color_pattern + ' ' + shape_pattern + r' on the left and a '
+                       + color_pattern + ' ' + shape_pattern + r' on the right on a ' + color_pattern + r' background')
+            match = re.fullmatch(pattern, text)
+            if match:
+                left, right = facts['objects']
+                expected = (left['color'], left['shape'], right['color'], right['shape'], 'white')
+                if match.groups() != expected:
+                    return result('rejected', 'pixel_shape_or_color_contradiction', canonical)
     return result('needs_manual', 'semantic_claims_outside_validated_grammar', canonical)
