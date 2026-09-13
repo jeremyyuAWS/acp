@@ -569,6 +569,9 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
                 if applied_fixes is not None:
                     applied_fixes.append({
                         "rule_id": "SC_1_1_1",
+                        "locator": f"{part_name}#{rid}",
+                        "model": res.get("model"),
+                        "model_call_id": res.get("ai_call_id"),
                         "value": res["alt"],
                         "source": (f"AI vision model ({res['model']}), confirmed by an "
                                    "independent second reading (consistency cross-check)"),
