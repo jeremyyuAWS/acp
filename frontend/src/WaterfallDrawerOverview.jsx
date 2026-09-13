@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import WaterfallDrawerCharts, { SettledSpend } from './WaterfallDrawerCharts.jsx'
+import { AIActivityCharts } from './CloudAIActivity.jsx'
 import WaterfallCount from './WaterfallCount.jsx'
 import WaterfallDrawerStory from './WaterfallDrawerStory.jsx'
 import useWaterfallDrawerMetrics from './useWaterfallDrawerMetrics.js'
@@ -52,8 +52,7 @@ export default function WaterfallDrawerOverview({ scanId, batchId, identity, sel
       {metrics.error && <p role="status">{metrics.data ? 'Refresh delayed · showing the last recorded metrics.' : 'Stage metrics unavailable.'} <button type="button" onClick={metrics.refresh}>Retry metrics</button></p>}
       {metrics.data && <>
         <dl className="wf-spending" aria-label="Recorded attempt counters">{charts.contribution.rows.map(row => <div key={row.id}><dt>{row.label} · attempts</dt><dd><WaterfallCount value={row.value} identity={counterIdentity} paused={paused || reduced || metrics.error || !live} /></dd></div>)}</dl>
-        <details><summary>Recorded attempt activity and pace</summary><WaterfallDrawerCharts {...charts} onInspect={() => selectTab('Attempts')} /></details>
-        <details><summary>Settled cost for this stage and model</summary><SettledSpend data={charts.spend} /></details>
+        <AIActivityCharts data={metrics.data} />
       </>}
     </> : role === 'rules' || role === 'verify' || role === 'approval' ? <>
       <dl className="wf-spending"><div><dt>{role === 'approval' ? 'Review items · run total' : 'Verified changes · all origins, run total'}</dt><dd><WaterfallCount value={role === 'approval' ? snapshot.review?.items : snapshot.fixes?.verified} identity={`${identity}:${role}`} paused={paused || reduced || !live} /></dd></div></dl>
