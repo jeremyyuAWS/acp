@@ -10,7 +10,7 @@ export function reviewQueueAction(row, decisions = {}, automatic = false) {
   if (status === 'awaiting-validation' || (automatic && owner === 'check')) return { key: 'check', label: 'Status check' }
   const lane = laneOf(row).key
   const manualReason = ['Manual work or no supported proposal writer',
-    'PDF heading or structure map needs source-document tagging; it is not a writable existing-tag repair']
+    'This PDF needs headings or table structure added in the original document. ACP cannot apply this draft automatically.']
     .includes(row.automaticDisposition?.reason)
   if (owner === 'human' && manualReason) return { key: 'edit', label: 'Edit needed' }
   if (['manual', 'handoff'].includes(lane)) return { key: 'edit', label: 'Edit needed' }

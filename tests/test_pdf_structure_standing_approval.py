@@ -33,7 +33,7 @@ def test_actual_native_producer_requires_human_approval_then_writes_saved_tags(i
         item=store.enqueue_proposals(standing.SID,standing.FILE,rule,drafts)
         row=store.get_hitl_item(item)
         assert eligibility(row,standing.FILE) is None  # real writer, explicit human consent only
-        with pytest.raises(ValueError,match='deterministic draft'):
+        with pytest.raises(ValueError,match='created from document rules'):
             eligible_item(store,standing.OWNER,standing.SID,ctx.run_id,row)
         approve_file(store,ctx)
     assert store.get_hitl_item(item)['status']=='pending'

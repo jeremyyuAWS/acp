@@ -11,8 +11,8 @@ import release_continuation_store as persistence
 from release_artifacts import ReleaseArtifactError, require_current_source
 
 TERMINAL = {'published', 'blocked', 'failed', 'needs_confirmation'}
-PDF_STRUCTURE_MANUAL = 'PDF heading or structure map needs source-document tagging; it is not a writable existing-tag repair'
-PDF_STRUCTURE_REVIEW = 'Existing PDF tag repair needs individual approval; its deterministic draft is not covered by automatic AI-call approval'
+PDF_STRUCTURE_MANUAL = 'This PDF needs headings or table structure added in the original document. ACP cannot apply this draft automatically.'
+PDF_STRUCTURE_REVIEW = 'This PDF structure draft was created from document rules and needs your review before ACP applies it.'
 PDF_STRUCTURE_KINDS = {'1.3.1': {'pdf-table-header-scope': 'header-scope'},
                        '2.4.6': {'pdf-tag-heading': 'heading'}}
 
