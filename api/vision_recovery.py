@@ -40,7 +40,7 @@ def _decision(store, sid, file, state, **detail):
                        file=file, detail=_encoded(detail))
     safe = {key: detail[key] for key in ('retry', 'run_after', 'drafts') if key in detail}
     if state == 'blocked':
-        safe['reason_code'] = 'vision_recovery_unresolved'
+        safe['reason_code'] = detail.get('reason_code') if detail.get('reason_code') in {'vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked'} else 'vision_recovery_unresolved'
     store.append_scan_event(sid, 'remediate.vision_retry_' + state,
         phase='remediate', document=file, correlation_id=detail.get('run_id'),
         detail=safe or None)
@@ -66,16 +66,36 @@ def pending_for_file(store, sid, run_id, file):
     return False
 
 
-def schedule(store, context, job, misses):
-    if not misses or context is None:
+def _recovery_block(context):
+    reasons = {item.get('reason') if isinstance(item, dict) else str(item)
+               for item in context.deferred}
+    if reasons & {'provider_usage_unknown', 'existing_draft_attempt_requires_reconciliation',
+                  'budget_settlement_failed_or_breached', 'budget_release_failed'}:
+        return 'vision_spending_reconciliation_required'
+    if any(reason not in TRANSIENT for reason in reasons):
+        return 'vision_permission_or_budget_blocked'
+    if context.enabled:
+        snapshot = context.ledger.snapshot(context.owner_id, context.run_id)
+        if snapshot['blocked']:
+            return 'vision_spending_reconciliation_required'
+        if snapshot['available_units'] <= 0:
+            return 'vision_permission_or_budget_blocked'
+    return None
+
+
+def schedule(store, context, job, misses, *, inspect_pending=False):
+    if context is None or (not misses and not inspect_pending):
         return
     sid, file = context.scan_id, context.file
     if not (context.enabled or context.local_drafting):
         return
-    if any((item.get('reason') if isinstance(item, dict) else str(item)) not in TRANSIENT
-           for item in context.deferred):
-        _decision(store, sid, file, 'blocked', run_id=context.run_id, reason='AI spending or permission is unresolved; automatic vision retry is paused.')
-        return
+    row = _pending(store, sid, file)
+    if not misses:
+        if not row:
+            return
+        proposals = json.loads(row.get('proposals') or '[]')
+        if proposals and all(p.get('proposed_value') and not p.get('automatic_write_blocked') for p in proposals):
+            return
     if not file.lower().endswith(('.docx', '.pptx', '.xlsx', '.pdf')):
         _decision(store, sid, file, 'blocked', run_id=context.run_id, reason='Proposal-only vision recovery is not available for this format.')
         return
@@ -95,7 +115,34 @@ def schedule(store, context, job, misses):
         'source_revision': store.remediation_source_revision(sid),
         'corrected_sha256': digest, 'item_id': row['id'],
         'proposals_before': row['proposals'], 'retry': 1}
+    blocked = _recovery_block(context)
+    if blocked:
+        _decision(store, sid, file, 'blocked', run_id=context.run_id,
+                  reason_code=blocked, reason='AI spending or permission is unresolved; automatic vision retry is paused.')
+        if blocked == 'vision_spending_reconciliation_required':
+            _enqueue(store, dict(payload, waiting_spending=True, wait_check=1))
+        return
     _enqueue(store, payload)
+
+
+def schedule_existing_pending(store, owner, sid, run_id):
+    """Resume missing drafts in the current saved run without restarting remediation."""
+    from ai_run_policy import run_context
+    from ai_run_approval_override import run
+    run(store, owner, sid, run_id)  # Owner, current execution, consent and revision.
+    seen = set()
+    for summary in store.list_scan_jobs_of_type(sid, 'remediate_file'):
+        parent = store.get_job(summary['id']) or {}
+        durable = parent.get('payload') or {}
+        if isinstance(durable, str):
+            durable = json.loads(durable)
+        file = durable.get('file')
+        if (parent.get('batch_id') != run_id or durable.get('owner') != owner
+                or durable.get('scan_id') != sid or not file or file in seen):
+            continue
+        seen.add(file)
+        with run_context(store, durable, parent) as context:
+            schedule(store, context, parent, [], inspect_pending=True)
 
 
 def _enqueue(store, payload):
@@ -103,8 +150,10 @@ def _enqueue(store, payload):
     # A deterministic database key elects one enqueue across parent retries and
     # replicas. Done/dead jobs retain the key, so the allowance cannot restart.
     identity = _encoded([payload[k] for k in ('owner', 'run_id', 'file', 'corrected_sha256', 'retry')])
+    if payload.get('waiting_spending'):
+        identity += _encoded(['spending-wait', payload['wait_check']])
     job_id = hashlib.sha256(identity.encode()).hexdigest()[:32]
-    delay = 60 * payload['retry']
+    delay = 300 if payload.get('waiting_spending') else 60 * payload['retry']
     after = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
     now = datetime.now(timezone.utc).isoformat()
     with store._db.cursor() as cur:
@@ -113,6 +162,8 @@ def _enqueue(store, payload):
              after, payload['run_id'], payload['scan_id'], now, now))
         if cur.rowcount != 1:
             return
+    if payload.get('waiting_spending'):
+        return  # This is an admission check, not a scheduled model request.
     _decision(store, payload['scan_id'], payload['file'], 'pending',
               run_id=payload['run_id'], retry=payload['retry'], run_after=after)
 
@@ -152,6 +203,9 @@ def process(store, payload):
     from ai_spending_budget import BudgetError
     sid, file = payload['scan_id'], payload['file']
     try:
+        if payload.get('waiting_spending') and (type(payload.get('wait_check')) is not int
+                or not 1 <= payload['wait_check'] <= 8):
+            raise ValueError('The spending reconciliation check limit was reached.')
         if payload.get('retry') not in (1, 2):
             raise ValueError('The automatic retry limit was reached.')
         parent, durable = _validate(store, payload)
@@ -161,6 +215,18 @@ def process(store, payload):
         with run_context(store, durable, parent) as context:
             if context is None or not (context.enabled or context.local_drafting):
                 raise ValueError('The saved AI permission or spending limit does not allow recovery.')
+            blocked = _recovery_block(context)
+            if blocked:
+                _decision(store, sid, file, 'blocked', run_id=context.run_id, reason_code=blocked,
+                          reason='The saved spending or permission needs reconciliation before recovery.')
+                if (payload.get('waiting_spending') and payload['wait_check'] < 8
+                        and blocked == 'vision_spending_reconciliation_required'):
+                    _enqueue(store, dict(payload, wait_check=payload['wait_check'] + 1))
+                return
+            if payload.get('waiting_spending'):
+                resumed = {k: v for k, v in payload.items() if k not in {'waiting_spending', 'wait_check'}}
+                _enqueue(store, resumed)
+                return  # Paid generation uses the normal deterministic retry job.
             with ai.assessment_vision_budget(60), capture() as misses:
                 if file.lower().endswith('.pdf'):
                     from remediate_pdf import alt_proposals_for_pdf
@@ -205,7 +271,7 @@ def process(store, payload):
                             store._db.fetchone(cur)
                 _validate(store, payload)
                 with store._db.cursor() as cur:
-                    store._db.execute(cur, 'UPDATE hitl_queue SET proposals=%s,validated=0 WHERE id=%s AND status=%s AND proposals=%s',
+                    store._db.execute(cur, 'UPDATE hitl_queue SET proposals=%s,validated=0 WHERE id=%s AND status=%s AND proposals IS NOT DISTINCT FROM %s',
                         (_encoded(merged), payload['item_id'], 'pending', payload['proposals_before']))
                     if cur.rowcount != 1:
                         raise ValueError('The review changed while vision was recovering.')

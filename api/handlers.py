@@ -1360,7 +1360,6 @@ def _remediate_file(payload: dict, job: dict) -> None:
         try:
             result = _remediate_file_with_policy(payload, job)
             if context is not None:
-                schedule(core.store, context, job, vision_misses)
                 try:
                     from document_wide_workflow import process_file
                     process_file(core.store, context)
@@ -1369,6 +1368,9 @@ def _remediate_file(payload: dict, job: dict) -> None:
                         scan_id=context.scan_id, file=context.file,
                         detail=__import__('json').dumps({'owner_id': context.owner_id, 'run_id': context.run_id,
                             'reason': f'Document-wide suggestions did not complete: {type(exc).__name__}'}))
+                # Inspect after document-wide generation too: no captured transport
+                # miss does not establish that a pending caption has a usable draft.
+                schedule(core.store, context, job, vision_misses, inspect_pending=True)
             if context is not None:
                 try:
                     from ai_standing_approval import approve_file
@@ -5668,7 +5670,21 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         # A lane only credits what its own re-scan observed, and a re-scan cannot see 1.1.1 clear
         # while the other lane's images are still unresolved — split in two, each would verify
         # against the other's unfinished work and neither would ever be credited.
-        alt_write_fn = lambda d, v: apply_alt_text(d, v, decorative=deco_locators)  # noqa: E731
+        crop_description_plans = {}
+        if ext == 'docx':
+            from word_crop_description import reviewed_plans
+            crop_description_plans = reviewed_plans(core.store, scan_id, filename)
+        def alt_write_fn(data, values):
+            fixed, written, unresolved = apply_alt_text(data, values, decorative=deco_locators)
+            if crop_description_plans and written and not unresolved:
+                from word_crop_description import write_descriptions
+                from apply_office_image_of_text import resolve_media_locators
+                targets = resolve_media_locators(data, list(crop_description_plans), 'docx')
+                selected = {locator: plan for locator, plan in crop_description_plans.items()
+                    if targets.get(locator) and all(values.get(target) == plan['description']
+                        for target in targets[locator])}
+                fixed = write_descriptions(fixed, selected)
+            return fixed, written, unresolved
     working, alt_uploaded = _apply_one_value_kind(
         scan_id=scan_id, filename=filename, working=working,
         values=alt_values, extra_work=bool(deco_locators),

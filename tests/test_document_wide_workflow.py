@@ -113,9 +113,14 @@ def test_hook_runs_after_durable_phase_before_standing_approval(monkeypatch):
     monkeypatch.setattr(ai_run_policy,'run_context',lambda *a:nullcontext(ctx))
     monkeypatch.setattr(handlers,'_remediate_file_with_policy',lambda *a:order.append('durable'))
     monkeypatch.setattr(workflow,'process_file',lambda *a:order.append('generate'))
+    import vision_recovery
+    def recover(*args, **kwargs):
+        assert kwargs == {'inspect_pending': True}
+        order.append('recover')
+    monkeypatch.setattr(vision_recovery, 'schedule', recover)
     monkeypatch.setattr(ai_standing_approval,'approve_file',lambda *a:order.append('approve'))
     handlers._remediate_file({}, {})
-    assert order==['durable','generate','approve']
+    assert order==['durable','generate','recover','approve']
 
 
 def test_document_mode_suppresses_only_supported_criterion(monkeypatch):
