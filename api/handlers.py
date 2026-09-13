@@ -634,6 +634,12 @@ def _record_applied_fixes(scan_id: str, filename: str, fixes: list) -> None:
             core.store.record_applied_fix(
                 scan_id, filename, fx["rule_id"], fx["value"],
                 source=fx.get("source"), thumb=fx.get("thumb"), seq=i)
+            validation = fx.get("caption_validation") or {}
+            if validation.get("approved") is True and validation.get("status") == "validated":
+                evidence = validation.get("evidence") or {}
+                detail = {key: evidence[key] for key in ("version", "image_sha256", "method") if key in evidence}
+                core.store.log_decision("system", "remediate.caption_validated", scan_id=scan_id,
+                    file=filename, rule_id=fx["rule_id"], detail=__import__("json").dumps(detail, sort_keys=True))
         except Exception:
             swallowed("_record_applied_fixes: recording an applied fix failed", scan_id)
 
@@ -1481,7 +1487,13 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
     from ai_run_policy import optional_current_run_context
     from document_wide_workflow import enabled as document_wide_enabled
     _document_mode = document_wide_enabled(optional_current_run_context(), filename)
-    if impact_controls is not None and not _eligible_rules and not _document_mode:
+    _context = optional_current_run_context()
+    _pdf_figure_mode = (ext == "pdf" and _draft_ai and _context is not None
+                        and (_context.enabled or _context.local_drafting)
+                        and core.store._selected_sc(scan_id, filename, "1.1.1")
+                        and any(row.get("rule_id") == "1.1.1" and row.get("outcome") == "FAIL"
+                                for row in core.store.get_scan_traces(scan_id, file=filename)))
+    if impact_controls is not None and not _eligible_rules and not _document_mode and not _pdf_figure_mode:
         review_rules = [{"rule_id": row["rule_id"], "rule_name": row.get("rule_name"),
                          "finding_count": row.get("finding_count")}
                         for row in core.store.get_scan_traces(scan_id, file=filename)
@@ -1589,8 +1601,9 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
                 # write back through remediate_pdf.apply_pdf_approved, so they are enqueued.
                 # Without these two lines the cards were built by remediate_pdf and then dropped
                 # here — the reviewer never saw them, so the deferral existed only as a tally.
-                _enqueue_proposals(scan_id, filename, "1.1.1", "Non-text Content",
-                                   [p for p in _pdf_proposals if p.get("kind") == "pdf-figure-alt"])
+                if not _pdf_figure_mode:
+                    _enqueue_proposals(scan_id, filename, "1.1.1", "Non-text Content",
+                                       [p for p in _pdf_proposals if p.get("kind") == "pdf-figure-alt"])
                 _enqueue_proposals(scan_id, filename, "4.1.2", "Name, Role, Value",
                                    [p for p in _pdf_proposals if p.get("kind") == "pdf-field-name"])
                 _enqueue_proposals(scan_id, filename, "2.4.6", "Headings and Labels",
@@ -1671,7 +1684,7 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
                     # evidence is a nicety; never fail a remediation job for a thumbnail
                     swallowed("_remediate_file: attaching 1.1.1 HITL evidence failed", scan_id)
             if not out_path or not _Path(out_path).exists():
-                if not _document_mode:
+                if not _document_mode and not _pdf_figure_mode:
                     core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
                                             file=filename, detail=f".{ext}: no deterministic fixes applied")
                     return
@@ -1790,6 +1803,13 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
     _digest = _hashlib.sha256(fixed_bytes).hexdigest()
     core.store.record_remediation(scan_id, filename, drive_write_url=web_url, blob_url=blob_url,
                                   corrected_sha256=_digest, corrected_bytes=len(fixed_bytes))
+    if _pdf_figure_mode:
+        # Managed runs draft against the immutable bytes actually stored. Inline
+        # AI stays disabled; only independently validated exact raster drafts
+        # can later qualify for standing approval and the separate verified writer.
+        from remediate_pdf import alt_proposals_for_pdf
+        _enqueue_proposals(scan_id, filename, "1.1.1", "Non-text Content",
+            alt_proposals_for_pdf(fixed_bytes, scan_id=scan_id, context_file=filename))
     # `delivered` names the DESTINATION write, not the correction. A corrected copy that
     # reached blob but not the provider is stored-not-delivered — PRD §11's delivery-failure
     # class — and the snapshot counts it as pending. Saying `delivered` for it would make a

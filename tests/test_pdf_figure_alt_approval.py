@@ -137,12 +137,12 @@ def test_an_ungrounded_description_never_reaches_alt(monkeypatch, tmp_path):
 
 
 def test_unresolved_figure_has_manual_card_without_page_draft(monkeypatch, tmp_path):
-    # Each manual card retains its locator and a context page thumbnail, but no
-    # approvable caption derived from unrelated whole-page evidence.
+    # Unmapped figures retain locators, but neither pixels nor approvable text
+    # derived from unrelated whole-page evidence.
     r = _caption(tmp_path, monkeypatch, "cards.pdf", grounded=False)
     assert [p["locator"] for p in r["props"]] == ["pdf:fig:1:0", "pdf:fig:1:1"]
     assert all(not p["proposed_value"] for p in r["props"])
-    assert all(p["thumb"] and p["thumb"].startswith("data:image/png;base64,") for p in r["props"])
+    assert all(not p.get("thumb") for p in r["props"])
     assert all("manual description required" in p["source"] for p in r["props"])
 
 

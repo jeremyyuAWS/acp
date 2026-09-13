@@ -125,8 +125,19 @@ def eligible_item(store, owner, sid, run_id, item, *, approved=False):
     reason = eligibility(row, row.get('file', ''))
     if reason or row.get('rule_id') not in RULES:
         raise ValueError(reason or 'This change requires individual review')
+    pdf_figures = [p for p in row['proposals'] if p.get('kind') == 'pdf-figure-alt']
+    if pdf_figures:
+        import blob
+        from remediate_pdf import validate_exact_figure_proposals
+        artifact = (store.get_file_record(sid, row['file']) or {}).get('corrected_sha256')
+        data = blob.download_remediated(owner, sid, row['file'])
+        if (not row['file'].lower().endswith('.pdf') or row['rule_id'] != '1.1.1'
+                or data is None or not artifact or hashlib.sha256(data).hexdigest() != artifact
+                or any(not row.get('applied') and p.get('source_sha256') != artifact for p in pdf_figures)
+                or not validate_exact_figure_proposals(data, pdf_figures)):
+            raise ValueError('PDF figure caption needs current exact pixels and independent canonical validation')
     for p in row['proposals']:
-        if (p.get('explain_only') or p.get('companion_file') or p.get('kind')
+        if (p.get('explain_only') or p.get('companion_file') or (p.get('kind') and p.get('kind') != 'pdf-figure-alt')
                 or not p.get('model_call_id') or not p.get('model')
                 or p.get('describable') is False):
             raise ValueError('Proposal requires individual judgment or has no exact AI provenance')

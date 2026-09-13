@@ -143,8 +143,9 @@ def test_pdf_recovery_never_transcribes_page_body_text_into_figure_alt(monkeypat
     data = stream.getvalue()
     monkeypatch.setattr(remediate_pdf, '_render_page_png', lambda *a: b'body text and a vector figure')
     monkeypatch.setattr(ai, 'describe_image_structured', lambda *a, **k: pytest.fail('page body text must not become figure alt'))
-    with pytest.raises(ValueError, match='exact figure image association'):
-        remediate_pdf.alt_proposals_for_pdf(data, scan_id=SID, context_file='report.pdf')
+    proposals = remediate_pdf.alt_proposals_for_pdf(data, scan_id=SID, context_file='report.pdf')
+    assert len(proposals) == 1 and proposals[0]['automatic_write_blocked'] is True
+    assert not proposals[0]['proposed_value'] and not proposals[0].get('thumb')
     with pikepdf.open(io.BytesIO(data)) as original:
         assert '/Alt' not in original.Root.StructTreeRoot.K[0]
 
@@ -183,8 +184,9 @@ def test_pdf_multi_figure_page_never_receives_shared_page_caption(monkeypatch):
     stream = io.BytesIO()
     pdf.save(stream)
     monkeypatch.setattr(ai, 'describe_image_structured', lambda *a, **k: pytest.fail('ambiguous inference'))
-    with pytest.raises(ValueError, match='exact figure image association'):
-        remediate_pdf.alt_proposals_for_pdf(stream.getvalue(), scan_id=SID, context_file='report.pdf')
+    proposals = remediate_pdf.alt_proposals_for_pdf(stream.getvalue(), scan_id=SID, context_file='report.pdf')
+    assert len(proposals) == 1 and proposals[0]['automatic_write_blocked'] is True
+    assert not proposals[0]['proposed_value'] and not proposals[0].get('thumb')
 
 
 def test_pdf_pending_vision_is_blocked_without_queuing_page_caption(isolated_store):
@@ -197,7 +199,7 @@ def test_pdf_pending_vision_is_blocked_without_queuing_page_caption(isolated_sto
         isolated_store._db.execute(cur, 'SELECT action,detail FROM decision_log WHERE scan_id=%s', (SID,))
         row = isolated_store._db.fetchone(cur)
     assert row['action'] == 'vision.recovery.blocked'
-    assert 'exact figure image association' in json.loads(row['detail'])['reason']
+    assert 'stored corrected copy and pending review' in json.loads(row['detail'])['reason']
 
 
 def test_pending_and_recovered_activity_follow_durable_work(isolated_store, monkeypatch):
