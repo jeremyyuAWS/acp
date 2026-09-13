@@ -5798,12 +5798,25 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     record = core.store.get_remediation_urls(scan_id, filename) or {}
     with core.store.transaction():
         if retry_proof:
+            # The upload is outside SQL: an intervening review/revocation must not
+            # advance its pointer or inherit credit. Match decide_hitl's review-before-
+            # stage lock order, then authorize and recheck under the same transaction.
+            if getattr(core.store._db, 'supports_for_update', False):
+                with core.store._db.cursor() as cur:
+                    for expected in sorted(payload['standing_approval']['items'], key=lambda row: row['id']):
+                        core.store._db.execute(cur,
+                            'SELECT id FROM hitl_queue WHERE id=%s AND scan_id=%s AND file=%s FOR UPDATE',
+                            (expected['id'], scan_id, filename))
+                        core.store._db.fetchone(cur)
             from ai_standing_approval import authorization as retry_authorization, _source as retry_source
             revision = retry_authorization(core.store, owner, scan_id, retry_proof['run_id'])
             stage = core.store.get_stage_execution(retry_proof['run_id'], owner=owner) or {}
             from ai_run_approval_override import read as read_retry_consent
             if read_retry_consent(core.store, owner, scan_id, retry_proof['run_id'])['revision'] != retry_proof['consent_revision']:
                 raise ValueError('office_retry_consent_changed')
+            if check_standing_application(core.store, payload) is True:
+                raise ValueError('office_retry_approval_already_applied')
+            check_file_approvals(core.store, scan_id, filename)
             from worker import check_cancel as check_retry_cancel
             check_retry_cancel()
             if (revision != retry_proof['source_revision'] or not stage.get('is_current')

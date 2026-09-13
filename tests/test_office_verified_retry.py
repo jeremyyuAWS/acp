@@ -264,7 +264,7 @@ def test_ordinary_filename_containing_retry_word_reads_canonical(monkeypatch):
     assert blob.download_remediated('owner','scan',filename)==data
 
 
-@pytest.mark.parametrize('mutation', ['none','delete_review','revoke_consent','missing_contribution','no_next_model','rejected_replacement','unknown_usage','budget_conflict'])
+@pytest.mark.parametrize('mutation', ['none','delete_review','revoke_consent','missing_contribution','no_next_model','rejected_replacement','unknown_usage','budget_conflict','review_changed_upload','upload_readback_mismatch','upload_readback_truncated','consent_changed_upload','review_applied_upload'])
 def test_live_adapter_uses_restored_frozen_run_and_only_next_settled_model(isolated_store, monkeypatch, mutation):
     import time
     import core, blob, release_artifacts, llm_waterfall_provider as transport
@@ -278,9 +278,30 @@ def test_live_adapter_uses_restored_frozen_run_and_only_next_settled_model(isola
     monkeypatch.setattr(core,'get_scan_tokens',lambda sid:{'sp':'fixture-token'})
     monkeypatch.setattr(release_artifacts,'require_current_source',lambda *a,**kw:None)
     monkeypatch.setattr(blob,'download_remediated',lambda *a:original)
-    archive=[];canonical=[]
+    archive=[];canonical=[];readbacks=[]
+    actual_immutable_upload=blob.upload_immutable_retry
     monkeypatch.setattr(blob,'upload_remediated',lambda *args:canonical.append(args[3]) or 'canonical-fixture')
-    monkeypatch.setattr(blob,'upload_immutable_retry',lambda *args:archive.append(args[3]) or 'immutable:' + sha256(args[3]).hexdigest())
+    def immutable_upload(*args):
+        archive.append(args[3])
+        if mutation=='review_applied_upload' and image_target(args[3],LOC)[0]==GOOD:
+            store.mark_row_applied(selected['item_id'])
+        if mutation=='consent_changed_upload' and image_target(args[3],LOC)[0]==GOOD:
+            from ai_run_approval_override import read,save
+            current=read(store,'owner','scan',selected['run_id'])
+            save(store,'owner','scan',selected['run_id'],False,current['revision'],current['source_revision'])
+        if mutation=='review_changed_upload' and image_target(args[3],LOC)[0]==GOOD:
+            with store._db.cursor() as cur:
+                store._db.execute(cur,"UPDATE hitl_queue SET status='rejected',decision_version=decision_version+1 WHERE id=%s",(selected['item_id'],))
+        if mutation in {'upload_readback_mismatch','upload_readback_truncated','consent_changed_upload','review_applied_upload'} and image_target(args[3],LOC)[0]==GOOD:
+            stored=args[3][:-1] if mutation=='upload_readback_truncated' else args[3][:-1]+bytes([args[3][-1]^1])
+            def download(**kw):
+                readbacks.append(kw)
+                return SimpleNamespace(readall=lambda:stored)
+            client=SimpleNamespace(upload_blob=lambda *a,**kw:None,download_blob=download,url='https://fixture.blob.core.windows.net/immutable')
+            monkeypatch.setattr(blob,'_service_client',lambda:SimpleNamespace(get_blob_client=lambda **kw:client))
+            return actual_immutable_upload(*args)
+        return 'immutable:' + sha256(args[3]).hexdigest()
+    monkeypatch.setattr(blob,'upload_immutable_retry',immutable_upload)
     names=('gpt-4.1-mini-2025-04-14','gpt-4.1-2025-04-14','gpt-4.1-nano-2025-04-14')
     specs=tuple(transport.TextModelSpec('openai',name,'fixture-price-v1','1','2',32768,128,int(time.time())+3600) for name in names)
     calls=[];selected={}
@@ -343,7 +364,7 @@ def test_live_adapter_uses_restored_frozen_run_and_only_next_settled_model(isola
             store._db.execute(cur,'DELETE FROM remediation_contribution_proposals WHERE proposal_id=%s',(ticket['proposal_id'],))
         assert attempt(store,**kwargs) is None and len(calls)==1 and not archive
         return
-    if mutation in {'none','no_next_model','rejected_replacement','unknown_usage','budget_conflict'}:
+    if mutation in {'none','no_next_model','rejected_replacement','unknown_usage','budget_conflict','review_changed_upload','upload_readback_mismatch','upload_readback_truncated','consent_changed_upload','review_applied_upload'}:
         if mutation=='no_next_model':
             generator.models=generator.models[:1]
         if mutation=='budget_conflict':
@@ -355,6 +376,19 @@ def test_live_adapter_uses_restored_frozen_run_and_only_next_settled_model(isola
         import handlers
         monkeypatch.setattr(handlers,'_verify_residual',lambda data,file,**kw:verify_residual(data,file))
         # Storage is a local receipt fixture; actual writer, rescan, SQL CAS and credits run.
+        if mutation in {'review_changed_upload','upload_readback_mismatch','upload_readback_truncated','consent_changed_upload','review_applied_upload'}:
+            with pytest.raises(ValueError):
+                handlers._apply_approved_values(payload,{})
+            assert store.get_file_record('scan','file.docx')['corrected_sha256']==digest
+            assert bool(store.get_hitl_item(item_id)['applied']) == (mutation=='review_applied_upload')
+            assert not store.get_remediation_diffs('scan','file.docx')
+            with store._db.cursor() as cur:
+                store._db.execute(cur,"SELECT outcome FROM ai_validation_outcomes WHERE item_id=%s",(item_id,))
+                assert 'verified_cleared' not in {row['outcome'] for row in store._db.fetchall(cur)}
+            assert len(calls)==2
+            if readbacks:
+                assert readbacks[0]['offset']==0 and readbacks[0]['length']==len(archive[-1])+1
+            return
         handlers._apply_approved_values(payload,{})
         record=store.get_file_record('scan','file.docx')
         if mutation!='none':
@@ -481,3 +515,27 @@ def test_retry_unsafe_filename_stops_before_provider_or_archive(filename, isolat
     monkeypatch.setattr(llm_waterfall_provider, 'configured_generator', lambda: pytest.fail('unsafe retry dispatched'))
     assert attempt(isolated_store, scan_id='scan', filename=filename, original=b'', failed=b'',
                    values={}, applied=[], baseline=None, failed_check=None, tickets=[], verify=None) is None
+
+
+@pytest.mark.parametrize('already_exists', [False, True])
+@pytest.mark.parametrize('stored', [b'abc',b'ab',b'abd',b'abcd'])
+def test_immutable_retry_upload_verifies_bounded_exact_bytes(monkeypatch, already_exists, stored):
+    import blob
+    calls=[]
+    class Exists(Exception):
+        status_code=409
+    def upload(data,**kw):
+        assert data==b'abc' and kw['overwrite'] is False
+        if already_exists:raise Exists()
+    def download(**kw):
+        calls.append(kw);return SimpleNamespace(readall=lambda:stored)
+    client=SimpleNamespace(upload_blob=upload,download_blob=download,url='https://fixture.blob.core.windows.net/scoped')
+    identity=[]
+    monkeypatch.setattr(blob,'_service_client',lambda:SimpleNamespace(get_blob_client=lambda **kw:identity.append(kw) or client))
+    if stored==b'abc':
+        assert blob.upload_immutable_retry('owner','scan','file.docx',b'abc','application/octet-stream')==client.url
+    else:
+        with pytest.raises(ValueError,match='readback_mismatch'):
+            blob.upload_immutable_retry('owner','scan','file.docx',b'abc','application/octet-stream')
+    assert calls[0]['offset']==0 and calls[0]['length']==4
+    assert identity==[{'container':blob._CONTAINER,'blob':blob._blob_path('owner','scan','file.docx')+'.retry/'+sha256(b'abc').hexdigest()}]

@@ -122,9 +122,11 @@ def upload_immutable_retry(owner, scan_id, filename, data, content_type):
     except Exception as exc:
         if getattr(exc, 'status_code', None) != 409 and getattr(exc, 'error_code', '') != 'BlobAlreadyExists':
             raise
-        existing = client.download_blob(**_timeouts()).readall()
-        if hashlib.sha256(existing).hexdigest() != digest:
-            raise ValueError('retry_artifact_collision') from None
+    # An SDK acknowledgement is not proof of the persisted candidate. Verify the
+    # exact configured object on new uploads and immutable AlreadyExists replays.
+    persisted = client.download_blob(offset=0, length=len(data) + 1, **_timeouts()).readall()
+    if len(persisted) != len(data) or hashlib.sha256(persisted).hexdigest() != digest:
+        raise ValueError('retry_artifact_readback_mismatch') from None
     return client.url
 
 
