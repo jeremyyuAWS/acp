@@ -32,6 +32,12 @@ caption evidence against the current corrected artifact before standing approval
 Writing changes only the exact figure's alt text; source content and rendering
 must remain preserved. Existing descriptions must remain untouched.
 
+With document-wide AI enabled, bind the caption to the actual frozen assessment
+finding ID and current artifact. Preserve this independently validated draft and
+avoid a duplicate document-model call. The queue currently retains one decision
+per file and criterion; other ambiguous same-criterion figures stay recorded as
+unresolved rather than generating replies the queue cannot retain.
+
 ## Verification-driven model retry
 
 The Office retry integration targets a single approved image caption in a file
