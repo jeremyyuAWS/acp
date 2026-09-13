@@ -31,3 +31,13 @@ it('keeps server-owned deferral reasons visible without claiming queued or verif
  expect(workflowCounts(queue)).toMatchObject({'needs-review':1,completed:0})
  expect(automaticReviewQueue([deferred],{...policy,run_id:'other'})[0].automaticDisposition).toBeNull()
 })
+it('routes exact-bound jobless approvals to Blocked while retaining terminal and active outcomes',()=>{
+ const blocked={...row,status:'approved',_raw:{...row._raw,automatic_approval:{run_id:'run',source_revision:'source',proposal_snapshot_ids:['snapshot'],state:'blocked',owner:'You',reason:'No active application or verification job is recorded.'}}}
+ const queue=automaticReviewQueue([blocked,{...blocked,id:'written',applied:true}],policy)
+ expect(workflowCounts(queue)).toMatchObject({blocked:2,'awaiting-validation':0,completed:0})
+ expect(workflowCounts(automaticReviewQueue([{...blocked,validated:true,applied:true}],policy))).toMatchObject({blocked:0,completed:1})
+ const stale={...blocked,_raw:{...blocked._raw,automatic_approval:{...blocked._raw.automatic_approval,proposal_snapshot_ids:['old']}}}
+ expect(workflowCounts(automaticReviewQueue([stale],policy))).toMatchObject({blocked:0,'awaiting-validation':1})
+ const active={...blocked,_raw:{...blocked._raw,automatic_approval:{...blocked._raw.automatic_approval,state:'queued'}}}
+ expect(workflowCounts(automaticReviewQueue([active],policy))).toMatchObject({blocked:0,'awaiting-validation':1})
+})
