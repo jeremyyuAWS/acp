@@ -1,0 +1,60 @@
+import { describe, expect, it } from 'vitest'
+import { renderToStaticMarkup } from 'react-dom/server'
+import RemainingWorkStatus from './RemainingWorkStatus.jsx'
+import { remainingWorkStatus } from './remainingWorkStatus.js'
+import { addRemediationEvent } from './remediationEventFeed.js'
+const event = (id, kind, reasonCode) => ({id:String(id),key:String(id),kind,documentKey:'private-ref',reasonCode})
+describe('remaining work responsibility', () => {
+  it('replay order cannot resurrect recovered waits', () => {
+    expect(remainingWorkStatus({events:[event(4,'remediate.vision_retry_pending'),event(9,'remediate.vision_retry_recovered'),event(7,'remediate.vision_retry_blocked','vision_spending_reconciliation_required')]}).notices).toEqual([])
+  })
+  it('a finished document attempt does not supersede separately queued vision recovery', () => {
+    expect(remainingWorkStatus({events:[event(1,'remediate.vision_retry_pending'),event(2,'remediate.document_completed')]}).notices[0].label).toBe('AI retry queued')
+  })
+  it('only allowlists safe reason codes and never retains raw detail', () => {
+    const [row] = addRemediationEvent([], {kind:'remediate.vision_retry_blocked',document_ref:'private-ref',detail:{reason_code:'vision_spending_reconciliation_required',secret:'private prompt'}},1)
+    expect(row.reasonCode).toBe('vision_spending_reconciliation_required')
+    expect(JSON.stringify(row)).not.toContain('private prompt')
+    const [unknown] = addRemediationEvent([], {kind:'remediate.vision_retry_blocked',detail:{reason_code:'private error'}},2)
+    expect(unknown.reasonCode).toBeNull()
+  })
+  it('explains waiting separately from stopped automatic attempts', () => {
+    const waiting = remainingWorkStatus({events:[{...event(1,'remediate.vision_retry_blocked','vision_spending_reconciliation_required'),occurredAt:'2026-09-13T20:00:00Z'}],snapshot:{generated_at:'2026-09-13T20:05:00Z'}}).notices[0]
+    expect(waiting.label).toBe('AI usage confirmation pending')
+    expect(waiting.responsibility).not.toContain('will settle')
+    expect(remainingWorkStatus({events:[event(1,'remediate.vision_retry_blocked')]}).notices[0].label).toBe('Your review needed')
+  })
+  it('admitted automatic work does not become human review', () => {
+    expect(remainingWorkStatus({rows:[{id:1,automaticQueued:true,status:'pending',hasProposal:true,after:'A caption',proposals:[{proposed_value:'A caption',source:'AI',model:'vision',model_call_id:'call'}]}]}).notices).toEqual([])
+  })
+  it('manual handoff is clearly owed to a person', () => {
+    const notices=remainingWorkStatus({rows:[{id:2,status:'pending'}],decisions:{2:{state:'assigned'}}}).notices
+    expect(notices[0].label).toBe('Manual document edit needed')
+    expect(notices[0].responsibility).toContain('do not drain through AI automatically')
+  })
+  it('recent spending evidence separates its matching row from human review, and bounded checks never promise forever', () => {
+    const e={...event(1,'remediate.vision_retry_blocked','vision_spending_reconciliation_required'),documentName:'a.docx',occurredAt:'2026-09-13T20:00:00Z'}
+    const rows=[{id:1,file:'a.docx',rule_id:'1.1.1',status:'pending',hasProposal:false}]
+    const recent=remainingWorkStatus({events:[e],rows,snapshot:{generated_at:'2026-09-13T20:05:00Z'}})
+    expect(recent.notices.some(n=>n.key==='review')).toBe(false)
+    const old=remainingWorkStatus({events:[e],rows,snapshot:{generated_at:'2026-09-13T20:45:00Z'}})
+    expect(old.notices[0].label).toBe('AI usage confirmation needs attention')
+    expect(old.notices.some(n=>n.key==='manual')).toBe(true)
+  })
+  it('a spending pause never hides manual crop or sensory review in the same document', () => {
+    const e={...event(1,'remediate.vision_retry_blocked','vision_spending_reconciliation_required'),documentName:'a.docx',occurredAt:'2026-09-13T20:00:00Z'}
+    const rows=[{id:1,file:'a.docx',rule_id:'1.1.1',status:'pending',hasProposal:false},
+      {id:2,file:'a.docx',rule_id:'1.4.5',status:'pending'},
+      {id:3,file:'a.docx',rule_id:'1.3.3',status:'pending',hasProposal:true,after:'Use control A'}]
+    const notices=remainingWorkStatus({events:[e],rows,snapshot:{generated_at:'2026-09-13T20:05:00Z'}}).notices
+    expect(notices.find(n=>n.key==='manual').responsibility).toContain('1 review item')
+    expect(notices.find(n=>n.key==='review').responsibility).toContain('1 review item')
+  })
+  it('unknown progress is omitted and a stall never promises recovery', () => {
+    expect(remainingWorkStatus({snapshot:{progress:{material_age_s:null}}}).checkpoint).toBeNull()
+    const html=renderToStaticMarkup(<RemainingWorkStatus snapshot={{state:'stalled',progress:{material_age_s:125}}} />)
+    expect(html).toContain('Last saved progress 2m 5s ago')
+    expect(html).toContain('role="alert"')
+    expect(html).toContain('automatic recovery is not yet confirmed')
+  })
+})

@@ -166,6 +166,46 @@ describe('EvidenceCard — WCAG-exception toggles', () => {
     expect(btnWith('describe it')).toBeFalsy()
   })
 
+  it('a disclosed crop offers preservation without guessing logo type and sends only authored words', async () => {
+    const item = describedItem('1.4.5', 'Connect the controller to the power adapter')
+    item.file = 'manual.docx'
+    item.proposals[0].visible_crop = {
+      crop: { t: 19861, l: 0, r: 0, b: 0 },
+      selectable_description_supported: true, requires_visual_confirmation: true,
+      transcription_source: 'visible-crop-ocr-v1',
+      visible_image_sha256: 'a'.repeat(64), source_image_sha256: 'b'.repeat(64),
+    }
+    await mount(item)
+    expect(container.querySelector('[aria-label="Visible crop review for image 1"]')).toBeTruthy()
+    expect(container.querySelector('.crop-review-context-draft pre').textContent).toBe('Connect the controller to the power adapter')
+    expect(btnWith('Essential')).toBeFalsy()
+    expect(btnWith('Keep image and describe').disabled).toBe(true)
+    await type('A controller diagram labels the power adapter connection and its visible instructions.')
+    expect(btnWith('Keep image and describe').disabled).toBe(false)
+    await click('Keep image and describe')
+    const [, status, , , opts] = onAct.mock.calls[0]
+    expect(status).toBe('approved')
+    expect(opts.resolution).toBe('described_not_replaced')
+    expect(opts.approvedValues).toContain('A controller diagram labels the power adapter connection and its visible instructions.')
+  })
+
+  it('pairs the paged crop with its own OCR draft rather than the first whole-image draft', async () => {
+    const item = describedItem('1.4.5', 'Hidden full-image content must not describe the crop')
+    item.file = 'manual.docx'
+    item.proposals.push({ locator: 'image 2', thumb: PNG, proposed_value: 'Only the visible crop instructions', visible_crop: {
+      crop: { t: 19861, l: 0, r: 0, b: 0 },
+      selectable_description_supported: true, requires_visual_confirmation: true,
+      transcription_source: 'visible-crop-ocr-v1',
+      visible_image_sha256: 'a'.repeat(64), source_image_sha256: 'b'.repeat(64),
+    } })
+    await mount(item)
+    expect(container.querySelector('.crop-review-context')).toBeNull()
+    await act(async () => container.querySelector('[aria-label="Next flagged image"]').dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    const panel = container.querySelector('[aria-label="Visible crop review for image 2"]')
+    expect(panel.querySelector('pre').textContent).toBe('Only the visible crop instructions')
+    expect(panel.textContent).not.toContain('Hidden full-image content')
+  })
+
   it('a normal approve still writes the value and carries no resolution', async () => {
     await mount(imageItem('1.1.1'))
     await click('Approve')

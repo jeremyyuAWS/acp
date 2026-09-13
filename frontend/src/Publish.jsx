@@ -7,6 +7,7 @@ import ScopeBanner from './ScopeBanner.jsx'
 import DriveReleaseReconnect from './DriveReleaseReconnect.jsx'
 import ReleaseQuickActions from './ReleaseQuickActions.jsx'
 import ReleaseCompletionDocuments from './ReleaseCompletionDocuments.jsx'
+import ReleaseOutcomeSummary from './ReleaseOutcomeSummary.jsx'
 import { PROGRESS_STATES } from './RemediationProgressSummary.jsx'
 import ProgressQueueDrawer from './ProgressQueueDrawer.jsx'
 import { releaseProgressState } from './remediationLiveDocumentState.js'
@@ -37,7 +38,7 @@ import { hasCorrectedCopy, hasSavedCorrectedCopy, deliveryIsCurrent, releaseRead
 // publish() persists via POST /scans/{sid}/publish.
 // readOnly: time-travel replay — publishing must act on the live estate, not a snapshot.
 export default function Publish({ run, files = [], certified = [], readOnly = false, onPublish, me,
-  triage = {}, cap, assessment, embedded = false, onOpenDetails }) {
+  triage = {}, cap, assessment, remediationSnapshot, embedded = false, onOpenDetails }) {
   // Release operates on the exact document cohort chosen in Remediate. The banner below explains
   // the restriction; this filter enforces it for selection, delivery, packaging and set status.
   const releaseFiles = documentsInSelection(files, triage)
@@ -885,6 +886,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
         </div>
         <AutomaticPublicationStatus authorization={currentAutomaticAuthorization} pending={automaticStatusPending} error={automaticStatusError} compact destinationLabel={releaseDestination?.name || releaseProvider} />
+        <ReleaseOutcomeSummary scanId={run?.id} authorization={automaticCoveredFiles.length ? currentAutomaticAuthorization : null}
+          pending={automaticStatusPending} error={automaticStatusError} files={releaseFiles} results={releaseResults}
+          snapshot={remediationSnapshot} folders={releaseFolders.length ? releaseFolders : releaseFolder?.url ? [releaseFolder] : []} />
         <p className="muted">Manage remaining work in Remediate.</p>
         <p hidden aria-label="Release status overview" className="release-clarity-counts">
           <span><b>{publishableReady.length}</b> Ready</span>

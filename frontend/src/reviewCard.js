@@ -845,7 +845,28 @@ export function guidanceSentence(card) {
 // { kind, prompt, action:{label,title,resolution} } for the exemption path or { kind, note } for the
 // content-remediation path.
 const _CONTENT_IMAGE_KINDS = new Set(['Chart', 'Diagram', 'Screenshot', 'Table', 'Map', 'Photo', 'Illustration'])
-export function imagesOfTextException(sc, imgKind) {
+export function isReviewedCropEvidence(evidence) {
+  return evidence?.selectable_description_supported === true
+    && evidence?.requires_visual_confirmation === true
+    && evidence?.transcription_source === 'visible-crop-ocr-v1'
+    && /^[a-f0-9]{64}$/.test(evidence?.visible_image_sha256 || '')
+    && /^[a-f0-9]{64}$/.test(evidence?.source_image_sha256 || '')
+}
+
+export function imagesOfTextException(sc, imgKind, cropEvidence = null) {
+  if ((sc === '1.4.5' || sc === '1.4.9') && isReviewedCropEvidence(cropEvidence)) {
+    return {
+      kind: 'Visible crop',
+      note: 'Automatic replacement is unavailable for this crop. Replacing a picture with its words can lose useful diagram content.',
+      action: {
+        label: '📝 Keep image and describe',
+        title: 'Keep the original cropped image. Your explicitly reviewed description is added as selectable text beside it and as alt text. The image-of-text finding is recorded as a reviewed decision, not verified clear.',
+        resolution: DESCRIBED_NOT_REPLACED,
+        needsText: true,
+        needsTextHint: 'Write a description covering the diagram and its visible text in your own words. The OCR draft alone is not a description. Keeping the image does not verify that the image-of-text finding is cleared.',
+      },
+    }
+  }
   if (sc !== '1.4.5' && sc !== '1.4.9') return null
   const label = imgKind && imgKind.label
   if (label && _CONTENT_IMAGE_KINDS.has(label)) {

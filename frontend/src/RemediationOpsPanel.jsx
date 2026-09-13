@@ -8,6 +8,7 @@ import { counterRows, secondaryRows, freshness, headline, integrityAffects, part
 import { attemptStage, milestoneCrossings, retrySeconds } from './remediationLivePanel.js'
 import ActivityPulse from './ActivityPulse.jsx'
 import { activityGroups } from './remediationEventFeed.js'
+import RemainingWorkStatus from './RemainingWorkStatus.jsx'
 import RemediationExceptions, { useRemediationExceptions, exceptionCount } from './RemediationExceptions.jsx'
 import { getFindingDispositions } from './api.js'
 import './remediation-ops-panel.css'
@@ -300,6 +301,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   // into one AI graph and one activity list, without parallel progress totals.
   if (streamlined) return <section className={`panel remops${hidden ? ' remops-motion-paused' : ''}`} aria-label="Remediation live view">
     {['failed', 'cancelled', 'paused', 'stalled'].includes(snapshot.state) && <p role="status" className="remops-error">{line}{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>View in Monitor →</button>}</p>}
+    <RemainingWorkStatus snapshot={snapshot} events={events} />
     <RemediationWaterfallCard key={`${snapshot.scan_id || snapshot.run_id}:${snapshot.batch_id || "legacy"}`} snapshot={snapshot} paused={hidden} assessmentContext={assessmentContext} streamlined />
     {!hideActivity && <><div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /></div>
     <Activity key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot.terminal} /></>}
@@ -329,11 +331,12 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   </section>
 }
 
-export function RemediationActivityPanel({ snapshot, events = [], connected = false, receivedAt = null, activityStatus = 'ready', updateMode = 'idle' }) {
+export function RemediationActivityPanel({ snapshot, rows = [], decisions = {}, events = [], connected = false, receivedAt = null, activityStatus = 'ready', updateMode = 'idle' }) {
   if (!snapshot?.batch_id && !events.length) return null
   const fresh = freshness({snapshot, connected, receivedAt})
   return <section className="panel remops" aria-label="Remediation live activity">
     <div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /></div>
+    <RemainingWorkStatus snapshot={snapshot} events={events} rows={rows} decisions={decisions} />
     <Activity key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot?.terminal} />
   </section>
 }

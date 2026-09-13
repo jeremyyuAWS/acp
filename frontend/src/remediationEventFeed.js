@@ -102,11 +102,13 @@ export function addRemediationEvent(previous, event, id, limit = MAX_VISIBLE_REM
   return [{ key, id: id == null ? null : String(id), line, kind: event.kind,
             tone: eventTone(event.kind, event.detail), occurredAt: event.occurred_at || null,
             documentKey: eventDocumentKey(event),
+            documentName: event.document_suppressed ? null : (event.document || event.detail?.file || null),
             // The SERVER classifies material vs lease/heartbeat activity; the browser must not
             // re-derive it from the kind string, or the two ends drift the moment a kind is
             // added. Absent (an older server, or a replayed row) reads as unknown — which is
             // neither true nor false, and is why this is `?? null` rather than `|| false`.
             material: event.material == null ? null : !!event.material,
+            reasonCode: ['vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked'].includes(event.detail?.reason_code) ? event.detail.reason_code : null,
             attempt: event.attempt == null ? null : Number(event.attempt),
             phase: event.phase || null,
             correlationId: event.correlation_id || null }, ...previous]

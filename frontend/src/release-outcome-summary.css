@@ -1,0 +1,10 @@
+.release-outcome-summary { margin:16px 0; padding:16px; border:1px solid var(--line); border-left:3px solid var(--plum); border-radius:12px; font-family:var(--font-ui); }
+.release-outcome-summary--complete { border-left-color:var(--success-fg-strong); }
+.release-outcome-summary--attention { border-left-color:var(--warning-fg-strong); }
+.release-outcome-summary h3 { margin:0; font-size:15px; }
+.release-outcome-summary .rap-grid { margin:12px 0; }
+.release-outcome-summary dd { margin:0; font-variant-numeric:tabular-nums; }
+.release-outcome-summary dd small { font-size:12px; font-weight:400; color:var(--muted); }
+.release-outcome-summary > p { font-size:12px; line-height:1.6; margin:8px 0; }
+.release-outcome-summary nav { display:flex; flex-wrap:wrap; gap:12px; font-size:13px; }
+.release-outcome-summary a:focus-visible { outline:2px solid var(--focus-ring,var(--plum)); outline-offset:3px; }

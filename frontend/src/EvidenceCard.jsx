@@ -1,10 +1,11 @@
+import CropReviewContext from './CropReviewContext.jsx'
 import { isPdfStructuralRow, pdfStructuralSummary } from './pdfStructuralProposal.js'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { aiProvenance, getCopilotGuidance, getFileGeometry, getFileRemediationDiffs, getScanAiCalls, getSourceLink, suggestFix, validateAlt } from './api.js'
 import Thumbnail from './Thumbnail.jsx'
 import BeforeAfterEvidence from './BeforeAfterEvidence.jsx'
 import RiskChip from './RiskChip.jsx'
-import { applyOutcomeCopy, authoringScaffold, buildEvidenceCard, DESCRIBED_NOT_REPLACED, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, guidanceSentence, houseStyleOf, imagesOfTextException, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
+import { applyOutcomeCopy, authoringScaffold, buildEvidenceCard, DESCRIBED_NOT_REPLACED, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, guidanceSentence, houseStyleOf, imagesOfTextException, isReviewedCropEvidence, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
 import ProposalThumb, { isSafeThumb } from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import CaptionEditor from './CaptionEditor.jsx'
@@ -379,6 +380,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   const heroInst = instances[heroIdx] || null
   const heroLocator = heroInst?.locator || card.locator
   const heroThumb = heroInst?.thumb ?? card.thumb
+  const heroCrop = (card.sc === '1.4.5' || card.sc === '1.4.9') && isReviewedCropEvidence(heroInst?.visible_crop) ? heroInst.visible_crop : null
   // The kind of image, read from the model's own description (#130) — a routing hint for what a
   // good alt text looks like here (a chart needs a trend, an icon two words). null → no chip.
   const imgKind = describedImageType(heroInst ? { proposals: [heroInst] } : item)
@@ -867,11 +869,13 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
             (#122) so it's the SAME image the hero boxes above. The whole-page context is the hero
             preview; this is the "what". Suppressed when the hero IS this image already (xlsx isolated
             image) — no point showing the same picture twice, big then small. */}
-        {heroThumb && !heroIsImage && (
+        {heroThumb && !heroIsImage && !heroCrop && (
           <ProposalThumb thumb={heroThumb} alt={thumbAlt(card.thumbKind, card.file)}
                          size={thumbSize(card.thumbKind, 96)} className="evcard-thumb" />
         )}
         <div className="evcard-main" style={{ flex: 1, minWidth: 0 }}>
+          <CropReviewContext evidence={heroCrop} thumb={heroThumb} locator={heroLocator}
+                             draft={heroInst?.proposed_value} sourceUrl={sourceLink?.url} />
           <p className="evcard-problem">{guidanceSentence(card) || card.problem}</p>
           {/* Image-kind routing hint (#130) — the model's own noun for what this is, with a hint on
               what a good description looks like for that kind. Honest: derived from the description,
@@ -1411,7 +1415,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
               question — a chart is not a logo, and its text should become real text, not be waved
               through as essential. */}
           {(() => {
-            const exc = imagesOfTextException(card.sc, imgKind)
+            const exc = imagesOfTextException(card.sc, imgKind, heroCrop)
             if (!exc) return null
             return (
               <div className="evcard-exception">
