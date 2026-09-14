@@ -22,6 +22,8 @@ import BatchReviewSelection from './BatchReviewSelection.jsx'
 import { remediationReviewCounts } from './remediationCountSummary.js'
 import { exclusionReason } from './batchReviewSelection.js'
 import { reviewQueueAction, reviewQueueActions } from './reviewQueueAction.js'
+import { remediationRecoveryGuidance } from './remediationRecoveryGuidance.js'
+import RemediationSourceLink from './RemediationSourceLink.jsx'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is a TWO-column split: a 35% work queue on the left to find and
@@ -359,10 +361,14 @@ function taskLineOf(f, lane, automaticMode = false, decisions = {}) {
   }
 }
 
-function DetailPane({ f, decisions, readOnly = false, automaticMode = false, onDecide, onOpenWord, onRecheck, matchingFindings = [], matchingReadyCount = 0, legacyApprovalControls = false, onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
+function DetailPane({ f, decisions, readOnly = false, automaticMode = false, preparingProposals = false, onDecide, onOpenWord, onRecheck, onOpenPlan, onVerifySaved, matchingFindings = [], matchingReadyCount = 0, legacyApprovalControls = false, onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
   const [matchingPreviewOpen, setMatchingPreviewOpen] = useState(false)
   const [copiedValue, setCopiedValue] = useState('')
   const draftRef = useRef(null)
+  const [verification, setVerification] = useState(null)
+  const selectedRef = useRef(f?.id)
+  selectedRef.current = f?.id
+  useEffect(() => { setVerification(null) }, [f?.id])
   useEffect(() => { setMatchingPreviewOpen(false) }, [f?.id])
   useEffect(() => { setCopiedValue('') }, [f?.id])
   if (!f) {
@@ -411,12 +417,36 @@ function DetailPane({ f, decisions, readOnly = false, automaticMode = false, onD
     setCopiedValue(kind)
   }
   const why = whyOf(f)
+  const recovery = !resolved && !preparingProposals && remediationRecoveryGuidance(f, decisions)
+  const retryVerification = async () => {
+    const id = f.id
+    setVerification({ busy: true })
+    try {
+      const result = await onVerifySaved(f)
+      const remaining = Array.isArray(result?.remaining_issues) ? result.remaining_issues.length : null
+      if (selectedRef.current === id) setVerification({ message: result?.assessment_ok
+        ? remaining == null ? 'Saved copy checked. Remaining issue details are unavailable.' : remaining > 0 ? `Saved copy checked: ${remaining} remaining issues.` : 'Saved copy checked: no remaining issues in the recorded assessment scope.'
+        : result?.reason || 'The saved copy could not be assessed. No verification is claimed.' })
+    } catch (error) {
+      if (selectedRef.current === id) setVerification({ error: error.message || 'Saved-copy verification failed. The recorded result remains unchanged.' })
+    }
+  }
 
   return (
     <div className="remediation-detail" style={{ display: 'flex', flexDirection: 'column' }}>
       {/* Decision controls come first so reviewers can act without scrolling. */}
       <div className="remediation-detail-actions" role="group" aria-label={`Decision actions for ${displayText(r.issue)}`}
            style={{ borderTop: '1px solid var(--line,#e2dce4)', background: 'var(--bg, #fff)' }}>
+        {recovery && <section aria-label="What this item needs" style={{ padding: '10px 22px', borderBottom: '1px solid var(--line,#e2dce4)', fontSize: 12.5 }}>
+          <b>{recovery.title}</b><p>{recovery.reason}</p><p className="muted">{recovery.next}</p>
+          {recovery.plan && onOpenPlan && <button type="button" className="linklike" disabled={readOnly || saving} onClick={onOpenPlan}>Open remediation plan</button>}
+        </section>}
+        {onVerifySaved && f.applied && !f.validated && <div style={{ padding: '10px 22px', fontSize: 12.5 }}>
+          <button type="button" className="ghost" disabled={readOnly || saving || verification?.busy} onClick={retryVerification}>{verification?.busy ? 'Checking saved copy…' : 'Retry verification of saved copy'}</button>
+          <p className="muted">Checks the current saved bytes. It does not regenerate or reapply fixes.</p>
+          {verification?.message && <p role="status">{verification.message}</p>}
+          {verification?.error && <p role="alert">{verification.error}</p>}
+        </div>}
         {/* W8 — batch a decision across every other queued finding of the same rule/SC. Explicit and
             reversible-feeling: it names the count, and each target routes through the same onDecide
             (so approvals re-validate and rejections hand off) as if the reviewer acted on them one by
@@ -490,6 +520,7 @@ function DetailPane({ f, decisions, readOnly = false, automaticMode = false, onD
             </span>
           ) : isManual ? (
             <>
+              {!onOpenWord && <RemediationSourceLink finding={f} />}
               {onOpenWord && <button className="primary" disabled={readOnly || saving} onClick={() => onOpenWord(f)}>Open in Word</button>}
               {onRecheck && <button className="ghost" disabled={readOnly || saving} onClick={() => onRecheck(f)}>Upload &amp; recheck</button>}
               {legacyApprovalControls && <button className="ghost" disabled={readOnly || saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>}
@@ -695,7 +726,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 }
 
 export default function RemediationInbox({
-  queue: suppliedQueue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onPublish, preparingProposals = false, readOnly = false, legacyApprovalControls = false, autoApprove = null, automaticApprovalPolicy, onAutoApproveChange, autoApproveSaving = false, autoApproveError = null, approvalExplanation = null, afterRelease = false, onAutoApproveRetry, autoApproveNotice = null, onDismissAutoApproveNotice,
+  queue: suppliedQueue = [], decisions = {}, onDecide, onOpenWord, onRecheck, onOpenPlan, onVerifySaved, onPublish, preparingProposals = false, readOnly = false, legacyApprovalControls = false, autoApprove = null, automaticApprovalPolicy, onAutoApproveChange, autoApproveSaving = false, autoApproveError = null, approvalExplanation = null, afterRelease = false, onAutoApproveRetry, autoApproveNotice = null, onDismissAutoApproveNotice,
   initialSort = 'priority', initialTab = 'review', initialGroup = 'document', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
@@ -1010,7 +1041,7 @@ export default function RemediationInbox({
   )
   const guidedBody = (
     <>
-      <DetailPane f={selected} decisions={decisions} readOnly={readOnly} automaticMode={autoApprove === true} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
+      <DetailPane f={selected} decisions={decisions} readOnly={readOnly} automaticMode={autoApprove === true} preparingProposals={preparingProposals} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck} onOpenPlan={onOpenPlan} onVerifySaved={onVerifySaved}
                   headingRef={reviewHeadingRef}
                   saving={savingId != null && savingId === selected?.id}
                   error={saveError && selected && saveError.id === selected.id ? saveError : null}

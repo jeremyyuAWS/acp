@@ -1,4 +1,6 @@
 import RemediationAutomationLayout from './RemediationAutomationLayout.jsx'
+import { verifySavedRemediation } from './verifySavedRemediation.js'
+import { checkSelfRemediation } from './checkSelfRemediation.js'
 import useAutomaticReleaseStatus from './useAutomaticReleaseStatus.js'
 import AutomaticReleasePackage from './AutomaticReleasePackage.jsx'
 import { remediationWorkRunning } from './remediationWorkRunning.js'
@@ -45,7 +47,7 @@ import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, getRemediationExceptions, downloadRemediated, listAllHitl, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
+import { remediateScan, getRemediationStatus, getRemediationExceptions, downloadRemediated, listAllHitl, updateHitlItem, assignHitlItem, suggestFix, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate, getReleaseStatus, verifySavedCopy } from './api.js'
 import { stageExecutionNotice } from './stageExecutionNotice.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
@@ -469,6 +471,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const resultsOnlyRef = useRef(resultsOnly)
   resultsOnlyRef.current = resultsOnly
   const runId = run?.id
+  const verificationRunRef = useRef(runId)
+  verificationRunRef.current = runId
   const [releasePlanIntent, setReleasePlanIntent] = useState(null)
   const [releasePlanNotice, setReleasePlanNotice] = useState('')
   const [automaticReleaseState, setAutomaticReleaseState] = useState(null)
@@ -948,29 +952,18 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     return Promise.resolve()
   }
   const draftAi = (item) => { if (reviewReadOnlyRef.current) return Promise.reject(new Error('Historical scans are available for results browsing only.')); return suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion) }
-  const rescan = (id) => {
-    if (readOnly || resultsOnlyRef.current) return
+  const verifySaved = async (item) => {
+    const result = await verifySavedRemediation({ runId, item, canAct: () => !reviewReadOnlyRef.current && verificationRunRef.current === runId, getReleaseStatus, verifySavedCopy })
+    onRefresh?.()
+    return result
+  }
+  const rescan = async (id) => {
+    if (reviewReadOnlyRef.current) return
     const item = self.find((x) => x.id === id)
+    if (!item) return
     setSelf((s) => s.map((x) => x.id === id ? { ...x, status: 'scanning' } : x))
-    if (SIM || !runId || !item?.file) {
-      setTimeout(() => setSelf((s) => s.map((x) => x.id === id ? { ...x, status: 'verified' } : x)), 1700)
-      return
-    }
-    rescoreFile(runId, item.file)
-      .then(({ job_id }) => {
-        if (!job_id) throw new Error('no job_id')
-        const poll = setInterval(async () => {
-          try {
-            const j = await getJob(job_id)
-            if (j?.status === 'done' || j?.status === 'error') {
-              clearInterval(poll)
-              setSelf((s) => s.map((x) => x.id === id ? { ...x, status: j.status === 'done' ? 'verified' : 'error' } : x))
-              onRefresh?.()
-            }
-          } catch { clearInterval(poll); setSelf((s) => s.map((x) => x.id === id ? { ...x, status: 'verified' } : x)) }
-        }, 1500)
-      })
-      .catch(() => setSelf((s) => s.map((x) => x.id === id ? { ...x, status: 'verified' } : x)))
+    const outcome = await checkSelfRemediation(item, verifySaved)
+    if (!reviewReadOnlyRef.current && verificationRunRef.current === runId) setSelf((s) => s.map((x) => x.id === id ? { ...x, ...outcome } : x))
   }
   const verified = self.filter((x) => x.status === 'verified').length
   // Live re-verified KPI = manual self-fixes + banked server fixes + the in-flight batch's
@@ -1475,7 +1468,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       {/* Self-remediation — you're fixing these yourself; visible whenever active. */}
       {self.length > 0 && (
         <RemSection id="rem-self" title="Self-remediation" count={self.length}
-                    hint="· you’re fixing these — re-scan to confirm" defaultOpen>
+                    hint="· you’re fixing these — check the saved copy" defaultOpen>
           <div className="queue">
             {self.map((it) => (
               <div className={`qrow${it.status === 'verified' ? ' qdone' : ''}`} key={it.id}>
@@ -1485,20 +1478,20 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   <div className="qmeta">{it.rule}</div>
                   <div className="selfstatus">
                     {it.status === 'awaiting' && <>
-                      <span className="muted">awaiting your fix — open the file, apply it in the source, then confirm</span>
+                      <span className="muted">awaiting your fix — edit the source, assess and save the updated correction, then check its evidence</span>
                       {SOURCE_URL[it.source] && <a className="ghost small" style={{ marginLeft: 8 }} href={SOURCE_URL[it.source]} target="_blank" rel="noopener noreferrer">↗ Open the file</a>}
                     </>}
-                    {it.status === 'scanning' && <span className="muted"><span className="spinner" /> re-scanning across all engines…</span>}
-                    {it.status === 'verified' && <span className="okline">✓ verified — finding cleared, now passing 100 / 100</span>}
+                    {it.status === 'scanning' && <span className="muted"><span className="spinner" /> checking the exact saved copy…</span>}
+                    {it.verificationMessage && <span className="muted" role={it.status === 'error' ? 'alert' : 'status'}>{it.verificationMessage}</span>}
                   </div>
                 </div>
                 {it.status === 'verified'
                   ? <span className="qbtn verified">✓ confirmed</span>
-                  : <button className="qbtn rescan" disabled={it.status === 'scanning'} onClick={() => rescan(it.id)}>↻ Re-scan to confirm</button>}
+                  : <button className="qbtn rescan" disabled={reviewReadOnly || it.status === 'scanning'} onClick={() => rescan(it.id)}>↻ Check saved copy</button>}
               </div>
             ))}
           </div>
-          <p className="muted" style={{ marginTop: 12 }}>When you remediate a document yourself, the agent re-runs every engine to independently confirm the fix before it’s certified — no manual sign-off taken on trust.</p>
+          <p className="muted" style={{ marginTop: 12 }}>The check assesses the exact saved correction. It does not approve a manual change or certify meaning automatically. Source edits must first be assessed and saved as an updated correction.</p>
         </RemSection>
       )}
 
@@ -1820,6 +1813,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             onPublish={reviewReadOnly ? undefined : () => onNavigate?.('publish')}
             onOpenPlan={readOnly ? undefined : openRemediationPlan}
             preparingProposals={!runStream?.snapshot?.terminal && ((runStream?.status?.running ?? remProg?.running ?? 0) > 0 || (runStream?.status?.queued ?? remProg?.queued ?? 0) > 0)}
+            onVerifySaved={reviewReadOnly ? undefined : verifySaved}
             renderDetailExtra={(sel) => (sel ? (
               <>
                 {/* R15 · only for a row ACP applied itself — a drafted-AI or manually-authored

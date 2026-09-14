@@ -1607,6 +1607,13 @@ export const publishAllFiles = (scanId, files, releaseFolderName = '', options =
 export const getReleaseStatus = (scanId) => (SIM
   ? sim({ release_id: null, roots: [], documents: [], documents_total: 0, published: 0, failed: 0, remaining: 0 }, 50)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release`, { headers: headers() }).then(j))
+// Verify only the exact saved artifact. This never regenerates or reapplies fixes.
+export const verifySavedCopy = (scanId, artifact) => (SIM
+  ? Promise.reject(new Error('Saved-copy verification is unavailable in demo mode.'))
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/verify-saved-copy`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(artifact),
+    }).then(j))
 export const listReleaseHistory = (limit = 50) => (SIM
   ? sim({ releases: [] }, 50)
   : fetch(`${BASE}/releases?limit=${encodeURIComponent(limit)}`, { headers: headers() }).then(j))
