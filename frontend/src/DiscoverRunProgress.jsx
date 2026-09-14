@@ -227,17 +227,24 @@ function SharePointLiveSummary({ source, scope, progress, freshness }) {
   const activeSite = sites.find((site) => site.status === 'scanning')
   const activeLibrary = activeSite?.active_library
   freshness = freshness ?? progress?.freshness ?? null
-  const streamLabel = freshness === 'live' ? 'Live updates connected'
+  const streamLabel = freshness === 'live' ? 'Live discovery updates connected'
     : freshness === 'reconnecting' ? 'Live updates reconnecting'
       : freshness === 'checkpoint' ? 'Showing latest checkpoint'
         : freshness === 'stale' ? 'Live data is stale' : 'Update status unavailable'
   const chips = [
     sites.length > 0 && `${completedSites} of ${sites.length} sites read`,
     libraries.length > 0 && `${completedLibraries} of ${libraries.length} libraries complete`,
-    mode,
+    ['lifecycle', 'analysing', 'scoring', 'finalizing', 'done'].includes(progress?.phase) ? 'Source reading complete' : mode,
     throttles > 0 && `${n(throttles)} Graph retr${throttles === 1 ? 'y' : 'ies'}`,
     unreadSites > 0 && `${unreadSites} site${unreadSites === 1 ? '' : 's'} need attention`,
   ].filter(Boolean)
+  const measuredFiles = typeof progress?.files_found === 'number' && Number.isFinite(progress.files_found) && progress.files_found >= 0 ? progress.files_found : null
+  const measuredFolders = typeof progress?.folders_visited === 'number' && Number.isFinite(progress.folders_visited) && progress.folders_visited >= 0 ? progress.folders_visited : null
+  const selectedFolders = Array.isArray(scope?.folders) ? scope.folders.filter(Boolean) : []
+  const folderNames = selectedFolders.map(folder => folder.name).filter(Boolean)
+  const scopeLabel = selectedFolders.length === 1 && folderNames.length === 1 ? `Selected folder: ${folderNames[0]}`
+    : selectedFolders.length ? `${selectedFolders.length} selected folders` : null
+  const inventoryFinished = ['lifecycle', 'analysing', 'scoring', 'finalizing', 'done'].includes(progress?.phase)
 
   return (
     <div aria-label="SharePoint integration status"
@@ -252,6 +259,14 @@ function SharePointLiveSummary({ source, scope, progress, freshness }) {
           </span>
         )}
       </div>
+      {!activeLibrary && <p style={{ fontSize: 12.5, margin: '7px 0 0' }}>
+        {inventoryFinished ? 'Source inventory collected; Discovery is finishing its checks.' : 'Reading source folders and document metadata.'}
+        {scopeLabel && <> {scopeLabel}. Subfolders are included within the saved scan scope.</>}
+      </p>}
+      {(measuredFiles !== null || measuredFolders !== null) && <p style={{ fontSize: 12.5, margin: '7px 0 0', fontVariantNumeric: 'tabular-nums' }}>
+        {[measuredFiles !== null && `${n(measuredFiles)} documents found`, measuredFolders !== null && `${n(measuredFolders)} folders visited`].filter(Boolean).join(' · ')}
+      </p>}
+      {!sites.length && <p className="muted" style={{ fontSize: 11.5, margin: '7px 0 0' }}>Site and library coverage has not been reported for this run. Live updates describe Discovery progress, not a separate Microsoft Graph health check.</p>}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 7 }}>
         {chips.map((chip) => (
           <span key={chip} style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 999,
