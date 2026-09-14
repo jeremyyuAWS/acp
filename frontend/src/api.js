@@ -2615,9 +2615,13 @@ export const resumeReleaseContinuation = (scanId, intentId) => fetch(
   { method: 'POST', headers: headers() }).then(j)
 
 
-export const getRecentRemediationActivity = (scanId) => {
+export const getRecentRemediationActivity = (scanId, { afterSeq = null, limit = null } = {}) => {
   if (SIM || !scanId) return sim({ available: false, events: [] })
-  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/activity`, { headers: headers() }).then(j)
+  const query = new URLSearchParams()
+  if (afterSeq != null) query.set('after_seq', String(afterSeq))
+  if (limit != null) query.set('limit', String(limit))
+  const suffix = query.size ? `?${query}` : ''
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/activity${suffix}`, { headers: headers() }).then(j)
 }
 
 // Separate per-run release consent. AI approval settings never enable publication.
@@ -2708,3 +2712,35 @@ export const getStageProgressQueue = (executionId, bucket) => (SIM
   ? sim({ execution_id: executionId, bucket, available: false, files: [], count: null })
   : fetch(`${BASE}/stage-executions/${encodeURIComponent(executionId)}/queue?bucket=${encodeURIComponent(bucket)}`,
     { headers: headers(), cache: 'no-store' }).then(j))
+
+// Activity evidence is bound to a recorded event and saved-byte hash. Keep
+// downloads authenticated instead of opening a URL without the user's headers.
+export const getRemediationActivityEvidence = (scanId, seq, options = {}) => (SIM || !scanId
+  ? sim({available: false, reason: 'Evidence requires a recorded remediation event.'})
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/activity/${encodeURIComponent(seq)}/evidence`, {headers: headers(), signal: options.signal}).then(j))
+const downloadActivityBlob = (blob, name) => {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+export const downloadRemediationActivitySavedCopy = async (scanId, seq) => {
+  const identity = authEpoch()
+  const response = await fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/activity/${encodeURIComponent(seq)}/copy`, {headers: headers()})
+  if (!response.ok) { await j(response); throw new Error('The matching saved copy is unavailable.') }
+  const blob = await response.blob()
+  if (authEpoch() !== identity) throw new Error('The signed-in account changed.')
+  const disposition = response.headers.get('Content-Disposition') || ''
+  const encoded = /filename\*=UTF-8''([^;\r\n]+)/i.exec(disposition)
+  const match = /filename="([^"\r\n]+)"/.exec(disposition)
+  let name = match?.[1] || `saved-copy-${seq}`
+  if (encoded) { try {name = decodeURIComponent(encoded[1])} catch {} }
+  name = name.split(/[\\/]/).at(-1).replace(/[\x00-\x1f\x7f]/g, '') || `saved-copy-${seq}`
+  downloadActivityBlob(blob, name)
+}
+export const downloadRemediationActivityEvidence = async (scanId, seq) => {
+  const identity = authEpoch()
+  const evidence = await getRemediationActivityEvidence(scanId, seq)
+  if (authEpoch() !== identity) throw new Error('The signed-in account changed.')
+  if (evidence?.available !== true) throw new Error('Evidence is not recorded for this activity.')
+  downloadActivityBlob(new Blob([JSON.stringify(evidence, null, 2)], {type: 'application/json'}), `activity-evidence-${seq}.json`)
+}

@@ -31,3 +31,34 @@ it('does not introduce an incomplete assessment or accepted plan', async () => {
   await act(async () => root.render(createElement(RemediationWorkspaceTabs, { runId:'accepted-fixture', assessmentReady:true, planAccepted:true })))
   expect(container.querySelector('dialog').open).toBe(false)
 })
+it('does not reopen an accepted plan while its running snapshot reconnects', async () => {
+  history.replaceState({}, '', '/?tab=remediate&mode=plan')
+  const {root,container}=createTestRoot()
+  const props={runId:'accepted-popup-reconnect',assessmentIdentity:'accepted-popup-reconnect:assessment-1',assessmentReady:true,plan:'choices',live:'progress'}
+  await act(async()=>root.render(createElement(RemediationWorkspaceTabs,props)))
+  expect(container.querySelector('dialog').open).toBe(true)
+  await act(async()=>root.render(createElement(RemediationWorkspaceTabs,{...props,planAccepted:true})))
+  expect(container.querySelector('dialog').open).toBe(false)
+  // Remediation is running, but the next stream snapshot is unavailable. Its
+  // last accepted plan must not become a fresh planning prompt from the old URL.
+  await act(async()=>root.render(createElement(RemediationWorkspaceTabs,{...props,assessmentReady:false,planAccepted:false,snapshot:null})))
+  expect(container.querySelector('dialog').open).toBe(false)
+})
+
+it('keeps an accepted assessment closed across remounts, preserves explicit planning and introduces a new assessment', async () => {
+  const props={runId:'accepted-popup-remount',assessmentIdentity:'accepted-popup-remount:assessment-1',assessmentReady:true,plan:'choices',live:'progress'}
+  const first=createTestRoot()
+  await act(async()=>first.root.render(createElement(RemediationWorkspaceTabs,{...props,planAccepted:true})))
+  await unmountAll()
+  history.replaceState({}, '', '/?tab=remediate&mode=plan')
+  const second=createTestRoot()
+  await act(async()=>second.root.render(createElement(RemediationWorkspaceTabs,{...props,assessmentReady:false,planAccepted:false})))
+  expect(second.container.querySelector('dialog').open).toBe(false)
+  expect(new URLSearchParams(location.search).get('mode')).toBe('live')
+  await act(async()=>window.dispatchEvent(new PopStateEvent('popstate')))
+  expect(second.container.querySelector('dialog').open).toBe(false)
+  await act(async()=>[...second.container.querySelectorAll('button')].find(button=>button.textContent==='Remediation plan').click())
+  expect(second.container.querySelector('dialog').open).toBe(true)
+  await act(async()=>second.root.render(createElement(RemediationWorkspaceTabs,{...props,assessmentIdentity:'accepted-popup-remount:assessment-2',planAccepted:false})))
+  expect(second.container.querySelector('dialog').open).toBe(true)
+})

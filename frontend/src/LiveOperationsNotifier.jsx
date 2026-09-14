@@ -3,18 +3,49 @@ import { openAdminActivityStream } from './api.js'
 
 const LABEL = { discover: 'Discovery', assess: 'Assessment', remediate: 'Remediation' }
 
+const STAGE_ORDER = { discover: 0, assess: 1, remediate: 2, release: 3 }
+const stageKey = (run) => `${run.scan_id}:${run.stage}:${run.stage_run_id || ''}`
+const observedStart = (run) => Number(run.running) > 0 || Number(run.queued) > 0 || run.executionStarted === true
+
+// Queue tails include assessment trace work. Canonical workflow completion is
+// the assessment result boundary; trace settlement cannot announce it again.
+export function notificationRuns(snapshot) {
+  if (!Array.isArray(snapshot?.workflows)) return snapshot?.runs || []
+  return snapshot.workflows.flatMap((workflow) => (workflow.stages || []).map((stage) => {
+    const canonical = stage.canonical
+    const complete = canonical ? canonical.state === 'succeeded'
+      : stage.completion_recorded === true && stage.terminal_outcome === 'completed'
+    const counts = canonical?.counts?.work_items || {}
+    return {
+      scan_id: workflow.scan_id, owner: workflow.owner_display_name,
+      stage: stage.stage, stage_run_id: stage.stage_run_id || canonical?.execution_id,
+      status: complete ? 'recent' : ['running', 'waiting'].includes(stage.status) ? 'active' : stage.status,
+      running: stage.active ?? counts.processing ?? 0, queued: stage.waiting ?? counts.queued ?? 0,
+      total: stage.total ?? counts.total ?? 0, completed: stage.completed ?? counts.completed ?? 0,
+      completion_recorded: complete, terminal_outcome: complete ? 'completed' : stage.terminal_outcome,
+      notification_source: canonical ? 'canonical' : 'lifecycle',
+      executionStarted: canonical && ['processing', 'processing_complete', 'running'].includes(canonical.state),
+    }
+  }))
+}
+
 export function newStageStarts(previous = [], current = []) {
-  const prior = new Set(previous.filter((run) => run.status !== 'recent').map((run) => `${run.scan_id}:${run.stage}`))
+  const prior = new Set(previous.filter((run) => run.status !== 'recent' && observedStart(run)).map((run) => stageKey(run)))
   return current.filter((run) => LABEL[run.stage] && run.status !== 'recent' && (Number(run.running) > 0 || Number(run.queued) > 0))
-    .filter((run) => !prior.has(`${run.scan_id}:${run.stage}`))
+    .filter((run) => !prior.has(stageKey(run)))
 }
 
 export function newStageCompletions(previous = [], current = []) {
-  const prior = new Map(previous.map((run) => [`${run.scan_id}:${run.stage}`, run]))
+  const prior = new Map(previous.map((run) => [stageKey(run), run]))
   return current.filter((run) => {
-    const before = prior.get(`${run.scan_id}:${run.stage}`)
-    return LABEL[run.stage] && run.status === 'recent' && before && before.status !== 'recent'
-      && (Number(before.running) > 0 || Number(before.queued) > 0)
+    const before = prior.get(stageKey(run))
+    const laterAlreadyStarted = previous.some((other) => other.scan_id === run.scan_id
+      && STAGE_ORDER[other.stage] > STAGE_ORDER[run.stage]
+      && (other.completion_recorded === true || observedStart(other)))
+    return LABEL[run.stage] && run.status === 'recent' && run.completion_recorded === true
+      && run.terminal_outcome === 'completed' && before && before.status === 'active'
+      && !laterAlreadyStarted
+      && (before.notification_source === 'canonical' || Number(before.running) > 0 || Number(before.queued) > 0)
   })
 }
 
@@ -66,6 +97,7 @@ export default function LiveOperationsNotifier({ onOpen }) {
   const [notice, setNotice] = useState(null)
   const previous = useRef(null)
   const seen = useRef(new Set())
+  const completedSeen = useRef(new Set())
   const soundArmed = useRef(false)
   const dismissTimer = useRef(null)
 
@@ -74,19 +106,28 @@ export default function LiveOperationsNotifier({ onOpen }) {
     window.addEventListener('pointerdown', arm, { once: true })
     window.addEventListener('keydown', arm, { once: true })
     const stream = openAdminActivityStream({ onMessage: (snapshot) => {
-      const current = snapshot?.runs || []
+      const current = notificationRuns(snapshot)
       if (previous.current === null) {
-        current.forEach((item) => seen.current.add(`${item.scan_id}:${item.stage}`))
+        current.forEach((item) => {
+          if (observedStart(item) || item.completion_recorded === true) seen.current.add(stageKey(item))
+          if (item.completion_recorded === true) completedSeen.current.add(stageKey(item))
+        })
         previous.current = current
         return
       }
-      const starts = newStageStarts(previous.current, current).filter((item) => !seen.current.has(`${item.scan_id}:${item.stage}`))
+      const starts = newStageStarts(previous.current, current).filter((item) =>
+        !seen.current.has(stageKey(item)) && (item.stage_run_id ||
+          !Array.from(seen.current).some((key) => key.startsWith(`${item.scan_id}:${item.stage}:`))))
       const completions = newStageCompletions(previous.current, current)
-      current.forEach((item) => seen.current.add(`${item.scan_id}:${item.stage}`))
+        .filter((item) => !completedSeen.current.has(stageKey(item)))
+      current.forEach((item) => {
+        if (item.completion_recorded === true) completedSeen.current.add(stageKey(item))
+      })
+      current.forEach((item) => { if (observedStart(item) || item.completion_recorded === true) seen.current.add(stageKey(item)) })
       previous.current = current
       if (!starts.length && !completions.length) return
-      const kind = completions.length ? 'completed' : 'started'
-      const latest = (completions.length ? completions : starts).at(-1)
+      const kind = starts.length ? 'started' : 'completed'
+      const latest = (starts.length ? starts : completions).at(-1)
       setNotice({ run: latest, kind })
       if (soundArmed.current) { try { playNotificationSound(kind) } catch { /* notification sound is best effort */ } }
       window.clearTimeout(dismissTimer.current)

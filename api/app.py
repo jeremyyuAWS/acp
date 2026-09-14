@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="acp — accessibility compliance API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
-                   allow_methods=["*"], allow_headers=["*"], expose_headers=["X-Acp-Auth"])
+                   allow_methods=["*"], allow_headers=["*"], expose_headers=["X-Acp-Auth", "Content-Disposition"])
 
 
 @app.middleware("http")
@@ -358,6 +358,9 @@ async def _access_gate(request, call_next):
 
 for _router in ROUTERS:
     app.include_router(_router)
+
+from routes.activity_event_evidence import router as _activity_evidence_router
+app.include_router(_activity_evidence_router)
 
 # Feeds the fail-closed access gate the real, registered route table (core.py cannot import
 # `app` itself without a cycle — app.py imports core, not the reverse). Placed at module level,

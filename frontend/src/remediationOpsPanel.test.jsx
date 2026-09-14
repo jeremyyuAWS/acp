@@ -681,7 +681,7 @@ describe('streamlined Live View deliberately retires duplicate progress surfaces
 })
 
 describe('document activity milestones', () => {
-  it('groups parallel-document updates and keeps delivery problems visible beside verified results', () => {
+  it('shows every parallel-document update in the full activity list', () => {
     const markup = renderToStaticMarkup(createElement(RemediationOpsPanel, {
       snapshot: SNAP, streamlined: true,
       events: [
@@ -691,7 +691,7 @@ describe('document activity milestones', () => {
       ],
     }))
     expect(markup).toContain('remops-activity-error')
-    expect(markup).toContain('1 other updates for this document')
+    expect(markup).toContain('3 recorded updates')
     expect(markup).toContain('Provider write permission required')
     expect(markup).toContain('Three fixes verified')
     expect(markup).toContain('Saved in ACP')
@@ -728,8 +728,8 @@ it('shows a yellow retry only for a recorded retry, not for a failed verificatio
     ],
   }))
   const doc = new DOMParser().parseFromString(markup, 'text/html')
-  expect(doc.querySelector('.remops-activity details li .remops-delivery-tag')?.textContent).toBe('source delivery is unavailable')
-  expect(doc.querySelector('.remops-activity details li')?.textContent).toContain('Corrected copy of demo.pdf saved in ACP')
+  expect(doc.querySelector('.remops-activity .remops-delivery-tag')?.textContent).toBe('source delivery is unavailable')
+  expect(doc.querySelector('.remops-activity ol>li:last-child')?.textContent).toContain('Corrected copy of demo.pdf saved in ACP')
  })
 
  it('uses a saved document icon for corrected copies instead of the neutral dot', () => {

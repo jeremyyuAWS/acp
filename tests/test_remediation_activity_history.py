@@ -45,3 +45,30 @@ def test_suppression_withholds_saved_names(client, isolated_store):
     assert body['available'] is True
     assert 'secret.pdf' not in json.dumps(body)
     assert body['events'][0]['document_suppressed'] is True
+
+
+def test_cursor_pages_restore_all_retained_remediation_events(client, isolated_store):
+    _seed(isolated_store, 'pages')
+    for i in range(125):
+        isolated_store.append_scan_event('pages', 'remediate.document_completed', document=f'{i}.pdf')
+    first = client.get('/scans/pages/remediation/activity?after_seq=0&limit=75').json()
+    assert len(first['events']) == 75
+    assert first['latest_seq'] == 75
+    second = client.get('/scans/pages/remediation/activity?after_seq=75&limit=75').json()
+    assert [row['seq'] for row in second['events']] == list(range(76, 126))
+    assert second['latest_seq'] == 125
+    empty = client.get('/scans/pages/remediation/activity?after_seq=125&limit=75').json()
+    assert empty['events'] == []
+    assert empty['latest_seq'] is None
+
+
+def test_ai_request_models_replay_in_full_history_with_filename_privacy(client, isolated_store):
+    import json
+    _seed(isolated_store, 'models')
+    for kind, status in [('remediate.ai_request_started', 'dispatched'), ('remediate.ai_request_finished', 'response_received')]:
+        isolated_store.append_scan_event('models', kind, document='private.pdf', detail={'model': 'moondream:latest', 'provider': 'ollama', 'processing_zone': 'local', 'status': status})
+    isolated_store.set_setting('remediation_filename_privacy', 'suppressed')
+    body = client.get('/scans/models/remediation/activity?after_seq=0&limit=2000').json()
+    assert [event['kind'] for event in body['events']] == ['remediate.ai_request_started', 'remediate.ai_request_finished']
+    assert all(event['detail']['model'] == 'moondream:latest' for event in body['events'])
+    assert 'private.pdf' not in json.dumps(body)

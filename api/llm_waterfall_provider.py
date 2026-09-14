@@ -141,7 +141,8 @@ class StrictTextGenerator:
         if post is None:
             import httpx
             post = httpx.post
-        self.post = post
+        from ai_request_activity import managed_transport
+        self.post = managed_transport(post, self.specs, self.providers)
 
     def __call__(self, model: str, request: Request) -> Generation:
         spec = self.specs[model]

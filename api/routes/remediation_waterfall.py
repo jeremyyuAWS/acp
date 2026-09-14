@@ -32,12 +32,14 @@ def run_insights(sid: str, batch_id: str, request: Request, response: Response,
 
 
 @router.get('/scans/{sid}/remediation/activity')
-def recent_activity(sid: str, request: Request, response: Response):
+def recent_activity(sid: str, request: Request, response: Response,
+                    after_seq: int | None = Query(default=None, ge=0),
+                    limit: int = Query(default=50, ge=1, le=2000)):
     import core
     from routes.scans import _owner
     from remediation_activity_history import read_recent_activity
     response.headers['Cache-Control'] = 'no-store'
-    return read_recent_activity(core.store, sid, _owner(request))
+    return read_recent_activity(core.store, sid, _owner(request), after_seq=after_seq, limit=limit)
 
 
 @router.get('/scans/{sid}/remediation/waterfall/{batch_id}/metrics')

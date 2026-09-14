@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getRemediationSnapshot, openRemediationStream, getRecentRemediationActivity } from './api.js'
 import { isNewer } from './remediationSnapshot.js'
-import { addRemediationEvent } from './remediationEventFeed.js'
+import { addRemediationEvent, mergeRemediationEvents } from './remediationEventFeed.js'
 
 // The run's live state, and THE ONE PLACE THAT HOLDS ITS STREAM.
 //
@@ -39,7 +39,7 @@ export function useRemediationRun(runId) {
   // a counter rather than a boolean so a second run's completion is distinguishable from the
   // first's still being set.
   const [endedAt, setEndedAt] = useState(0)
-  // A bounded projection of durable lifecycle events. State remains server-owned in `snapshot`;
+  // All retained durable lifecycle narration, loaded in bounded pages. State remains server-owned in `snapshot`;
   // these rows answer the different question "what just happened?" and survive tab changes with
   // the stream because this hook lives at App level.
   const [events, setEvents] = useState([])
@@ -113,18 +113,35 @@ export function useRemediationRun(runId) {
       } finally { snapshotPending = false }
     }
 
-    let historyPending = false, historyAgain = false
+    let historyPending = false, historyAgain = false, historyCursor = 0
     const loadHistory = async () => {
       if (!live) return
       if (historyPending) { historyAgain = true; return }
       historyPending = true
       try {
-        const result = await getRecentRemediationActivity(runId)
-        if (!live) return
-        if (result?.available !== true || !Array.isArray(result.events)) throw new Error('History unavailable')
-        setEvents(previous => result.events.reduce((rows, event) => addRemediationEvent(rows, event, event.seq), previous))
-        setActivityStatus('ready')
-      } catch { if (live) setActivityStatus('unavailable') }
+        let more = true
+        while (live && more) {
+          const result = await getRecentRemediationActivity(runId, { afterSeq: historyCursor, limit: 2000 })
+          if (!live) return
+          if (result?.available !== true || !Array.isArray(result.events)) {
+            const error = new Error('History unavailable')
+            if (result?.reason === 'scan_not_found') error.status = 404
+            throw error
+          }
+          setEvents(previous => mergeRemediationEvents(previous, result.events))
+          const next = result.latest_seq ?? result.events.at(-1)?.seq
+          more = result.events.length === 2000 && Number(next) > historyCursor
+          if (Number(next) > historyCursor) historyCursor = Number(next)
+        }
+        if (live) setActivityStatus('ready')
+      } catch (error) {
+        if (live && [401, 403, 404].includes(error?.status)) {
+          stopForExpiredSession()
+          snapRef.current = null
+          setSnapshot(null); setReceivedAt(null); setStatus(null); setEvents([])
+          setActivityStatus('unavailable')
+        } else if (live) setActivityStatus('unavailable')
+      }
       finally {
         historyPending = false
         if (live && historyAgain) { historyAgain = false; loadHistory() }

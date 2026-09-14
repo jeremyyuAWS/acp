@@ -35,6 +35,7 @@ it('uses the same shared mono entry selectors for standalone and run activity wi
   const feeds=container.querySelectorAll('.remops-activity')
   expect(feeds).toHaveLength(2)
   for (const feed of feeds) {
+    await act(async()=>[...feed.querySelectorAll('button')].find(button=>button.textContent==='Group by document').click())
     expect(feed.querySelector('.remops-activity-event > span:last-child').textContent).toContain(name)
     expect(feed.querySelector('time').dateTime).toBe('2026-09-13T12:00:00Z')
     const details=feed.querySelector('details');details.open=true
@@ -61,5 +62,5 @@ it('keeps older retained activity keyboard-reachable in a bounded scrolling list
  expect(list.tabIndex).toBe(0)
  expect(list.children).toHaveLength(25)
  expect(list.textContent).toContain('Saved document 24')
- expect(readFileSync('src/remediation-ops-panel.css','utf8')).toMatch(/\.remops-activity>ol\{[^}]*max-height:420px;overflow-y:scroll;scrollbar-gutter:stable/)
+ expect(readFileSync('src/remediation-ops-panel.css','utf8')).toMatch(/\.remops-history-scroll>ol\{[^}]*height:420px;overflow-y:scroll;[^}]*scrollbar-gutter:stable/)
 })

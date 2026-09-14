@@ -1,6 +1,7 @@
 // User-facing projection of the durable remediation lifecycle log. The event is narration, not
 // state: counters and terminality continue to come only from the reconciled run snapshot.
-export const MAX_VISIBLE_REMEDIATION_EVENTS = 10
+// Retained server history is not truncated in the browser. Explicit limits remain supported.
+export const MAX_VISIBLE_REMEDIATION_EVENTS = Infinity
 
 const n = (value, noun) => {
   const amount = Number(value)
@@ -41,6 +42,15 @@ export function verificationFailureLabel(detail = {}) {
 export function remediationEventLine(event) {
   const detail = event?.detail || {}
   switch (event?.kind) {
+    case 'remediate.ai_request_started':
+    case 'remediate.ai_request_finished': {
+      const zone = {local: 'Local AI', cloud: 'Cloud AI', tenant: 'Tenant AI'}[detail.processing_zone] || 'AI'
+      const safe = value => typeof value === 'string' && /^[a-zA-Z0-9_.:/@+ -]{1,128}$/.test(value) && !/https?:|@/.test(value) ? value : null
+      const model = safe(detail.model) || 'Model not recorded'
+      const provider = safe(detail.provider)
+      const action = event.kind.endsWith('_started') ? 'Request sent' : detail.status === 'failed' ? 'Request failed' : 'Response received'
+      return `${zone} · ${model}${provider ? ` (${provider})` : ''} · ${action} for ${file(event)}`
+    }
     case 'remediate.accepted':
       return `Remediation accepted${Number.isFinite(Number(detail.documents)) ? ` for ${n(detail.documents, 'document')}` : ''}`
     case 'remediate.fix_applied':
@@ -99,6 +109,7 @@ export function remediationEventLine(event) {
 }
 
 export function eventTone(kind, detail = {}) {
+  if (kind === 'remediate.ai_request_finished' && detail.status === 'failed') return 'attention'
   if (kind === 'remediate.delivery_failed' && detail.delivery_status === 'saved_in_acp') return 'neutral'
   if (kind === 'remediate.verification_failed' || kind === 'remediate.delivery_failed') return 'error'
   if (kind === 'remediate.delivery_retry_requested' || kind === 'remediate.review_requested' || kind === 'remediate.delivery_retry_refused'
@@ -117,6 +128,7 @@ export function addRemediationEvent(previous, event, id, limit = MAX_VISIBLE_REM
   return [{ key, id: id == null ? null : String(id), line, kind: event.kind,
             tone: eventTone(event.kind, event.detail), occurredAt: event.occurred_at || null,
             documentKey: eventDocumentKey(event),
+            documentSuppressed: event.document_suppressed === true,
             documentName: event.document_suppressed ? null : (event.document || event.detail?.file || null),
             // The SERVER classifies material vs lease/heartbeat activity; the browser must not
             // re-derive it from the kind string, or the two ends drift the moment a kind is
@@ -125,6 +137,15 @@ export function addRemediationEvent(previous, event, id, limit = MAX_VISIBLE_REM
             material: event.material == null ? null : !!event.material,
             reasonCode: ['vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked', 'vision_generated_output_unusable', 'vision_local_endpoint_required', 'vision_recovery_unresolved', 'vision_response_empty'].includes(event.detail?.reason_code) ? event.detail.reason_code : null,
             attempt: event.attempt == null ? null : Number(event.attempt),
+            evidenceIds: typeof event.detail?.evidence_id === 'string' && /^[a-f0-9]{12}$/.test(event.detail.evidence_id) ? [event.detail.evidence_id] : [],
+            evidenceAvailable: typeof event.detail?.evidence_id === 'string' && /^[a-f0-9]{12}$/.test(event.detail.evidence_id),
+            snapshotSha256: /^[a-f0-9]{64}$/i.test(event.detail?.artifact_sha256 || '') ? event.detail.artifact_sha256 : null,
+            activityDetails: {
+              criterion: (Array.isArray(event.detail?.criteria) ? event.detail.criteria : (Array.isArray(event.detail?.failed_criteria) ? event.detail.failed_criteria : []).map(row => row?.criterion)).filter(value => /^\d+\.\d+\.\d+$/.test(value)).join(', '),
+              location: !event.document_suppressed && typeof event.detail?.location === 'string' ? event.detail.location.slice(0, 300) : null,
+              nextAction: event.kind === 'remediate.verification_failed' ? 'Inspect the failed criterion before retrying.' : event.kind === 'remediate.review_requested' && event.detail?.reason_code === 'pdf_structure_tagging_required' ? 'Add PDF accessibility tags in a document editor.' : null,
+            },
+            processingZone: ['local', 'cloud', 'tenant'].includes(event.detail?.processing_zone) ? event.detail.processing_zone : null,
             phase: event.phase || null,
             correlationId: event.correlation_id || null }, ...previous]
     .sort((a, b) => {
@@ -132,6 +153,24 @@ export function addRemediationEvent(previous, event, id, limit = MAX_VISIBLE_REM
       return a.id != null && b.id != null && Number.isFinite(left) && Number.isFinite(right) ? right - left : 0
     })
     .slice(0, limit)
+}
+
+// Replay a whole cursor page with one sort; a long history must not sort itself
+// again for every event in the page. Existing objects survive replay unchanged.
+export function mergeRemediationEvents(previous, events = []) {
+  const keys = new Set(previous.map(row => row.key))
+  const added = []
+  for (const event of events) {
+    const row = addRemediationEvent([], event, event.seq)[0]
+    if (!row || keys.has(row.key)) continue
+    keys.add(row.key)
+    added.push(row)
+  }
+  if (!added.length) return previous
+  return [...added, ...previous].sort((a, b) => {
+    const left = Number(a.id), right = Number(b.id)
+    return a.id != null && b.id != null && Number.isFinite(left) && Number.isFinite(right) ? right - left : 0
+  })
 }
 
 // The per-document histories PRD §6D needs: several documents remediating at once, each with its

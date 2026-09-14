@@ -105,9 +105,10 @@ it.each(['plan', 'modes'])('suppresses the accepted plan popup for legacy %s URL
 })
 it('closes an initial plan as soon as it is accepted', async () => {
   history.replaceState({}, '', '/?tab=remediate&mode=plan')
-  const { root, container } = await mount()
+  const freshProps = { ...props, runId: "newly-accepted-workspace-fixture" }
+  const { root, container } = await mount(freshProps)
   expect(container.querySelector('dialog').open).toBe(true)
-  await act(async () => root.render(createElement(RemediationWorkspaceTabs, { ...props, planAccepted: true })))
+  await act(async () => root.render(createElement(RemediationWorkspaceTabs, { ...freshProps, planAccepted: true })))
   expect(container.querySelector('dialog').open).toBe(false)
 })
 

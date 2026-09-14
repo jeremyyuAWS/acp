@@ -9,6 +9,7 @@ it('keeps expanded document history open as the lead changes and animates only n
   const rows = [event('2'), event('1')]
   await act(async () => root.render(<Activity events={rows} />))
   expect(container.querySelector('.remops-activity-fresh')).toBeNull()
+  await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === 'Group by document').click())
   const details = container.querySelector('details'); details.open = true
   await act(async () => root.render(<Activity events={[event('3', 'attention'), ...rows]} />))
   expect(container.querySelector('details')).toBe(details)
@@ -24,9 +25,11 @@ it('does not animate the first saved history loaded after an empty initial rende
 it('resets activity history and motion when the run scope changes', async () => {
   const { root, container } = createTestRoot()
   await act(async () => root.render(<Activity key="run:1" events={[event('2'), event('1')]} />))
+  await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === 'Group by document').click())
   container.querySelector('details').open = true
   await act(async () => root.render(<Activity key="run:2" events={[event('4'), event('3')]} />))
-  expect(container.querySelector('details').open).toBe(false)
+  expect(container.querySelector('details')).toBeNull()
+  expect([...container.querySelectorAll('button')].find(button => button.textContent === 'Group by document').getAttribute('aria-pressed')).toBe('false')
   expect(container.querySelector('.remops-activity-fresh')).toBeNull()
 })
 it('animates the first new activity after a confirmed empty feed', async () => {

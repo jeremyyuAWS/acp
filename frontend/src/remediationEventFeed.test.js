@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { addRemediationEvent, eventTone, remediationEventLine,
-         MAX_VISIBLE_REMEDIATION_EVENTS, activityGroups } from './remediationEventFeed.js'
+         activityGroups } from './remediationEventFeed.js'
 
 describe('remediation lifecycle event narration', () => {
   it('maps every durable remediation event without exposing arbitrary detail', () => {
@@ -22,16 +22,16 @@ describe('remediation lifecycle event narration', () => {
     expect(remediationEventLine({ kind: 'unknown', detail: { secret: 'never render me' } })).toBe(null)
   })
 
-  it('deduplicates by durable event id and retains only the newest ten', () => {
+  it('deduplicates by durable event id and retains the complete loaded history', () => {
     let rows = []
     for (let id = 1; id <= 12; id += 1) {
       rows = addRemediationEvent(rows, {
         kind: 'remediate.document_completed', detail: { file: `${id}.docx` },
       }, id)
     }
-    expect(rows).toHaveLength(MAX_VISIBLE_REMEDIATION_EVENTS)
+    expect(rows).toHaveLength(12)
     expect(rows[0].id).toBe('12')
-    expect(rows.at(-1).id).toBe('3')
+    expect(rows.at(-1).id).toBe('1')
     expect(addRemediationEvent(rows, {
       kind: 'remediate.document_completed', detail: { file: 'duplicate.docx' },
     }, 12)).toBe(rows)

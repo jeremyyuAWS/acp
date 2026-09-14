@@ -103,19 +103,18 @@ describe('the stacked bar is truthful about the scope', () => {
     expect(progressBar({})).toBe(null)
   })
 
-  it('clamps the remainder at zero when counters exceed the scope', () => {
+  it('withholds the bar when counters exceed the scope', () => {
     // The counters disagreeing with the scope is an integrity violation the snapshot reports;
     // the bar must not render the disagreement as a negative-width shape.
     const over = { ...SNAP, total_documents: 5 }
-    expect(progressBar(over).waiting).toBe(0)
-    expect(progressBar(over).waitingPct).toBe(0)
+    expect(progressBar(over)).toBe(null)
   })
 })
 
 describe('state is never carried by colour alone', () => {
   it('labels every band with its name and count', () => {
     const html = render({ snapshot: SNAP, receivedAt: Date.now() })
-    for (const word of ['completed', 'active', 'failed', 'blocked', 'waiting']) {
+    for (const word of ['completed', 'processing', 'review', 'skipped', 'failed', 'waiting']) {
       expect(html).toContain(word)
     }
   })
@@ -131,7 +130,7 @@ describe('state is never carried by colour alone', () => {
 
   it('gives the bar a text alternative naming every count', () => {
     const html = render({ snapshot: SNAP, receivedAt: Date.now() })
-    expect(html).toMatch(/aria-label="20 documents: 8 completed, 3 active, 1 failed, 3 blocked, 5 waiting"/)
+    expect(html).toMatch(/aria-label="20 documents: 8 completed, 3 processing, 5 waiting, 2 review, 1 failed, 1 skipped"/)
   })
 
   it('announces the state, not the counters', () => {
@@ -271,7 +270,7 @@ describe('corrected copies and verified documents stay distinct', () => {
     expect(html).toContain('Fixes applied')
     expect(html).toContain('Fixes verified')
     expect(html).toContain('Corrected copies delivered')
-    expect(html).toContain('Pending delivery')
+    expect(html).toContain('Corrected copies pending delivery')
     // Never a bare, unit-less "Verified" — it was read as documents on one line and fixes on the
     // next, from the same number.
     expect(html).not.toMatch(/>Verified</)
