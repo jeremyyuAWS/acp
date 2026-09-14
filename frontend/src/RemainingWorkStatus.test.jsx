@@ -12,6 +12,9 @@ describe('remaining work responsibility', () => {
       rows: [{ id: 1, file: 'report.docx', rule_id: '1.1.1', aiDraftable: true, status: 'pending', hasProposal: false }] }).notices
     expect(notices[0].label).toBe('Local AI setup needs attention')
     expect(notices[0].responsibility).toContain('does not identify the exact local failure')
+    expect(notices[0].responsibility).toContain('Ask an administrator')
+    expect(notices[0].responsibility).toContain('before starting a new remediation plan')
+    expect(notices[0].responsibility).not.toContain('retry the failed generation')
     expect(notices[0].label).not.toMatch(/spending|endpoint unavailable/i)
     expect(legacy.reasonCode).toBe('vision_permission_or_budget_blocked')
     expect(notices.find(n => n.key === 'blocked-ai').responsibility).not.toMatch(/pricing|spending/)
