@@ -45,6 +45,8 @@ def read_metrics(store, owner, scan_id, run_id, *, stage=None, provider=None, mo
     result = aggregate_metrics(records[:MAX_RECORDS], stage=stage, provider=provider, model=model,
         now=datetime.now(timezone.utc), terminal=execution.get('state') in ('completed', 'succeeded', 'failed', 'cancelled'),
         complete=len(records) <= MAX_RECORDS, currency=currency, ledger_complete=ledger_count == len(records))
+    from ai_local_activity import read_local_activity
+    result['local_activity'] = read_local_activity(db, owner, scan_id, run_id)
     result.update(scan_id=scan_id, run_id=run_id, batch_id=run_id)
     result['revision'] = hashlib.sha256(json.dumps({k:v for k,v in result.items() if k != 'generated_at'}, sort_keys=True).encode()).hexdigest()[:20]
     return result

@@ -471,6 +471,9 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
             from ai_attempt_history import AttemptHistory
             import hashlib
             ctx = optional_current_run_context()
+            if ctx is not None and ctx.local_drafting:
+                from ai_local_activity import bind_local_call
+                bind_local_call(core.store, ctx, call_id)
             if managed_identity and ctx is not None and ok and completion and scan_id == ctx.scan_id and file == ctx.file:
                 AttemptHistory(ctx.ledger.db).bind_trace(ctx.owner_id, ctx.scan_id, ctx.run_id,
                     managed_operation_id or hashlib.sha256(prompt.encode()).hexdigest(), call_id, file=file,

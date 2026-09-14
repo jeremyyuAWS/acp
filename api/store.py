@@ -1906,12 +1906,13 @@ if _LEGACY_OWNER and "@" in _LEGACY_OWNER and all(c.isalnum() or c in ".+-_@" fo
 from ai_spending_budget import SCHEMA as _AI_SPENDING_SCHEMA
 from ai_run_policy import RUN_POLICY_SCHEMA as _AI_RUN_POLICY_SCHEMA
 from ai_attempt_history import SCHEMA as _AI_ATTEMPT_HISTORY_SCHEMA
+from ai_local_activity import SCHEMA as _AI_LOCAL_ACTIVITY_SCHEMA
 from ai_review_chain import SCHEMA as _AI_REVIEW_SCHEMA
 from remediation_run_insights import SCHEMA as _AI_PROPOSAL_SNAPSHOT_SCHEMA
 from remediation_contribution import SCHEMA as _CONTRIBUTION_SCHEMA
 from automatic_release_store import SCHEMA as _AUTOMATIC_RELEASE_SCHEMA
 _SCHEMA.extend([*_AI_SPENDING_SCHEMA, _AI_RUN_POLICY_SCHEMA,
-                *_AI_ATTEMPT_HISTORY_SCHEMA, *_AI_REVIEW_SCHEMA, *_AI_PROPOSAL_SNAPSHOT_SCHEMA, *_CONTRIBUTION_SCHEMA, *_AUTOMATIC_RELEASE_SCHEMA])
+                *_AI_ATTEMPT_HISTORY_SCHEMA, *_AI_LOCAL_ACTIVITY_SCHEMA, *_AI_REVIEW_SCHEMA, *_AI_PROPOSAL_SNAPSHOT_SCHEMA, *_CONTRIBUTION_SCHEMA, *_AUTOMATIC_RELEASE_SCHEMA])
 
 # ── Power BI read-only views (Postgres only) ────────────────────────────────
 # Three views that expose ACP scan data for Power BI DirectQuery. They are
@@ -2510,8 +2511,9 @@ class _PgAdapter:
     # writing rows without it, and _decision_rows reads NULL as a legacy row rather than as a
     # decision, so a rolling deploy under-counts nothing and double-counts nothing.
     # v53 retains numeric-only GPU timing in nullable ai_calls.timing.
-    _SCHEMA_VERSION = 53
-    _SCHEMA_CHECKSUM_AT_VERSION = "10672a4d7523cb18b78c2add1da271d8"
+    # v54 binds local request telemetry to its authenticated execution without paid attempts.
+    _SCHEMA_VERSION = 54
+    _SCHEMA_CHECKSUM_AT_VERSION = "71a7807dd1f25d943d0d7627c967a3f8"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -4922,7 +4924,7 @@ class Store:
                          "finding_disposition_event", "remediation_diff", "applied_fixes",
                          "ai_calls", "ai_validation_outcomes", "second_opinion_reservations",
                          "remediation_contribution_runs", "remediation_contribution_proposals",
-                         "ai_proposal_snapshots", "ai_attempt_trace_links", "ai_review_receipts", "ai_attempt_history",
+                         "ai_local_call_execution_links", "ai_proposal_snapshots", "ai_attempt_trace_links", "ai_review_receipts", "ai_attempt_history",
                          "ai_spending_attempts", "ai_spending_run_policies", "ai_spending_budgets",
                          "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
@@ -5110,7 +5112,7 @@ class Store:
             # Policy actions are idempotency/audit receipts for customer changes, not the live
             # policy itself. The policy remains configuration; its historical receipts do not.
             for t in ("remediation_contribution_runs", "remediation_contribution_proposals",
-                         "ai_proposal_snapshots", "ai_attempt_trace_links", "ai_review_receipts", "ai_attempt_history",
+                         "ai_local_call_execution_links", "ai_proposal_snapshots", "ai_attempt_trace_links", "ai_review_receipts", "ai_attempt_history",
                       "ai_spending_attempts", "ai_spending_run_policies", "ai_spending_budgets"):
                 self._db.execute(cur, f"DELETE FROM {t} WHERE owner_id=%s", (owner_email,))
                 cleared.append(t)
