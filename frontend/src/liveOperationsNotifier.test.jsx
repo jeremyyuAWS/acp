@@ -1,7 +1,11 @@
-import React from 'react'
+import React, { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { openAdminActivityStream } from './api.js'
+import LiveOperationsNotifier from './LiveOperationsNotifier.jsx'
+vi.mock('./api.js', () => ({ openAdminActivityStream: vi.fn() }))
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { LiveOperationsToast, newStageCompletions, newStageStarts, playNotificationSound } from './LiveOperationsNotifier.jsx'
+import { LiveOperationsToast, newStageCompletions, newStageStarts, notificationRuns, playNotificationSound } from './LiveOperationsNotifier.jsx'
 
 describe('Live Operations notifications', () => {
   it('announces only newly active Discover, Assess, and Remediate stages', () => {
@@ -15,12 +19,18 @@ describe('Live Operations notifications', () => {
     expect(newStageStarts(previous, current).map((run) => run.stage)).toEqual(['assess'])
   })
 
-  it('announces a completion only when an active stage becomes recent', () => {
+  it('announces a completion only when an active stage records successful completion', () => {
     const active = { scan_id: 'one', stage: 'assess', status: 'active', running: 1, queued: 2 }
-    const completed = { ...active, status: 'recent', running: 0, queued: 0, completed: 24, total: 24 }
+    const completed = { ...active, status: 'recent', running: 0, queued: 0, completed: 24, total: 24, completion_recorded: true, terminal_outcome: 'completed' }
     expect(newStageCompletions([active], [completed])).toEqual([completed])
     expect(newStageCompletions([], [completed])).toEqual([])
     expect(newStageCompletions([completed], [completed])).toEqual([])
+  })
+
+  it('does not call a late trace-job tail assessment completion', () => {
+    const before = {scan_id:'one',stage:'assess',status:'active',running:1,queued:0}
+    const tail = {...before,status:'recent',running:0,completed:147,total:147}
+    expect(newStageCompletions([before], [tail])).toEqual([])
   })
 
   it('opens Live Operations when the notification is clicked', () => {
@@ -74,4 +84,85 @@ describe('Live Operations notifications', () => {
     vi.runAllTimers()
     vi.useRealTimers()
   })
+})
+
+
+describe('assessment notification result boundary', () => {
+  const workflow = (assessmentState, traceStatus = 'active', remediationState = null) => ({
+    runs: [{scan_id:'scan',stage:'assess',status:traceStatus,running:traceStatus==='active'?1:0,queued:0}],
+    workflows: [{scan_id:'scan',owner_display_name:'Owner',stages:[{
+      stage:'assess',stage_run_id:'assessment-execution',status:assessmentState==='succeeded'?'completed':'running',
+      active:assessmentState==='processing'?18:0,waiting:assessmentState==='processing'?129:0,
+      total:147,completed:assessmentState==='processing'?0:147,
+      canonical:{state:assessmentState,execution_id:'assessment-execution'},
+    }, ...(remediationState ? [{stage:'remediate',stage_run_id:'remediation-execution',status:'running',active:3,waiting:144,total:147,completed:0,canonical:{state:remediationState}}] : [])]}],
+  })
+  it('announces the recorded assessment completion while the trace job is still active', () => {
+    const before = notificationRuns(workflow('processing_complete'))
+    const finished = notificationRuns(workflow('succeeded'))
+    expect(newStageCompletions(before, finished).map((run)=>run.stage)).toEqual(['assess'])
+    const remediating = notificationRuns(workflow('succeeded','active','processing'))
+    expect(newStageStarts(finished, remediating).map((run)=>run.stage)).toEqual(['remediate'])
+    expect(newStageCompletions(finished, remediating)).toEqual([])
+    const lateTraceDone = notificationRuns(workflow('succeeded','recent','processing'))
+    expect(newStageCompletions(remediating, lateTraceDone)).toEqual([])
+  })
+  it('does not announce controller processing_complete before the stage succeeds', () => {
+    expect(newStageCompletions(notificationRuns(workflow('processing')), notificationRuns(workflow('processing_complete')))).toEqual([])
+  })
+  it('does not announce a stale assessment completion after remediation was already observed', () => {
+    expect(newStageCompletions(notificationRuns(workflow('processing_complete','active','processing')), notificationRuns(workflow('succeeded','recent','processing')))).toEqual([])
+  })
+  it('does not fabricate completion from queue disappearance without authoritative workflow completion', () => {
+    const before=notificationRuns({runs:[{scan_id:'scan',stage:'assess',status:'active',running:1}]})
+    const after=notificationRuns({runs:[{scan_id:'scan',stage:'assess',status:'recent',running:0}]})
+    expect(newStageCompletions(before, after)).toEqual([])
+  })
+})
+
+
+it('shows assessment completion before remediation and ignores later trace settlement in the mounted notifier', async () => {
+  const host=document.createElement('div');document.body.appendChild(host)
+  const root=createRoot(host);let push
+  vi.mocked(openAdminActivityStream).mockImplementation(({onMessage})=>{push=onMessage;return {close:vi.fn()}})
+  const snapshot = (state,remediation=false,trace='active') => ({
+    runs:[{scan_id:'scan',stage:'assess',status:trace,running:trace==='active'?1:0}],
+    workflows:[{scan_id:'scan',owner_display_name:'Owner',stages:[{
+      stage:'assess',stage_run_id:'assess-1',status:state==='succeeded'?'completed':'running',
+      active:state==='processing'?18:0,waiting:0,total:147,completed:state==='processing'?129:147,canonical:{state},
+    },...(remediation?[{stage:'remediate',stage_run_id:'remediate-1',status:'running',active:2,waiting:145,total:147,canonical:{state:'processing'}}]:[])]}],
+  })
+  try {
+    await act(async()=>root.render(<LiveOperationsNotifier />))
+    await act(async()=>push(snapshot('processing')))
+    expect(host.textContent).toBe('')
+    await act(async()=>push(snapshot('succeeded')))
+    expect(host.textContent).toContain('Assessment complete')
+    await act(async()=>push(snapshot('succeeded',true)))
+    expect(host.textContent).toContain('Remediation started')
+    await act(async()=>push(snapshot('succeeded',true,'recent')))
+    expect(host.textContent).toContain('Remediation started')
+    expect(host.textContent).not.toContain('Assessment complete')
+    await act(async()=>push({runs:[{scan_id:'scan',stage:'assess',status:'active',running:1}]}))
+    await act(async()=>push(snapshot('succeeded')))
+    expect(host.textContent).toContain('Remediation started')
+    expect(host.textContent).not.toContain('Assessment complete')
+  } finally {
+    await act(async()=>root.unmount());host.remove()
+  }
+})
+
+
+it('does not toast an already completed stage on initial connection', async () => {
+  const host=document.createElement('div');document.body.appendChild(host);const root=createRoot(host);let push
+  vi.mocked(openAdminActivityStream).mockImplementation(({onMessage})=>{push=onMessage;return{close:vi.fn()}})
+  const completed={workflows:[{scan_id:'scan',stages:[{stage:'assess',stage_run_id:'assess-1',status:'completed',total:147,completed:147,canonical:{state:'succeeded'}}]}]}
+  try {
+    await act(async()=>root.render(<LiveOperationsNotifier />))
+    await act(async()=>push(completed))
+    expect(host.textContent).toBe('')
+    await act(async()=>push({runs:[{scan_id:'scan',stage:'assess',status:'active',running:1}]}))
+    await act(async()=>push(completed))
+    expect(host.textContent).toBe('')
+  }finally{await act(async()=>root.unmount());host.remove()}
 })
