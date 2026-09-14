@@ -694,23 +694,26 @@ def advance(store, payload, job):
             if preflight is None:
                 preflight = delivery_preflight(row)
             if not preflight.get('ready'):
-                raise DeliveryPreflightBlocked(preflight.get('message') or 'The authorized delivery destination is not ready. Check its access before delivery.')
+                message = preflight.get('message') or 'The authorized delivery destination is not ready. Check its access before delivery.'
+                if preflight.get('credential_valid') is False:
+                    raise DriveReconnectRequired(message)
+                raise DeliveryPreflightBlocked(message)
             row = publish_admission(store, row['id'], row['owner_email'], row['scan_id'], file, digest)
             dispatched += 1
             result = dispatch(store, row, file, digest)
             outcome = next((r for r in result.get('published',[]) if r.get('file')==file),{})
             confirmed = receipt(store,row,file,digest)
             state = 'published' if confirmed else 'publishing' if outcome.get('status') in {'queued','published'} else 'failed'
-            persistence.update_file(store,row['id'],row['owner_email'],file,dict(state=state,artifact_digest=digest,
+            persistence.update_file(store,row['id'],row['owner_email'],file,dict(state=state,artifact_digest=digest,requires_reconnect=False,failure_category=None,
                 message='Delivered' if state=='published' else 'Waiting for delivery receipt' if state=='publishing' else 'Delivery was not confirmed. Inspect the receipt before retrying.',receipt=outcome))
         except DeliveryAlreadyAdmitted:
             continue
         except FileRemediationFinishedWithoutCopy as exc:
             persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='failed',message=str(exc),failure_category='no_corrected_copy'))
         except DeliveryPreflightBlocked as exc:
-            persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc),failure_category='delivery_preflight_blocked',waiting_for_delivery=False))
+            persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc),failure_category='delivery_preflight_blocked',requires_reconnect=False,waiting_for_delivery=False))
         except DriveReconnectRequired as exc:
-            persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc),requires_reconnect=True,waiting_for_delivery=False))
+            persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc),failure_category='delivery_preflight_blocked',requires_reconnect=True,waiting_for_delivery=False))
         except (ValueError, ReleaseArtifactError) as exc:
             persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc),waiting_for_delivery=False))
         except Exception as exc:
@@ -777,7 +780,7 @@ def advance(store, payload, job):
                     job_states.append(item['status'])
         paused = _permanent_delivery_pause(row, job_states)
         stalled = progress['_delivery_watch']['needs_attention']
-        persistence.save(store,row,status='completed' if completed else 'failed' if terminal or expired else 'blocked' if stalled or paused else 'waiting',
+        persistence.save(store,row,status='completed' if completed else 'failed' if terminal or expired else 'blocked' if stalled or paused or 'blocked' in states else 'waiting',
                          progress=progress,schedule=not terminal and not expired and not paused,delay=STALLED_CHECK_SECONDS if stalled else 20)
 
 

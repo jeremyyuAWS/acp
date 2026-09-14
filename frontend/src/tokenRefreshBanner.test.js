@@ -40,7 +40,7 @@ describe('token-refresh failure surfaces a dismissable banner', () => {
 
   it('refreshes active SharePoint releases immediately and without a background popup', () => {
     expect(app).toMatch(/workflow\?\.source === 'sharepoint'/)
-    expect(app).toMatch(/refreshSPToken\(\{ interactive: false \}\)/)
+    expect(app).toMatch(/refreshSPToken\(\{ interactive: false, persist: false \}\)/)
     expect(app).toMatch(/refresh\(\)[\s\S]{0,150}setInterval\(refresh, 20 \* 60 \* 1000\)/)
   })
 

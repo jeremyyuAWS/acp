@@ -1,3 +1,4 @@
+import { authEpoch } from './apiIdentity.js'
 import ReleaseReviewWorkspace from './ReleaseReviewWorkspace.jsx'
 import { reviewBadgeTitle } from './remediationCountSummary.js'
 import { prepareWorkflowEntry } from './workflowEntry.js'
@@ -247,6 +248,46 @@ function clearActivityStorage() {
     Object.keys(sessionStorage).filter((k) => k.startsWith('acp-')).forEach((k) => sessionStorage.removeItem(k))
     ACTIVITY_LS.forEach((k) => localStorage.removeItem(k))
   } catch { /* storage unavailable — ignore */ }
+}
+
+// Reconnecting an already-connected source must refresh durable workflow credentials now.
+// Epoch and effect cleanup fence owner changes, logout, and superseded reconnect attempts.
+export function useSharePointWorkflowKeepalive({ hasSPToken, owner, reconnectRevision,
+  setActiveWorkflows, setTokenRefreshError }) {
+  useEffect(() => {
+    if (!hasSPToken || !owner) return
+    let alive = true
+    const epoch = authEpoch()
+    const current = () => alive && authEpoch() === epoch
+    const refresh = async () => {
+      try {
+        const response = await getActiveWorkflows()
+        if (!current()) return
+        const workflows = response?.active_workflows || []
+        setActiveWorkflows(workflows)
+        let ids = [...new Set(workflows
+          .filter((workflow) => workflow?.source === 'sharepoint' && workflow?.scan_id)
+          .map((workflow) => workflow.scan_id))]
+        // Rolling-deploy compatibility when the older API omits Release workflows.
+        if (!ids.length) {
+          const active = await getActiveScan()
+          if (active?.id) ids = [active.id]
+        }
+        if (!ids.length || !current()) return
+        const tok = await refreshSPToken({ interactive: false, persist: false })
+        if (!current()) return
+        sessionStorage.setItem('sp_token', tok)
+        setSPToken(tok)
+        await Promise.all(ids.map((id) => refreshScanSPToken(id)))
+        if (current()) setTokenRefreshError(null)
+      } catch {
+        if (current()) setTokenRefreshError('SharePoint session may have expired — remaining scan or release files are paused until you re-sign in to SharePoint.')
+      }
+    }
+    refresh()
+    const iv = setInterval(refresh, 20 * 60 * 1000)
+    return () => { alive = false; clearInterval(iv) }
+  }, [hasSPToken, owner, reconnectRevision, setActiveWorkflows, setTokenRefreshError])
 }
 
 export default function App() {
@@ -502,38 +543,9 @@ export default function App() {
   const [hasSPToken, setHasSPToken] = useState(() => !!sessionStorage.getItem('sp_token'))
   const [tokenRefreshError, setTokenRefreshError] = useState(null)
 
-  // Keep every long-running SharePoint workflow's MSAL token fresh, including Release jobs that
-  // run after the scan itself is complete. Refresh immediately when the session opens and then
-  // every 20 minutes. Background refresh is silent-only: a timer must never summon a popup.
-  useEffect(() => {
-    if (!hasSPToken || !me) return
-    let alive = true
-    const refresh = async () => {
-      try {
-        const response = await getActiveWorkflows()
-        if (!alive) return
-        const workflows = response?.active_workflows || []
-        setActiveWorkflows(workflows)
-        let ids = [...new Set(workflows
-          .filter((workflow) => workflow?.source === 'sharepoint' && workflow?.scan_id)
-          .map((workflow) => workflow.scan_id))]
-        // Compatibility for an older API replica during a rolling deploy: it does not expose
-        // publish_file yet, but can still report a live SharePoint scan through this endpoint.
-        if (!ids.length) {
-          const active = await getActiveScan()
-          if (active?.id) ids = [active.id]
-        }
-        if (!ids.length || !alive) return
-        const tok = await refreshSPToken({ interactive: false })
-        setSPToken(tok)
-        await Promise.all(ids.map((id) => refreshScanSPToken(id)))
-        setTokenRefreshError(null)
-      } catch { setTokenRefreshError('SharePoint session may have expired — remaining scan or release files are paused until you re-sign in to SharePoint.') }
-    }
-    refresh()
-    const iv = setInterval(refresh, 20 * 60 * 1000)
-    return () => { alive = false; clearInterval(iv) }
-  }, [hasSPToken, me])
+  const [spReconnectRevision, setSPReconnectRevision] = useState(0)
+  useSharePointWorkflowKeepalive({ hasSPToken, owner: me?.email, reconnectRevision: spReconnectRevision,
+    setActiveWorkflows, setTokenRefreshError })
   const [delegations, setDelegations] = useState(loadDelegations)
   const [fileTypeConfig, setFileTypeConfig] = useState(loadFileTypeConfig)
   const [rolePrivileges, setRolePrivileges] = useState(loadRolePrivileges)
@@ -1077,6 +1089,7 @@ export default function App() {
     } else if (provider === 'microsoft') {
       sessionStorage.setItem('sp_token', token)
       setSPToken(token); setHasSPToken(true)
+      setSPReconnectRevision((revision) => revision + 1)
       if (priv) setMe((m) => ({ ...m, ...priv, email, sso: 'Microsoft', scope: priv.scope?.label }))
     }
   }

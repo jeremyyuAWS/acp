@@ -93,7 +93,8 @@ def test_legacy_active_failed_file_is_projected_and_resumed(prepared):
     assert projected['can_resume'] and projected['requires_reconnect']
     assert persistence.get(prepared.store, row['id'], OWNER)['progress']['files'][FILE]['state'] == 'failed'
     row = tick(prepared, row)
-    assert row['status'] == 'waiting'
+    assert row['status'] == 'blocked'
+    assert row['progress']['_tick_revision'] == row['revision']
     assert row['progress']['files'][FILE]['state'] == 'blocked'
     assert prepared.store.get_job(batch['job_ids'][0])['status'] == 'dead'
     row = flow.resume(prepared.store, row['id'], OWNER, SID)
