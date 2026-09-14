@@ -27,6 +27,10 @@ def plan_ai_readiness(policy, ai_enabled=True):
             return {'state': 'local_endpoint_unreachable', 'blocked': True}
         text_available = ai._tags_have(models, ai.OLLAMA_MODEL)
         vision_available = ai._tags_have(models, ai.OLLAMA_VISION_MODEL)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (401, 403):
+            return {'state': 'local_endpoint_access_denied', 'blocked': True}
+        return {'state': 'local_endpoint_unreachable', 'blocked': True}
     except Exception:
         return {'state': 'local_endpoint_unreachable', 'blocked': True}
     # Local drafting includes text and image proposals. A reachable endpoint with
