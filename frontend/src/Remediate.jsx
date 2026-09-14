@@ -1,4 +1,5 @@
 import RemediationAutomationLayout from './RemediationAutomationLayout.jsx'
+import { verifySavedRemediation } from './verifySavedRemediation.js'
 import useAutomaticReleaseStatus from './useAutomaticReleaseStatus.js'
 import AutomaticReleasePackage from './AutomaticReleasePackage.jsx'
 import { remediationWorkRunning } from './remediationWorkRunning.js'
@@ -45,7 +46,7 @@ import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, getRemediationExceptions, downloadRemediated, listAllHitl, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
+import { remediateScan, getRemediationStatus, getRemediationExceptions, downloadRemediated, listAllHitl, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate, getReleaseStatus, verifySavedCopy } from './api.js'
 import { stageExecutionNotice } from './stageExecutionNotice.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
@@ -469,6 +470,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const resultsOnlyRef = useRef(resultsOnly)
   resultsOnlyRef.current = resultsOnly
   const runId = run?.id
+  const verificationRunRef = useRef(runId)
+  verificationRunRef.current = runId
   const [releasePlanIntent, setReleasePlanIntent] = useState(null)
   const [releasePlanNotice, setReleasePlanNotice] = useState('')
   const [automaticReleaseState, setAutomaticReleaseState] = useState(null)
@@ -948,6 +951,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     return Promise.resolve()
   }
   const draftAi = (item) => { if (reviewReadOnlyRef.current) return Promise.reject(new Error('Historical scans are available for results browsing only.')); return suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion) }
+  const verifySaved = async (item) => {
+    const result = await verifySavedRemediation({ runId, item, canAct: () => !reviewReadOnlyRef.current && verificationRunRef.current === runId, getReleaseStatus, verifySavedCopy })
+    onRefresh?.()
+    return result
+  }
   const rescan = (id) => {
     if (readOnly || resultsOnlyRef.current) return
     const item = self.find((x) => x.id === id)
@@ -1820,6 +1828,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             onPublish={reviewReadOnly ? undefined : () => onNavigate?.('publish')}
             onOpenPlan={readOnly ? undefined : openRemediationPlan}
             preparingProposals={!runStream?.snapshot?.terminal && ((runStream?.status?.running ?? remProg?.running ?? 0) > 0 || (runStream?.status?.queued ?? remProg?.queued ?? 0) > 0)}
+            onVerifySaved={reviewReadOnly ? undefined : verifySaved}
             renderDetailExtra={(sel) => (sel ? (
               <>
                 {/* R15 · only for a row ACP applied itself — a drafted-AI or manually-authored
