@@ -16,7 +16,7 @@ export function remainingWorkStatus({ events = [], rows = [], decisions = {}, sn
   for (const event of latest.values()) {
     if (event.kind === 'remediate.vision_retry_pending') notices.push({ key: event.key, label: 'AI retry queued', responsibility: 'ACP will retry automatically. No individual approval is needed for this retry.', tone: 'automatic' })
     if (event.kind === 'remediate.vision_retry_blocked') {
-      if (event.documentName && ['vision_permission_or_budget_blocked', 'vision_spending_reconciliation_required'].includes(event.reasonCode)) blockedCaptionFiles.add(event.documentName)
+      if (event.documentName && ['vision_permission_or_budget_blocked', 'vision_spending_reconciliation_required', 'vision_local_endpoint_required'].includes(event.reasonCode)) blockedCaptionFiles.add(event.documentName)
       if (event.reasonCode === 'vision_spending_reconciliation_required') {
         const recorded = Date.parse(event.occurredAt || '')
         const withinChecks = Number.isFinite(now) && Number.isFinite(recorded) && now >= recorded && now - recorded < 40 * 60 * 1000
@@ -24,7 +24,9 @@ export function remainingWorkStatus({ events = [], rows = [], decisions = {}, sn
         notices.push({ key: event.key, label: withinChecks ? 'AI usage confirmation pending' : 'AI usage confirmation needs attention', responsibility: 'ACP checks previous usage only while a reconciliation retry is scheduled (up to eight checks). Another paid request waits for confirmation; unresolved spending may need attention.', tone: 'waiting' })
       }
       else if (event.reasonCode === 'vision_permission_or_budget_blocked') notices.push({ key: event.key, label: 'AI permission or spending limit needs attention', responsibility: 'Check the saved AI permission and available spending limit. ACP cannot send another request yet.', tone: 'review' })
+      else if (event.reasonCode === 'vision_local_endpoint_required') notices.push({ key: event.key, label: 'Local AI endpoint unavailable', responsibility: 'This run permits local AI only. Configure a private local AI endpoint, or start a new plan that explicitly permits cloud AI and its spending allowance. Increasing the budget alone will not fix a local-only run.', tone: 'review' })
       else if (event.reasonCode === 'vision_generated_output_unusable') notices.push({ key: event.key, label: 'AI response could not be used', responsibility: 'Automatic generation attempts have stopped. Check AI activity for the validation reason; review an available suggestion or provide the missing content.', tone: 'review' })
+      else if (event.reasonCode === 'vision_recovery_unresolved') notices.push({ key: event.key, label: 'AI generation needs checking', responsibility: 'Check the recorded AI failure before retrying. A spending problem or human decision has not been confirmed.', tone: 'waiting' })
       else notices.push({ key: event.key, label: 'Your review needed', responsibility: 'Automatic image-description attempts have stopped. Review the suggestion or provide an authored description.', tone: 'review' })
     }
   }
@@ -39,7 +41,7 @@ export function remainingWorkStatus({ events = [], rows = [], decisions = {}, sn
   }), decisions, blockedCaptionFiles)
   const descriptions = [
     ['missing-proposals', 'Suggestion not ready', 'need a usable proposal before a fix can be applied. Check AI activity for generation status; no application job is confirmed.', 'waiting'],
-    ['blocked-ai', 'AI request blocked', 'cannot obtain a new AI suggestion until saved permission, verified pricing, or available spending is resolved. Existing rule-based fixes can continue.', 'waiting'],
+    ['blocked-ai', 'AI request blocked', 'cannot obtain a new AI suggestion until the saved AI permission, required endpoint, verified pricing, or available spending is resolved. Existing rule-based fixes can continue.', 'waiting'],
     ['failed-checks', 'Saved fix needs recovery', 'have a recorded application or verification failure. Check the failed criterion and reason before retrying that operation.', 'review'],
     ['status-checks', 'Recorded status needs checking', 'have a blocker without a confirmed failure reason. Check saved evidence; these are not automatically classified as human decisions.', 'waiting'],
     ['review', 'Your review needed', 'need a decision on an available suggestion. Auto-apply does not bypass requirements for individual judgment.', 'review'],
@@ -55,5 +57,14 @@ export function remainingWorkStatus({ events = [], rows = [], decisions = {}, sn
   const recovery = stalled ? 'ACP has detected a stall. Check Live Operations for the worker or retry blocker; automatic recovery is not yet confirmed.'
     : snapshot?.retry_at ? 'A retry is scheduled. ACP will resume eligible work automatically.'
       : snapshot?.progress?.lease_healthy === true && !snapshot?.terminal ? 'A worker is still active. ACP continues monitoring its checkpoints.' : null
-  return { notices, checkpoint, recovery, stalled, counts }
+  // Consolidate repeated per-document operational warnings, without merging counted review categories.
+  const grouped = new Map()
+  for (const notice of notices) {
+    const key = notice.count == null ? `${notice.label}:${notice.responsibility}` : notice.key
+    const previous = grouped.get(key)
+    if (previous) previous.affectedDocuments = (previous.affectedDocuments || 1) + 1
+    else grouped.set(key, { ...notice })
+  }
+  const consolidated = [...grouped.values()].map(notice => notice.affectedDocuments ? { ...notice, responsibility: `${notice.affectedDocuments} documents affected. ${notice.responsibility}` } : notice)
+  return { notices: consolidated, checkpoint, recovery, stalled, counts }
 }

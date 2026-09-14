@@ -79,3 +79,17 @@ describe('remaining work responsibility', () => {
     expect(html).toContain('automatic recovery is not yet confirmed')
   })
 })
+
+
+it('consolidates repeated operational warnings without combining review counts',()=>{
+ const result=remainingWorkStatus({events:[{id:'1',key:'1',documentKey:'a',kind:'remediate.vision_retry_blocked',reasonCode:'vision_permission_or_budget_blocked'},{id:'2',key:'2',documentKey:'b',kind:'remediate.vision_retry_blocked',reasonCode:'vision_permission_or_budget_blocked'}]})
+ expect(result.notices).toHaveLength(1)
+ expect(result.notices[0].responsibility).toContain('2 documents affected')
+})
+it('shows local endpoint failures without a spending warning',()=>{
+ const [row]=addRemediationEvent([], {kind:'remediate.vision_retry_blocked',document_ref:'a',detail:{reason_code:'vision_local_endpoint_required'}},1)
+ const result=remainingWorkStatus({events:[row]})
+ expect(result.notices[0].label).toBe('Local AI endpoint unavailable')
+ expect(result.notices[0].responsibility).toContain('Increasing the budget alone will not fix')
+ expect(result.notices.some(n=>n.label.includes('spending limit'))).toBe(false)
+})
