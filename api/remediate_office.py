@@ -1525,34 +1525,28 @@ def _draft_docx_assisted(entries: dict, path: Path, proposals: list | None, *,
                 explain_only=True, sc="1.3.2"))
             made += 1
 
-    # 1.4.5 — images of text. The draft IS the OCR'd text, not a model's description of it: the
-    # remediation for an image of text is to re-author it AS text, so the thing a reviewer needs
-    # is the words themselves, ready to paste. Transcribed, never generated — nothing here can
-    # confabulate, which is why it is offered even though 1.4.5's fix is human work.
-    #
-    # Charts are excluded upstream by images_of_text (WCAG's Essential exception), so a bar chart
-    # does not arrive here asking to be retyped.
+    # Finding details are display excerpts, not recovered content. Reuse the
+    # shared image proposer so complete visible OCR, locator and review evidence
+    # remain bound to the actual image. This is still a draft, never an approval.
     try:
-        import ocr as _ocr
-        for f in (_ocr.images_of_text(path, path.suffix.lower()) or [])[:_ASSISTED_MAX_DRAFTS]:
-            if made >= _ASSISTED_MAX_DRAFTS or not _sc_ok(in_scope, "1.4.5"):
-                break
-            detail = str(f.get("detail") or "")
-            quoted = re.search(r"[“\"']([^”\"']{4,})[”\"']", detail)
-            text = quoted.group(1).strip() if quoted else ""
-            if not text:
-                continue
-            proposals.append(_prop.proposal(
-                locator="word/media#image-of-text", before="(text baked into an image)",
-                proposed_value=text,
-                rationale="transcribed from the image by OCR — re-author this as real text so it "
-                          "can be resized, restyled and read by assistive technology",
-                source="OCR transcription (no model)", sc="1.4.5"))
-            made += 1
+        if made < _ASSISTED_MAX_DRAFTS and _sc_ok(in_scope, "1.4.5"):
+            import ocr as _ocr
+            visible, _ = _ocr._embedded_images_and_total(path, path.suffix.lower(), visible_word=True)
+            # Match the detector's bounded, visible Word membership. Unused
+            # media and unsupported placement geometry cannot create findings.
+            visible_locators = {f"image {image.media_number}" for image in visible if image.placements}
+            for draft in _prop.propose_images_of_text(path, path.suffix.lower(), ai_enabled=False):
+                if made >= _ASSISTED_MAX_DRAFTS:
+                    break
+                if draft.get("sc") != "1.4.5" or draft.get("locator") not in visible_locators:
+                    continue
+                # Preserve this lane's Essential exception for charts/diagrams.
+                if _ocr._looks_like_chart(draft.get("proposed_value") or ""):
+                    continue
+                proposals.append(draft)
+                made += 1
     except Exception:
-        swallowed("remediate_office._draft_docx_assisted: drafting AI-assisted docx proposals "
-                  "failed", scan_id)
-
+        swallowed("remediate_office._draft_docx_assisted: drafting OCR image text failed", scan_id)
     return made
 
 
