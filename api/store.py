@@ -9038,7 +9038,7 @@ class Store:
         out: dict = {"scan_id": scan_id, "run_id": scan_id}
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT id,started_at,assessed_at,source,status FROM scan_runs WHERE id=%s",
+                "SELECT id,started_at,assessed_at,source,status,owner_email FROM scan_runs WHERE id=%s",
                 (scan_id,))
             run = self._db.fetchone(cur) or {}
             self._db.execute(cur,
@@ -9075,6 +9075,25 @@ class Store:
                               "cancel_requested_at": row.get("cancel_requested_at")}
             out["jobs"] = list(jobs.values())
             out["batch_id"] = batch_id
+            # Safe disclosure from this batch's frozen owner-scoped AI contract,
+            # never from current settings or a draft plan. Legacy events retain
+            # their recorded reason; clients can describe local-only policy honestly.
+            out['ai_policy'] = None
+            if batch_id and run.get('owner_email'):
+                self._db.execute(cur, '''SELECT p.policy_json FROM ai_spending_run_policies p
+                    JOIN stage_executions e ON e.execution_id=p.run_id
+                    AND e.scan_id=p.scan_id AND e.owner_email=p.owner_id
+                    WHERE p.owner_id=%s AND p.scan_id=%s AND p.run_id=%s
+                    AND e.stage='remediate' AND e.is_current=1''',
+                    (run['owner_email'], scan_id, batch_id))
+                saved_ai = self._db.fetchone(cur)
+                if saved_ai:
+                    try:
+                        zone = _json.loads(saved_ai['policy_json']).get('ai_zone')
+                        if zone in ('local', 'any'):
+                            out['ai_policy'] = {'zone': zone}
+                    except (TypeError, ValueError, AttributeError):
+                        pass
             out["cancel_requested"] = any(j.get("cancel_requested_at") for j in jobs.values())
             # DERIVED FROM A ROW, NEVER FROM AN IDLE QUEUE. This is the fact that lets
             # remediation_run.derive_run_state return `paused` at all — see its comment on

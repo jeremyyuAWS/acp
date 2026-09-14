@@ -705,6 +705,9 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
         "run_id": facts.get("run_id"),
         "scan_id": facts.get("scan_id"),
         "batch_id": facts.get("batch_id"),
+        "ai_policy": ({'zone': facts['ai_policy']['zone']}
+                      if isinstance(facts.get('ai_policy'), dict)
+                      and facts['ai_policy'].get('zone') in ('local', 'any') else None),
         "generated_at": now.isoformat(),
         "revision": _revision(facts, now),
         "state": state,

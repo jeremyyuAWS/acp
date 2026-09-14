@@ -5,6 +5,16 @@ import { remainingWorkStatus } from './remainingWorkStatus.js'
 import { addRemediationEvent } from './remediationEventFeed.js'
 const event = (id, kind, reasonCode) => ({id:String(id),key:String(id),kind,documentKey:'private-ref',reasonCode})
 describe('remaining work responsibility', () => {
+  it('describes legacy warnings using frozen local policy without asserting an endpoint diagnosis', () => {
+    const legacy = event(1, 'remediate.vision_retry_blocked', 'vision_permission_or_budget_blocked')
+    const notices = remainingWorkStatus({ events: [legacy], snapshot: { ai_policy: { zone: 'local' } } }).notices
+    expect(notices[0].label).toBe('Local AI setup needs attention')
+    expect(notices[0].responsibility).toContain('does not identify the exact local failure')
+    expect(notices[0].label).not.toMatch(/spending|endpoint unavailable/i)
+    expect(legacy.reasonCode).toBe('vision_permission_or_budget_blocked')
+    expect(remainingWorkStatus({ events: [legacy], snapshot: { ai_policy: { zone: 'any' } } }).notices[0].label).toBe('AI permission or spending limit needs attention')
+    expect(remainingWorkStatus({ events: [legacy] }).notices[0].label).toBe('AI permission or spending limit needs attention')
+  })
   it('reports rejected generated output without a false spending or permission blocker', () => {
     const [row] = addRemediationEvent([], {kind:'remediate.vision_retry_blocked', document:'report.docx', document_ref:'private-ref', detail:{reason_code:'vision_generated_output_unusable', output:'private provider text'}}, 7)
     expect(row.reasonCode).toBe('vision_generated_output_unusable')
