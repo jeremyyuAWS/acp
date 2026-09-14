@@ -17,6 +17,9 @@ def test_complete_recovered_instructions_are_not_truncated(monkeypatch):
 
 @pytest.mark.parametrize('caption,reason', [
     ('I cannot provide instructions for medical equipment.', 'provider_refusal'),
+    ('I’m sorry, but I can’t describe this image.', 'provider_refusal'),
+    ("I'm sorry, but I cannot provide a description.", 'provider_refusal'),
+    ('Sorry, I cannot describe this image.', 'provider_refusal'),
     ("Sorry, I can't describe this image.", 'provider_refusal'),
     ('As an AI language model, I cannot view images.', 'provider_refusal'),
     ('Connect the controller and then…', 'incomplete_description'),
@@ -88,3 +91,11 @@ def test_cleaned_length_bound_cannot_receive_grounded_write_credit(monkeypatch):
     result = ai.describe_image_structured(b'image')
     assert result['automatic_write_blocked'] is True
     assert result['reason_code'] == 'incomplete_description'
+
+
+def test_refusal_words_in_recovered_image_text_are_content(monkeypatch):
+    quote = "I'm sorry, but I cannot provide a description. This is the quoted message shown on screen."
+    monkeypatch.setattr(ocr, 'ocr_text', lambda _: quote)
+    result = ai.describe_image_structured(b'image', allow_transcription=True)
+    assert result['alt'] == quote and result['grounded'] is True
+    assert not result.get('automatic_write_blocked')

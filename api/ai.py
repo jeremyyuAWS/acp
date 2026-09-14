@@ -1287,7 +1287,8 @@ def _description_quality_failure(alt: str) -> str | None:
     if re.search(r"(?:…|\.\.\.)\s*$", alt or ""):
         return "incomplete_description"
     if re.search(
-        r"^(?:sorry[,!]?\s*)?(?:as an ai(?: language model)?[, ]+)?"
+        r"^(?:(?:(?:i(?:[’']m| am)\s+)?sorry)[,!]?\s*(?:but\s+)?)?"
+        r"(?:as an ai(?: language model)?[, ]+)?"
         r"(?:i(?: am)?|we)\s+(?:cannot|can't|can’t|am unable to|are unable to)\s+"
         r"(?:provide|describe|view|see|help|assist|generate|identify|interpret)\b",
         (alt or "").strip(), re.I):
