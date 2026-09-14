@@ -1,5 +1,5 @@
 /**
- * Overview keeps one audit-grade scope disclosure immediately below Estate progress.
+ * The retired Overview workflow preserves its audit-grade scope disclosure immediately below Estate progress.
  * The compact AssessmentScopeCard is intentionally absent here because it duplicated
  * AssertionScope. It remains mounted on Remediate, where its reassessment controls belong.
  */
@@ -17,7 +17,7 @@ vi.mock('./api.js', async (importActual) => ({
   getScanDiff: async () => null,
 }))
 
-const { default: Overview } = await import('./Overview.jsx')
+const { default: Overview } = await import('./RetiredOverviewWorkflow.jsx')
 const RUN = { id: 'scan-1', certifiable: 1, scope: null, at: '2026-08-08T00:00:00Z' }
 const FILES = [{ name: 'a.docx', score: 90, issues: [], department: 'Legal', format: 'docx' }]
 

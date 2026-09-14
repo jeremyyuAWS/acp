@@ -9,15 +9,12 @@ import { analysedCount, avgScore } from './docStatus.js'
 import { IDENTITY, SIM, remediableCount, recommendationSummary } from './sim.js'
 import { openReport, getScanInventory } from './api.js'
 import { loadPublished } from './ontology.js'
-import EstateProgressPanel from './EstateProgressPanel.jsx'
 import BalancedSummary from './BalancedSummary.jsx'
 import { reconcileBuckets, assessmentEligible } from './estateFunnel.js'
 import { reconciliationInputs } from './reconciliationInputs.js'
 import { assessMetrics, coverageSentence, SEVERITIES, SEVERITY_LABEL } from './assessMetrics.js'
 import AssertionScope from './AssertionScope.jsx'
-import NextStep from './NextStep.jsx'
 import { CORE_SCS } from './activeScope.js'
-import AccordionSection from './AccordionSection.jsx'
 
 // Inline until PR #643 (process-health-pr1) merges — then replace with:
 // import ProcessHealthAlert from './ProcessHealthAlert.jsx'
@@ -68,6 +65,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const estateFiles = useMemo(() => [...files, ...inventoryOnlyRows(files, inv)], [files, inv])
   const reportRef = useRef(null)
   const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState(null)
   const [scanExporting, setScanExporting] = useState(false)
   const doScanExport = async () => {
     setScanExporting(true)
@@ -78,6 +76,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
     finally { setTimeout(() => setScanExporting(false), 600) }
   }
   const doExport = async () => {
+    setExportError(null)
     setExporting(true)
     try {
       const now = new Date()
@@ -97,7 +96,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       // A verdict needs a measurement. With nothing analysed there is no evidence for
       // "ACTION REQUIRED" either — say so rather than let null fall through the comparisons.
       const verdict = auditReady == null ? ['NOT YET ASSESSED', '#5F5E5A']
-        : auditReady >= 80 ? ['ON TRACK TO COMPLIANT', 'var(--success-fg)'] : auditReady >= 45 ? ['DEVELOPING', 'var(--warn-fg)'] : ['ACTION REQUIRED', 'var(--info-fg)']
+        : auditReady >= 80 ? ['ON TRACK TO COMPLIANT', '#3B6D11'] : auditReady >= 45 ? ['DEVELOPING', '#854F0B'] : ['ACTION REQUIRED', '#175CD3']
       const criteria = wm.map((c) => ({ sc: c.sc, label: c.name, count: c.count }))
       const { exportGovernanceReport } = await import('./pdfReport.js')
       await exportGovernanceReport({
@@ -105,12 +104,17 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         total: n, score: run.avg_score, certifiable: run.certifiable, needFix, auditReady,
         uncertain: run.uncertain, error: run.error,
         summary: `Estate accessibility score ${run.avg_score ?? '—'}/100, with ${auditReadyLabel} of documents audit-ready${analysed < n ? ` (${analysed.toLocaleString()} of ${n.toLocaleString()} documents analysed)` : ''}. ${needFix} documents are in the remediation backlog and ${n.toLocaleString()} are under continuous monitoring across ${(trend && trend.length) || 4} scans.`,
-        severity, deptScores, topViolations, byLevel, rec, topRisk, criteria,
+        severity, deptScores, topViolations,
+        // Native PDF colors must be concrete values; jsPDF cannot resolve CSS variables.
+        byLevel: byLevel.map(item => ({ ...item, color: item.lvl === 'A' ? '#175CD3' : item.color })),
+        rec, topRisk, criteria,
         legal: { publicCritical, total: n }, lift: { before, after }, verdict,
         ontology: { ver: ontVer, classified: ontDocs.length, crit: ontCrit, high: ontHigh },
       })
-    } catch (e) { console.error('PDF export failed', e) }
-    finally { setTimeout(() => setExporting(false), 600) }
+    } catch (e) {
+      console.error('PDF export failed', e)
+      setExportError('The quarterly governance report could not be generated. Please try again.')
+    } finally { setExporting(false) }
   }
 
   // Raw findings grid for analysts — every issue flattened to a row.
@@ -359,6 +363,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           </div>
         </details>
       </div>
+      {exportError && <p role="alert">{exportError}</p>}
       {!hasEstateProgress && scopePanel}
       <div ref={reportRef}>
       {/* Process health banners — rendered above the findings summary so a degraded run is
@@ -395,89 +400,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
              when neither inventory nor files exist yet. */}
       <BalancedSummary run={run} files={files} inventory={inv?.scanId === run.id ? inv : null}
         cap={cap} assessment={assessment} onOpenFile={file => file._estateOnly ? setEstOnlyFile(file) : setSelFile(file)} />
-      <details className="balanced-legacy"><summary>Workflow and assessment details</summary>
-      <EstateProgressPanel
-        inventory={run.scope?.inventory}
-        analysed={analysed}
-        needFix={needFix}
-        certifiable={run.certifiable}
-        published={publish}
-        errorCount={run.error}
-        files={files}
-        estateFiles={estateFiles}
-        onGo={onGo}
-        collapsible
-        afterProgress={hasEstateProgress ? scopePanel : null}
-      />
-
-      {/* ── ASSESSMENT — the section that grows in once documents have actually been assessed.
-             Below discovery, above the detailed findings charts. Before a run it is a prompt, not an
-             empty grid; after one it is the seven metrics (board 4), read from the SAME assessMetrics
-             the Assess tab reports so one run never shows two different totals across two tabs. ── */}
-      {stageAssessed && metrics ? (
-        <>
-          {/* Supporting assessment evidence stays collapsed. Its concise coverage summary remains
-              visible in the header; the four estate stages above own the open headline view. */}
-          <AccordionSection id="assessment-summary" className="panel overview-assessment"
-                            ariaLabel="Assessment summary" defaultOpen={false}
-                            title="Assessment" meta={coverageSentence(metrics)}>
-              <>
-                <div className="metrics">
-                  <div className="metric" title="Documents where at least one selected check completed.">
-                    <span>documents assessed</span><b>{metrics.documentsAssessed}</b></div>
-                  <div className="metric" title="Assessed documents carrying at least one unresolved finding.">
-                    <span>needing attention</span><b style={{ color: 'var(--warn-fg)' }}>{metrics.documentsNeedingAttention}</b></div>
-                  <div className="metric" title="Unresolved finding instances across all assessed documents. One criterion can produce many.">
-                    <span>total findings</span><b>{metrics.totalFindings}</b></div>
-                  <div className="metric" title="Findings with a deterministic remediation — same input, same fix, no person needed.">
-                    <span>auto-fix available</span><b style={{ color: '#2F7D32' }}>{metrics.autoFixAvailable}</b></div>
-                  <div className="metric" title="Findings needing a person's judgement, including every AI-drafted fix awaiting approval.">
-                    <span>human review required</span><b>{metrics.humanReviewRequired}</b></div>
-                  <div className="metric" title="Selected checks that could not run — no method for these formats. Not passes and not failures.">
-                    <span>unable to assess</span><b>{metrics.unableToAssess} <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>checks</span></b></div>
-                </div>
-                {/* The severity partition, added up on screen — the 7th metric, printed as an equation so
-                    a reader can check it against Total findings rather than take it on trust. */}
-                {metrics.totalFindings > 0 && (
-                  <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
-                    By severity: {SEVERITIES.map((s, i) => (
-                      <span key={s}>{i > 0 ? ' · ' : ''}<b>{metrics.bySeverity[s]}</b> {SEVERITY_LABEL[s]}</span>
-                    ))} — {sevAddends.join(' + ')} = {metrics.totalFindings}
-                  </div>
-                )}
-              </>
-          </AccordionSection>
-
-          {/* SO WHAT NOW (board 7). The only panel on this screen with a primary action. */}
-          <NextStep metrics={metrics}
-                    awaiting={lifecycleAwaiting}
-                    onRemediate={() => onGo && onGo('remediate')}
-                    onReviewLifecycle={() => onGo && onGo('discover')} />
-        </>
-      ) : (
-        <AccordionSection id="assessment-summary" className="panel overview-runassess"
-                          ariaLabel="Assessment not yet run" defaultOpen
-                          title="Assessment" meta="not yet run">
-          {(n > 0 ? (
-            <>
-              <p className="muted" style={{ margin: '4px 0 12px' }}>
-                {n.toLocaleString()} document{n === 1 ? '' : 's'} discovered
-                {eligible != null && eligible < n && ` · ${eligible.toLocaleString()} eligible for WCAG assessment`}.{' '}
-                Run an assessment to score them against WCAG 2.1 — findings, coverage and the
-                severity breakdown appear here once it finishes.
-              </p>
-              <button onClick={() => onGo && onGo('assess')}>Run assessment →</button>
-            </>
-          ) : (
-            <p className="muted" style={{ margin: '4px 0 0' }}>
-              No documents have been discovered yet. Configure a source and run a scan from
-              the Discover tab first.
-            </p>
-          ))}
-        </AccordionSection>
-      )}
-
-      </details>
+      {/* Previous workflow and assessment panels are retained in RetiredOverviewWorkflow.jsx, deliberately unmounted. */}
       </div>
 
       {/* An estate-only row (image/video/unsupported — never opened, see inventoryOnlyRows) has no

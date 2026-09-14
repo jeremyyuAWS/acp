@@ -25,7 +25,8 @@ import { dirname, join } from 'node:path'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
-import Overview from './Overview.jsx'
+import LiveOverview from './Overview.jsx'
+import Overview from './RetiredOverviewWorkflow.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -46,10 +47,10 @@ const FILES = [
 let container, root
 afterEach(unmountAll)
 
-const render = async (props = {}) => {
+const render = async (props = {}, Component = Overview) => {
   ;({ container, root } = createTestRoot())
   await act(async () => {
-    root.render(createElement(Overview, {
+    root.render(createElement(Component, {
       run: RUN, files: FILES, trend: [], trendDates: [], onGo: () => {},
       scanList: [], onPickScan: () => {}, me: { email: 'auditor@example.com' }, ...props,
     }))
@@ -188,7 +189,7 @@ describe('operating an accordion moves both the state and the content', () => {
 
 describe('report exports are consolidated', () => {
   it('uses one native Reports disclosure for every export', async () => {
-    await render()
+    await render({}, LiveOverview)
     const menu = container.querySelector('details.reports-menu')
     expect(menu, 'Reports disclosure missing').toBeTruthy()
     expect(menu.querySelector(':scope > summary')?.textContent).toContain('Reports')

@@ -44,6 +44,6 @@ describe('balanced Scan Analytics integration', () => {
     expect(source).toMatch(/<AdminInsights[^>]*run=\{run\}[^>]*files=\{files\}[^>]*cap=\{cap\}[^>]*assessment=\{assessment\}/)
     const overview = readFileSync(`${import.meta.dirname}/Overview.jsx`, 'utf8')
     expect(overview).toContain('<BalancedSummary run={run} files={files}')
-    expect(overview).toContain('Workflow and assessment details')
+    expect(overview).not.toContain('<summary>Workflow and assessment details</summary>')
   })
 })

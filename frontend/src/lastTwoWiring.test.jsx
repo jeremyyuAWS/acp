@@ -119,7 +119,8 @@ describe('no redesign component ships unreachable', () => {
     // 'DiscoveryCompleteness' and 'AssessmentReconciliation' were here until 2026-09-02.
     // The PRD simplification retired their mounts; they are tracked as deliberate orphans
     // by unmountedComponents.test.jsx instead.
-    'AssertionScope', 'NextStep', 'RunDetails',
+    'AssertionScope', 'RunDetails',
+    // NextStep was retired with Overview workflow details on 2026-09-14; covered by overviewWorkflowRetired.test.jsx.
     // 'RemediationApprovals' was here until 2026-09-01. The Remediate redesign removed its mount
     // so that finding-level approval happens in exactly one place (the inbox's review panel); it is
     // now tracked as a deliberate orphan by unmountedComponents.test.jsx instead.

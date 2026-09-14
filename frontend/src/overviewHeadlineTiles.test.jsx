@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import Overview from './Overview.jsx'
+// Legacy headline behavior is retained only for explicit future restoration.
+import Overview from './RetiredOverviewWorkflow.jsx'
 
 // The Overview's four headline tiles (approved board 7) — REMOVED on 2026-09-02 by the PRD "ACP
 // Discover and Overview Simplification". EstateProgressPanel's stage funnel carries those values;
@@ -18,7 +19,7 @@ import Overview from './Overview.jsx'
 // against the funnel that renders the headline today.
 
 const here = dirname(fileURLToPath(import.meta.url))
-const src = readFileSync(join(here, 'Overview.jsx'), 'utf8')
+const src = readFileSync(join(here, 'RetiredOverviewWorkflow.jsx'), 'utf8')
 
 const INVENTORY = { discovered: 12408, assessment_eligible: 9000, by_status: { assessable: 9000 } }
 

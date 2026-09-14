@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { createElement } from 'react'
-import Overview from './Overview.jsx'
+// Legacy behavior remains tested for deliberate future restoration.
+import Overview from './RetiredOverviewWorkflow.jsx'
 import { htmlExpanded } from './testAccordion.js'
 
 // The Overview grows organically across the funnel (owner direction, 2026-08-20). It renders once an
