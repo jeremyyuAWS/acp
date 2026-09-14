@@ -1,3 +1,4 @@
+import { deriveWaterfallImpact } from './RemediationWaterfallImpact.jsx'
 import InfoTip from './InfoTip.jsx'
 import { useEffect, useRef, useState } from 'react'
 import { REMEDIATION_CATEGORIES, remediationCategory } from './remediationCategories.js'
@@ -32,6 +33,7 @@ export function planCategoryCounts(data) {
 }
 export default function RemediationPlanImpact({ identity, data, ready, loading, policyKey, assessmentTotal }) {
   const counts = ready ? planCategoryCounts(data) : null
+  const eligibility = ready ? deriveWaterfallImpact(data) : null
   const assessed = Number.isSafeInteger(assessmentTotal) && assessmentTotal >= 0 ? assessmentTotal : null
   const outside = counts && assessed !== null ? Math.max(0, assessed - data.open.findings) : 0
   const totalText = outside > 0
@@ -54,9 +56,10 @@ export default function RemediationPlanImpact({ identity, data, ready, loading, 
     const timer = setTimeout(() => setFlash(null), 2600)
     return () => clearTimeout(timer)
   }, [flash])
-  const active = counts && flash?.identity === identity && flash?.policyKey === policyKey ? flash.deltas : null
+  const active = counts && flash && flash.identity === identity && flash?.policyKey === policyKey ? flash.deltas : null
   return <section className="plan-impact" aria-label="Plan classification preview" aria-busy={loading}>
     <h4>How this plan classifies your findings</h4>
+    <p><strong>Eligible for AI: {eligibility?.complete ? eligibility.groups.ai.count.toLocaleString() : 'Not yet known'}</strong>. This is a subset of the planned routes below, not an additional total or a prediction of successful fixes. Local and cloud models may have the same eligible findings.</p>
     <div className="plan-impact__grid">{REMEDIATION_CATEGORIES.map(([key, label]) => {
       const delta = active?.[key] || 0
       const hardDelta = ['manual', 'blocked', 'unsupported'].reduce((sum, id) => sum + (active?.[id] || 0), 0)
@@ -73,6 +76,6 @@ export default function RemediationPlanImpact({ identity, data, ready, loading, 
       </div>}
     </div>
     <p role="status" aria-live="polite" aria-atomic="true">{loading ? 'Updating…' : counts ? `${totalText} ${REMEDIATION_CATEGORIES.filter(([key]) => active?.[key]).map(([key, label]) => `${label}: ${active[key] > 0 ? '+' : ''}${active[key]}`).join('; ')}` : 'Preview unavailable — category counts could not be reconciled.'}</p>
-    <small>Plan classification only. Completion requires application and verification.</small>
+    <small>Plan classification only. Applied and Verified results require recorded application and successful checks of the saved copy. Remaining exceptions appear in Needs Your Input.</small>
   </section>
 }

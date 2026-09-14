@@ -102,3 +102,18 @@ it('keeps tile info controls centered and transparent inside the plan card', asy
     }
   } finally { style.remove() }
 })
+
+it.each(['local', 'cloud'])('shows reconciled %s AI eligibility as a subset, not successful fixes', async zone => {
+  const { root, container } = createTestRoot()
+  const preview = { policy: { ai: 1, ai_zone: zone }, open: { findings: 5 },
+    integrity: { complete: true, open_equals_lane_sum: true }, findings: [
+      { id: 'ai', origin: 'ai', lane: 'automatic', finding_count: 3 },
+      { id: 'manual', origin: 'human', lane: 'manual', finding_count: 2 },
+    ] }
+  await act(async () => root.render(<RemediationPlanImpact ready data={preview} />))
+  expect(container.textContent).toContain('Eligible for AI: 3')
+  expect(container.textContent).toContain('not an additional total')
+  expect(container.querySelector('.remediation-category-pill--verified strong').textContent).toBe('0')
+  await act(async () => root.render(<RemediationPlanImpact ready data={{ ...preview, integrity: {} }} />))
+  expect(container.textContent).toContain('Eligible for AI: Not yet known')
+})
