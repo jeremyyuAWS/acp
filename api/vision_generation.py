@@ -171,8 +171,14 @@ class _CaptionGenerator:
             raise
         result['image_processing'] = self.image_processing
         if self.clean and result.get('text') and not result.get('response_issue'):
-            from ai import _clean_alt, _is_usable_alt
-            if not _is_usable_alt(_clean_alt(result['text'])):
+            from ai import _clean_alt, _is_usable_alt, _description_quality_failure
+            caption = _clean_alt(result['text'])
+            quality_failure = _description_quality_failure(caption)
+            if quality_failure:
+                # Preserve existing refusal/authorized truncation handling in the
+                # durable attempt spine; never retain this as a replayable draft.
+                result['response_issue'] = ('refused' if quality_failure == 'provider_refusal' else 'truncated')
+            elif not _is_usable_alt(caption):
                 result['response_issue'] = 'invalid_required_structure'
         return result
 
