@@ -15,11 +15,11 @@ beforeEach(() => { vi.clearAllMocks(); window.history.replaceState({}, '', '/');
 afterEach(unmountAll)
 
 describe('balanced Scan Analytics integration', () => {
-  it('mounts all six selected panels and sends a calendar day to the real analytics filters', async () => {
+  it('mounts the four focused panels and sends a calendar day to the real analytics filters', async () => {
     const { root, container: c } = createTestRoot()
     await act(async () => root.render(createElement(AdminInsights, { run, files, cap: { docx: { '1.3.1': 'auto' } } })))
     await flush()
-    expect(c.querySelectorAll('.balanced-grid h2')).toHaveLength(6)
+    expect(c.querySelectorAll('.balanced-grid h2')).toHaveLength(4)
     expect(c.querySelector('.balanced-context').textContent).toContain('chosen')
     await act(async () => c.querySelector('[aria-label="2026-09-14: 22 attempts. Show matching scans"]').click())
     await flush()
@@ -36,11 +36,12 @@ describe('balanced Scan Analytics integration', () => {
     await act(async () => root.render(createElement(AdminInsights, { run: { id: 'new', files: 0 }, files: [] }))); await flush()
     await act(async () => resolveOld({ rows: [{ file: 'stale.png', format: 'image', status: 'metadata_only' }], total: 1 })); await flush()
     expect(c.querySelector('.balanced-context').textContent).toContain('new')
-    expect(c.querySelector('.balanced-formats').textContent).not.toContain('Images')
-    expect(c.querySelector('.balanced-formats').textContent).toContain('No format totals')
+    expect(c.querySelector('.balanced-coverage').textContent).not.toContain('Images')
+    expect(c.querySelector('.balanced-coverage').textContent).toContain('File-type inventory is not recorded')
   })
   it('keeps selected-scan data wired through the actual app entry point', () => {
     const source = readFileSync(`${import.meta.dirname}/App.jsx`, 'utf8')
+    expect(source).toContain("defaultCollapsed={['overview', 'analytics'].includes(view)}")
     expect(source).toMatch(/<AdminInsights[^>]*run=\{run\}[^>]*files=\{files\}[^>]*cap=\{cap\}[^>]*assessment=\{assessment\}/)
     const overview = readFileSync(`${import.meta.dirname}/Overview.jsx`, 'utf8')
     expect(overview).toContain('<BalancedSummary run={run} files={files}')

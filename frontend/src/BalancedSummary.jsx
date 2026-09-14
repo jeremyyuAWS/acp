@@ -49,7 +49,7 @@ export function ScanActivityCalendar({ activity = [], onDay, disabled = false, s
   </Card>
 }
 
-export default function BalancedSummary({ run, files = [], inventory = null, cap, assessment, calendar = null, onOpenFile, now }) {
+export default function BalancedSummary({ run, files = [], inventory = null, cap, assessment, calendar = null, onOpenFile, now, showSupplemental = false }) {
   const model = useMemo(() => balancedSummaryModel({ run, files, inventory, cap, assessment, now }), [run, files, inventory, cap, assessment, now])
   const [selected, setSelected] = useState(null)
   const evidenceRef = useRef(null), returnFocus = useRef(null)
@@ -85,17 +85,18 @@ export default function BalancedSummary({ run, files = [], inventory = null, cap
   const maxAge = Math.max(1, ...Object.values(model.age).map(rows => rows.length))
   let cumulative = 0
   const detailId = useId()
-  return <div className={`balanced-summary${calendar ? ' balanced-summary-analytics' : ''}`}>
+  return <div className={`balanced-summary${calendar ? ' balanced-summary-analytics' : ''}${showSupplemental ? '' : ' balanced-summary-focused'}`}>
     <p className="balanced-context">{run?.id ? <>Estate and finding charts: selected scan <strong>{run.id}</strong>.</> : 'Select an assessed scan to populate the estate and finding charts.'}
       {calendar && ' The activity calendar uses the reporting filters; these selected-scan charts do not aggregate repeated observations.'}</p>
     <div className="balanced-metrics">{metrics.map(([label, value, note]) => <div className="balanced-metric" key={label}><span>{label}</span><strong>{number(value)}</strong><small>{note}</small></div>)}</div>
     {run?.status === 'failed' && <p className="balanced-notice" role="status">The selected scan failed. Available results may be incomplete.</p>}
     {files.some(file => file.status === 'error') && <p className="balanced-notice">Some documents could not be assessed. They are shown separately from assessment results.</p>}
-    <div className="balanced-tags" role="group" aria-label="Remediation tags"><strong>Remediation tags</strong>{REMEDIATION_CATEGORIES.map(([key]) => <button type="button" key={key} disabled={!model.findingsKnown || !model.tags[key]}
+    {/* Supplemental charts are retained for restoration, but retired from both dashboard tabs. */}
+    {showSupplemental && <div className="balanced-tags" role="group" aria-label="Remediation tags"><strong>Remediation tags</strong>{REMEDIATION_CATEGORIES.map(([key]) => <button type="button" key={key} disabled={!model.findingsKnown || !model.tags[key]}
       aria-label={`View ${CATEGORY_SHORT_LABELS[key]} findings: ${model.findingsKnown ? number(model.tags[key]) : 'not assessed'}`} title={categoryExplanation(key)}
       onClick={() => open(`${CATEGORY_SHORT_LABELS[key]} findings`, findingRows(model.findings.filter(row => row.category === key)))}>
       <RemediationCategoryPill category={key} count={model.findingsKnown ? model.tags[key] : null} />
-    </button>)}</div>
+    </button>)}</div>}
     <div className="balanced-grid">
       {calendar}
       <Card title="Estate coverage by file type" kind="coverage" note="Document counts on a common scale · awaiting assessment is separate from verification pending">
@@ -112,7 +113,7 @@ export default function BalancedSummary({ run, files = [], inventory = null, cap
         {model.discovered != null && model.formatTotal !== model.discovered && <p className="balanced-note">Format totals cover {number(model.formatTotal)} of {number(model.discovered)} discovered documents.</p>}
         <DataTable caption="Coverage by file type" columns={['Format', 'Total', ...COVERAGE_STATES.map(([, label]) => label)]} rows={formats.map(row => [row.label, number(row.total), ...COVERAGE_STATES.map(([key]) => number(row[key]))])} />
       </Card>
-      <Card title="Document formats" kind="formats" note={`${number(model.formatTotal)} documents in recorded format totals · area = count`}>
+      {showSupplemental && <Card title="Document formats" kind="formats" note={`${number(model.formatTotal)} documents in recorded format totals · area = count`}>
         {formats.some(row => row.total > 0) ? <div className="balanced-treemap" role="group" aria-label="Document format treemap">{treemapRects(formats).map((row, i) => <button type="button" key={row.key} className={`balanced-tile balanced-tile-${i % 5}`}
           style={{ left: `${row.x}%`, top: `${row.y}%`, width: `${row.w}%`, height: `${row.h}%` }}
           aria-label={`${row.label}: ${number(row.total)} documents. View available records`} title={`${row.label}: ${number(row.total)} documents`}
@@ -120,7 +121,7 @@ export default function BalancedSummary({ run, files = [], inventory = null, cap
           <span>{row.label}</span><strong>{number(row.total)}</strong>
         </button>)}</div> : <p className="balanced-empty">No format totals are available.</p>}
         <DataTable caption="Document formats" columns={['Format', 'Documents']} rows={formats.map(row => [row.label, number(row.total)])} />
-      </Card>
+      </Card>}
       <Card title="Remediation opportunities" kind="remediation" note="Finding instances by recorded department · the same tags as Assess and Remediate">
         {!model.findingsKnown ? <p className="balanced-empty">Assessment has not produced findings data yet.</p> : !model.findings.length ? <p className="balanced-empty">No findings recorded in this assessment scope.</p> : <div className="balanced-scroll"><table className="balanced-heatmap">
           <caption>Department and remediation tag counts</caption><thead><tr><th scope="col">Department</th>{columns.map(([key]) => <th key={key} scope="col"><RemediationCategoryPill category={key} /></th>)}</tr></thead>
@@ -143,13 +144,13 @@ export default function BalancedSummary({ run, files = [], inventory = null, cap
         <DataTable caption="Finding categories" columns={['Category', 'Finding instances']} rows={groupRows.map(({ label, rows }) => [label, model.findingsKnown ? number(rows.length) : 'Not assessed'])} />
         <p className="balanced-note">Structure: 1.3.*; contrast: 1.4.3, 1.4.6, 1.4.11; text alternatives: 1.1.1. Other includes the remaining selected criteria.</p>
       </Card>
-      <Card title="Human review age" kind="review" note={model.findingsKnown ? `${number(model.reviewCount)} findings in Approve, AI, or Manual routes` : 'Review findings are not available yet'}>
+      {showSupplemental && <Card title="Human review age" kind="review" note={model.findingsKnown ? `${number(model.reviewCount)} findings in Approve, AI, or Manual routes` : 'Review findings are not available yet'}>
         {model.findingsKnown && <div className="balanced-rank-list">{ages.map(([key, label]) => <button type="button" className="balanced-rank" key={key} disabled={!model.age[key].length} onClick={() => open(`${label} · review findings`, findingRows(model.age[key]))}>
           <span>{label}</span><span className={`balanced-rank-track balanced-age-${key}`}><i style={{ width: `${model.age[key].length / maxAge * 100}%` }} /></span><strong>{number(model.age[key].length)}</strong>
         </button>)}</div>}
         <DataTable caption="Human review age" columns={['Age from first seen', 'Finding instances']} rows={ages.map(([key, label]) => [label, model.findingsKnown ? number(model.age[key].length) : 'Not assessed'])} />
         <p className="balanced-note">Age requires a finding’s recorded first-seen date. Missing or invalid dates stay Not recorded. An AI route may be applied automatically depending on the remediation plan.</p>
-      </Card>
+      </Card>}
     </div>
     {detail && <section className="balanced-card balanced-evidence" aria-labelledby={detailId} ref={evidenceRef} tabIndex={-1}>
       <button type="button" className="balanced-close" onClick={close}>Close chart records</button><h2 id={detailId}>{detail.title}</h2>

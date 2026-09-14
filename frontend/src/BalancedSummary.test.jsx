@@ -8,6 +8,7 @@ import BalancedSummary, { ScanActivityCalendar } from './BalancedSummary.jsx'
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 const props = {
+  showSupplemental: true, // Retained chart variants remain testable for explicit restoration.
   run: { id: 'chosen', files: 2, scope: { scan_scope: { '1.3.1': true, '1.1.1': true }, inventory: { discovered: 2, assessment_eligible: 2, by_format: { docx: 2 } } } },
   files: [{ file: 'finance.docx', type: 'DOCX', score: 45, status: 'analysed', department: 'Finance', issues: [{ wcag: '1.3.1', severity: 'SERIOUS' }, { wcag: '1.1.1', severity: 'MODERATE', has_proposal: true }] }],
   cap: { docx: { '1.3.1': 'auto', '1.1.1': 'assisted' } },
@@ -61,4 +62,14 @@ describe('balanced summary approved dashboard', () => {
     expect(tile.querySelector('strong').textContent).toBe('—')
     expect(c.querySelector('.balanced-remediation').textContent).toContain('not produced findings')
   })
+})
+
+// Owner retired these supplemental visuals from both tabs on 2026-09-14.
+it.each([false, true])('omits retired charts and legend from the live dashboard (analytics=%s)', async analytics => {
+ const {container:c}=await render({...props,showSupplemental:false,calendar:analytics ? createElement(ScanActivityCalendar,{activity:[]}) : null})
+ expect(c.querySelector('.balanced-tags')).toBeNull()
+ expect(c.querySelector('.balanced-formats')).toBeNull()
+ expect(c.querySelector('.balanced-review')).toBeNull()
+ expect(c.querySelectorAll('.balanced-grid>section')).toHaveLength(analytics ? 4 : 3)
+ expect(c.querySelector('.balanced-heatmap')).toBeTruthy()
 })
