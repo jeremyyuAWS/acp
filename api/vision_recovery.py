@@ -57,7 +57,7 @@ def _decision(store, sid, file, state, **detail):
 
 def _pending(store, sid, file):
     with store._db.cursor() as cur:
-        store._db.execute(cur, 'SELECT id,status,proposals FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s',
+        store._db.execute(cur, 'SELECT id,status,proposals,finding_count FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s',
                           (sid, file, '1.1.1'))
         row = store._db.fetchone(cur)
     return row if row and row['status'] == 'pending' else None
@@ -136,7 +136,11 @@ def schedule(store, context, job, misses, *, inspect_pending=False):
         if not row:
             return
         proposals = json.loads(row.get('proposals') or '[]')
-        if proposals and all(p.get('proposed_value') and not p.get('automatic_write_blocked') for p in proposals):
+        count = row.get('finding_count')
+        locators = {p.get('locator') for p in proposals if p.get('locator')}
+        if (type(count) is int and count > 0 and len(locators) >= count
+                and all(p.get('proposed_value') and not p.get('automatic_write_blocked')
+                        and not p.get('is_template') for p in proposals)):
             return
     if not file.lower().endswith(('.docx', '.pptx', '.xlsx', '.pdf')):
         _decision(store, sid, file, 'blocked', run_id=context.run_id, reason='Proposal-only vision recovery is not available for this format.')

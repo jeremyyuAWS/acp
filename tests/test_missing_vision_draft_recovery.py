@@ -25,7 +25,7 @@ def test_complete_drafts_are_not_sent_again(isolated_store):
     job, payload = seed(isolated_store)
     clear_retries(isolated_store)
     with isolated_store._db.cursor() as cur:
-        isolated_store._db.execute(cur, 'UPDATE hitl_queue SET proposals=%s WHERE id=%s',
+        isolated_store._db.execute(cur, 'UPDATE hitl_queue SET proposals=%s,finding_count=1 WHERE id=%s',
             (json.dumps([{'locator':'word/document.xml#r1', 'proposed_value':'Usable authored caption'}]), payload['item_id']))
     with run_context(isolated_store, job['payload'], job) as context:
         recovery.schedule(isolated_store, context, job, [], inspect_pending=True)
@@ -134,3 +134,15 @@ def test_current_saved_run_can_resume_missing_drafts_without_rescan(isolated_sto
     assert len(isolated_store.list_scan_jobs_of_type(SID, 'remediate_file')) == 1
     with pytest.raises(ValueError):
         recovery.schedule_existing_pending(isolated_store, 'other@example.test', SID, previous['run_id'])
+
+
+def test_partial_nonempty_drafts_do_not_hide_missing_finding_coverage(isolated_store):
+    job, payload = seed(isolated_store)
+    clear_retries(isolated_store)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, 'UPDATE hitl_queue SET proposals=%s WHERE id=%s',
+            (json.dumps([{'locator':'word/document.xml#r1', 'proposed_value':'Usable caption'}]),payload['item_id']))
+    with run_context(isolated_store,job['payload'],job) as context:
+        recovery.schedule(isolated_store,context,job,[],inspect_pending=True)
+    assert len(isolated_store.list_scan_jobs_of_type(SID,'vision_proposal_retry')) == 1
+    assert isolated_store.get_hitl_item(payload['item_id'])['finding_count'] == 8
