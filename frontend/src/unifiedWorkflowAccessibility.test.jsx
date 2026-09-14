@@ -150,7 +150,7 @@ describe('accessible counts, motion, and responsive layout', () => {
       snapshot: terminalRemediation, receivedAt: Date.parse(terminalRemediation.generated_at),
       events: [],
     }))
-    expect(run).toContain('aria-label="3 documents: 2 completed, 1 blocked"')
+    expect(run).toContain('aria-label="3 documents: 2 completed, 1 review"')
     expect(run).toContain('Findings: 9 / 9 accounted')
     expect(run).toContain('1 awaiting human review')
   })

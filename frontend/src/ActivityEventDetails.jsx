@@ -27,7 +27,7 @@ export default function ActivityEventDetails({ event = {}, loadEvidence, downloa
   }
   async function download(action) {
     setDownloadError(null)
-    try { await action(event.id) } catch { if (current.current === identity) setDownloadError('The exact saved-version download could not be completed. Try again.') }
+    try { await action(event.id) } catch (error) { if (current.current === identity) setDownloadError(error?.status === 409 ? 'This saved version is no longer available. No newer copy was substituted.' : 'The exact saved-version download could not be completed. Try again.') }
   }
   return <div className="activity-event-details">
     <p className="activity-event-details__summary"><strong>{summary.criteria.length ? summary.criteria.map(sc => `SC ${sc}`).join(' · ') : 'Criterion Not Recorded'}</strong><span>{summary.location || 'Location Unavailable'}</span></p>

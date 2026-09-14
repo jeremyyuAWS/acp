@@ -44,3 +44,14 @@ it('offers compact optional filters without changing recorded history totals',as
  await act(()=>[...host.querySelectorAll('button')].find(b=>b.textContent==='Clear filters').click())
  expect(host.querySelector('ol').children).toHaveLength(3)
 })
+it('uses an image frame for recovered descriptions without a verified checkmark',async()=>{
+ await render([{...rows(1)[0],kind:'remediate.vision_retry_recovered',tone:'neutral'}])
+ expect(host.querySelector('[data-activity-icon="image-description"]')).not.toBeNull()
+ expect(host.querySelector('.remops-activity-event>span').textContent).not.toContain('✓')
+})
+it('mounts criterion and exact-version evidence details for a durable event binding',async()=>{
+ const sha='a'.repeat(64)
+ const event=addRemediationEvent([],{kind:'remediate.verified',document:'report.docx',detail:{fixes:1,evidence_id:'123456abcdef',artifact_sha256:sha,criteria:['1.3.1']}},8)[0]
+ await render([event]);expect(host.textContent).toContain('SC 1.3.1');expect(host.textContent).toContain('Location Unavailable')
+ expect(host.querySelector('.activity-event-details details summary').textContent).toBe('View Changes and Evidence')
+})

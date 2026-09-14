@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getRemediationSnapshot, openRemediationStream, getRecentRemediationActivity } from './api.js'
 import { isNewer } from './remediationSnapshot.js'
-import { addRemediationEvent } from './remediationEventFeed.js'
+import { addRemediationEvent, mergeRemediationEvents } from './remediationEventFeed.js'
 
 // The run's live state, and THE ONE PLACE THAT HOLDS ITS STREAM.
 //
@@ -128,7 +128,7 @@ export function useRemediationRun(runId) {
             if (result?.reason === 'scan_not_found') error.status = 404
             throw error
           }
-          setEvents(previous => result.events.reduce((rows, event) => addRemediationEvent(rows, event, event.seq, Infinity), previous))
+          setEvents(previous => mergeRemediationEvents(previous, result.events))
           const next = result.latest_seq ?? result.events.at(-1)?.seq
           more = result.events.length === 2000 && Number(next) > historyCursor
           if (Number(next) > historyCursor) historyCursor = Number(next)

@@ -30,7 +30,7 @@ export function activityEvidenceModel(payload = {}, event = {}) {
   return { available: exact, artifact, verificationLabel, changesTruncated: payload.changes_truncated === true,
     changeCount: Number.isSafeInteger(payload.change_count) && payload.change_count >= 0 ? payload.change_count : null,
     savedCopyAvailable: exact && payload.saved_copy?.matches_event === true && !!text(payload.saved_copy.download_url),
-    changes: exact && Array.isArray(payload.changes) ? payload.changes.map(change => ({
+    changes: exact && Array.isArray(payload.changes) ? payload.changes.filter(change => change && typeof change === 'object').map(change => ({
       criterion: criterion(change.criterion), location: text(change.location),
       before: text(change.before), after: text(change.after),
       textTruncated: change.text_truncated === true,

@@ -1,3 +1,4 @@
+import ActivityEventDetails from './ActivityEventDetails.jsx'
 import { isRemediationActivity, remediationStep } from './processingActivity.js'
 import useRemediationFreshness from './useRemediationFreshness.js'
 import { useEffect, useLayoutEffect, useRef, useState, useId } from 'react'
@@ -12,7 +13,7 @@ import ActivityPulse from './ActivityPulse.jsx'
 import { activityGroups } from './remediationEventFeed.js'
 import RemainingWorkStatus from './RemainingWorkStatus.jsx'
 import RemediationExceptions, { useRemediationExceptions, exceptionCount } from './RemediationExceptions.jsx'
-import { getFindingDispositions } from './api.js'
+import { getFindingDispositions, getRemediationActivityEvidence, downloadRemediationActivitySavedCopy, downloadRemediationActivityEvidence } from './api.js'
 import './remediation-ops-panel.css'
 import './remediation-live-detail.css'
 import './remediation-reconciliation.css'
@@ -236,7 +237,7 @@ function ActivityLine({ line = '' }) {
   return match ? <>{match[1]} <span className="remops-delivery-tag">{match[2]}</span></> : line
 }
 
-export function Activity({ events = [], status = 'ready', terminal = false, compact = false }) {
+export function Activity({ scanId = null, events = [], status = 'ready', terminal = false, compact = false }) {
   const listRef = useRef(null)
   const anchorRef = useRef(null)
   const listId = useId()
@@ -246,7 +247,7 @@ export function Activity({ events = [], status = 'ready', terminal = false, comp
   const [search, setSearch] = useState('')
   const [outcome, setOutcome] = useState('all')
   const [zone, setZone] = useState('all')
-  const filtered = events.filter(event => (!search.trim() || `${event.documentName || ''} ${event.line || ''}`.toLowerCase().includes(search.trim().toLowerCase()))
+  const filtered = events.filter(event => (!search.trim() || `${event.documentName || ''} ${event.line || ''} ${event.activityDetails?.criterion || ''} ${event.activityDetails?.location || ''}`.toLowerCase().includes(search.trim().toLowerCase()))
     && (outcome === 'all' || (outcome === 'attention' && ['attention', 'error'].includes(event.tone))
       || (outcome === 'verified' && event.kind === 'remediate.verified')
       || (outcome === 'saved' && ['remediate.fix_applied', 'remediate.delivered', 'remediate.delivery_failed'].includes(event.kind))
@@ -262,20 +263,22 @@ export function Activity({ events = [], status = 'ready', terminal = false, comp
     anchorRef.current = list.scrollTop > 0 && first ? {key: first.dataset.activityKey, offset: first.getBoundingClientRect().top - top} : null
     setScroll({top: list.scrollTop, max: Math.max(0, list.scrollHeight - list.clientHeight)})
   }
-  useLayoutEffect(() => {
+  const restoreScroll = () => {
     const list = listRef.current
     if (!list) return
     const anchor = anchorRef.current
     const row = anchor && [...list.children].find(item => item.dataset.activityKey === anchor.key)
     if (row) list.scrollTop += row.getBoundingClientRect().top - list.getBoundingClientRect().top - anchor.offset
     rememberScroll()
-  }, [events, grouped, search, outcome, zone])
+  }
+  useLayoutEffect(restoreScroll, [events, grouped, search, outcome, zone])
   useEffect(() => {
     if (typeof ResizeObserver === 'undefined' || !listRef.current) return undefined
-    const observer = new ResizeObserver(rememberScroll)
+    const observer = new ResizeObserver(restoreScroll)
     observer.observe(listRef.current)
+    for (const row of listRef.current.children) observer.observe(row)
     return () => observer.disconnect()
-  }, [events.length > 0])
+  }, [events, grouped, search, outcome, zone])
   const seen = useRef(events.length || status !== 'loading' ? new Set(events.map(event => event.key)) : null)
   const [fresh, setFresh] = useState(new Set())
   const timer = useRef(null)
@@ -292,7 +295,7 @@ export function Activity({ events = [], status = 'ready', terminal = false, comp
     timer.current = setTimeout(() => setFresh(new Set()), 1500)
   }, [events, status])
   useEffect(() => () => clearTimeout(timer.current), [])
-  return <section className="remops-activity">{!compact && <h3>Live activity</h3>}{events.length ? <><div className="remops-history-tools"><span>{filtering ? `${filtered.length.toLocaleString()} of ` : ''}{events.length.toLocaleString()} recorded updates · Newest first</span><button type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(value => !value)}>Filter activity{filtering ? ' •' : ''}</button><button type="button" aria-pressed={grouped} onClick={() => {anchorRef.current = null; setGrouped(value => !value)}}>{grouped ? "Show all activity" : "Group by document"}</button><button type="button" onClick={() => {if (listRef.current) listRef.current.scrollTop = 0; rememberScroll()}}>Latest activity ↑</button></div>{(filtersOpen || filtering) && <div className="remops-history-filters"><label><span className="sr-only">Search activity</span><input type="search" placeholder="Find document or activity…" value={search} onChange={event => {anchorRef.current = null; setSearch(event.target.value)}} /></label><label><span className="sr-only">Activity outcome</span><select value={outcome} onChange={event => {anchorRef.current = null; setOutcome(event.target.value)}}><option value="all">All outcomes</option><option value="attention">Needs attention</option><option value="verified">Verified fixes</option><option value="saved">Saved copies</option><option value="ai">AI requests</option></select></label><label><span className="sr-only">AI processing location</span><select value={zone} onChange={event => {anchorRef.current = null; setZone(event.target.value)}}><option value="all">All AI locations</option><option value="local">Local AI</option><option value="cloud">Cloud AI</option><option value="tenant">Tenant AI</option></select></label>{filtering && <button type="button" onClick={() => {anchorRef.current = null; setSearch(''); setOutcome('all'); setZone('all')}}>Clear filters</button>}</div>}{filtering && !filtered.length && <p role="status">No recorded activity matches these filters.</p>}<div className="remops-history-scroll"><ol id={listId} ref={listRef} onScroll={rememberScroll} onToggle={rememberScroll} aria-label="Recent remediation activity" tabIndex={0}>{groups.map((group) => { const event = group.lead; const retry = ['scan.retrying', 'scan.interrupted', 'remediate.delivery_retry_requested', 'remediate.vision_retry_pending'].includes(event.kind); return <li key={group.key} data-activity-key={group.key} className={`remops-activity-${event.tone}${retry ? ' remops-activity-retry' : ''}${fresh.has(event.key) ? ' remops-activity-fresh' : ''}`}><div className="remops-activity-event"><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{event.kind === 'remediate.accepted' ? <svg data-activity-icon="accepted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3h10M7 7h10M4 11h5l2 3h2l2-3h5v9H4z" /></svg> : event.kind === 'remediate.fix_applied' || (event.kind === 'remediate.delivery_failed' && event.tone === 'neutral') ? <svg data-activity-icon="saved-copy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 15l3 3 5-5" /></svg> : retry ? '↻' : event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span><ActivityLine line={event.line} /></span></div>{group.rows.length > 1 && <details><summary>{group.rows.length - 1} other updates for this document</summary><ul>{group.rows.filter(row => row !== event).map(row => <li key={row.key}><ActivityLine line={row.line} /></li>)}</ul></details>}</li> })}</ol><input className="remops-history-scrollbar" type="range" min="0" max={Math.max(1, scroll.max)} value={scroll.top} aria-label="Scroll activity history" aria-controls={listId} aria-valuetext={`${Math.round(scroll.top)} of ${Math.round(scroll.max)} pixels`} onChange={event => {if (listRef.current) listRef.current.scrollTop = Number(event.target.value); rememberScroll()}} /></div></> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
+  return <section className="remops-activity">{!compact && <h3>Live activity</h3>}{events.length ? <><div className="remops-history-tools"><span>{filtering ? `${filtered.length.toLocaleString()} of ` : ''}{events.length.toLocaleString()} recorded updates · Newest first</span><button type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(value => !value)}>Filter activity{filtering ? ' •' : ''}</button><button type="button" aria-pressed={grouped} onClick={() => {anchorRef.current = null; setGrouped(value => !value)}}>{grouped ? "Show all activity" : "Group by document"}</button><button type="button" onClick={() => {if (listRef.current) listRef.current.scrollTop = 0; rememberScroll()}}>Latest activity ↑</button></div>{(filtersOpen || filtering) && <div className="remops-history-filters"><label><span className="sr-only">Search activity</span><input type="search" placeholder="Find document, criterion, or activity…" value={search} onChange={event => {anchorRef.current = null; setSearch(event.target.value)}} /></label><label><span className="sr-only">Activity outcome</span><select value={outcome} onChange={event => {anchorRef.current = null; setOutcome(event.target.value)}}><option value="all">All outcomes</option><option value="attention">Needs attention</option><option value="verified">Verified fixes</option><option value="saved">Saved copies</option><option value="ai">AI requests</option></select></label><label><span className="sr-only">AI processing location</span><select value={zone} onChange={event => {anchorRef.current = null; setZone(event.target.value)}}><option value="all">All AI locations</option><option value="local">Local AI</option><option value="cloud">Cloud AI</option><option value="tenant">Tenant AI</option></select></label>{filtering && <button type="button" onClick={() => {anchorRef.current = null; setSearch(''); setOutcome('all'); setZone('all')}}>Clear filters</button>}</div>}{filtering && !filtered.length && <p role="status">No recorded activity matches these filters.</p>}<div className="remops-history-scroll"><ol id={listId} ref={listRef} onScroll={rememberScroll} onToggle={rememberScroll} aria-label="Recent remediation activity" tabIndex={0}>{groups.map((group) => { const event = group.lead; const retry = ['scan.retrying', 'scan.interrupted', 'remediate.delivery_retry_requested', 'remediate.vision_retry_pending'].includes(event.kind); return <li key={group.key} data-activity-key={group.key} className={`remops-activity-${event.tone}${retry ? ' remops-activity-retry' : ''}${fresh.has(event.key) ? ' remops-activity-fresh' : ''}`}><div className="remops-activity-event"><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{event.kind === 'remediate.accepted' ? <svg data-activity-icon="accepted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3h10M7 7h10M4 11h5l2 3h2l2-3h5v9H4z" /></svg> : event.kind === 'remediate.fix_applied' || (event.kind === 'remediate.delivery_failed' && event.tone === 'neutral') ? <svg data-activity-icon="saved-copy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 15l3 3 5-5" /></svg> : event.kind === 'remediate.vision_retry_recovered' ? <svg data-activity-icon="image-description" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 15l5-5 5 5 3-3 5 5M7 8h1" /></svg> : event.kind?.startsWith('remediate.ai_request_') ? <svg data-activity-icon="ai-request" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4" /></svg> : retry ? '↻' : event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : <svg data-activity-icon="activity-record" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 12h8M8 16h6" /></svg>}</span><span><ActivityLine line={event.line} /></span></div><ActivityEventDetails event={event} loadEvidence={scanId ? seq => getRemediationActivityEvidence(scanId, seq) : undefined} downloadSavedCopy={scanId ? seq => downloadRemediationActivitySavedCopy(scanId, seq) : undefined} downloadEvidence={scanId ? seq => downloadRemediationActivityEvidence(scanId, seq) : undefined} />{group.rows.length > 1 && <details><summary>{group.rows.length - 1} other updates for this document</summary><ul>{group.rows.filter(row => row !== event).map(row => <li key={row.key}><ActivityLine line={row.line} /></li>)}</ul></details>}</li> })}</ol><input className="remops-history-scrollbar" type="range" min="0" max={Math.max(1, scroll.max)} value={scroll.top} aria-label="Scroll activity history" aria-controls={listId} aria-valuetext={`${Math.round(scroll.top)} of ${Math.round(scroll.max)} pixels`} onChange={event => {if (listRef.current) listRef.current.scrollTop = Number(event.target.value); rememberScroll()}} /></div></> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
 }
 
 // The stub this replaces summed four numbers into "Needs attention · N" and offered nothing to do
@@ -345,7 +348,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
     <RemainingWorkStatus snapshot={snapshot} events={events} />
     <RemediationWaterfallCard key={`${snapshot.scan_id || snapshot.run_id}:${snapshot.batch_id || "legacy"}`} snapshot={snapshot} paused={hidden} assessmentContext={assessmentContext} streamlined />
     {!hideActivity && <><div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /></div>
-    <Activity key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot.terminal} /></>}
+    <Activity scanId={snapshot?.scan_id || snapshot?.run_id} key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot.terminal} /></>}
     <p aria-live="polite" className="sr-only" data-testid="rem-ops-announce">{line}</p>
   </section>
   return <section className={`panel remops${paused || hidden ? ' remops-motion-paused' : ''}`} aria-label="Remediation run status">
@@ -367,7 +370,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
         run that is going well, and a heading that only appears once something is wrong is one
         nobody has learned where to look for. The Disclosure's summary is this region's name, so
         the region itself renders no second heading under it. */}
-    <div className={`remops-bottom${events.length ? '' : ' remops-bottom-empty'}`}><Disclosure title="Live activity" compact={compact}><Activity key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot.terminal} compact={compact} /></Disclosure><Disclosure title={`Needs attention${exceptionTotal ? ` · ${exceptionTotal}` : ''}`} compact={compact}><RemediationExceptions view={exceptionState.view} error={exceptionState.error} onReload={exceptionState.reload} runId={snapshot.run_id} onAnnounce={setAnnouncement} heading={null} /></Disclosure></div>
+    <div className={`remops-bottom${events.length ? '' : ' remops-bottom-empty'}`}><Disclosure title="Live activity" compact={compact}><Activity scanId={snapshot?.scan_id || snapshot?.run_id} key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot.terminal} compact={compact} /></Disclosure><Disclosure title={`Needs attention${exceptionTotal ? ` · ${exceptionTotal}` : ''}`} compact={compact}><RemediationExceptions view={exceptionState.view} error={exceptionState.error} onReload={exceptionState.reload} runId={snapshot.run_id} onAnnounce={setAnnouncement} heading={null} /></Disclosure></div>
     <p aria-live="polite" className="sr-only" data-testid="rem-ops-announce">{announcement || line}</p>
   </section>
 }
@@ -379,7 +382,7 @@ export function RemediationActivityPanel({ activity = null, snapshot, rows = [],
     <div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /></div>
     <RemediationProcessingNow activity={activity} terminal={snapshot?.terminal} />
     <RemainingWorkStatus snapshot={snapshot} events={events} rows={rows} decisions={decisions} automatic={automatic} />
-    <Activity key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot?.terminal} />
+    <Activity scanId={snapshot?.scan_id || snapshot?.run_id} key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot?.terminal} />
   </section>
 }
 

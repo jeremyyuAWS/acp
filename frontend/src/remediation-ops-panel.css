@@ -63,3 +63,5 @@
 @media(prefers-reduced-motion:reduce){.remops-history-scroll>ol>li.remops-activity-fresh{animation:none}}
 
 .remops-history-filters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center}.remops-history-filters label{min-width:0}.remops-history-filters input,.remops-history-filters select,.remops-history-filters button{font-size:12px;padding:5px 8px;min-height:30px}.remops-history-filters input{width:min(280px,100%)}
+
+.remops-history-scroll>ol{scrollbar-width:none}.remops-history-scroll>ol::-webkit-scrollbar{display:none}
