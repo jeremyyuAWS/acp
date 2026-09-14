@@ -44,3 +44,15 @@ def test_rules_and_cloud_do_not_probe_local_endpoint(monkeypatch):
     assert plan_ai_readiness({'ai': 0})['state'] == 'not_required'
     assert plan_ai_readiness({'ai': 1, 'ai_zone': 'any'})['state'] == 'governed_cloud'
     assert plan_ai_readiness({'ai': 1}, False)['state'] == 'ai_disabled'
+
+
+def test_local_access_denied_is_not_endpoint_failure_or_cloud_budget(monkeypatch):
+    import ai
+    import httpx
+    monkeypatch.setattr(ai, '_maybe_refresh_endpoint', lambda: None)
+    monkeypatch.setattr(ai, 'OLLAMA_BASE_URL', 'http://10.0.1.2:11434')
+    for status in (401, 403, 503):
+        response = httpx.Response(status, request=httpx.Request('GET', 'http://10.0.1.2:11434/api/tags'))
+        monkeypatch.setattr(httpx, 'get', Mock(return_value=response))
+        readiness = plan_ai_readiness({'ai': 1, 'ai_zone': 'local', 'ai_budget_usd': '0.00'})
+        assert readiness == {'state': 'local_endpoint_access_denied' if status in (401, 403) else 'local_endpoint_unreachable', 'blocked': True}

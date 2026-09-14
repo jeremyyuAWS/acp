@@ -264,9 +264,11 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
   const readinessText = {
     local_endpoint_required: 'Local AI is unavailable: the configured endpoint is outside the local zone. Ask an administrator to configure a private endpoint, or choose Rules only. Cloud AI requires a separately approved plan; increasing the spending limit will not fix this local-only plan.',
     local_endpoint_unreachable: 'The private local AI endpoint is not responding. Retry the readiness check, ask an administrator to check the endpoint, or choose Rules only.',
+    local_endpoint_access_denied: 'The private AI endpoint rejected access. Ask an administrator to check its access credentials, then retry readiness, or choose Rules only. Changing the cloud spending limit will not fix local endpoint access.',
     ai_disabled: 'AI is disabled by the administrator. Choose Rules only or ask the administrator to enable AI.',
     local_models_missing: 'The private endpoint is reachable, but a configured AI model is unavailable. Local drafting needs the configured text and vision models. Ask an administrator to install the missing model, retry readiness, or choose Rules only.',
     local_endpoint_reachable: 'Local AI endpoint is reachable. No cloud AI charges. Suggestions and applied fixes are checked during processing.',
+    governed_cloud: 'Cloud AI availability is checked when a request is admitted. This preview has not verified provider access, current pricing, or remaining spending. Permission and spending checks still apply before each request.',
   }[data?.ai_readiness?.state]
   const startButton = <button type="button" className="remediation-impact__run" disabled={aiBlocked || !questionsComplete || readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
     onClick={() => { if (questionsComplete && ready) onRun(selected, data) }}>{runBusy ? 'Remediation is running…' : automaticRelease ? 'Start automatic remediation & publishing' : 'Approve plan and start'}</button>
@@ -285,7 +287,8 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       {!requireAnswers && startButton}
     </div>
     {ready && readinessText && <div role={aiBlocked ? 'alert' : 'status'} className="remediation-impact__note">
-      <strong>{aiBlocked ? 'AI readiness needs attention' : 'AI readiness checked'}</strong><p>{readinessText}</p>
+      <strong>{aiBlocked ? 'AI readiness needs attention' : data.ai_readiness.state === 'governed_cloud' ? 'Cloud AI checks pending' : 'Local AI readiness checked'}</strong><p>{readinessText}</p>
+      {data.policy?.ai_zone === 'local' && <p>Endpoint: {data.ai_readiness.state === 'local_endpoint_required' ? 'outside the local zone' : data.ai_readiness.state === 'local_endpoint_access_denied' ? 'access denied' : data.ai_readiness.state === 'local_endpoint_unreachable' ? 'unavailable' : ['local_endpoint_reachable', 'local_models_missing'].includes(data.ai_readiness.state) ? 'reachable' : 'not checked'} · Cloud spending: not used.</p>}
       {['local_endpoint_reachable', 'local_models_missing'].includes(data?.ai_readiness?.state) && <p>Text model: {data.ai_readiness.text_model_available ? 'available' : 'unavailable'} · Vision model: {data.ai_readiness.vision_model_available ? 'available' : 'unavailable'}. Unavailable models cannot generate their suggestions.</p>}
       {aiBlocked && <button type="button" disabled={loading || runBusy || readOnly} onClick={() => setReload(current => current + 1)}>Retry readiness check</button>}
     </div>}

@@ -39,6 +39,22 @@ describe('RemediationImpactCard', () => {
     await act(async () => button(container, 'Approve plan and start').click())
     expect(onRun.mock.calls[0][0]).toEqual(policy)
   })
+  it('distinguishes local endpoint access denial from cloud spending', async () => {
+    const policy = { rule_based: 2, ai: 1, ai_zone: 'local', ai_budget_usd: '0.00' }
+    getRemediationImpact.mockResolvedValue({ ...result(policy), ai_readiness: { state: 'local_endpoint_access_denied', blocked: true } })
+    const { container } = await mount({ onRun: vi.fn() })
+    expect(container.textContent).toContain('Endpoint: access denied · Cloud spending: not used.')
+    expect(container.textContent).toContain('check its access credentials')
+    expect(button(container, 'Approve plan and start').disabled).toBe(true)
+  })
+  it('does not claim that cloud access, pricing, or spending has been checked by a preview', async () => {
+    getRemediationImpact.mockResolvedValue({ ...result({rule_based: 2, ai: 1, ai_zone: 'any'}), ai_readiness: { state: 'governed_cloud', blocked: false } })
+    const { container } = await mount({ onRun: vi.fn() })
+    expect(container.textContent).toContain('Cloud AI checks pending')
+    expect(container.textContent).toContain('has not verified provider access, current pricing, or remaining spending')
+    expect(container.textContent).not.toContain('AI readiness checked')
+    expect(button(container, 'Retry readiness check')).toBeUndefined()
+  })
   it('passes every findings lane to the assessment and opens blocked details', async () => {
     const data = result()
     data.open.findings = 11
