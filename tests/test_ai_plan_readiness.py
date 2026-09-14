@@ -81,3 +81,22 @@ def test_local_readiness_retry_is_bounded(monkeypatch):
     monkeypatch.setattr(httpx, 'get', probe)
     assert plan_ai_readiness({'ai': 1, 'ai_zone': 'local'})['blocked'] is True
     assert probe.call_count == 2
+
+
+def test_local_readiness_retries_startup_gateway_failure_but_not_access_denial(monkeypatch):
+    import ai
+    import httpx
+    monkeypatch.setattr(ai, '_maybe_refresh_endpoint', lambda: None)
+    monkeypatch.setattr(ai, 'OLLAMA_BASE_URL', 'https://ollama.internal.example.com')
+    request = httpx.Request('GET', ai.OLLAMA_BASE_URL + '/api/tags')
+    healthy = httpx.Response(200, request=request, json={'models': [{'name': ai.OLLAMA_MODEL}, {'name': ai.OLLAMA_VISION_MODEL}]})
+    for status in (502, 503, 504):
+        probe = Mock(side_effect=[httpx.Response(status, request=request), healthy])
+        monkeypatch.setattr(httpx, 'get', probe)
+        assert plan_ai_readiness({'ai': 1, 'ai_zone': 'local'})['blocked'] is False
+        assert probe.call_count == 2
+    for status in (401, 403):
+        probe = Mock(return_value=httpx.Response(status, request=request))
+        monkeypatch.setattr(httpx, 'get', probe)
+        assert plan_ai_readiness({'ai': 1, 'ai_zone': 'local'})['state'] == 'local_endpoint_access_denied'
+        assert probe.call_count == 1
