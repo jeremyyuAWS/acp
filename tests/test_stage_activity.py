@@ -22,3 +22,13 @@ def test_legacy_activity_fallback_requires_matching_phase(monkeypatch):
     monkeypatch.setitem(sys.modules, 'core', SimpleNamespace(get_job_state=state.get))
     assert activity.current('legacy', stage='assess') is None
     assert activity.current('legacy', stage='remediate')['file'] == 'legacy.docx'
+
+
+def test_assessment_publish_cannot_throttle_remediation_stage(monkeypatch):
+    state = {}
+    monkeypatch.setitem(sys.modules, 'core', SimpleNamespace(set_job=lambda key, value: state.__setitem__(key, value), get_job_state=state.get))
+    monkeypatch.setattr(activity.time, 'time', lambda: 1000.0)
+    activity.record_file('stage-rate-isolation', 'scan.pdf', action='checking contrast', phase='analysing', force=True)
+    activity.record('stage-rate-isolation', file='fix.docx', action='applying fix', phase='remediating')
+    assert activity.current('stage-rate-isolation', stage='remediate')['file'] == 'fix.docx'
+    activity.finish_file('stage-rate-isolation', 'scan.pdf')
