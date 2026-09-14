@@ -51,3 +51,22 @@ it('shows measured latency distribution and validation coverage without claiming
  expect(container.textContent).toContain('2 validated · 1 unavailable')
  expect(container.textContent).toContain('not pure model latency')
 })
+it('shows actual admission wait with coverage and excludes unlinked calls honestly', async () => {
+ useMetrics.mockReturnValue({data:{mode:'recorded',complete:true,models:{rows:[{id:'cloud:m',label:'cloud · m',provider_timing:{queue_wait_ms:{average:250,measured_attempts:2}}}]}}})
+ const {root,container}=createTestRoot()
+ await act(async () => root.render(<CloudAIActivity scanId="s" batchId="r"/>))
+ expect(container.textContent).toContain('Admission wait')
+ expect(container.textContent).toContain('250 ms')
+ expect(container.textContent).toContain('2 measured waits')
+ expect(container.textContent).toContain('Calls without a run link are excluded')
+ expect(container.textContent).toContain('not the provider’s internal queue')
+})
+it('keeps absent admission measurements unavailable rather than zero', async () => {
+ const {root,container}=createTestRoot()
+ await act(async () => root.render(<AIActivityCharts data={{models:{rows:[{id:'legacy:m',label:'legacy · m'}]}}}/>))
+ const headers=[...container.querySelectorAll('thead th')]
+ const index=headers.findIndex(header=>header.textContent==='Admission wait')
+ expect(index).toBeGreaterThan(0)
+ expect(container.querySelector('tbody tr').children[index].textContent).toContain('Unavailable')
+ expect(container.querySelector('tbody tr').children[index].textContent).not.toContain('0 ms')
+})
