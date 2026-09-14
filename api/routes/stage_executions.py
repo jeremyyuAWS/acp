@@ -29,7 +29,7 @@ class RevisionMutation(BaseModel):
 
 def _execution_or_404(execution_id: str, request: Request) -> dict:
     execution = core.store.get_stage_execution(execution_id, owner=_owner(request))
-    if not execution:
+    if not execution or not core.store.get_scan_head(execution["scan_id"], owner=_owner(request)):
         raise HTTPException(404, "stage execution not found")
     return execution
 
@@ -68,7 +68,7 @@ def submit_execution(workflow_id: str, stage: str, body: ExecutionSubmission, re
 @router.get("/workflows/{workflow_id}/stages/{stage}/executions/current")
 def current_execution(workflow_id: str, stage: str, request: Request):
     result = core.store.current_stage_execution(workflow_id, stage, owner=_owner(request))
-    if not result:
+    if not result or not core.store.get_scan_head(result["scan_id"], owner=_owner(request)):
         raise HTTPException(404, "current stage execution not found")
     return result
 
