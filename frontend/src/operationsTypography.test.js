@@ -13,7 +13,7 @@ describe('shared operations typography', () => {
   it('gives analytics and Live Operations the same KPI hierarchy and width', () => {
     expect(analytics).toContain("import './operations-typography.css'")
     expect(liveOps).toContain("import './operations-typography.css'")
-    expect(analytics).toContain('className="ops-kpi-grid ops-kpi-grid--analytics"')
+    expect(analytics).toMatch(/className="ops-kpi-grid ops-kpi-grid--analytics(?:\s[^\"]*)?"/)
     expect(liveOps).toContain('className="ops-kpi-grid"')
     expect(css).toMatch(/minmax\(180px, 1fr\)/)
     expect(css).toMatch(/\.ops-kpi__value\s*\{[^}]*font-family:\s*inherit/s)

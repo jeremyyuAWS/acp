@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import Response
+import analytics_overview
 
 import analytics_trends
 import core
@@ -34,8 +37,17 @@ def compliance_trend(request: Request, source: str | None = Query(None)):
 @router.get("/admin/analytics/overview")
 def admin_analytics_overview(
     request: Request,
-    period: str = Query("30d", pattern="^(today|7d|30d|90d|all)$"),
+    response: Response,
+    period: str = Query("30d", pattern="^(today|7d|30d|90d|all|custom)$"),
     source: str | None = Query(None),
+    owner: str | None = Query(None),
+    status: str | None = Query(None),
+    search: str | None = Query(None, max_length=200),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    timezone_name: str = Query("UTC", alias="timezone"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
 ):
     """Admin-only estate analytics overview across ALL users.
 
@@ -48,28 +60,17 @@ def admin_analytics_overview(
     """
     from .system import _require_admin
     _require_admin(request)
+    response.headers["Cache-Control"] = "no-store"
 
+    activity = analytics_overview.build(core.store.list_scan_attempts_admin(), period=period,
+        source=source, owner=owner, status=status, search=search, start=start, end=end,
+        timezone_name=timezone_name, page=page, page_size=page_size)
     all_scans = core.store.list_scans_admin()
 
-    # Period cutoff — completed_at is stored as an ISO string; compare as string prefix (YYYY-MM-DD)
-    # which sorts correctly. Use UTC so the server timezone never shifts the boundary.
-    now = datetime.now(tz=timezone.utc)
-    if period == "today":
-        cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()[:10]
-    elif period == "7d":
-        cutoff = (now - timedelta(days=7)).isoformat()[:10]
-    elif period == "30d":
-        cutoff = (now - timedelta(days=30)).isoformat()[:10]
-    elif period == "90d":
-        cutoff = (now - timedelta(days=90)).isoformat()[:10]
-    else:
-        cutoff = None
-
-    scans = all_scans
-    if cutoff:
-        scans = [s for s in scans if (s.get("completed_at") or "") >= cutoff]
-    if source:
-        scans = [s for s in scans if s.get("source") == source]
+    lower = analytics_overview.timestamp(activity["reporting"]["start"])
+    upper = analytics_overview.timestamp(activity["reporting"]["end"])
+    scans = analytics_overview.filtered(all_scans, source, owner, status, search)
+    scans = [s for s in scans if analytics_overview.within(s.get("completed_at"), lower, upper)]
 
     total_docs = sum(s.get("files") or 0 for s in scans)
     total_cert = sum(s.get("certifiable") or 0 for s in scans)
@@ -129,4 +130,65 @@ def admin_analytics_overview(
         "by_source": by_source,
         "trend": analytics_trends.compliance_trend(scans),
         "recent_scans": recent,
+        **activity,
     }
+
+
+@router.get("/admin/analytics/scans/{scan_id}")
+def admin_analytics_detail(request: Request, scan_id: str, response: Response):
+    from .system import _require_admin
+    _require_admin(request)
+    response.headers["Cache-Control"] = "no-store"
+    row = core.store.get_scan_attempt_admin(scan_id)
+    if row is None:
+        raise HTTPException(404, "Scan not found")
+    scan = core.store.get_scan(scan_id)
+    return {"scan": row, "observations": (scan or {}).get("files", []),
+            "events": core.store.list_scan_events(scan_id, limit=100),
+            "reporting": {"scope": "Platform · all users", "events_limit": 100,
+                          "events_note": "First 100 recorded events; historical coverage may be incomplete"}}
+
+
+@router.get("/admin/analytics/methodology")
+def admin_analytics_methodology(request: Request, response: Response, basis: Literal["attempts", "results"] = "attempts", period: str = Query("30d", pattern="^(today|7d|30d|90d|all|custom)$"),
+        source: str | None = None, owner: str | None = None, status: str | None = None,
+        search: str | None = Query(None, max_length=200), start: str | None = None, end: str | None = None,
+        timezone_name: str = Query("UTC", alias="timezone")):
+    from .system import _require_admin
+    _require_admin(request)
+    response.headers["Cache-Control"] = "no-store"
+    reporting = analytics_overview.build(core.store.list_scan_attempts_admin(), period=period, source=source,
+        owner=owner, status=status, search=search, start=start, end=end, timezone_name=timezone_name)["reporting"]
+    reporting["export_basis"] = basis
+    reporting["time_basis"] = "completed_at (successful results)" if basis == "results" else "started_at (all recorded attempts)"
+    return reporting
+
+
+@router.get("/admin/analytics/export")
+def admin_analytics_export(request: Request, basis: Literal["attempts", "results"] = "attempts", period: str = Query("30d", pattern="^(today|7d|30d|90d|all|custom)$"),
+        source: str | None = None, owner: str | None = None, status: str | None = None,
+        search: str | None = Query(None, max_length=200), start: str | None = None, end: str | None = None,
+        timezone_name: str = Query("UTC", alias="timezone")):
+    from .system import _require_admin
+    _require_admin(request)
+    import csv
+    import io
+    rows = core.store.list_scan_attempts_admin()
+    data = analytics_overview.build(rows, period=period, source=source, owner=owner, status=status,
+        search=search, start=start, end=end, timezone_name=timezone_name, page_size=max(len(rows), 1))
+    register = data["results_register"] if basis == "results" else data["register"]
+    output = io.StringIO()
+    fields = ["id", "owner_email", "source", "started_at", "completed_at", "status", "files", "certifiable", "uncertain", "error", "avg_score", "rubric_name", "rubric_hash"]
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for row in register["rows"]:
+        # Spreadsheet formula execution is not an intended interpretation of recorded metadata.
+        writer.writerow({k: "'" + v if isinstance(v, str) and v.lstrip().startswith(("=", "+", "-", "@")) else v for k, v in row.items()})
+    import json
+    core.store.log_decision(_owner(request), "admin.analytics.export", detail=json.dumps({
+        "scope": "platform-all-users", "filters": data["reporting"]["filters"],
+        "start": data["reporting"]["start"], "end": data["reporting"]["end"],
+        "rows": register["total"], "basis": basis, "generated_at": data["reporting"]["generated_at"], "outcome": "generated"}))
+    return Response(output.getvalue(), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="scan-analytics.csv"',
+        "Cache-Control": "no-store", "X-Analytics-Scope": "platform-all-users", "X-Export-Rows": str(register["total"]), "X-Export-Basis": basis,
+        "X-Analytics-Generated-At": data["reporting"]["generated_at"]})

@@ -364,7 +364,11 @@ _map_many([("GET", "/admin/schedule-guardrails"),
           {"settings.view", "workers.manage"})
 
 # ── Scan Analytics ────────────────────────────────────────────────────────────
-_map_many([("GET", "/admin/analytics/overview"), ("GET", "/ai/costs")], {"analytics.view"})
+_map_many([("GET", "/admin/analytics/overview"),
+           ("GET", "/admin/analytics/scans/{scan_id}"),
+           ("GET", "/admin/analytics/export"),
+           ("GET", "/admin/analytics/methodology"),
+           ("GET", "/ai/costs")], {"analytics.view"})
 
 # ── Settings and platform administration ──────────────────────────────────────
 _map_many([("GET", "/settings"),
