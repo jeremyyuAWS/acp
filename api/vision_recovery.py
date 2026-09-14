@@ -40,7 +40,7 @@ def _decision(store, sid, file, state, **detail):
                        file=file, detail=_encoded(detail))
     safe = {key: detail[key] for key in ('retry', 'run_after', 'drafts') if key in detail}
     if state == 'blocked':
-        safe['reason_code'] = detail.get('reason_code') if detail.get('reason_code') in {'vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked', 'vision_generated_output_unusable'} else 'vision_recovery_unresolved'
+        safe['reason_code'] = detail.get('reason_code') if detail.get('reason_code') in {'vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked', 'vision_generated_output_unusable', 'vision_local_endpoint_required'} else 'vision_recovery_unresolved'
     store.append_scan_event(sid, 'remediate.vision_retry_' + state,
         phase='remediate', document=file, correlation_id=detail.get('run_id'),
         detail=safe or None)
@@ -72,6 +72,8 @@ def _recovery_block(context):
     if reasons & {'provider_usage_unknown', 'existing_draft_attempt_requires_reconciliation',
                   'budget_settlement_failed_or_breached', 'budget_release_failed'}:
         return 'vision_spending_reconciliation_required'
+    if getattr(context, 'local_drafting', False) and 'local_endpoint_required' in reasons:
+        return 'vision_local_endpoint_required'
     if context.enabled:
         snapshot = context.ledger.snapshot(context.owner_id, context.run_id)
         if snapshot['blocked']:
@@ -81,12 +83,18 @@ def _recovery_block(context):
     # Settled, rejected output is not evidence of missing consent or funds.
     if 'attempts_exhausted' in reasons:
         return 'vision_generated_output_unusable'
-    if any(reason not in TRANSIENT for reason in reasons):
+    if reasons & {'provider_access_denied', 'budget_admission_denied'}:
         return 'vision_permission_or_budget_blocked'
+    if any(reason not in TRANSIENT for reason in reasons):
+        return 'vision_recovery_unresolved' if getattr(context, 'local_drafting', False) else 'vision_permission_or_budget_blocked'
     return None
 
 
 def _block_description(reason_code):
+    if reason_code == 'vision_local_endpoint_required':
+        return 'This local-only run needs a private local AI endpoint. Cloud processing is not authorized by its saved plan.'
+    if reason_code == 'vision_recovery_unresolved':
+        return 'Automatic generation is paused; check the recorded AI failure before retrying.'
     if reason_code == 'vision_generated_output_unusable':
         return 'Generated AI output could not be used; automatic attempts have stopped.'
     return 'AI spending or permission is unresolved; automatic vision retry is paused.'

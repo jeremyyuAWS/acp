@@ -261,3 +261,15 @@ def test_unusable_generation_stops_without_dispatching_another_retry(isolated_st
     assert len(isolated_store.list_scan_jobs_of_type(SID, 'vision_proposal_retry')) == before
     assert isolated_store.list_scan_events(SID)[-1]['detail'] == {
         'reason_code': 'vision_generated_output_unusable'}
+
+
+def test_local_endpoint_refusal_is_not_a_cloud_spending_block():
+    from types import SimpleNamespace
+    context = SimpleNamespace(deferred=[{'reason': 'local_endpoint_required'}, {'reason': 'ai_disabled_or_budget_zero'}], enabled=False, local_drafting=True)
+    assert recovery._recovery_block(context) == 'vision_local_endpoint_required'
+
+
+def test_unknown_local_failure_does_not_become_a_budget_block():
+    from types import SimpleNamespace
+    context = SimpleNamespace(deferred=[{'reason': 'local_draft_unavailable'}], enabled=False, local_drafting=True)
+    assert recovery._recovery_block(context) == 'vision_recovery_unresolved'
