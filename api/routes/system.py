@@ -669,10 +669,11 @@ def readyz():
     # a vision probe can never 500 /readyz.
     try:
         import ai as _ai
+        import providers as _providers
         vision = {"ready": _ai.vision_is_available(),
                   "reason": _ai.vision_unavailable_reason(),
                   "model": _ai.OLLAMA_VISION_MODEL,
-                  "zone": _ai.provenance().get("zone")}
+                  "zone": _providers.zone_for_url(_ai.OLLAMA_BASE_URL)}
     except Exception as exc:  # pragma: no cover - defensive: a vision probe must not break /readyz
         vision = {"ready": False, "reason": f"{exc.__class__.__name__}: {exc}"}
 

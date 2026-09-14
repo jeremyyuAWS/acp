@@ -199,6 +199,7 @@ def test_a_broken_langfuse_status_accessor_cannot_break_readyz(monkeypatch):
 # ── /readyz vision-engine readiness (GPU model) ──────────────────────────────────────────
 def _mock_vision(monkeypatch, *, available, model="llava:13b", reason=None, zone="local"):
     import ai
+    monkeypatch.setattr(ai, "OLLAMA_BASE_URL", "https://public.example.com" if zone == "cloud" else "https://ollama.internal.example.com")
     monkeypatch.setattr(ai, "vision_is_available", lambda: available, raising=False)
     monkeypatch.setattr(ai, "vision_unavailable_reason", lambda: reason, raising=False)
     monkeypatch.setattr(ai, "OLLAMA_VISION_MODEL", model, raising=False)
@@ -364,3 +365,11 @@ def test_a_missing_pdf_engine_errors_the_file_instead_of_crashing_the_scan(tmp_p
     assert out["issues"] == []                       # nothing invented, nothing passed
     assert "PDF engine unavailable" in out["errors"][0]["message"]
     assert "ACP_PDF_ENGINE" in out["errors"][0]["message"]   # names the fix, not just the fault
+
+
+def test_vision_zone_uses_vision_endpoint_not_default_cloud_text_provider(monkeypatch):
+    import ai
+    _mock_vision(monkeypatch, available=True, model='moondream', zone='cloud')
+    monkeypatch.setattr(ai, 'OLLAMA_BASE_URL', 'https://ollama.internal.example.com')
+    result = _readyz(monkeypatch, beat=_iso(seconds=5), local_pool=0, pdf_ok=True)
+    assert result['engines']['vision']['zone'] == 'local'
