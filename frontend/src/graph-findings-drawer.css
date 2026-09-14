@@ -1,0 +1,21 @@
+.graph-findings-drawer { font-size: 13px; }
+.graph-findings-summary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.graph-findings-summary span { color: var(--muted); }
+.graph-findings-preview { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.graph-findings-preview p { font-size: 12px; margin: 8px 0 0; }
+.graph-findings-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 16px; border-bottom: 1px solid var(--line); }
+.graph-findings-tabs button { background: transparent; border: 0; border-bottom: 3px solid transparent; padding: 10px 8px; color: var(--muted); font-size: 13px; cursor: pointer; }
+.graph-findings-tabs button[aria-selected=true] { border-bottom-color: var(--plum); color: var(--ink); font-weight: 700; }
+.graph-finding { border: 1px solid var(--line); border-left: 3px solid var(--warn-fg); border-radius: 10px; padding: 12px; margin: 12px 0; overflow-wrap: anywhere; }
+.graph-finding--change { border-left-color: var(--success-fg); }
+.graph-finding-select { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; width: 100%; background: transparent; border: 0; padding: 0; text-align: left; cursor: pointer; color: var(--ink); }
+.graph-finding-select span { font-family: var(--font-mono); color: var(--muted); font-size: 12px; }
+.graph-finding-pill { display: inline-block; background: var(--warn-bg); color: var(--warn-fg); border-radius: 999px; padding: 3px 8px; margin-top: 8px; font-size: 12px; }
+.graph-finding-pill.is-verified { background: var(--success-bg); color: var(--success-fg); }
+.graph-finding dl { display: grid; grid-template-columns: 55px minmax(0, 1fr); gap: 8px; }
+.graph-finding dt { font-weight: 700; }
+.graph-finding dd { margin: 0; white-space: pre-wrap; }
+.graph-findings-coverage { margin: 16px 0; }
+.graph-findings-footer { border-top: 1px solid var(--line); padding-top: 12px; }
+
+.graph-finding-pill.is-edit-needed { background: var(--error-bg); color: var(--error-fg-strong); }

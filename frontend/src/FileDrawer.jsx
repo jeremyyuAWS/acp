@@ -1,5 +1,6 @@
 import { useState, useEffect, Fragment } from 'react'
 import Drawer from './Drawer.jsx'
+import GraphFindingsDrawer from './GraphFindingsDrawer.jsx'
 import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
@@ -798,6 +799,8 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       <div className="taglist">{shownTags.map((t) => <Tag key={t} t={t} />)}</div>
     </>
   )
+
+  if (context === 'graph') return <GraphFindingsDrawer key={`${scanId}:${file.file}`} file={file} scanId={scanId} onClose={onClose} items={hitlItems} readOnly={readOnly} onAct={drawerAct} />
 
   // Discover (steps 1–3): inventory · classify · retain — NO accessibility assessment.
   if (context === 'discover') {

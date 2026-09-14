@@ -2498,7 +2498,7 @@ export default function App() {
             reachable for open-ended exploration, same as Upload. Still needs an
             assessed scan (the graph visualizes WCAG findings), so it shares Monitor's
             gate: assessGate when a scan exists but hasn't been assessed yet. */}
-        {view === 'graph' && (run ? (assessed ? <Suspense fallback={<Loading />}><KnowledgeGraph files={files} scanId={run.id} /></Suspense> : assessGate) : placeholder)}
+        {view === 'graph' && (run ? (assessed ? <Suspense fallback={<Loading />}><KnowledgeGraph files={files} scanId={run.id} readOnly={isTimeTravel} /></Suspense> : assessGate) : placeholder)}
 
         {/* Visible to every signed-in user under the temporary open-tab policy. The analytics
             API remains the authority for the underlying estate-wide data. */}
