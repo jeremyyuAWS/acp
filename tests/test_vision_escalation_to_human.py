@@ -133,10 +133,11 @@ def test_a_failed_escalation_leaves_the_local_evidence_line_for_the_reviewer(mon
     import ai
     import providers
     monkeypatch.setattr(providers, "cloud_vision_provider", lambda: None)
-    monkeypatch.setattr(ai, "_ocr_text", lambda *a, **k: "", raising=False)
+    import ocr
+    monkeypatch.setattr(ocr, "ocr_text", lambda *a, **k: "")
+    # The generation seam returns a cleaned string, not a provider transport dict.
     monkeypatch.setattr(ai, "_vision_generate",
-                        lambda *a, **k: {"text": "A photograph of a person at a desk.",
-                                         "ok": True, "model": "moondream"}, raising=False)
+                        lambda *a, **k: "A photograph of a person at a desk.")
     monkeypatch.setattr(ai, "_trace_ai", lambda *a, **k: None)
 
     out = ai.describe_image_structured(b"\x89PNG-not-really", filename="photo.png")
