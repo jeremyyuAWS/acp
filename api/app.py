@@ -359,6 +359,9 @@ async def _access_gate(request, call_next):
 for _router in ROUTERS:
     app.include_router(_router)
 
+from routes.activity_event_evidence import router as _activity_evidence_router
+app.include_router(_activity_evidence_router)
+
 # Feeds the fail-closed access gate the real, registered route table (core.py cannot import
 # `app` itself without a cycle — app.py imports core, not the reverse). Placed at module level,
 # immediately after every router is included, so there is no window where a real request could
