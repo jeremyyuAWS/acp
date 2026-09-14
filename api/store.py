@@ -5715,8 +5715,12 @@ class Store:
             "scan_file": "assess", "scan_assess": "assess", "assess_trace": "assess",
             "remediate_file": "remediate", "deliver_corrected_copy": "remediate",
             "rescore_file": "remediate", "apply_approved_values": "remediate",
-            "publish_file": "publish",
+            "publish_file": "publish", "release_continue": "publish",
+            "publish_batch": "publish", "publish_release_reports": "publish",
+            "vision_proposal_retry": "remediate",
         }
+        # Continuations must remain visible even before the first publish_file exists: the
+        # browser uses these owner-scoped rows to refresh delegated provider credentials.
         # NOT the same list as core.REMEDIATE_LANE_JOB_TYPES. publish_file is its own Release
         # stage; exposing it here also lets the browser keep its delegated Microsoft token fresh
         # while a large queued release outlives the token it started with.

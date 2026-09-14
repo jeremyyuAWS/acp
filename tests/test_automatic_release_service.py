@@ -571,3 +571,37 @@ def test_unknown_dispatch_diagnostic_rejects_non_http_status(prepared, monkeypat
     assert diagnostic['http_status'] is None
     assert len(diagnostic['error_type']) == 80
     assert 'private provider payload' not in json.dumps(diagnostic)
+
+
+def test_missing_microsoft_preflight_exposes_reconnect_and_resumes_same_permission(prepared, monkeypatch):
+    monkeypatch.setattr(flow, 'delivery_preflight', lambda row: {
+        'ready': False, 'credential_valid': False,
+        'message': 'Reconnect Microsoft to check this folder.'})
+    row = tick(prepared, authorize(prepared))
+    identity = row['id']
+    view = flow.public(row, prepared.store)
+    assert view['requires_reconnect'] is True
+    assert row['status'] == 'blocked'
+    assert not row['progress']['files'][FILE].get('artifact_digest')
+    assert not prepared.calls
+    assert prepared.store.active_workflows(OWNER)[0]['stage'] == 'publish'
+    monkeypatch.setattr(flow, 'delivery_preflight', lambda row: {'ready': True, 'credential_valid': True})
+    row = tick(prepared, row)
+    assert row['id'] == identity
+    assert row['progress']['files'][FILE]['artifact_digest'] == DIGEST
+    assert not flow.public(row, prepared.store)['requires_reconnect']
+    assert len(prepared.calls) == 1
+
+
+def test_reconnected_but_unwritable_folder_is_not_reported_as_missing_access(prepared, monkeypatch):
+    monkeypatch.setattr(flow, 'delivery_preflight', lambda row: {
+        'ready': False, 'credential_valid': False, 'message': 'Reconnect Microsoft.'})
+    row = tick(prepared, authorize(prepared))
+    monkeypatch.setattr(flow, 'delivery_preflight', lambda row: {
+        'ready': False, 'credential_valid': True, 'write_permission': False,
+        'message': 'Microsoft sign-in is missing a files or sites write grant.'})
+    row = tick(prepared, row)
+    assert row['status'] == 'blocked'
+    assert not flow.public(row, prepared.store)['requires_reconnect']
+    assert row['progress']['files'][FILE]['message'].endswith('write grant.')
+    assert not prepared.calls
