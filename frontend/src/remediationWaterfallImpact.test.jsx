@@ -113,3 +113,18 @@ it('still refuses to draw when a row genuinely fits no segment', () => {
     { id: 'odd', file: 'third.pdf', origin: 'rule_based', lane: 'unknown_lane', finding_count: 1 }]
   expect(deriveWaterfallImpact(data).complete).toBe(false)
 })
+
+it.each(['local', 'cloud'])('labels %s eligibility without claiming completed fixes', async zone => {
+  const data = preview(); data.policy.ai_zone = zone
+  const { container } = await render(data)
+  expect(container.textContent).toContain('Eligible for AI')
+  expect(deriveWaterfallImpact(data).groups.ai.count).toBe(4)
+  expect(container.textContent).toContain('model-specific success is not predicted here')
+})
+it('does not treat a zero cloud budget as blocking local requests or require approval for every AI change', async () => {
+  const data = preview(); Object.assign(data.policy, { ai_zone: 'local', ai_budget_usd: 0, auto_approve_ai: true })
+  const { container } = await render(data)
+  expect(container.textContent).not.toContain('No paid AI requests are allowed')
+  expect(container.textContent).toContain('Eligible AI suggestions are applied automatically')
+  expect(container.textContent).toContain('Exceptions still need your input')
+})

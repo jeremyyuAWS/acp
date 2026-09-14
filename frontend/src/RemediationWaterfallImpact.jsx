@@ -3,7 +3,7 @@ import './remediation-waterfall-impact.css'
 
 const ROUTES = [
   ['rule_based', 'Rule-based fixes planned', 'Rules can prepare these changes. Any required approval still comes first.'],
-  ['ai', 'AI may help', 'AI can try these findings. A useful suggestion is not guaranteed.'],
+  ['ai', 'Eligible for AI', 'Supported findings AI can attempt under this plan. This is not a prediction of successful fixes.'],
   ['person', 'Needs a person', 'Content decisions or work without an available automated route.'],
   ['blocked', 'Cannot plan yet', 'Missing evidence or other blockers need attention first.'],
 ]
@@ -46,13 +46,15 @@ export default function RemediationWaterfallImpact({ data, onInspectAI, onInspec
   const { groups, total, complete } = deriveWaterfallImpact(data)
   const countText = count => complete ? count.toLocaleString() : count > 0 ? `${count.toLocaleString()} recorded` : 'Not yet known'
   const aiEnabled = data?.policy?.ai > 0
+  const localOnly = data?.policy?.ai_zone === 'local'
+  const automaticAI = data?.policy?.auto_approve_ai === true
   const zeroBudget = data?.policy?.ai_budget_usd !== undefined && Number(data.policy.ai_budget_usd) === 0
   return <section className="waterfall-impact" aria-labelledby={titleId}>
     <p className="waterfall-impact__eyebrow">Before you start · Plan preview</p>
     <h3 id={titleId}>Impact of your remediation plan</h3>
     <p>{total === null ? 'Selected finding total is not yet known.' : `${total.toLocaleString()} unresolved findings in this preview.`}
       {' '}{validCount(data?.open?.files) && `${data.open.files.toLocaleString()} selected files with findings.`}</p>
-    <p>These are planned routes, not completed fixes. Extra help from each AI model is not measured yet.</p>
+    <p>These are planned routes, not completed fixes. Local and cloud models can have the same eligible findings. Successful fixes depend on the actual response, application and verification; model-specific success is not predicted here.</p>
     {!complete && <p className="waterfall-impact__incomplete">A complete chart is not available because the finding counts could not be fully reconciled. Recorded counts below may be incomplete.</p>}
     {complete && total > 0 && <div className="waterfall-impact__stack" aria-hidden="true">
       {ROUTES.map(([key]) => groups[key].count > 0 && <span key={key} className={`waterfall-impact__color--${key}`} style={{ width: `${groups[key].count / total * 100}%` }} />)}
@@ -78,10 +80,10 @@ export default function RemediationWaterfallImpact({ data, onInspectAI, onInspec
         </tr>
       })}</tbody>
     </table>
-    {!aiEnabled ? <p>Rules only is selected. This plan will not ask AI for new suggestions.</p> : zeroBudget ?
+    {!aiEnabled ? <p>Rules only is selected. This plan will not ask AI for new suggestions.</p> : zeroBudget && !localOnly ?
       <p>The AI spending limit is $0. No paid AI requests are allowed; AI eligibility does not mean a request will run.</p> :
-      <p>AI suggestions need your approval before application. Another model may be tried when the first response is empty or cut short and spending permits.</p>}
-    <p className="waterfall-impact__process">{aiEnabled ? 'Try rules → Ask AI for remaining supported work → Review the suggestion → Apply approved changes and check the result' : 'Try rules → Review changes when required → Apply approved changes and check the result'}</p>
+      <p>{automaticAI ? 'Eligible AI suggestions are applied automatically under your saved approval policy. Exceptions still need your input.' : 'Your saved approval policy determines which AI suggestions need review before application.'} {localOnly ? 'Local AI readiness determines whether requests can run; the cloud spending limit does not fund local requests.' : 'Another model may be tried when the first response is empty or cut short and spending permits.'}</p>}
+    <p className="waterfall-impact__process">{aiEnabled ? 'Try rules → Ask AI for remaining supported work → Apply changes under your approval policy → Verify the saved result → Show exceptions needing your input' : 'Try rules → Review changes when required → Apply approved changes and check the result'}</p>
     <p>Exploring this chart does not start remediation or ask an AI model to generate anything. Use “Approve plan and start” when you are ready.</p>
   </section>
 }
