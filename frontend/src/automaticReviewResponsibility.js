@@ -5,7 +5,7 @@ export function automaticReviewResponsibility(row, decisions = {}) {
   if (status==='completed') return 'results'
   if (row.automaticQueued || (status === 'awaiting-validation' && ['queued','checking','applying','verifying','processing'].includes(row.automaticDisposition?.state))) return 'acp'
   const decision=decisions[row.id] || decisions[row.file]
-  if (['assigned','deferred','rejected'].includes(decision?.state) || row.rejectedFix) return 'human'
+  if (['assigned','deferred','rejected'].includes(decision?.state) || row.rejectedFix || row.manual === true) return 'human'
   const rule=String(row.rule_id || row.ruleId || '').replace(/^(WCAG_?|SC_)/,'').replace(/_/g,'.')
   if (row.automaticDisposition?.responsibility==='human' || (rule && !AUTO_RULES.has(rule))) return 'human'
   // No admitted job is unknown, not automatic processing or a verified fix.
