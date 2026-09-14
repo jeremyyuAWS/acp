@@ -109,3 +109,12 @@ it('shows local endpoint failures without a spending warning',()=>{
  expect(result.notices[0].responsibility).toContain('Increasing the budget alone will not fix')
  expect(result.notices.some(n=>n.label.includes('spending limit'))).toBe(false)
 })
+
+it('retains the safe empty-response reason and shows a concrete next action', () => {
+  const [row] = addRemediationEvent([], {kind:'remediate.vision_retry_blocked',document:'A.pptx',document_ref:'ref',detail:{reason_code:'vision_response_empty',response:'private text'}}, 8)
+  expect(row.reasonCode).toBe('vision_response_empty')
+  const notices = remainingWorkStatus({events:[row],rows:[]}).notices
+  expect(notices[0].label).toBe('AI returned no image description')
+  expect(notices[0].responsibility).toContain('Provide the missing description')
+  expect(JSON.stringify(notices)).not.toContain('private text')
+})

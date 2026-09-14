@@ -273,3 +273,51 @@ def test_unknown_local_failure_does_not_become_a_budget_block():
     from types import SimpleNamespace
     context = SimpleNamespace(deferred=[{'reason': 'local_draft_unavailable'}], enabled=False, local_drafting=True)
     assert recovery._recovery_block(context) == 'vision_recovery_unresolved'
+
+
+def test_local_cloud_budget_refusal_does_not_block_private_vision_timeout():
+    from types import SimpleNamespace
+    context = SimpleNamespace(enabled=False, local_drafting=True,
+        deferred=[{'reason': 'ai_disabled_or_budget_zero'}, {'reason': 'vision_timeout'}])
+    assert recovery._recovery_block(context) is None
+
+
+def test_exhausted_empty_image_response_retains_actual_failure():
+    with recovery.capture() as misses:
+        recovery.record('empty_response')
+    assert misses == ['empty_response']
+
+
+def test_local_empty_image_response_is_not_an_unknown_permission_block():
+    from types import SimpleNamespace
+    context = SimpleNamespace(enabled=False, local_drafting=True,
+        deferred=[{'reason': 'ai_disabled_or_budget_zero'}])
+    assert recovery._recovery_block(context, ['empty_response']) == 'vision_response_empty'
+
+
+def test_private_recovery_survives_expected_cloud_budget_refusal(isolated_store, monkeypatch):
+    _, payload = seed(isolated_store)
+    draft(monkeypatch)
+    import remediate_office
+    original = remediate_office.alt_proposals_for_office
+    def propose(*args, **kwargs):
+        from ai_run_policy import optional_current_run_context
+        optional_current_run_context().deferred.append({'reason': 'ai_disabled_or_budget_zero'})
+        return original(*args, **kwargs)
+    monkeypatch.setattr(remediate_office, 'alt_proposals_for_office', propose)
+    recovery.process(isolated_store, payload)
+    assert isolated_store.get_hitl_item(payload['item_id'])['proposals'][0]['proposed_value'] == 'A useful recovered caption'
+    assert isolated_store.list_scan_events(SID)[-1]['kind'] == 'remediate.vision_retry_recovered'
+
+
+def test_empty_local_recovery_preserves_review_and_emits_specific_safe_cause(isolated_store, monkeypatch):
+    _, payload = seed(isolated_store)
+    draft(monkeypatch)
+    import remediate_office
+    def propose(*args, **kwargs):
+        recovery.record('empty_response')
+        return [], []
+    monkeypatch.setattr(remediate_office, 'alt_proposals_for_office', propose)
+    recovery.process(isolated_store, payload)
+    assert isolated_store.get_hitl_item(payload['item_id'])['proposals'] == json.loads(payload['proposals_before'])
+    assert isolated_store.list_scan_events(SID)[-1]['detail'] == {'reason_code': 'vision_response_empty'}
