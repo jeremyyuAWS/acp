@@ -101,7 +101,8 @@ def test_a_wedged_job_stops_having_its_lease_extended(store, monkeypatch, capsys
         worker.HANDLERS.pop("wedged", None)
 
 
-def test_a_slow_but_healthy_job_still_gets_its_lease_extended(store, monkeypatch):
+@pytest.mark.parametrize("startup_delay", [0, 0.3], ids=["normal", "delayed-start"])
+def test_a_slow_but_healthy_job_still_gets_its_lease_extended(store, monkeypatch, startup_delay):
     # The behaviour the ceiling must NOT break: a long-running job below the ceiling keeps its
     # lease, so the sweeper does not reclaim work that is genuinely in progress.
     import worker
@@ -109,22 +110,29 @@ def test_a_slow_but_healthy_job_still_gets_its_lease_extended(store, monkeypatch
     monkeypatch.setattr(worker, "max_unverified_lease_s", lambda: 3600)
 
     touches = []
-    monkeypatch.setattr(store, "touch_job", lambda jid, **kw: touches.append(jid))
+    lease_extended = threading.Event()
+    def touch(jid, **kw):
+        touches.append(jid)
+        lease_extended.set()
+    monkeypatch.setattr(store, "touch_job", touch)
 
     release = threading.Event()
     worker.HANDLERS["slow"] = _blocking_handler(release)
     try:
         jid = store.enqueue_job("slow", {}, scan_id="s1")
         w = worker.JobWorker(store, worker_id="w1")
-        t = threading.Thread(target=w.run_once, daemon=True)
+        def run_after_startup():
+            time.sleep(startup_delay)
+            w.run_once()
+        t = threading.Thread(target=run_after_startup, daemon=True)
         t.start()
-        time.sleep(0.2)
-        assert touches, "a healthy job below the ceiling must keep its lease"
+        assert lease_extended.wait(timeout=4), "a healthy job below the ceiling must keep its lease"
         assert set(touches) == {jid}
     finally:
         release.set()
         t.join(timeout=5)
         worker.HANDLERS.pop("slow", None)
+        assert not t.is_alive(), "the worker thread must finish before test teardown"
 
 
 def test_the_ceiling_makes_a_wedged_job_reclaimable_end_to_end(store, monkeypatch):
