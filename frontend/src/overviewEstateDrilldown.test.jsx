@@ -70,7 +70,7 @@ describe('the estate composition widens to files discovery listed but never scan
     getScanInventory.mockResolvedValue({ scan_id: 's1', total: 1, offset: 0, limit: 1000,
       rows: [{ file: 'photo.png', status: 'metadata_only', format: 'image', size_kb: 512 }] })
     await render()
-    expect(text()).toContain('PNG')
+    expect(text()).toContain('Images')
   })
 
   it('does not duplicate a file the inventory also lists — it is already in `files`', async () => {
@@ -78,31 +78,23 @@ describe('the estate composition widens to files discovery listed but never scan
       rows: [{ file: 'a.docx', status: 'assessable', format: 'docx' },
              { file: 'b.pdf', status: 'assessable', format: 'pdf' }] })
     await render()
-    // Exactly one DOCX and one PDF across the "Document types & eligibility" rows — the inventory
-    // repeated both scanned files and must have added neither. The panel prints "N · P% eligible"
-    // per type, so the count is the number before the separator.
-    const section = container.querySelector('[data-accordion="estate-composition"]')
-    expect(section, 'no Estate composition section').toBeTruthy()
-    const labels = [...section.querySelectorAll('span')]
-      .filter((el) => ['DOCX', 'PDF'].includes(el.textContent.trim()))
-    expect(labels.map((el) => el.textContent.trim()).sort()).toEqual(['DOCX', 'PDF'])
-    const total = labels.reduce((a, el) =>
-      a + Number(el.nextElementSibling.textContent.trim().split('·')[0].replace(/,/g, '')), 0)
-    expect(total).toBe(2)
+    const section = container.querySelector('.balanced-coverage')
+    expect(section, 'no balanced coverage section').toBeTruthy()
+    const rows = [...section.querySelectorAll('.balanced-format-row')]
+    expect(rows.map(row => row.querySelector('button').textContent).sort()).toEqual(['PDF', 'Word'])
+    expect(rows.reduce((sum, row) => sum + Number(row.querySelector('strong').textContent), 0)).toBe(2)
   })
 
-  // THE DRILL-THROUGH IS GONE, DELIBERATELY. Overview's clickable "By document type" bars, the
-  // SegmentDrawer they opened and the EstateOnlyDrawer behind that were removed on 2026-09-02 with
-  // the rest of the Overview charts (PRD "ACP Discover and Overview Simplification"). The WIDENING
-  // survives — the tests above prove estate-only rows still reach the type breakdown — but nothing
-  // on this screen opens a per-file drawer from it any more. Pinned so it cannot creep back
-  // unnoticed; Discover's own file inventory is where a reader drills into files now.
-  it('no longer offers a per-type drill-through on Overview', async () => {
+  it('opens an estate-only file through the balanced chart records', async () => {
     getScanInventory.mockResolvedValue({ scan_id: 's1', total: 1, offset: 0, limit: 1000,
       rows: [{ file: 'clip.mp4', status: 'metadata_only', format: 'av', size_kb: 20480, owner: 'Dana' }] })
     await render()
-    expect(container.querySelector('.critrow')).toBeNull()
-    expect(text()).not.toContain('Listed by discovery — not opened')
+    const format = [...container.querySelectorAll('.balanced-format-row button')].find(button => button.textContent === 'Video / audio')
+    await click(format)
+    const file = container.querySelector('.balanced-evidence .balanced-link')
+    expect(file.textContent).toBe('clip.mp4')
+    await click(file)
+    expect(text()).toContain('Listed by discovery')
   })
 
   it('does not fetch the inventory at all when the scan has no id', async () => {
@@ -124,11 +116,8 @@ describe('the wiring is where it says it is', () => {
     expect(overview).toMatch(/f\._estateOnly \? setEstOnlyFile\(f\) : setSelFile\(f\)/)
   })
 
-  it('hands the widened estate to EstateProgressPanel, which is what renders the type breakdown', () => {
-    // The panel builds its own typeMap from `estateFiles`, so this prop is the whole path by which
-    // a never-opened file reaches "Document types & eligibility".
-    expect(overview).toMatch(/estateFiles=\{estateFiles\}/)
-    const panel = readFileSync(join(here, 'EstateProgressPanel.jsx'), 'utf8')
-    expect(panel).toMatch(/for \(const f of \(estateFiles \|\| \[\]\)\)/)
+  it('hands the recorded inventory to the balanced type breakdown', () => {
+    expect(overview).toMatch(/<BalancedSummary[\s\S]{0,220}inventory=/)
+    expect(overview).not.toMatch(/<EstateProgressPanel\b/)
   })
 })

@@ -17,7 +17,7 @@ const code = (f) => readFileSync(join(here, f), 'utf8').split('\n')
   .join('\n')
 
 const panel = code('EstateProgressPanel.jsx')
-const overview = code('Overview.jsx')
+const overview = code('RetiredOverviewWorkflow.jsx')
 const discover = code('Discover.jsx')
 
 describe('EstateProgressPanel component', () => {
@@ -65,7 +65,7 @@ describe('EstateProgressPanel component', () => {
   })
 })
 
-describe('EstateProgressPanel wired in Overview', () => {
+describe('EstateProgressPanel retained in the unmounted legacy component', () => {
   it('imports EstateProgressPanel', () => {
     expect(overview).toMatch(/import EstateProgressPanel from ['"]\.\/EstateProgressPanel\.jsx['"]/)
   })

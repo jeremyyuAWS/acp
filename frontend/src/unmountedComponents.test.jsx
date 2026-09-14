@@ -125,6 +125,8 @@ const EXPECTED_UNMOUNTED = [
   'RemediationTransform',
   // Retired 2026-09-12: the owner removed the duplicate assessment section from Release.
   // Kept for restoration; Assess and Remediate still show assessment details.
+  // Owner retired Overview workflow details in favor of Balanced Summary on 2026-09-14.
+  'RetiredOverviewWorkflow',
   'RetiredReleaseAssessmentDetails',
   // Retired by explicit, frozen batch selection; historical live-view approval is unreachable.
   'RetiredVisibleBulkApproval',

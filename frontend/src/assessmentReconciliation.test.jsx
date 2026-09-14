@@ -150,7 +150,7 @@ describe('Overview no longer mounts the reconciliation', () => {
   it('does not render the panel, even on a run that carries a full inventory', () => {
     const html = screen(RUN, rows(6646, 47))
     // A run this panel WOULD have rendered for — so the absence is the removal, not a null return.
-    expect(html).toContain('Estate progress')
+    expect(html).toContain('Estate coverage by file type')
     expect(html).not.toContain('What was assessed, and what was not')
     expect(html).not.toContain('6,646 + 343 + 1,300 + 4,072 + 47')
   })

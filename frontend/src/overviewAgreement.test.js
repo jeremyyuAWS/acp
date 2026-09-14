@@ -6,6 +6,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { statusSegments, severityItems, Bars } from './charts.jsx'
 import Overview from './Overview.jsx'
+import RetiredOverviewWorkflow from './RetiredOverviewWorkflow.jsx'
 import { mountExpanded } from './testAccordion.js'
 import { findingsByCriterion, findingsByLevel, levelOfFinding } from './wcagFinding.js'
 import { statusOf, statusCounts, analysedCount, avgScore, ALL_STATUSES, NOT_ASSESSED } from './docStatus.js'
@@ -292,7 +293,7 @@ describe('Overview reports absent values as absent, not as zero', () => {
     // The "N of M documents have been analysed" banner went with the headline tiles on
     // 2026-09-02. The claim it made is still made, by the coverage sentence in the Assessment
     // section's own heading — which is derived from assessMetrics, not from a second count.
-    expect(overviewSrc).toMatch(/meta=\{coverageSentence\(metrics\)\}/)
+    expect(screen()).toContain('assessed / — eligible documents')
     const am = readFileSync(join(here, 'assessMetrics.js'), 'utf8')
     expect(am).toMatch(/export function coverageSentence/)
   })
@@ -477,8 +478,8 @@ describe('the Overview totals count the documents the Overview lists', () => {
     // The four tiles were removed on 2026-09-02. This run's scope carries no inventory, so the
     // estate KPIs have nothing to report — and report a dash, rather than claiming discovery
     // found 0 documents.
-    expect(html).toMatch(/Discovered—/)
-    expect(html).not.toMatch(/Discovered0/)
+    expect(html).toMatch(/Documents discovered3/)
+    expect(html).not.toMatch(/Documents discovered0/)
     // The invariant this test was written for is the line below, and it is untouched: the
     // funnel and the KPI row must all describe ONE population.
     expect(statusSegments(SCAN_12F2_RUN, SCAN_12F2_FILES).reduce((a, s) => a + s.value, 0))
@@ -500,8 +501,9 @@ describe('the Overview totals count the documents the Overview lists', () => {
     const partial = [...SCAN_12F2_FILES, asApp([driveDoc('never-opened.pdf',
       { status: 'discovered', score: null, compliant: 0 })])[0]]
     const html = screen({ ...SCAN_12F2_RUN, files: 4 }, partial)
-    expect(html).toMatch(/4,?\s*not eligible|awaiting assessment|of eligible|of discovered/)
-    expect(html).toMatch(/Assessment/)
+    expect(html).toContain('Documents discovered4')
+    expect(html).toContain('3 assessed / — eligible documents')
+    expect(html).toContain('Their coverage is not recorded')
   })
 })
 
@@ -671,7 +673,8 @@ describe('the Compliance-by-dimension cards agree with the estate beside them', 
 // scan of the same account (8 raw, 3 kept) and the pair was reported as one screen disagreeing
 // with itself. Both counts were right. This is the sentence Discover has carried since
 // scanScope.js and the Overview did not.
-describe('the Overview headline says what its count counts', () => {
+describe('the retired workflow preserves detailed source scope for restoration', () => {
+  const screen = (run = SCAN_12F2_RUN, files = SCAN_12F2_FILES) => mountExpanded(createElement(RetiredOverviewWorkflow, { run, files })).textContent.replace(/\s+/g, ' ')
   it('names the folder, and says the rest of the Drive was not scanned', () => {
     const html = screen(UTSW_RUN, UTSW_FILES)
     expect(html).toMatch(/4 documents in the Drive folder “UTSW DEMO V2”/)
