@@ -1,8 +1,9 @@
 import { reviewWorkBreakdown } from './reviewWorkBreakdown.js'
+import { pendingReviewRows } from './remediationCountSummary.js'
 
 // Recent event evidence is narration, never a substitute for the reconciled counters.
 const VISION = new Set(['remediate.vision_retry_pending', 'remediate.vision_retry_blocked', 'remediate.vision_retry_recovered', 'remediate.delivered'])
-export function remainingWorkStatus({ events = [], rows = [], decisions = {}, snapshot = null } = {}) {
+export function remainingWorkStatus({ events = [], rows = [], decisions = {}, snapshot = null, automatic = false } = {}) {
   const latest = new Map()
   const ordered = [...events].sort((a, b) => Number(b.id) - Number(a.id))
   for (const event of ordered) {
@@ -52,9 +53,22 @@ export function remainingWorkStatus({ events = [], rows = [], decisions = {}, sn
     ['review', 'Your review needed', 'need a decision on an available suggestion. Auto-apply does not bypass requirements for individual judgment.', 'review'],
     ['manual', 'Manual document edit needed', 'need a person to edit or resolve the document. These do not drain through AI automatically.', 'manual'],
   ]
-  for (const [key, label, responsibility, tone] of descriptions) {
-    const count = counts[key]
-    if (count) notices.push({ key, label, count, responsibility: `${count.toLocaleString()} review item${count === 1 ? '' : 's'} ${responsibility}`, tone })
+  // The human population is exactly the one used by the review tab badge.
+  // Status checks are a separate population, not additional human decisions.
+  const humanRows = pendingReviewRows(rows, decisions, automatic)
+  const humanIds = new Set(humanRows)
+  const statusRows = pendingReviewRows(rows, decisions, false).filter(row => !humanIds.has(row))
+  const humanCounts = reviewWorkBreakdown(humanRows, decisions, blockedCaptionFiles)
+  const statusCounts = reviewWorkBreakdown(statusRows, decisions, blockedCaptionFiles)
+  for (const [population, breakdown] of [['human', humanCounts], ['status', statusCounts]]) {
+    for (const [key, label, responsibility, tone] of descriptions) {
+      const count = breakdown[key]
+      if (!count) continue
+      const status = population === 'status'
+      const statusLabel = key === 'review' || key === 'manual' ? 'Recorded status needs checking' : label
+      notices.push({key: status ? `status:${key}` : key, population, label: status ? statusLabel : label, count,
+        responsibility: `${count.toLocaleString()} ${status ? 'status-check' : 'review'} item${count === 1 ? '' : 's'} ${status && ['review', 'manual'].includes(key) ? 'have not been admitted to automatic processing. Check the saved eligibility or recovery reason; these are outside the human-input tab.' : responsibility}`, tone: status ? 'waiting' : tone})
+    }
   }
   const age = snapshot?.progress?.material_age_s
   const checkpoint = typeof age === 'number' && Number.isFinite(age) && age >= 0 ? `Last saved progress ${Math.floor(age / 60)}m ${Math.floor(age % 60)}s ago.` : null
@@ -71,5 +85,5 @@ export function remainingWorkStatus({ events = [], rows = [], decisions = {}, sn
     else grouped.set(key, { ...notice })
   }
   const consolidated = [...grouped.values()].map(notice => notice.affectedDocuments ? { ...notice, responsibility: `${notice.affectedDocuments} documents affected. ${notice.responsibility}` } : notice)
-  return { notices: consolidated, checkpoint, recovery, stalled, counts }
+  return { notices: consolidated, checkpoint, recovery, stalled, counts, humanCounts, statusCounts, humanTotal: humanRows.length, statusTotal: statusRows.length }
 }

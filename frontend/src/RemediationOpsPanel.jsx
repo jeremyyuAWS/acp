@@ -333,13 +333,13 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   </section>
 }
 
-export function RemediationActivityPanel({ activity = null, snapshot, rows = [], decisions = {}, events = [], connected = false, receivedAt = null, activityStatus = 'ready', updateMode = 'idle' }) {
+export function RemediationActivityPanel({ activity = null, snapshot, rows = [], decisions = {}, events = [], connected = false, receivedAt = null, activityStatus = 'ready', updateMode = 'idle', automatic = false }) {
   const fresh = useRemediationFreshness({snapshot, connected, receivedAt})
   if (!snapshot?.batch_id && !events.length) return null
   return <section className="panel remops" aria-label="Remediation live activity">
     <div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /></div>
     <RemediationProcessingNow activity={activity} terminal={snapshot?.terminal} />
-    <RemainingWorkStatus snapshot={snapshot} events={events} rows={rows} decisions={decisions} />
+    <RemainingWorkStatus snapshot={snapshot} events={events} rows={rows} decisions={decisions} automatic={automatic} />
     <Activity key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot?.terminal} />
   </section>
 }
