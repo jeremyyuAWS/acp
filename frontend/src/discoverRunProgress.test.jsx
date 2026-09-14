@@ -165,7 +165,7 @@ describe('the discovery step checklist', () => {
     }))
     expect(html).toContain('SharePoint integration status')
     expect(html).toContain('Microsoft Graph')
-    expect(html).toContain('Live updates connected')
+    expect(html).toContain('Live discovery updates connected')
     expect(html).toContain('1 of 2 sites read')
     expect(html).toContain('2 of 3 libraries complete')
     expect(html).toContain('Mixed enumeration')
@@ -179,6 +179,30 @@ describe('the discovery step checklist', () => {
     }))
     expect(html).not.toContain('SharePoint integration status')
     expect(html).not.toContain('Microsoft Graph')
+  })
+
+  it('shows measured progress for a folder scan without fabricating site coverage', () => {
+    const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {
+      busy: true, source: 'sharepoint', freshness: 'live',
+      progress: { phase: 'discovering', files_found: 41, folders_visited: 12 },
+      scope: { kind: 'sharepoint', folders: [{ name: 'Clinical policies' }] },
+    }))
+    expect(html).toContain('41 documents found · 12 folders visited')
+    expect(html).toContain('Selected folder: Clinical policies')
+    expect(html).toContain('not a separate Microsoft Graph health check')
+    expect(html).not.toContain('sites read')
+    expect(html).not.toContain('libraries complete')
+  })
+
+  it('distinguishes a finishing inventory from active source enumeration', () => {
+    const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {
+      busy: true, source: 'sharepoint', freshness: 'checkpoint',
+      progress: { phase: 'lifecycle', files_found: 41 }, scope: { kind: 'sharepoint' },
+    }))
+    expect(html).toContain('Source inventory collected')
+    expect(html).toContain('Showing latest checkpoint')
+    expect(html).not.toContain('Live discovery updates connected')
+    expect(html).not.toContain('0 folders visited')
   })
 
   it('shows Discovering documents heading', () => {
