@@ -136,6 +136,7 @@ export function addRemediationEvent(previous, event, id, limit = MAX_VISIBLE_REM
             material: event.material == null ? null : !!event.material,
             reasonCode: ['vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked', 'vision_generated_output_unusable', 'vision_local_endpoint_required', 'vision_recovery_unresolved', 'vision_response_empty'].includes(event.detail?.reason_code) ? event.detail.reason_code : null,
             attempt: event.attempt == null ? null : Number(event.attempt),
+            processingZone: ['local', 'cloud', 'tenant'].includes(event.detail?.processing_zone) ? event.detail.processing_zone : null,
             phase: event.phase || null,
             correlationId: event.correlation_id || null }, ...previous]
     .sort((a, b) => {

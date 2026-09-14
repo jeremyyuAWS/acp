@@ -183,7 +183,7 @@ export function useRemediationRun(runId) {
           // The FRAME's id is the authority, not a field inside the payload: the cursor must only
           // ever advance to something this client actually rendered.
           if (id != null) cursorRef.current = id
-          setEvents((previous) => addRemediationEvent(previous, event, id, Infinity))
+          setEvents((previous) => addRemediationEvent(previous, event, id))
         },
         onReconcile: () => {
           // The server declined to replay — cursor ahead of the log, log pruned, cursor malformed.

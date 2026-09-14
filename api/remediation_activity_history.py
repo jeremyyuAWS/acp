@@ -2,6 +2,7 @@
 import json
 
 KINDS = (
+    'remediate.ai_request_started', 'remediate.ai_request_finished',
     'remediate.accepted', 'remediate.fix_applied', 'remediate.verified',
     'remediate.verification_failed', 'remediate.delivered', 'remediate.delivery_failed',
     'remediate.review_requested', 'remediate.document_completed', 'scan.interrupted',

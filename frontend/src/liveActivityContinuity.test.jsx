@@ -33,3 +33,14 @@ it('shows the recorded AI model and zone without a verification claim',()=>{
  expect(remediationEventLine({...event,kind:'remediate.ai_request_finished',detail:{processing_zone:'cloud',model:'gpt-4.1',status:'failed'}})).toContain('Cloud AI · gpt-4.1 · Request failed')
  expect(remediationEventLine({...event,detail:{}})).toContain('Model not recorded')
 })
+it('offers compact optional filters without changing recorded history totals',async()=>{
+ const events=[{...rows(1)[0],key:'local',line:'Local AI caption for report.pptx',kind:'remediate.ai_request_started',processingZone:'local',tone:'neutral'}, {...rows(1)[0],key:'cloud',line:'Cloud AI caption for other.pptx',kind:'remediate.ai_request_finished',processingZone:'cloud',tone:'attention'}]
+ await render(events);expect(host.querySelector('select')).toBeNull()
+ await act(()=>[...host.querySelectorAll('button')].find(b=>b.textContent.startsWith('Filter')).click())
+ const location=[...host.querySelectorAll('select')][1]
+ await act(()=>{location.value='local';location.dispatchEvent(new Event('change',{bubbles:true}))})
+ expect(host.querySelector('ol').children).toHaveLength(1);expect(host.textContent).toContain('1 of 2 recorded updates')
+ await render([...events,{...events[1],key:'cloud2'}]);expect(host.textContent).toContain('1 of 3 recorded updates')
+ await act(()=>[...host.querySelectorAll('button')].find(b=>b.textContent==='Clear filters').click())
+ expect(host.querySelector('ol').children).toHaveLength(3)
+})
