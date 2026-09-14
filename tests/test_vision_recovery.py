@@ -328,3 +328,13 @@ def test_cloud_empty_output_does_not_buy_an_extra_recovery_attempt():
     context = SimpleNamespace(enabled=True, local_drafting=False, deferred=[], owner_id=OWNER, run_id='run',
         ledger=SimpleNamespace(snapshot=lambda *_: {'blocked': False, 'available_units': 100}))
     assert recovery._recovery_block(context, ['empty_response']) == 'vision_generated_output_unusable'
+
+
+def test_successful_paid_recovery_can_save_draft_after_spending_last_available_units():
+    from types import SimpleNamespace
+    context = SimpleNamespace(enabled=True, local_drafting=False, deferred=[], owner_id=OWNER, run_id='run',
+        ledger=SimpleNamespace(snapshot=lambda *_: {'blocked': False, 'available_units': 0}))
+    assert recovery._recovery_block(context) == 'vision_permission_or_budget_blocked'
+    assert recovery._recovery_block(context, [], check_admission=False) is None
+    context.ledger.snapshot = lambda *_: {'blocked': True, 'available_units': 0}
+    assert recovery._recovery_block(context, [], check_admission=False) == 'vision_spending_reconciliation_required'

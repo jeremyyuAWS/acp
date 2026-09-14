@@ -85,7 +85,7 @@ def _recovery_reasons(context):
     return reasons
 
 
-def _recovery_block(context, misses=()):
+def _recovery_block(context, misses=(), *, check_admission=True):
     reasons = _recovery_reasons(context)
     if reasons & {'provider_usage_unknown', 'existing_draft_attempt_requires_reconciliation',
                   'budget_settlement_failed_or_breached', 'budget_release_failed'}:
@@ -96,7 +96,7 @@ def _recovery_block(context, misses=()):
         snapshot = context.ledger.snapshot(context.owner_id, context.run_id)
         if snapshot['blocked']:
             return 'vision_spending_reconciliation_required'
-        if snapshot['available_units'] <= 0:
+        if check_admission and snapshot['available_units'] <= 0:
             return 'vision_permission_or_budget_blocked'
     # Settled, rejected output is not evidence of missing consent or funds.
     if 'attempts_exhausted' in reasons:
@@ -280,7 +280,7 @@ def process(store, payload):
                 else:
                     proposals, _ = alt_proposals_for_office(data, file.rsplit('.', 1)[-1],
                         scan_id=sid, context_file=file, include_grounded=True)
-            blocked = _recovery_block(context, misses)
+            blocked = _recovery_block(context, misses, check_admission=False)
             if blocked:
                 raise RecoveryBlocked(blocked)
             if misses:

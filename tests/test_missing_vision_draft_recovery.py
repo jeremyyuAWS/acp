@@ -72,11 +72,11 @@ def test_reconciliation_waits_without_generation_then_resumes_same_allowance(iso
     clear_retries(isolated_store)
     waiting = dict(original, waiting_spending=True, wait_check=1)
     recovery._enqueue(isolated_store, waiting)
-    monkeypatch.setattr(recovery, '_recovery_block', lambda context, misses=(): 'vision_spending_reconciliation_required')
+    monkeypatch.setattr(recovery, '_recovery_block', lambda context, misses=(), check_admission=True: 'vision_spending_reconciliation_required')
     monkeypatch.setattr(remediate_office, 'alt_proposals_for_office', lambda *a, **k: pytest.fail('paid generation while usage unknown'))
     recovery.process(isolated_store, waiting)
     assert len(isolated_store.list_scan_jobs_of_type(SID, 'vision_proposal_retry')) == 2
-    monkeypatch.setattr(recovery, '_recovery_block', lambda context, misses=(): None)
+    monkeypatch.setattr(recovery, '_recovery_block', lambda context, misses=(), check_admission=True: None)
     recovery.process(isolated_store, waiting)
     recovery.process(isolated_store, waiting)
     jobs = isolated_store.list_scan_jobs_of_type(SID, 'vision_proposal_retry')
@@ -97,7 +97,7 @@ def test_unknown_usage_checks_stop_after_eight_and_do_not_restart(isolated_store
     monkeypatch.setattr(blob, 'download_remediated', lambda *args: DATA)
     _, original = seed(isolated_store)
     clear_retries(isolated_store)
-    monkeypatch.setattr(recovery, '_recovery_block', lambda context, misses=(): 'vision_spending_reconciliation_required')
+    monkeypatch.setattr(recovery, '_recovery_block', lambda context, misses=(), check_admission=True: 'vision_spending_reconciliation_required')
     for check in range(1, 9):
         waiting = dict(original, waiting_spending=True, wait_check=check)
         recovery._enqueue(isolated_store, waiting)
