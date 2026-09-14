@@ -42,6 +42,7 @@ def prepared(isolated_store,monkeypatch):
         store.enqueue_job('publish_file',{'owner':OWNER,'scan_id':SID,'file':FILE,'artifact_digest':'sha256:'+DIGEST, 'automatic_release_id':body.get('automatic_release_id')},scan_id=SID,batch_id=batch)
         return {'batch_id':batch,'published':[{'file':FILE,'status':'queued'}]}
     monkeypatch.setattr(scans,'publish_files',publish)
+    monkeypatch.setattr(flow, 'delivery_preflight', lambda row: {'ready': True})
     return fixture
 
 
@@ -507,3 +508,66 @@ def test_optional_automatic_inspection_does_not_block_strict_saved_copy(prepared
     prepared.store.queue_hitl_deferral(SID, FILE, 'Missing faithful alt text', 1, rule_id='1.1.1')
     with pytest.raises(ValueError, match='review or manual work remains'):
         flow.ready(prepared.store, row, FILE)
+
+
+def test_missing_sharepoint_delivery_job_has_specific_receipt_inspection_action(prepared):
+    row = authorize(prepared)
+    row = tick(prepared, row)
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, "DELETE FROM jobs WHERE type='publish_file'")
+    row = tick(prepared, row)
+    entry = flow.public(row)['file_progress'][FILE]
+    assert entry['state'] == 'blocked'
+    assert entry['failure_category'] == 'delivery_record_missing'
+    assert 'No delivery job or receipt is recorded' in entry['message']
+    assert 'Inspect the destination before retrying' in entry['message']
+    assert entry['artifact_digest'] == DIGEST
+    assert not entry['requires_reconnect']
+    assert not flow.public(row)['can_resume']
+    assert len(prepared.calls) == 1
+
+
+def test_provider_preflight_failure_does_not_freeze_an_undispatched_copy(prepared, monkeypatch):
+    monkeypatch.setattr(flow, 'delivery_preflight', lambda row: {'ready': False, 'message': 'Reconnect Microsoft to check this folder.'})
+    row = tick(prepared, authorize(prepared))
+    entry = row['progress']['files'][FILE]
+    assert entry['state'] == 'blocked'
+    assert entry['failure_category'] == 'delivery_preflight_blocked'
+    assert not entry.get('artifact_digest')
+    assert not prepared.calls
+    monkeypatch.setattr(flow, 'delivery_preflight', lambda row: {'ready': True})
+    row = tick(prepared, row)
+    assert row['progress']['files'][FILE]['artifact_digest'] == DIGEST
+    assert len(prepared.calls) == 1
+
+
+def test_unknown_dispatch_keeps_bounded_diagnostic_after_missing_job_reconciliation(prepared, monkeypatch):
+    from fastapi import HTTPException
+    from routes import scans
+    def unavailable(*args, **kwargs):
+        raise HTTPException(403, 'synthetic write grant unavailable')
+    monkeypatch.setattr(scans, 'publish_files', unavailable)
+    row = tick(prepared, authorize(prepared))
+    assert row['progress']['files'][FILE]['dispatch_error'] == {'error_type': 'HTTPException', 'http_status': 403}
+    row = tick(prepared, row)
+    assert row['progress']['files'][FILE]['failure_category'] == 'delivery_record_missing'
+    assert row['progress']['files'][FILE]['dispatch_error']['http_status'] == 403
+    with prepared.store._db.cursor() as cur:
+        prepared.store._db.execute(cur, "SELECT detail FROM decision_log WHERE scan_id=%s AND action='release.dispatch_outcome_unknown'", (SID,))
+        audit = prepared.store._db.fetchone(cur)
+    assert json.loads(audit['detail'])['http_status'] == 403
+
+
+@pytest.mark.parametrize('status', [object(), '403', True, 99, 600])
+def test_unknown_dispatch_diagnostic_rejects_non_http_status(prepared, monkeypatch, status):
+    from routes import scans
+    error = type('SyntheticError' * 20, (Exception,), {})('private provider payload')
+    error.status_code = status
+    def unavailable(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(scans, 'publish_files', unavailable)
+    row = tick(prepared, authorize(prepared))
+    diagnostic = row['progress']['files'][FILE]['dispatch_error']
+    assert diagnostic['http_status'] is None
+    assert len(diagnostic['error_type']) == 80
+    assert 'private provider payload' not in json.dumps(diagnostic)
