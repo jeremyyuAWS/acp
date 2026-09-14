@@ -94,6 +94,17 @@ def test_protected_routes_return_exact_bytes_or_conflict(client, isolated_store,
     monkeypatch.setattr(blob, 'download_remediated', lambda *_: DATA)
     path = f'/scans/evidence/remediation/activity/{seq}'
     assert client.get(path + '/evidence').json()['available'] is True
-    assert client.get(path + '/copy').content == DATA
+    response = client.get(path + '/copy')
+    assert response.content == DATA
+    assert response.headers['content-disposition'] == "attachment; filename*=UTF-8''document.docx"
+    assert response.headers['content-type'] == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     monkeypatch.setattr(blob, 'download_remediated', lambda *_: b'newer')
     assert client.get(path + '/copy').status_code == 409
+
+
+def test_exact_copy_filename_is_basename_and_removes_header_controls(isolated_store, monkeypatch):
+    import activity_event_evidence as evidence
+    monkeypatch.setattr(evidence, '_bound_record', lambda *_: ({'file': 'folder/subfolder/Report\r\nInjected.docx', 'artifact_sha256': hashlib.sha256(DATA).hexdigest()}, None))
+    data, filename = exact_copy(isolated_store, 'evidence', 1, OWNER, lambda *_: DATA, with_filename=True)
+    assert data == DATA
+    assert filename == 'ReportInjected.docx'

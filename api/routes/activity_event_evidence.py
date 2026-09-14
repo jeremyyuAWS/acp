@@ -2,6 +2,8 @@
 from fastapi import APIRouter, HTTPException, Request, Response
 import core
 from activity_event_evidence import read, exact_copy
+from urllib.parse import quote
+import mimetypes
 
 router = APIRouter()
 
@@ -23,10 +25,11 @@ def activity_evidence(sid: str, seq: int, request: Request, response: Response):
 def activity_copy(sid: str, seq: int, request: Request):
     import blob
     try:
-        data = exact_copy(core.store, sid, seq, _owner(request), blob.download_remediated)
+        data, filename = exact_copy(core.store, sid, seq, _owner(request), blob.download_remediated, with_filename=True)
     except LookupError:
         raise HTTPException(404, 'activity copy not found')
     except ValueError:
         raise HTTPException(409, 'The recorded saved version is no longer available')
-    return Response(data, media_type='application/octet-stream',
-                    headers={'Cache-Control': 'no-store', 'Content-Disposition': 'attachment'})
+    return Response(data, media_type=mimetypes.guess_type(filename)[0] or 'application/octet-stream',
+                    headers={'Cache-Control': 'no-store',
+                             'Content-Disposition': "attachment; filename*=UTF-8''" + quote(filename, safe='')})

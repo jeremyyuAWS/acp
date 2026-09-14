@@ -95,11 +95,15 @@ def read(store, sid, seq, owner):
                            'reason': None if matches else 'saved_version_changed'}}
 
 
-def exact_copy(store, sid, seq, owner, download):
+def exact_copy(store, sid, seq, owner, download, *, with_filename=False):
     body, reason = _bound_record(store, sid, seq, owner)
     if body is None:
         raise LookupError(reason)
     data = download(owner, sid, body['file'])
     if not data or hashlib.sha256(data).hexdigest() != body['artifact_sha256']:
         raise ValueError('The recorded saved version is no longer available')
+    if with_filename:
+        filename = str(body['file']).replace('\\', '/').rsplit('/', 1)[-1]
+        filename = ''.join(c for c in filename if ord(c) >= 32 and ord(c) != 127)
+        return data, filename or 'corrected-copy'
     return data
