@@ -29,7 +29,7 @@ export default function ReleaseCompletionDocuments({ files = [], states = [], pr
       <label htmlFor={`${id}-search`}>Search filenames<input id={`${id}-search`} type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search files…" /></label>
       <label htmlFor={`${id}-publication`}>Publication status<select id={`${id}-publication`} value={publication} onChange={event => setPublication(event.target.value)}><option value="all">All publication statuses</option>{statuses.map(status => <option key={status} value={status}>{PUBLICATION_LABELS[status] || rows.find(row => row.state.status === status).state.label || status}</option>)}</select></label>
       <label htmlFor={`${id}-format`}>File type<select id={`${id}-format`} value={format} onChange={event => setFormat(event.target.value)}><option value="all">All file types</option>{formats.map(value => <option key={value}>{value}</option>)}</select></label>
-      <label htmlFor={`${id}-verification`}>Verification status<select id={`${id}-verification`} value={verification} onChange={event => setVerification(event.target.value)}><option value="all">All verification statuses</option><option value="passed">Selected checks passed</option><option value="unconfirmed">Not confirmed clear</option></select></label>
+      <label htmlFor={`${id}-verification`}>Verification status<select id={`${id}-verification`} value={verification} onChange={event => setVerification(event.target.value)}><option value="all">All verification statuses</option><option value="passed">Selected checks passed</option><option value="unconfirmed">Needs verification</option></select></label>
       {filtered && <button className="ghost" onClick={clear}>Clear filters</button>}
     </div>
     <p className="release-documents-count" role="status">{visible.length} of {rows.length} documents shown{filter !== 'all' ? ' · Selected file queue' : ''}</p>
@@ -37,7 +37,7 @@ export default function ReleaseCompletionDocuments({ files = [], states = [], pr
       <tbody>{visible.map(({ file, state, result }) => <tr key={file.file}>
         <th scope="row">{file.file}</th>
         <td>{file.remediated_at ? 'Saved in ACP' : 'Not saved yet'}</td>
-        <td>{checksPassed(file) ? 'Selected checks passed' : 'Not confirmed clear'}</td>
+        <td>{checksPassed(file) ? 'Selected checks passed' : <>Needs verification<small style={{ display: 'block', marginTop: 6 }}>Remaining findings or incomplete checks. See the remaining-work checklist.</small></>}</td>
         <td><strong>{state.label}</strong><p>{state.reason}</p>{result?.published_at && <small>Receipt recorded: {new Date(result.published_at).toLocaleString()}</small>}</td>
         <td>{state.status === 'released' && (urls[file.file] || result?.published_url) ? <a href={urls[file.file] || result.published_url} target="_blank" rel="noopener noreferrer">Open published copy</a>
           : !coveredFiles.includes(file.file) && result?.status === 'failed' && ['ready', 'failed'].includes(state.status) ? <button disabled={readOnly || publishing} onClick={() => onRetry([file.file])}>Retry delivery</button> : null}{reportsByFile[file.file]}</td>
