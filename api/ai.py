@@ -1274,13 +1274,25 @@ def _looks_like_an_image_of_text(ocr_txt: str) -> bool:
 
 
 def _transcribed_alt(ocr_txt: str) -> str:
-    """The image's own text as an alt string: whitespace collapsed, length-bounded, no model in
-    the loop. Not run through _clean_alt — that strips 'image of'-style leads, which is right for
-    a model's reply and wrong for a verbatim transcription."""
-    t = re.sub(r"\s+", " ", (ocr_txt or "").strip())
-    if len(t) > 250:
-        t = t[:250].rsplit(" ", 1)[0].rstrip(",;:") + "…"
-    return t
+    """Preserve all recovered image text; a caption length limit must not erase instructions.
+
+    Whitespace is collapsed, but content is neither paraphrased nor truncated.
+    OCR completeness/accuracy itself still requires the existing assessment checks.
+    """
+    return re.sub(r"\s+", " ", (ocr_txt or "").strip())
+
+
+def _description_quality_failure(alt: str) -> str | None:
+    """Only observable incompleteness/refusal, never a semantic confidence score."""
+    if re.search(r"(?:…|\.\.\.)\s*$", alt or ""):
+        return "incomplete_description"
+    if re.search(
+        r"^(?:sorry[,!]?\s*)?(?:as an ai(?: language model)?[, ]+)?"
+        r"(?:i(?: am)?|we)\s+(?:cannot|can't|can’t|am unable to|are unable to)\s+"
+        r"(?:provide|describe|view|see|help|assist|generate|identify|interpret)\b",
+        (alt or "").strip(), re.I):
+        return "provider_refusal"
+    return None
 
 
 def _ocr_numeric_values_denied(alt: str, ocr_text: str) -> bool:
@@ -1400,12 +1412,20 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
                     "ground it — confirm it matches the intent")
     else:
         evidence = "vision description only — no text in the image to anchor it; confirm it matches the intent"
+    quality_failure = _description_quality_failure(alt)
     numeric_denial = _ocr_numeric_values_denied(alt, ocr_txt)
     if numeric_denial:
         grounded = False
         evidence = "OCR read numeric values, but the draft says there are none; review the caption individually."
+    if quality_failure:
+        grounded = False
+        evidence = ("The provider returned a refusal instead of an image description; obtain a usable draft."
+                    if quality_failure == "provider_refusal" else
+                    "The description ends with an omission marker; review or regenerate the complete content.")
     out = {"alt": alt, "grounded": grounded, "evidence": evidence, "model": model_used}
-    if numeric_denial:
+    if quality_failure:
+        out.update(automatic_write_blocked=True, reason_code=quality_failure)
+    elif numeric_denial:
         out.update(automatic_write_blocked=True, reason_code="ocr_numeric_values_denied")
     call_id = escalation.get("ai_call_id") if escalation else getattr(alt, "ai_call_id", None)
     if call_id:
