@@ -1884,9 +1884,11 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
         # cleared. The difference is a verification FAILURE, and it is the number PRD §17.8
         # requires never to reach the delivery counter.
         _unverified = len(rem_diffs) - len(verified_diffs)
+        from activity_event_evidence import record as record_activity_evidence
         if verified_diffs:
+            _evidence = record_activity_evidence(core.store, scan_id, filename, job, fixed_bytes, verified_diffs, verified=True, verification_ok=verification.ok)
             _rem_event(scan_id, "remediate.verified", job, filename,
-                       fixes=len(verified_diffs))
+                       fixes=len(verified_diffs), **_evidence)
         from verification_event_detail import verification_event_detail
         _event_detail = verification_event_detail(verification, rem_diffs, fixed_bytes, filename)
         _manual_ids = {_row['criterion'] for _row in _event_detail['manual_criteria']}
@@ -1894,8 +1896,9 @@ def _remediate_file_with_policy(payload: dict, job: dict) -> None:
                                  if not verification.cleared({d.get('rule_id')})
                                  and d.get('rule_id') not in _manual_ids]
         if _automatic_unverified:
+            _evidence = record_activity_evidence(core.store, scan_id, filename, job, fixed_bytes, _automatic_unverified, verified=False, verification_ok=verification.ok)
             _rem_event(scan_id, "remediate.verification_failed", job, filename,
-                       fixes=len(_automatic_unverified), failed_criteria=_event_detail['failed_criteria'])
+                       fixes=len(_automatic_unverified), failed_criteria=_event_detail['failed_criteria'], **_evidence)
         for _manual in _event_detail['manual_criteria']:
             _rem_event(scan_id, "remediate.review_requested", job, filename,
                        criterion=_manual['criterion'], reason_code=_manual['reason_code'])
