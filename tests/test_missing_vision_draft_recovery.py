@@ -25,7 +25,7 @@ def test_complete_drafts_are_not_sent_again(isolated_store):
     job, payload = seed(isolated_store)
     clear_retries(isolated_store)
     with isolated_store._db.cursor() as cur:
-        isolated_store._db.execute(cur, 'UPDATE hitl_queue SET proposals=%s WHERE id=%s',
+        isolated_store._db.execute(cur, 'UPDATE hitl_queue SET proposals=%s,finding_count=1 WHERE id=%s',
             (json.dumps([{'locator':'word/document.xml#r1', 'proposed_value':'Usable authored caption'}]), payload['item_id']))
     with run_context(isolated_store, job['payload'], job) as context:
         recovery.schedule(isolated_store, context, job, [], inspect_pending=True)
@@ -72,11 +72,11 @@ def test_reconciliation_waits_without_generation_then_resumes_same_allowance(iso
     clear_retries(isolated_store)
     waiting = dict(original, waiting_spending=True, wait_check=1)
     recovery._enqueue(isolated_store, waiting)
-    monkeypatch.setattr(recovery, '_recovery_block', lambda context: 'vision_spending_reconciliation_required')
+    monkeypatch.setattr(recovery, '_recovery_block', lambda context, misses=(), check_admission=True: 'vision_spending_reconciliation_required')
     monkeypatch.setattr(remediate_office, 'alt_proposals_for_office', lambda *a, **k: pytest.fail('paid generation while usage unknown'))
     recovery.process(isolated_store, waiting)
     assert len(isolated_store.list_scan_jobs_of_type(SID, 'vision_proposal_retry')) == 2
-    monkeypatch.setattr(recovery, '_recovery_block', lambda context: None)
+    monkeypatch.setattr(recovery, '_recovery_block', lambda context, misses=(), check_admission=True: None)
     recovery.process(isolated_store, waiting)
     recovery.process(isolated_store, waiting)
     jobs = isolated_store.list_scan_jobs_of_type(SID, 'vision_proposal_retry')
@@ -97,7 +97,7 @@ def test_unknown_usage_checks_stop_after_eight_and_do_not_restart(isolated_store
     monkeypatch.setattr(blob, 'download_remediated', lambda *args: DATA)
     _, original = seed(isolated_store)
     clear_retries(isolated_store)
-    monkeypatch.setattr(recovery, '_recovery_block', lambda context: 'vision_spending_reconciliation_required')
+    monkeypatch.setattr(recovery, '_recovery_block', lambda context, misses=(), check_admission=True: 'vision_spending_reconciliation_required')
     for check in range(1, 9):
         waiting = dict(original, waiting_spending=True, wait_check=check)
         recovery._enqueue(isolated_store, waiting)
@@ -134,3 +134,15 @@ def test_current_saved_run_can_resume_missing_drafts_without_rescan(isolated_sto
     assert len(isolated_store.list_scan_jobs_of_type(SID, 'remediate_file')) == 1
     with pytest.raises(ValueError):
         recovery.schedule_existing_pending(isolated_store, 'other@example.test', SID, previous['run_id'])
+
+
+def test_partial_nonempty_drafts_do_not_hide_missing_finding_coverage(isolated_store):
+    job, payload = seed(isolated_store)
+    clear_retries(isolated_store)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, 'UPDATE hitl_queue SET proposals=%s WHERE id=%s',
+            (json.dumps([{'locator':'word/document.xml#r1', 'proposed_value':'Usable caption'}]),payload['item_id']))
+    with run_context(isolated_store,job['payload'],job) as context:
+        recovery.schedule(isolated_store,context,job,[],inspect_pending=True)
+    assert len(isolated_store.list_scan_jobs_of_type(SID,'vision_proposal_retry')) == 1
+    assert isolated_store.get_hitl_item(payload['item_id'])['finding_count'] == 8

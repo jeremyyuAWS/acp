@@ -12,6 +12,15 @@ import json
 TRANSIENT = frozenset({'vision_timeout', 'timeout', 'capacity_busy', 'circuit_open',
     'assessment_vision_budget_exhausted', 'shared_capacity_busy',
     'shared_capacity_unavailable', 'shared_coordination_unavailable'})
+OUTPUT_FAILURES = frozenset({'empty', 'empty_response', 'reply_unusable'})
+
+
+class RecoveryBlocked(ValueError):
+    def __init__(self, reason_code):
+        self.reason_code = reason_code
+        super().__init__(_block_description(reason_code))
+
+
 _MISSES = ContextVar('vision_recovery_misses', default=None)
 
 
@@ -27,7 +36,7 @@ def capture():
 
 def record(reason):
     misses = _MISSES.get()
-    if misses is not None and reason in TRANSIENT:
+    if misses is not None and reason in TRANSIENT | OUTPUT_FAILURES:
         misses.append(reason)
 
 
@@ -40,7 +49,7 @@ def _decision(store, sid, file, state, **detail):
                        file=file, detail=_encoded(detail))
     safe = {key: detail[key] for key in ('retry', 'run_after', 'drafts') if key in detail}
     if state == 'blocked':
-        safe['reason_code'] = detail.get('reason_code') if detail.get('reason_code') in {'vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked', 'vision_generated_output_unusable', 'vision_local_endpoint_required'} else 'vision_recovery_unresolved'
+        safe['reason_code'] = detail.get('reason_code') if detail.get('reason_code') in {'vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked', 'vision_generated_output_unusable', 'vision_local_endpoint_required', 'vision_response_empty'} else 'vision_recovery_unresolved'
     store.append_scan_event(sid, 'remediate.vision_retry_' + state,
         phase='remediate', document=file, correlation_id=detail.get('run_id'),
         detail=safe or None)
@@ -48,7 +57,7 @@ def _decision(store, sid, file, state, **detail):
 
 def _pending(store, sid, file):
     with store._db.cursor() as cur:
-        store._db.execute(cur, 'SELECT id,status,proposals FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s',
+        store._db.execute(cur, 'SELECT id,status,proposals,finding_count FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s',
                           (sid, file, '1.1.1'))
         row = store._db.fetchone(cur)
     return row if row and row['status'] == 'pending' else None
@@ -66,9 +75,18 @@ def pending_for_file(store, sid, run_id, file):
     return False
 
 
-def _recovery_block(context):
+def _recovery_reasons(context):
     reasons = {item.get('reason') if isinstance(item, dict) else str(item)
                for item in context.deferred}
+    # Cloud text dispatch is deliberately refused in a local-only plan. It is
+    # not evidence that a private, zero-cost image request lacks authorization.
+    if getattr(context, 'local_drafting', False):
+        reasons.discard('ai_disabled_or_budget_zero')
+    return reasons
+
+
+def _recovery_block(context, misses=(), *, check_admission=True):
+    reasons = _recovery_reasons(context)
     if reasons & {'provider_usage_unknown', 'existing_draft_attempt_requires_reconciliation',
                   'budget_settlement_failed_or_breached', 'budget_release_failed'}:
         return 'vision_spending_reconciliation_required'
@@ -78,13 +96,18 @@ def _recovery_block(context):
         snapshot = context.ledger.snapshot(context.owner_id, context.run_id)
         if snapshot['blocked']:
             return 'vision_spending_reconciliation_required'
-        if snapshot['available_units'] <= 0:
+        if check_admission and snapshot['available_units'] <= 0:
             return 'vision_permission_or_budget_blocked'
     # Settled, rejected output is not evidence of missing consent or funds.
     if 'attempts_exhausted' in reasons:
         return 'vision_generated_output_unusable'
     if reasons & {'provider_access_denied', 'budget_admission_denied'}:
         return 'vision_permission_or_budget_blocked'
+    if getattr(context, 'local_drafting', False):
+        if set(misses) & {'empty', 'empty_response'}:
+            return 'vision_response_empty'
+    if set(misses) & OUTPUT_FAILURES:
+        return 'vision_generated_output_unusable'
     if any(reason not in TRANSIENT for reason in reasons):
         return 'vision_recovery_unresolved' if getattr(context, 'local_drafting', False) else 'vision_permission_or_budget_blocked'
     return None
@@ -93,6 +116,8 @@ def _recovery_block(context):
 def _block_description(reason_code):
     if reason_code == 'vision_local_endpoint_required':
         return 'This local-only run needs a private local AI endpoint. Cloud processing is not authorized by its saved plan.'
+    if reason_code == 'vision_response_empty':
+        return 'The image model returned no description after the automatic prompt retry. Provide the missing description or retry generation after checking local AI.'
     if reason_code == 'vision_recovery_unresolved':
         return 'Automatic generation is paused; check the recorded AI failure before retrying.'
     if reason_code == 'vision_generated_output_unusable':
@@ -111,7 +136,11 @@ def schedule(store, context, job, misses, *, inspect_pending=False):
         if not row:
             return
         proposals = json.loads(row.get('proposals') or '[]')
-        if proposals and all(p.get('proposed_value') and not p.get('automatic_write_blocked') for p in proposals):
+        count = row.get('finding_count')
+        locators = {p.get('locator') for p in proposals if p.get('locator')}
+        if (type(count) is int and count > 0 and len(locators) >= count
+                and all(p.get('proposed_value') and not p.get('automatic_write_blocked')
+                        and not p.get('is_template') for p in proposals)):
             return
     if not file.lower().endswith(('.docx', '.pptx', '.xlsx', '.pdf')):
         _decision(store, sid, file, 'blocked', run_id=context.run_id, reason='Proposal-only vision recovery is not available for this format.')
@@ -132,7 +161,7 @@ def schedule(store, context, job, misses, *, inspect_pending=False):
         'source_revision': store.remediation_source_revision(sid),
         'corrected_sha256': digest, 'item_id': row['id'],
         'proposals_before': row['proposals'], 'retry': 1}
-    blocked = _recovery_block(context)
+    blocked = _recovery_block(context, misses)
     if blocked:
         _decision(store, sid, file, 'blocked', run_id=context.run_id,
                   reason_code=blocked, reason=_block_description(blocked))
@@ -251,11 +280,9 @@ def process(store, payload):
                 else:
                     proposals, _ = alt_proposals_for_office(data, file.rsplit('.', 1)[-1],
                         scan_id=sid, context_file=file, include_grounded=True)
-            if any((item.get('reason') if isinstance(item, dict) else str(item)) not in TRANSIENT
-                   for item in context.deferred):
-                # Deferred managed attempts may have unknown billed usage. Never
-                # manufacture a fresh reservation to repeat an uncertain paid call.
-                raise ValueError('The saved spending authorization cannot safely complete vision recovery; remaining work stays in review.')
+            blocked = _recovery_block(context, misses, check_admission=False)
+            if blocked:
+                raise RecoveryBlocked(blocked)
             if misses:
                 if payload['retry'] < 2:
                     _validate(store, payload)
@@ -300,4 +327,5 @@ def process(store, payload):
             from ai_standing_approval import approve_file
             approve_file(store, context)
     except (ValueError, BudgetError) as exc:
-        _decision(store, sid, file, 'blocked', run_id=payload.get('run_id'), reason=str(exc))
+        _decision(store, sid, file, 'blocked', run_id=payload.get('run_id'), reason=str(exc),
+                  reason_code=getattr(exc, 'reason_code', None))

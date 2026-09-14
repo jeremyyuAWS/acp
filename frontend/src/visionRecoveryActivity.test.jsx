@@ -31,3 +31,8 @@ describe('vision retry narration', () => {
     expect(container.textContent).toContain('Image description queued to retry')
   })
 })
+
+it('shows empty image response as a specific safe cause', () => {
+  expect(remediationEventLine({kind:'remediate.vision_retry_blocked',document:'A.pptx',detail:{reason_code:'vision_response_empty',response:'private text'}})).toContain('AI returned no image description')
+  expect(remediationEventLine({kind:'remediate.vision_retry_blocked',document:'A.pptx',detail:{reason_code:'vision_response_empty',response:'private text'}})).not.toContain('private text')
+})

@@ -72,6 +72,7 @@ export function remediationEventLine(event) {
       if (detail.reason_code === 'vision_spending_reconciliation_required') return `Image description for ${file(event)} paused · awaiting confirmation of previous AI usage before another paid request`
       if (detail.reason_code === 'vision_permission_or_budget_blocked') return `Image description for ${file(event)} paused · saved AI permission or spending limit needs attention`
       if (detail.reason_code === 'vision_local_endpoint_required') return `Local AI for ${file(event)} unavailable · the saved local-only plan requires a private endpoint; cloud processing was not authorized`
+      if (detail.reason_code === 'vision_response_empty') return `AI returned no image description for ${file(event)} · automatic prompt retry exhausted; provide the description or retry after checking local AI`
       if (detail.reason_code === 'vision_generated_output_unusable') return `AI response for ${file(event)} could not be used · automatic generation attempts stopped; check AI activity for the validation reason`
       if (detail.reason_code === 'vision_recovery_unresolved') return `AI generation for ${file(event)} paused · check the recorded failure before retrying`
       return `Image description for ${file(event)} still needs individual review`
@@ -122,7 +123,7 @@ export function addRemediationEvent(previous, event, id, limit = MAX_VISIBLE_REM
             // added. Absent (an older server, or a replayed row) reads as unknown — which is
             // neither true nor false, and is why this is `?? null` rather than `|| false`.
             material: event.material == null ? null : !!event.material,
-            reasonCode: ['vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked', 'vision_generated_output_unusable', 'vision_local_endpoint_required', 'vision_recovery_unresolved'].includes(event.detail?.reason_code) ? event.detail.reason_code : null,
+            reasonCode: ['vision_spending_reconciliation_required', 'vision_permission_or_budget_blocked', 'vision_generated_output_unusable', 'vision_local_endpoint_required', 'vision_recovery_unresolved', 'vision_response_empty'].includes(event.detail?.reason_code) ? event.detail.reason_code : null,
             attempt: event.attempt == null ? null : Number(event.attempt),
             phase: event.phase || null,
             correlationId: event.correlation_id || null }, ...previous]
