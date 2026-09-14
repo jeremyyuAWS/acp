@@ -54,3 +54,38 @@ def test_real_saved_bytes_rechecked_without_rewriting(candidate, monkeypatch):
 
 
 from test_release_candidate_assessment import candidate
+
+
+def test_reuse_checks_actual_bytes_and_pending_writes(candidate,monkeypatch):
+    from test_release_candidate_assessment import SID,OWNER,FILE
+    monkeypatch.setattr('verification_identity.evaluator_identity',lambda:'test-evaluator')
+    store,state,save=candidate
+    digest,at=save(state['bytes'])
+    first=verify_saved_copy(store,SID,OWNER,FILE,digest,at)
+    monkeypatch.setattr('proposals.verify_residual',lambda *a,**k:pytest.fail('unchanged successful check must not rerun'))
+    assert verify_saved_copy(store,SID,OWNER,FILE,digest,at)['assessment_reused'] is True
+    original=state['bytes'];state['bytes']=b'changed actual bytes'
+    with pytest.raises(ReleaseArtifactError):verify_saved_copy(store,SID,OWNER,FILE,digest,at)
+    state['bytes']=original
+    monkeypatch.setattr(store,'count_unapplied_approved_values',lambda *a:1)
+    with pytest.raises(ReleaseArtifactError) as error:verify_saved_copy(store,SID,OWNER,FILE,digest,at)
+    assert error.value.category=='approved_changes_unapplied'
+
+
+def test_failed_incomplete_or_changed_evaluator_and_scope_rerun(candidate,monkeypatch):
+    from test_release_candidate_assessment import SID,OWNER,FILE
+    monkeypatch.setattr('verification_identity.evaluator_identity',lambda:'test-evaluator')
+    store,state,save=candidate;digest,at=save(state['bytes'])
+    first=verify_saved_copy(store,SID,OWNER,FILE,digest,at)
+    calls=[]
+    monkeypatch.setattr('saved_copy_verification.assess_candidate',lambda *a,**k:calls.append(1) or {'reran':True})
+    monkeypatch.setattr('verification_identity.evaluator_identity',lambda:'new-evaluator')
+    assert verify_saved_copy(store,SID,OWNER,FILE,digest,at)=={'reran':True}
+    monkeypatch.setattr('verification_identity.evaluator_identity',lambda:'test-evaluator')
+    monkeypatch.setattr(store,'scope_for_file',lambda *a:{'1.3.1':['docx']})
+    assert verify_saved_copy(store,SID,OWNER,FILE,digest,at)=={'reran':True}
+    monkeypatch.setattr(store,'scope_for_file',lambda sid,file,scope:scope)
+    for override in [{'assessment_ok':False},{'skipped_rules':2}]:
+        monkeypatch.setattr('saved_copy_verification.current_assessment',lambda *a,**k:{**first,**override})
+        assert verify_saved_copy(store,SID,OWNER,FILE,digest,at)=={'reran':True}
+    assert len(calls)==4
