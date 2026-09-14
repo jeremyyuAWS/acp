@@ -266,7 +266,7 @@ function SharePointLiveSummary({ source, scope, progress, freshness }) {
       {(measuredFiles !== null || measuredFolders !== null) && <p style={{ fontSize: 12.5, margin: '7px 0 0', fontVariantNumeric: 'tabular-nums' }}>
         {[measuredFiles !== null && `${n(measuredFiles)} documents found`, measuredFolders !== null && `${n(measuredFolders)} folders visited`].filter(Boolean).join(' · ')}
       </p>}
-      {!sites.length && <p className="muted" style={{ fontSize: 11.5, margin: '7px 0 0' }}>Site and library coverage is not reported for this scan path. Live updates describe Discovery progress, not a separate Microsoft Graph health check.</p>}
+      {!sites.length && <p className="muted" style={{ fontSize: 11.5, margin: '7px 0 0' }}>Site and library coverage has not been reported for this run. Live updates describe Discovery progress, not a separate Microsoft Graph health check.</p>}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 7 }}>
         {chips.map((chip) => (
           <span key={chip} style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 999,
