@@ -2,6 +2,8 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import math
+import statistics
 
 MAX_RECORDS = 1000
 STAGES = frozenset(('primary', 'fallback_1', 'fallback_2', 'review', 'final_review'))
@@ -27,7 +29,11 @@ def read_metrics(store, owner, scan_id, run_id, *, stage=None, provider=None, mo
     db = store._db
     with db.cursor() as cur:
         db.execute(cur, '''SELECT h.attempt_id,h.provider,h.model,h.purpose,h.status,h.created_at,h.updated_at,h.result_json,
-            a.state AS spending_state,a.actual_cost_units,a.max_cost_units FROM ai_attempt_history h
+            a.state AS spending_state,a.actual_cost_units,a.max_cost_units,
+            (SELECT MIN(c.timing) FROM ai_attempt_trace_links l JOIN ai_calls c ON c.id=l.trace_call_id
+             WHERE l.owner_id=h.owner_id AND l.run_id=h.run_id AND l.attempt_id=h.attempt_id
+               AND c.scan_id=h.scan_id AND c.file=h.file AND c.provider=h.provider AND c.model=h.model
+             HAVING COUNT(*)=1) AS measured_timing FROM ai_attempt_history h
             LEFT JOIN ai_spending_attempts a ON a.owner_id=h.owner_id AND a.run_id=h.run_id AND a.attempt_id=h.attempt_id
             WHERE h.owner_id=%s AND h.scan_id=%s AND h.run_id=%s ORDER BY h.created_at DESC,h.attempt_id DESC LIMIT %s''',
             (owner, scan_id, run_id, MAX_RECORDS + 1))
@@ -107,12 +113,31 @@ def aggregate_metrics(records, *, stage=None, provider=None, model=None, now, te
         identity = (row['provider'], row['model'])
         item = model_rows.setdefault(identity, {'id': ':'.join(identity), 'label': ' · '.join(identity),
             'value': 0, 'input_tokens': 0, 'output_tokens': 0, 'tokens_complete': True,
-            'completed': 0, 'active': 0, 'timed_attempts': 0, 'duration_seconds': 0})
+            'completed': 0, 'active': 0, 'timed_attempts': 0, 'duration_seconds': 0,
+            'durations': [], 'usable_outputs': 0, 'no_usable_output': 0,
+            'validation_unavailable': 0, 'provider_timing': {}})
         item['value'] += 1
         item['active'] += row.get('status') == 'started' and row.get('spending_state') == 'dispatched'
         if row.get('status') == 'started':
             continue
         item['completed'] += 1
+        from ollama_runtime import safe_timings
+        try:
+            measured = safe_timings(json.loads(row.get('measured_timing') or '{}'))
+        except (TypeError, ValueError):
+            measured = {}
+        for field, value in measured.items():
+            item['provider_timing'].setdefault(field, []).append(value)
+        # Match settled contribution outcomes; uncertain usage is not validation.
+        if row.get('spending_state') == 'settled':
+            if row.get('validation') == 'usable':
+                item['usable_outputs'] += 1
+            elif row.get('status') in ('empty_response', 'unusable_response', 'refused'):
+                item['no_usable_output'] += 1
+            else:
+                item['validation_unavailable'] += 1
+        else:
+            item['validation_unavailable'] += 1
         for source, target in (('prompt_tokens', 'input_tokens'), ('completion_tokens', 'output_tokens')):
             tokens = row.get(source)
             if type(tokens) is int and tokens >= 0:
@@ -124,8 +149,18 @@ def aggregate_metrics(records, *, stage=None, provider=None, model=None, now, te
             duration = (finish - begin).total_seconds()
             durations.append(duration)
             item['duration_seconds'] += duration
+            item['durations'].append(duration)
             item['timed_attempts'] += 1
     for item in model_rows.values():
+        item['provider_timing'] = {field: {'average': sum(values) / len(values), 'measured_attempts': len(values)}
+                                   for field, values in item['provider_timing'].items()}
+        samples = sorted(item.pop('durations'))
+        item['median_seconds'] = statistics.median(samples) if samples else None
+        item['p95_seconds'] = samples[math.ceil(len(samples) * .95) - 1] if samples else None
+        known = item['usable_outputs'] + item['no_usable_output']
+        item['validated_attempts'] = known
+        item['usable_percent'] = 100 * item['usable_outputs'] / known if known else None
+        item['quality_complete'] = covered and item['validation_unavailable'] == 0
         item['average_seconds'] = item.pop('duration_seconds') / item['timed_attempts'] if item['timed_attempts'] else None
         if not item['tokens_complete'] or not item['completed']:
             item['input_tokens'] = item['output_tokens'] = None
