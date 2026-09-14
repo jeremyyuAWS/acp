@@ -61,3 +61,17 @@ def test_excluded_criterion_does_not_recover_or_offer_its_content(source):
     proposals = []
     assert remediate_office._draft_docx_assisted(entries, path, proposals, in_scope=lambda sc: False) == 0
     assert proposals == []
+
+
+def test_unused_embedded_media_does_not_create_an_extra_draft(source):
+    path, entries = source
+    with zipfile.ZipFile(path, 'a') as archive:
+        archive.writestr('word/media/image2.png', entries['word/media/image1.png'])
+    with zipfile.ZipFile(path) as archive:
+        entries = {name: archive.read(name) for name in archive.namelist()}
+    original = path.read_bytes()
+    assert len(ocr.images_of_text(path, '.docx')) == 1
+    proposals = []
+    count = remediate_office._draft_docx_assisted(entries, path, proposals, in_scope=lambda sc: sc == '1.4.5')
+    assert count == 1 and [p['locator'] for p in proposals] == ['image 1']
+    assert path.read_bytes() == original

@@ -1530,10 +1530,14 @@ def _draft_docx_assisted(entries: dict, path: Path, proposals: list | None, *,
     try:
         if made < _ASSISTED_MAX_DRAFTS and _sc_ok(in_scope, "1.4.5"):
             import ocr as _ocr
+            visible, _ = _ocr._embedded_images_and_total(path, path.suffix.lower(), visible_word=True)
+            # Match the detector's bounded, visible Word membership. Unused
+            # media and unsupported placement geometry cannot create findings.
+            visible_locators = {f"image {image.media_number}" for image in visible if image.placements}
             for draft in _prop.propose_images_of_text(path, path.suffix.lower(), ai_enabled=False):
                 if made >= _ASSISTED_MAX_DRAFTS:
                     break
-                if draft.get("sc") != "1.4.5":
+                if draft.get("sc") != "1.4.5" or draft.get("locator") not in visible_locators:
                     continue
                 # Preserve this lane's Essential exception for charts/diagrams.
                 if _ocr._looks_like_chart(draft.get("proposed_value") or ""):
