@@ -54,7 +54,7 @@ export function remediationEventLine(event) {
       return `Corrected copy of ${file(event)} saved to the source provider`
     case 'remediate.delivery_failed':
       if (detail.reason === 'delivery_disabled') return `Corrected copy of ${file(event)} saved in ACP · source delivery is disabled`
-      if (detail.delivery_status === 'saved_in_acp') return `Corrected copy of ${file(event)} saved in ACP · source delivery is unavailable`
+      if (detail.delivery_status === 'saved_in_acp') return `Corrected copy of ${file(event)} saved in ACP · publication is handled in Release`
       if (detail.reason === 'write_permission_required') return `Corrected copy of ${file(event)} retained in ACP · provider write permission required`
       return `Corrected copy of ${file(event)} retained in ACP; provider delivery failed`
     case 'remediate.review_requested':

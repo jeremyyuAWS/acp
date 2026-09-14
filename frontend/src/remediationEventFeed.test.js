@@ -58,7 +58,7 @@ describe('clear grouped activity', () => {
     expect(remediationEventLine(event)).not.toContain('secret')
     expect(eventTone(event.kind, event.detail)).toBe('neutral')
     expect(remediationEventLine({ ...event, detail: { file: 'a.docx', reason: 'write_permission_required' } })).toContain('write permission required')
-    expect(remediationEventLine({ ...event, detail: { file: 'a.docx', delivery_status: 'saved_in_acp', reason: 'source_delivery_unavailable' } })).toContain('source delivery is unavailable')
+    expect(remediationEventLine({ ...event, detail: { file: 'a.docx', delivery_status: 'saved_in_acp', reason: 'source_delivery_unavailable' } })).toContain('publication is handled in Release')
   })
   it('groups documents by opaque reference and surfaces exceptions before completion', () => {
     const rows = [
@@ -95,3 +95,13 @@ it('does not prioritize an old delivery failure after a confirmed delivery', () 
   expect(line).not.toContain('private')
   expect(line).not.toContain('raw secret')
  })
+
+it('separates a normal saved-copy handoff from an actual provider write failure',()=>{
+ const saved={kind:'remediate.delivery_failed',document:'a.pptx',detail:{delivery_status:'saved_in_acp',reason:'source_delivery_unavailable'}}
+ expect(remediationEventLine(saved)).toContain('publication is handled in Release')
+ expect(remediationEventLine(saved)).not.toContain('unavailable')
+ expect(eventTone(saved.kind,saved.detail)).toBe('neutral')
+ const failed={...saved,detail:{delivery_status:'failed',reason:'provider_error'}}
+ expect(remediationEventLine(failed)).toContain('provider delivery failed')
+ expect(eventTone(failed.kind,failed.detail)).toBe('error')
+})
