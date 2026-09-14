@@ -139,7 +139,8 @@ def _derive_alt(attrs: str, caption: str | None) -> tuple[str, str] | None:
     if caption:
         cap = unescape(_CAPTION_LEAD.sub("", caption)).strip()
         if len(cap) >= 4:
-            return cap[:250], "the adjacent caption"
+            # A faithful source must retain its content, including later instructions.
+            return cap, "the adjacent caption"
     name = unescape(_ATTR(attrs, "name")).strip()
     if name and not _GENERIC_NAME.match(name):
         return name, "the shape's descriptive name"
