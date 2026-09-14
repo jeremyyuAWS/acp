@@ -639,11 +639,11 @@ export const getReleaseAiProvenance = (scanId, files = []) => (SIM || !scanId ||
 // "Before → After" section, and the review drawer's evidence card. SIM serves the same
 // fixtures as getScanRemediationDiffs, narrowed to the one file, on the same "only after the
 // demo has actually remediated" gate.
-export const getFileRemediationDiffs = (scanId, file) => {
+export const getFileRemediationDiffs = (scanId, file, { strict = false } = {}) => {
   if (SIM) return sim(_simRemed.total ? simRemediationDiffs().filter((d) => d.file === file) : [])
   if (!scanId) return sim([])
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/remediation-diffs`,
-               { headers: headers() }).then(j).catch(() => [])
+               { headers: headers() }).then(j).catch(error => { if (strict) throw error; return [] })
 }
 // Scan-wide before→after evidence — every verified-cleared fix across all files, so the
 // Remediation view can group REAL applied fixes by rule/category without fabricating counts.

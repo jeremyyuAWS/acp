@@ -13,18 +13,20 @@ const text = value => value == null ? 'Not recorded' : typeof value === 'string'
 export default function GraphFindingsDrawer({ file, scanId, onClose, items = [], readOnly = false, onAct }) {
   const previewRef = useRef(null)
   const [records, setRecords] = useState(null)
+  const [loadError, setLoadError] = useState('')
+  const [retry, setRetry] = useState(0)
   const [tab, setTab] = useState(null)
   const [selected, setSelected] = useState(null)
   const [review, setReview] = useState(null)
   const [downloadError, setDownloadError] = useState('')
   useEffect(() => {
     let live = true
-    setRecords(null); setTab(null); setSelected(null); setReview(null); setDownloadError('')
-    const load = () => getFileRemediationDiffs(scanId, file.file).then(rows => { if (live) setRecords(rows || []) })
+    setRecords(null); setTab(null); setSelected(null); setReview(null); setDownloadError(''); setLoadError('')
+    const load = () => getFileRemediationDiffs(scanId, file.file, { strict: true }).then(rows => { if (live) { setRecords(rows || []); setSelected(null); setLoadError('') } }).catch(() => { if (live) setLoadError('Recorded changes could not be loaded. This does not mean the document has no changes.') })
     load()
     window.addEventListener('acp:file-remediated', load)
     return () => { live = false; window.removeEventListener('acp:file-remediated', load) }
-  }, [scanId, file.file])
+  }, [scanId, file.file, retry])
   const changes = records || []
   const findings = file.issues || []
   // Pending review records are current work; original scan findings stay explicitly historical.
@@ -39,7 +41,8 @@ export default function GraphFindingsDrawer({ file, scanId, onClose, items = [],
   const located = selected && (Number.isInteger(selected.page) && selected.page > 0 || selected.locator)
   return <Drawer title={file.file} subtitle="Findings & changes" onClose={onClose}>
     <div className="graph-findings-drawer">
-      <div className="graph-findings-summary"><strong>{file.remediated_at ? 'Corrected copy saved' : 'No corrected copy recorded'}</strong><span>{attention.length} loaded review items · {records === null ? 'Loading changes…' : `${changes.length} recorded changes`}</span></div>
+      <div className="graph-findings-summary"><strong>{file.remediated_at ? 'Corrected copy saved' : 'No corrected copy recorded'}</strong><span>{attention.length} loaded review items · {loadError ? 'Change evidence unavailable' : records === null ? 'Loading changes…' : `${changes.length} recorded changes`}</span></div>
+      {loadError && <div role="alert" className="graph-finding"><p>{loadError}</p><button type="button" className="ghost small" onClick={() => setRetry(value => value + 1)}>Retry loading changes</button></div>}
       <section className="graph-findings-preview" aria-label="Finding preview" tabIndex={-1} ref={previewRef}>
         <Thumbnail key={`${selected?.page || 1}:${selected?.locator || ''}`} scanId={scanId} file={file.file} page={located ? selected.page || 1 : 1} locator={located ? selected.locator : null} maxHeight={440} />
         <p className="muted">{selected ? located ? 'Preview at the recorded location. Object highlights appear when geometry is available.' : 'Location unavailable for this record. Showing the document cover.' : 'Select a finding or change to inspect its recorded location.'}</p>
@@ -50,7 +53,7 @@ export default function GraphFindingsDrawer({ file, scanId, onClose, items = [],
       </div>
       <section id="graph-findings-panel" role="tabpanel" aria-label={activeTab === 'attention' ? 'Needs your attention' : activeTab === 'changes' ? 'Changes made' : 'All findings'}>
         {activeTab === 'all' && <p className="muted">Findings from the original scan. Changes and review items are shown separately.</p>}
-        {activeTab === 'changes' && records === null && <p role="status">Loading recorded changes…</p>}
+        {activeTab === 'changes' && records === null && !loadError && <p role="status">Loading recorded changes…</p>}
         {!rows.length && records !== null && <p className="muted">{activeTab === 'attention' ? 'No pending review items were loaded. Check assessment coverage for incomplete checks.' : activeTab === 'changes' ? 'No change evidence is available.' : 'No original findings recorded.'}</p>}
         {rows.map((row, index) => {
           const rowKey = `${activeTab}:${index}`
