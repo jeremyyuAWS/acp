@@ -14,3 +14,16 @@ it('applied unverified without an active job needs a verification check, never a
  expect(matchesAutomaticReview(row,'awaiting-validation',{},true)).toBe(false)
  expect(matchesAutomaticReview(row,'status-check',{},true)).toBe(true)
 })
+it('saved AI language fixes no longer inherit an obsolete request for individual approval',()=>{
+ const row={...alt,rule_id:'3.1.2',status:'approved',applied:true,validated:false,automaticDisposition:{state:'review_required',responsibility:'human',reason:'Proposal requires individual judgment or has no exact AI provenance'}}
+ expect(responsibility(row)).toBe('check')
+ expect(matchesAutomaticReview(row,'review',{},true)).toBe(false)
+ expect(matchesAutomaticReview(row,'status-check',{},true)).toBe(true)
+ expect(matchesAutomaticReview(row,'completed',{},true)).toBe(false)
+ expect(responsibility({...row,status:'pending',applied:false})).toBe('human')
+ expect(responsibility({...row,status:'pending',applied:false},{1:{state:'approved'}})).toBe('check')
+ expect(responsibility({...row,status:'pending',applied:false},{1:{state:'assigned'}})).toBe('human')
+ expect(responsibility({...row,status:'verification_failed'})).toBe('human')
+ expect(responsibility(row,{1:{state:'assigned'}})).toBe('human')
+ expect(responsibility({...row,rejectedFix:true})).toBe('human')
+})

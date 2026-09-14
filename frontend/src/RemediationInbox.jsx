@@ -1035,7 +1035,7 @@ export default function RemediationInbox({
           </button>
         )}
         <span style={{ fontSize: 13, fontWeight: 700 }}>Guided remediation</span>
-        {(selected?.automaticReason || selected?.automaticQueued) && <p className="automatic-review-queued" role="status"><b>{autoApprove === true ? (automaticReviewResponsibility(selected, decisions) === 'human' ? 'You' : selected.automaticQueued ? 'ACP' : 'Status check') : selected.automaticQueued ? 'ACP' : selected.automaticDisposition?.owner || 'You'}: </b>{selected.automaticReason || 'Automatic eligibility checks are queued.'}{selected.automaticQueued && <> This is not yet an applied or verified fix.</>}</p>}
+        {(selected?.automaticReason || selected?.automaticQueued) && <p className="automatic-review-queued" role="status"><b>{autoApprove === true ? (automaticReviewResponsibility(selected, decisions) === 'human' ? 'You' : selected.automaticQueued ? 'ACP' : 'Status check') : selected.automaticQueued ? 'ACP' : selected.automaticDisposition?.owner || 'You'}: </b>{autoApprove === true && workflowStatusOf(selected, decisions) === 'awaiting-validation' && automaticReviewResponsibility(selected, decisions) === 'check' ? 'Approval is already recorded. Verification is still pending; no additional approval is needed.' : selected.automaticReason || 'Automatic eligibility checks are queued.'}{selected.automaticQueued && <> This is not yet an applied or verified fix.</>}</p>}
       </span>
     </div>
   )

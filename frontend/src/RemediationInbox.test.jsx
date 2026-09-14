@@ -720,3 +720,19 @@ it('does not offer apply for an unsupported PDF outline with a stale applied fla
  expect(btnByText('Apply this fix')).toBeUndefined()
  expect(btnByText('Open in Word')).toBeTruthy()
 })
+
+it('removes saved AI language fixes with stale review reasons from Needs your input', async () => {
+ const marker={state:'review_required',responsibility:'human',reason:'Proposal requires individual judgment or has no exact AI provenance',scan_id:'scan',run_id:'run',source_revision:'source',proposal_snapshot_ids:['snap']}
+ const saved={id:701,file:'rights-notice.docx',scanId:'scan',rule_id:'3.1.2',status:'approved',applied:true,validated:false,hasProposal:true,after:'es',_raw:{scan_id:'scan',proposal_snapshot_ids:['snap'],automatic_approval:marker}}
+ const manual={id:702,file:'manual-crop.pdf',rule_id:'1.4.5',status:'pending',manual:true,title:'Describe crop'}
+ await render({queue:[saved,manual],automaticApprovalPolicy:{enabled:true,run_id:'run',source_revision:'source'},legacyApprovalControls:false,autoApprove:true,initialTab:'review'})
+ expect(container.querySelector('.rinbox-queuepane').textContent).not.toContain('rights-notice.docx')
+ expect(container.querySelector('.rinbox-queuepane').textContent).toContain('manual-crop.pdf')
+ expect(container.querySelector('option[value="review"]').textContent).toBe('Needs your input (1)')
+ const filter=container.querySelector('select[aria-label="Filter by status"]')
+ await act(async()=>{filter.value='status-check';filter.dispatchEvent(new Event('change',{bubbles:true}))})
+ expect(container.querySelector('.rinbox-queuepane').textContent).toContain('rights-notice.docx')
+ expect(container.textContent).toContain('no additional approval is needed')
+ expect(container.textContent).not.toContain('Proposal requires individual judgment')
+ expect(container.textContent).not.toContain('This finding is verified')
+})

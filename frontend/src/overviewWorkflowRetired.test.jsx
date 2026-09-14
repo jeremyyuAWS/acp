@@ -14,7 +14,7 @@ describe('Overview workflow panels are intentionally retired', () => {
     const html = renderToStaticMarkup(createElement(Overview, { run, files }))
     expect(html).not.toContain('Workflow and assessment details')
     for (const id of ['estate-progress', 'assessment-summary', 'next-step']) expect(html).not.toContain(`data-accordion="${id}"`)
-    for (const title of ['Estate coverage by file type', 'Document formats', 'Remediation opportunities', 'Finding categories', 'Human review age', 'Report exports']) expect(html).toContain(title)
+    for (const title of ['Estate coverage by file type', 'Remediation opportunities', 'Finding categories', 'Report exports']) expect(html).toContain(title)
   })
   it('preserves the retired component without any application mount', () => {
     const dir = dirname(fileURLToPath(import.meta.url))

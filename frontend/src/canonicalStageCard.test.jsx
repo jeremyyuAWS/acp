@@ -494,4 +494,17 @@ describe('unified idempotent workflow integration', () => {
     await act(async () => root.unmount())
   })
 
+  it('defaults every dashboard stage to collapsed, including attention cards, but allows opening', async () => {
+    const {container,root}=createTestRoot()
+    const lineage={workflow_id:'dashboard-collapsed',workflow_revision:7,stages:[stage('discover','succeeded',1),stage('assess','succeeded',2),stage('remediate','succeeded',3),stage('release','failed',4)]}
+    await act(async()=>root.render(createElement(WorkflowStageStack,{lineage,defaultCollapsed:true})))
+    const toggles=[...container.querySelectorAll('.workflow-stage-stack__summary')]
+    expect(toggles).toHaveLength(4)
+    expect(toggles.every(button=>button.getAttribute('aria-expanded')==='false')).toBe(true)
+    expect(container.querySelector('[data-stage="release"]').classList.contains('needs-attention')).toBe(true)
+    await act(async()=>toggles[3].click())
+    expect(toggles[3].getAttribute('aria-expanded')).toBe('true')
+    await act(async()=>root.unmount())
+  })
+
 })
