@@ -19,8 +19,18 @@ def plan_ai_readiness(policy, ai_enabled=True):
         import httpx
         # The normal worker probe can wait 90 seconds for a cold start. A plan
         # preview must remain responsive and may only make this bounded metadata GET.
-        response = httpx.get(f'{ai.OLLAMA_BASE_URL.rstrip("/")}/api/tags',
-                             headers=ai._OLLAMA_HEADERS, timeout=3.0)
+        for attempt in range(2):
+            try:
+                response = httpx.get(f'{ai.OLLAMA_BASE_URL.rstrip("/")}/api/tags',
+                                     headers=ai._OLLAMA_HEADERS, timeout=3.0)
+                if response.status_code in (502, 503, 504) and attempt == 0:
+                    continue
+                break
+            except httpx.TimeoutException:
+                # A scale-from-zero endpoint can time out before its first reply.
+                # Retry metadata once; never generate or hold a preview for 90s.
+                if attempt:
+                    raise
         response.raise_for_status()
         models = response.json().get('models')
         if not isinstance(models, list):

@@ -287,7 +287,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       {!requireAnswers && startButton}
     </div>
     {ready && readinessText && <div role={aiBlocked ? 'alert' : 'status'} className="remediation-impact__note">
-      <strong>{aiBlocked ? 'AI readiness needs attention' : data.ai_readiness.state === 'governed_cloud' ? 'Cloud AI checks pending' : 'Local AI readiness checked'}</strong><p>{readinessText}</p>
+      <strong>{data.ai_readiness.state === 'local_endpoint_required' ? 'Endpoint Outside Local Zone' : aiBlocked ? 'AI readiness needs attention' : data.ai_readiness.state === 'governed_cloud' ? 'Cloud AI checks pending' : 'Local AI readiness checked'}</strong><p>{readinessText}</p>
       {data.policy?.ai_zone === 'local' && <p>Endpoint: {data.ai_readiness.state === 'local_endpoint_required' ? 'outside the local zone' : data.ai_readiness.state === 'local_endpoint_access_denied' ? 'access denied' : data.ai_readiness.state === 'local_endpoint_unreachable' ? 'unavailable' : ['local_endpoint_reachable', 'local_models_missing'].includes(data.ai_readiness.state) ? 'reachable' : 'not checked'} · Cloud spending: not used.</p>}
       {['local_endpoint_reachable', 'local_models_missing'].includes(data?.ai_readiness?.state) && <p>Text model: {data.ai_readiness.text_model_available ? 'available' : 'unavailable'} · Vision model: {data.ai_readiness.vision_model_available ? 'available' : 'unavailable'}. Unavailable models cannot generate their suggestions.</p>}
       {aiBlocked && <button type="button" disabled={loading || runBusy || readOnly} onClick={() => setReload(current => current + 1)}>Retry readiness check</button>}
