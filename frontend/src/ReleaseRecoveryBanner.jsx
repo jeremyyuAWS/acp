@@ -18,10 +18,10 @@ export default function ReleaseRecoveryBanner({ status, providerName, error, onR
   return createPortal(<div className={`release-recovery-banner ${signIn || unconfirmed ? 'release-recovery-banner--attention' : ''}`}
     role="status" aria-live="polite" style={{ top: offset }}>
     <span><strong>{signIn ? `${providerName} sign-in is required` : unconfirmed ? 'Delivery recovery is unconfirmed' : status === 'recovering' ? 'Recovering saved delivery automatically' : 'Checking saved delivery status'}</strong>
-      <span>{signIn ? ' Renew access to continue the approved release.' : unconfirmed ? ' ACP is refreshing the saved status. Delivery has not been confirmed; another request will not be sent without fresh recovery evidence.' : ' ACP checks existing copies before continuing. No extra approval is needed.'}</span>
+      <span>{signIn ? ' Reconnect to continue this saved release. Existing delivered copies are checked first; no new scan or approval is needed.' : unconfirmed ? ' ACP is refreshing the saved status. Delivery has not been confirmed; another request will not be sent without fresh recovery evidence.' : ' ACP checks existing copies before continuing. No extra approval is needed.'}</span>
       {error && <span className="release-recovery-banner__detail">{error}</span>}
     </span>
     {unconfirmed && <button type="button" disabled={disabled} onClick={onCheckStatus}>Check delivery status</button>}
-    {signIn && <button type="button" disabled={disabled} onClick={onReconnect}>Reconnect {providerName} and continue</button>}
+    {signIn && <button type="button" disabled={disabled} onClick={onReconnect}>Reconnect {providerName} and resume delivery</button>}
   </div>, document.body)
 }
