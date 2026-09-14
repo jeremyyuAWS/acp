@@ -63,6 +63,8 @@ describe('RemediationImpactCard', () => {
     const { container } = await mount({ onRun })
     expect(button(container, 'Approve plan and start').disabled).toBe(true)
     expect(container.textContent).toContain('increasing the spending limit will not fix this local-only plan')
+    expect(container.textContent).toContain('Endpoint Outside Local Zone')
+    expect(container.textContent).not.toContain('AI readiness needs attention')
     getRemediationImpact.mockResolvedValue({ ...result(policy), ai_readiness: { state: 'local_endpoint_reachable', blocked: false, text_model_available: true, vision_model_available: true } })
     await act(async () => button(container, 'Retry readiness check').click())
     expect(button(container, 'Approve plan and start').disabled).toBe(false)
