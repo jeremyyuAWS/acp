@@ -317,8 +317,10 @@ def read_insights(store, owner, scan_id, run_id, *, offset=0, limit=100):
             not_used_reason = "AI suggestions were not enabled for this run's plan."
         elif ai_zone != 'local' and (budget_usd is None or Decimal(budget_usd) <= 0):
             not_used_reason = 'Cloud AI not used: the run spending limit prevents a request.'
+        elif ai_zone == 'local':
+            not_used_reason = 'No managed AI requests were recorded. Local AI activity is not included in this request history; check AI activity for endpoint or generation failures.'
         else:
-            not_used_reason = 'AI was enabled for this run, but no eligible findings needed a suggestion.'
+            not_used_reason = 'AI was enabled, but no managed requests were recorded. Check AI activity for eligibility or generation blockers.'
     activity_summary = {
         'by_model': by_model, 'attempted': attempted_total, 'completed': completed_total,
         'suggestions_generated': generated_total, 'suggestions_applied': suggestions_applied,

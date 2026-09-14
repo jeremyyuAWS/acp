@@ -185,10 +185,10 @@ def test_activity_summary_explains_why_ai_was_not_used(store):
     # A zero paid budget does not block a LOCAL-only run — Ollama has nothing to meter.
     set_policy(store, ai=1, ai_zone='local', ai_budget_usd='0.00')
     assert read_insights(store, OWNER, 'scan-1', 'run-1')['activity_summary']['not_used_reason'] \
-        == 'AI was enabled for this run, but no eligible findings needed a suggestion.'
+        == 'No managed AI requests were recorded. Local AI activity is not included in this request history; check AI activity for endpoint or generation failures.'
     set_policy(store, ai=1, ai_zone='any', ai_budget_usd='5.00')
     assert read_insights(store, OWNER, 'scan-1', 'run-1')['activity_summary']['not_used_reason'] \
-        == 'AI was enabled for this run, but no eligible findings needed a suggestion.'
+        == 'AI was enabled, but no managed requests were recorded. Check AI activity for eligibility or generation blockers.'
 
 
 def test_activity_summary_has_no_reason_once_something_was_attempted(store):
