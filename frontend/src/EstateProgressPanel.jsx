@@ -28,14 +28,15 @@ function FunnelStage({ label, count, ofDiscovered, pending, pendingLabel, color,
       <div style={{ flex: 1, minWidth: 0 }}>
         <button
           onClick={onClick}
-          style={{ width: '100%', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12,
-                   padding: '12px 14px', cursor: onClick ? 'pointer' : 'default', textAlign: 'left',
+          className="metric estate-progress-metric"
+          style={{ width: '100%', height: '100%', background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 12,
+                   padding: '14px 16px', cursor: onClick ? 'pointer' : 'default', textAlign: 'left',
                    transition: 'filter .15s' }}
           onMouseEnter={(e) => onClick && (e.currentTarget.style.filter = 'brightness(0.95)')}
           onMouseLeave={(e) => (e.currentTarget.style.filter = '')}
         >
-          <div style={{ fontSize: 11.5, lineHeight: 1.35, color: 'var(--muted)', marginBottom: 5 }}>{label}</div>
-          <div style={{ fontSize: 26, fontWeight: 700, color: fgColor, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
+          <div style={{ fontSize: 13, fontWeight: 400, lineHeight: 1.35, color: 'var(--muted)', marginBottom: 5 }}>{label}</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-metric)', fontWeight: 600, color: label === 'Remediated' ? fgColor : 'var(--ink)', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
             {count == null ? '—' : nf.format(count)}
           </div>
           <div style={{ fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.45, marginTop: 5 }}>
@@ -55,11 +56,7 @@ function FunnelStage({ label, count, ofDiscovered, pending, pendingLabel, color,
           </div>
         )}
       </div>
-      {/* Arrow connector */}
-      {!isLast && (
-        <div style={{ alignSelf: 'center', color: 'var(--muted)', fontSize: 20, padding: '0 6px',
-                      flexShrink: 0, lineHeight: 1, marginTop: -16 }}>›</div>
-      )}
+
     </div>
   )
 }
@@ -298,7 +295,7 @@ export default function EstateProgressPanel({
                       </button>
                     ) : null}>
 
-        <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, alignItems: 'start' }}>
           <FunnelStage
             label="Discovered"
             count={discovered}
