@@ -50,11 +50,11 @@ def test_too_little_text_is_not_an_image_of_text():
     assert ai._looks_like_an_image_of_text("Total revenue") is False
 
 
-def test_transcription_collapses_whitespace_and_bounds_length():
+def test_transcription_collapses_whitespace_and_preserves_complete_content():
     assert ai._transcribed_alt("  Quarterly   Revenue\n Report  ") == "Quarterly Revenue Report"
     long = " ".join(["word"] * 200)
     out = ai._transcribed_alt(long)
-    assert len(out) <= 251 and out.endswith("…")
+    assert out == long
 
 
 # ── the structured path ────────────────────────────────────────────────────────
