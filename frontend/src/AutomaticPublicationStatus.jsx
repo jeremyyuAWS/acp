@@ -17,9 +17,11 @@ export default function AutomaticPublicationStatus({ authorization, pending = fa
     <p role="status">{pending ? 'ACP is checking the saved publishing permission. Wait before starting another delivery.' : active
       ? complete ? 'All authorized copies are confirmed at the destination.'
         : authorization.status === 'stopped' ? 'Automatic publishing is stopped. Existing delivery results remain available.'
-          : 'Automatic publishing is on. No Publish click is needed for covered copies.'
+          : authorization.requires_reconnect ? 'Delivery is paused. Reconnect Microsoft or Google Drive to continue the saved release.'
+            : authorization.needs_attention || ['blocked', 'failed'].includes(authorization.status) ? 'Some copies could not be delivered. Published copies remain available; the remaining copies need recovery.'
+              : 'Automatic publishing is on. No Publish click is needed for covered copies.'
       : error ? 'Automatic publication status is unavailable. ACP must confirm the saved permission before another delivery.' : 'Automatic publishing is off. Choose copies and confirm publication in Release.'}</p>
-    {active && <p>{authorization.requires_reconnect ? 'Sign-in is required to resume the saved delivery.' : authorization.needs_attention || ['blocked', 'failed'].includes(authorization.status) ? 'Delivery needs recovery. Check the specific issue below.' : 'ACP delivers eligible saved copies after processing and release checks.'}</p>}
+    {active && <p>{authorization.requires_reconnect ? 'Reconnect the destination in Sources, then return to Release to continue. ACP checks existing delivery receipts first; no new scan or approval is needed.' : authorization.needs_attention || ['blocked', 'failed'].includes(authorization.status) ? 'Delivery needs recovery. Check the specific issue below.' : 'ACP delivers eligible saved copies after processing and release checks.'}</p>}
     {(authorization?.destination_label || destinationLabel) && <p><b>Destination:</b> {authorization?.destination_label || destinationLabel}</p>}
     {batch?.available === true && <p><b>{batch.delivered.toLocaleString()} of {batch.total.toLocaleString()} authorized copies delivered</b> · {batch.remaining.toLocaleString()} awaiting confirmation</p>}
     {active && batch?.available !== true && <p>Confirmed delivery totals are unavailable; this release is not shown as complete.</p>}

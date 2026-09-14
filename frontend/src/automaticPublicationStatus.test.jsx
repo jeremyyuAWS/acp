@@ -43,3 +43,11 @@ it('keeps remediation publication collapsed across polling without hiding public
  await act(async()=>root.render(<Status authorization={auth} collapsed />))
  expect(container.querySelector('details').open).toBe(false)
 })
+
+it('does not call a reconnect-blocked release active publication',async()=>{
+ const {root,container}=createTestRoot()
+ await act(async()=>root.render(<Status authorization={{id:'plan',status:'blocked',requires_reconnect:true,batch_progress:batch}}/>))
+ expect(container.textContent).toContain('Delivery is paused')
+ expect(container.textContent).toContain('no new scan or approval is needed')
+ expect(container.textContent).not.toContain('No Publish click is needed')
+})

@@ -37,3 +37,11 @@
 .remops-activity-fresh:not(.remops-activity-error):not(.remops-activity-retry) .remops-activity-event>span:last-child{animation:remops-new-text 1.5s ease-out both}
 @keyframes remops-new-text{0%,60%{color:var(--success-fg,#267c45)}100%{color:inherit}}
 @media(prefers-reduced-motion:reduce){.remops-activity-fresh .remops-activity-event>span:last-child{animation:none}}
+
+/* Keep activity history reachable without stretching the publication layout. */
+.remops-activity>ol{max-height:420px;overflow-y:scroll;scrollbar-gutter:stable;overscroll-behavior-y:contain;padding-right:8px;scrollbar-width:auto;scrollbar-color:var(--muted) var(--surface)}
+.remops-activity>ol:focus-visible{outline:2px solid var(--info-fg);outline-offset:4px}
+.remops-activity>ol::-webkit-scrollbar{width:10px}
+.remops-activity>ol::-webkit-scrollbar-thumb{background:var(--muted);border-radius:6px;border:2px solid var(--surface)}
+.remops-activity>ol::-webkit-scrollbar-track{background:var(--surface)}
+@media(max-width:760px){.remops-activity>ol{max-height:360px}}

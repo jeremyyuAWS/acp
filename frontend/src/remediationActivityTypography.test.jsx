@@ -52,3 +52,14 @@ it('matches Release monospace token while keeping long names wrapped and status 
   expect(activity).toMatch(/\.remops-activity details li\s*\{[^}]*font-family:var\(--font-mono/)
   expect(activity).toMatch(/\.remops-delivery-tag\s*\{[^}]*font-family:var\(--font-ui/)
 })
+
+it('keeps older retained activity keyboard-reachable in a bounded scrolling list', async()=>{
+ const {root,container}=createTestRoot()
+ const history=Array.from({length:25},(_,i)=>({key:String(i),documentKey:String(i),tone:'success',line:`Saved document ${i}`}))
+ await act(async()=>root.render(<Activity events={history}/>))
+ const list=container.querySelector('[aria-label="Recent remediation activity"]')
+ expect(list.tabIndex).toBe(0)
+ expect(list.children).toHaveLength(25)
+ expect(list.textContent).toContain('Saved document 24')
+ expect(readFileSync('src/remediation-ops-panel.css','utf8')).toMatch(/\.remops-activity>ol\{[^}]*max-height:420px;overflow-y:scroll;scrollbar-gutter:stable/)
+})
