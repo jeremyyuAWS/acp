@@ -198,6 +198,7 @@ def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs
             lease.release()
         return {
             "ok": False, "reason": "capacity_busy",
+            "timing": {"queue_wait_ms": round(max(0, time.monotonic() - admission_started) * 1000, 3)},
             "provider": getattr(provider, "name", "unknown"),
             "zone": getattr(provider, "zone", None),
             "model": kwargs.get("model") or getattr(provider, "model", None),
@@ -213,8 +214,11 @@ def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs
             if not lease.admitted:
                 _vision_metric('backpressured')
                 return {'ok': False, 'reason': 'shared_capacity_busy' if lease.reason == 'capacity_exhausted'
-                        else 'shared_coordination_unavailable', 'provider': getattr(provider, 'name', 'unknown'),
+                        else 'shared_coordination_unavailable',
+                        'timing': {'queue_wait_ms': round(max(0, time.monotonic() - admission_started) * 1000, 3)}, 'provider': getattr(provider, 'name', 'unknown'),
                         'model': 'not-dispatched'}
+        # Record admission only, before inference or explicit rate-limit backoff.
+        queue_wait_ms = round(max(0, time.monotonic() - admission_started) * 1000, 3)
         for attempt in range(3 if cloud_api else 1):
             if deadline is not None:
                 remaining = deadline - time.monotonic()
@@ -239,7 +243,8 @@ def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs
             _vision_metric("failed")
             if result.get("reason") == "timeout":
                 _vision_metric("timeouts")
-        return result
+        from ollama_runtime import safe_timings
+        return {**result, 'timing': {**safe_timings(result.get('timing')), 'queue_wait_ms': queue_wait_ms}}
     finally:
         if cloud_api:
             _CLOUD_VISION_GATE.release()
@@ -1000,7 +1005,7 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
                   scan_id=scan_id, file=file,
                   provider=res.get("provider") or getattr(prov, "name", "runpod_serverless"),
                   zone=res.get("zone") or "cloud", cost_usd=res.get("cost_usd", 0.0),
-                  prompt_version=prompt_version)
+                  prompt_version=prompt_version, timing=res.get('timing'))
         fb = _providers.local_vision_provider()
         if getattr(fb, "name", "") == "ollama":
             res = _bounded_vision_generate(

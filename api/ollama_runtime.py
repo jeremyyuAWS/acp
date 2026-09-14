@@ -31,7 +31,7 @@ def timings(data):
 
 # Fixed numeric allowlist: never retain provider payloads, text or endpoint metadata.
 TIMING_FIELDS = frozenset(('total_ms', 'model_load_ms', 'prompt_eval_ms',
-                           'inference_ms', 'output_tokens_per_second'))
+                           'inference_ms', 'output_tokens_per_second', 'queue_wait_ms'))
 
 
 def safe_timings(value):

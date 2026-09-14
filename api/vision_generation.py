@@ -227,6 +227,8 @@ def generate(prompt, image_bytes, *, clean=True, model=None):
     try:
         if _remaining() == 0:
             return deferred('assessment_vision_budget_exhausted')
+        # Measure semaphore admission separately from provider/validation time.
+        measured_queue_ms = round(max(0, time.monotonic() - started) * 1000, 3)
         result = managed_generate_attempts(bounded_prompt, ctx, generator, tier_indices=tiers, image_prefix=image_prefix)
     finally:
         _CLOUD_VISION_GATE.release()
@@ -243,6 +245,7 @@ def generate(prompt, image_bytes, *, clean=True, model=None):
         model=result['model'], provider=result['provider'], zone=result['zone'],
         cost_usd=float(result['cost_usd']), scan_id=ctx.scan_id, file=ctx.file,
         prompt_tokens=result.get('prompt_tokens'), completion_tokens=result.get('completion_tokens'),
+        timing={'queue_wait_ms': measured_queue_ms},
         managed_operation_id=result.get('operation_id'),
         managed_output_sha256=hashlib.sha256(result['text'].encode()).hexdigest())
     if not call_id:
