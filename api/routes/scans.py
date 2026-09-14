@@ -1956,7 +1956,7 @@ def remediation_status(sid: str, request: Request, response: Response):
         raise HTTPException(404, "scan not found")
     import activity
     out = core.store.remediation_status(sid)
-    out["activity"] = activity.current(sid)
+    out["activity"] = activity.current(sid, stage="remediate")
     out["workers"] = {"active": int(out.get("running") or 0),
                       "capacity": int(getattr(core, "WORKERS", 0) or 0)}
     # Live queue depth must never be served from the browser cache; every completed remediation
@@ -2598,7 +2598,7 @@ async def stream_remediation_status(sid: str, request: Request):
                     cursor = fresh[-1]["seq"]
 
             out = await asyncio.to_thread(core.store.remediation_status, sid)
-            out["activity"] = activity.current(sid)
+            out["activity"] = activity.current(sid, stage="remediate")
             out["workers"] = {"active": int(out.get("running") or 0),
                               "capacity": int(getattr(core, "WORKERS", 0) or 0)}
             # The reconciled run snapshot rides the SAME frame as the legacy counts, so a client

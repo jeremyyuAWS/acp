@@ -97,26 +97,43 @@ def record(scan_id: str | None, *, file: str | None = None, sc: str | None = Non
     if not scan_id:
         return
     now = time.time()
-    if not force and now - _last.get(scan_id, 0.0) < _MIN_INTERVAL:
+    rate_key = f"remediate:{scan_id}"
+    if not force and now - _last.get(rate_key, 0.0) < _MIN_INTERVAL:
         return
-    _last[scan_id] = now
+    _last[rate_key] = now
     try:
         import core
-        core.set_job(f"activity:{scan_id}", {
+        payload = {
             "text": line(file=file, sc=sc, action=action, detail=detail),
             "file": file, "sc": sc, "sc_name": sc_name(sc) if sc else None,
             "action": action, "detail": detail, "phase": phase, "at": now,
-        })
+        }
+        core.set_job(f"activity:{scan_id}", payload)
+        if phase in {"remediating", "downloading", "storing", "verifying", "publishing"}:
+            core.set_job(f"activity:remediate:{scan_id}", {**payload, "stage": "remediate"})
     except Exception:
         # a progress line must never be able to fail the work it describes
         swallowed("activity.record: publishing the activity line to the job state failed", scan_id)
 
 
-def current(scan_id: str) -> dict | None:
-    """The last published activity for a scan, or None. Never raises."""
+def current(scan_id: str, *, stage: str | None = None) -> dict | None:
+    """Last published activity, optionally isolated to a pipeline stage. Never raises.
+
+    Older workers use the shared key: accept it only with a matching phase.
+    Stage keys prevent concurrent assessment and remediation from hiding each other.
+    """
     try:
         import core
-        return core.get_job_state(f"activity:{scan_id}")
+        if stage:
+            scoped = core.get_job_state(f"activity:{stage}:{scan_id}")
+            if scoped is not None:
+                return scoped
+        legacy = core.get_job_state(f"activity:{scan_id}")
+        if not stage:
+            return legacy
+        phase = (legacy or {}).get("phase")
+        phases = {"analysing", "assessing"} if stage == "assess" else {"remediating", "downloading", "storing", "verifying", "publishing"}
+        return legacy if phase in phases else None
     except Exception:
         return None
 
@@ -167,12 +184,15 @@ def _render_inflight(scan_id: str, now: float) -> dict | None:
 
 def _publish(scan_id: str, payload: dict | None, *, force: bool) -> None:
     now = payload["at"] if payload else time.time()
-    if not force and now - _last.get(scan_id, 0.0) < _MIN_INTERVAL:
+    rate_key = f"assess:{scan_id}"
+    if not force and now - _last.get(rate_key, 0.0) < _MIN_INTERVAL:
         return
-    _last[scan_id] = now
+    _last[rate_key] = now
     try:
         import core
-        core.set_job(f"activity:{scan_id}", payload or {"text": None, "in_flight": 0, "at": now})
+        state = payload or {"text": None, "in_flight": 0, "at": now}
+        core.set_job(f"activity:{scan_id}", state)
+        core.set_job(f"activity:assess:{scan_id}", {**state, "stage": "assess"})
     except Exception:
         swallowed("activity._publish: publishing in-flight file state to the job state failed", scan_id)
 

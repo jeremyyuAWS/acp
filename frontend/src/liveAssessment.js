@@ -1,3 +1,4 @@
+import { isRemediationActivity } from './processingActivity.js'
 // Live Assessment running screen — pure normalization of the merged /scans/{sid}/live snapshot into a
 // display model. Kept out of the component so it is unit-tested and the component stays a thin render.
 //
@@ -34,25 +35,28 @@ const n = (x) => (typeof x === 'number' && x >= 0 ? Math.round(x) : 0)
 function normalizeQueue(q) {
   if (!q || typeof q !== 'object') return null
   const w = q.workers || {}
-  const cur = q.current && (q.current.file || q.current.text) ? {
+  const cur = q.current && !isRemediationActivity({...q.current, phase: q.current.phase || q.phase}) && (q.current.file || q.current.text) ? {
     file: q.current.file || null,
+    phase: q.current.phase || q.phase || null,
+    stage: q.current.stage || null,
     criterion: q.current.criterion || null,
     criterionName: q.current.criterion_name || null,
     action: q.current.action || null,
     text: q.current.text || null,
   } : null
-  const inFlight = n(q.in_flight)
+  const wrongStage = isRemediationActivity({...q.current, phase: q.current?.phase || q.phase})
+  const inFlight = wrongStage ? 0 : n(q.in_flight)
   const queued = n(q.queued)
   // A stale block (worker went quiet) is not live progress — say so plainly rather than showing a
   // frozen "6 in flight" that reads as busy.
   const stale = !!q.stale
   return {
     inFlight, queued,
-    workers: { busy: n(w.busy), max: typeof w.max === 'number' ? n(w.max) : null,
+    workers: { busy: wrongStage ? 0 : n(w.busy), max: typeof w.max === 'number' ? n(w.max) : null,
                idle: typeof w.idle === 'number' ? n(w.idle) : null,
                capacityScope: w.capacity_scope === 'per_replica' ? 'per_replica' : null },
     current: stale ? null : cur,
-    processing: !!q.processing && !stale,
+    processing: !!q.processing && !stale && !wrongStage,
     stale,
     // One human line for the lane strip: the current document, or the honest idle/paused state.
     laneLabel: stale ? 'No worker reporting — paused or between phases'

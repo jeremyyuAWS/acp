@@ -1931,7 +1931,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         review={reviewWorkspace}
         live={<>
           {runStream?.snapshot?.scan_id === runId && <RemediationActivityPanel
-            snapshot={runStream.snapshot} rows={inboxQueue} decisions={inboxDecisions} events={runStream.events || []} connected={!!runStream.connected}
+            snapshot={runStream.snapshot} activity={runStream.status?.activity || null} rows={inboxQueue} decisions={inboxDecisions} events={runStream.events || []} connected={!!runStream.connected}
             receivedAt={runStream.receivedAt || null} activityStatus={runStream.activityStatus || 'loading'}
             updateMode={runStream.connected ? 'live' : 'polling'} />}
           {/* App owns the live Assessment card above the workflow tabs. This compact label only
