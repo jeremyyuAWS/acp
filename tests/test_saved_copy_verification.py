@@ -89,3 +89,24 @@ def test_failed_incomplete_or_changed_evaluator_and_scope_rerun(candidate,monkey
         monkeypatch.setattr('saved_copy_verification.current_assessment',lambda *a,**k:{**first,**override})
         assert verify_saved_copy(store,SID,OWNER,FILE,digest,at)=={'reran':True}
     assert len(calls)==4
+
+
+from test_capability_enforcement import client
+
+
+def test_http_saved_copy_verification_requires_run_capability_and_owned_scan(client,monkeypatch):
+    import workspace_roles as wr
+    from test_capability_enforcement import OWNER,REVIEWER,ANALYST
+    tc,core,store=client
+    monkeypatch.setenv(wr.FLAG,'1')
+    monkeypatch.setattr(store,'get_scan',lambda sid,owner=None:{'files':[]} if owner==REVIEWER else None)
+    calls=[]
+    monkeypatch.setattr('saved_copy_verification.verify_saved_copy',lambda *args:calls.append(args) or {'assessment_ok':True})
+    body={'file':'actual.docx','corrected_sha256':'a'*64,'remediated_at':'now'}
+    path='/scans/owned-scan/verify-saved-copy'
+    assert tc.post(path,json=body).status_code==401
+    assert tc.post(path,json=body,headers={'Authorization':f'Bearer {ANALYST}'}).status_code==403
+    assert tc.post(path,json=body,headers={'Authorization':f'Bearer {OWNER}'}).status_code==404
+    result=tc.post(path,json=body,headers={'Authorization':f'Bearer {REVIEWER}'})
+    assert result.status_code==200
+    assert len(calls)==1 and calls[0][2]==REVIEWER
