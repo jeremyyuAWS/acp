@@ -32,3 +32,22 @@ def test_omission_marker_uses_only_existing_authorized_fallback_and_replays_succ
     assert len(calls) == 2
     assert {row['status'] for row in rows} == {'unusable_response', 'drafted'}
     assert all(row['spending_state'] == 'settled' for row in rows)
+
+
+def test_old_unvalidated_draft_is_not_replayed_under_new_quality_contract(setup, monkeypatch):
+    import ai
+    store, job, calls, outputs = setup
+    outputs.extend(['Connect the hose and then…', 'A red bicycle beside a brick wall.'])
+    with run_context(store, job['payload'], job):
+        # Seed a historical successful draft under the pre-validator input shape.
+        with monkeypatch.context() as old:
+            old.setattr(vision, 'CAPTION_VALIDATION_VERSION', '')
+            old.setattr(ai, '_description_quality_failure', lambda _: None)
+            historical = vision.generate('Describe', image())
+        fresh = vision.generate('Describe', image())
+        replay = vision.generate('Describe', image())
+    assert historical['ok'] and historical['text'].endswith('…')
+    assert fresh['ok'] and fresh['text'] == 'A red bicycle beside a brick wall.'
+    assert fresh['operation_id'] != historical['operation_id']
+    assert not fresh.get('replayed') and replay['replayed']
+    assert len(calls) == 2
