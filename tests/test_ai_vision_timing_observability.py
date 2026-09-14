@@ -34,8 +34,12 @@ def test_actual_vision_trace_and_durable_row_keep_only_numeric_measurements(isol
     value = ai._vision_generate('PRIVATE_PROMPT', b'PRIVATE_IMAGE', scan_id='scan', file='document.docx')
     assert value == 'A solid blue square.'
     row = isolated_store.list_ai_calls('scan')[0]
-    assert json.loads(row['timing']) == MEASURED
-    assert generations[0]['metadata']['timing'] == MEASURED
+    timing = json.loads(row['timing'])
+    assert timing.pop('queue_wait_ms') >= 0
+    assert timing == MEASURED
+    trace_timing = dict(generations[0]['metadata']['timing'])
+    assert trace_timing.pop('queue_wait_ms') >= 0
+    assert trace_timing == MEASURED
     assert 'PRIVATE' not in json.dumps(row) + json.dumps(generations)
     assert row['latency_ms'] >= 0
 
