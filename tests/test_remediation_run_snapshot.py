@@ -448,6 +448,31 @@ def test_the_facts_method_reads_review_and_delivery_from_the_real_tables(isolate
     assert [j["file"] for j in facts["jobs"]] == ["a.docx"]
 
 
+@pytest.mark.parametrize('mismatch', [None, 'policy_owner', 'policy_scan', 'policy_run', 'execution_owner', 'historical_execution'])
+def test_snapshot_ai_zone_requires_exact_frozen_execution_scope(isolated_store, mismatch):
+    from ai_run_policy import persist_payload_policy
+    sid = _scan_with_batch(isolated_store, 's-ai-zone', ['a.docx'])
+    policy_owner = 'stranger@example.com' if mismatch == 'policy_owner' else OWNER
+    policy_scan = 'other-scan' if mismatch == 'policy_scan' else sid
+    policy_run = 'other-run' if mismatch == 'policy_run' else 'batch-1'
+    execution_owner = 'stranger@example.com' if mismatch == 'execution_owner' else OWNER
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, '''INSERT INTO stage_executions
+            (execution_id,workflow_id,workflow_revision,scan_id,owner_email,stage,input_snapshot_id,
+             request_fingerprint,state,is_current,created_at,updated_at)
+            VALUES(%s,%s,1,%s,%s,'remediate','snapshot','fingerprint','running',%s,'t0','t0')''',
+            ('batch-1', sid, sid, execution_owner, 0 if mismatch == 'historical_execution' else 1))
+        persist_payload_policy(isolated_store._db, cur, policy_owner, policy_scan, policy_run,
+            [{'remediation_impact_policy': {'rule_based': 2, 'ai': 1, 'ai_zone': 'local',
+                                           'ai_budget_usd': '0.00', 'secret': 'must-not-be-disclosed'}}])
+    facts = isolated_store.remediation_run_facts(sid)
+    expected = {'zone': 'local'} if mismatch is None else None
+    assert facts['ai_policy'] == expected
+    snapshot = rr.build_snapshot(facts, now=NOW)
+    assert snapshot['ai_policy'] == expected
+    assert 'secret' not in str(snapshot['ai_policy'])
+
+
 def test_one_review_card_reports_all_eighteen_findings_it_represents(isolated_store):
     sid = _scan_with_batch(isolated_store, "s-snap-review-card-count", ["a.docx"])
     isolated_store.queue_hitl_deferral(sid, "a.docx", "author text alternatives", 18,
