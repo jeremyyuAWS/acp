@@ -78,3 +78,13 @@ def test_office_writer_preserves_bytes_and_routes_only_bad_draft_to_review(tmp_p
                 finding_count=1, proposals=proposals, proposal_snapshot_ids=['snapshot'], decision_version=0)
     with pytest.raises(ValueError, match='individual review'):
         eligible_item(SimpleNamespace(_selected_sc=lambda *args: True), 'owner', 'scan', 'run', item)
+
+
+def test_cleaned_length_bound_cannot_receive_grounded_write_credit(monkeypatch):
+    monkeypatch.setattr(ocr, 'ocr_text', lambda _: 'Controller Hose')
+    cleaned = ai._clean_alt(INSTRUCTIONS)
+    assert cleaned.endswith('…') and '6. Connect' not in cleaned
+    monkeypatch.setattr(ai, '_vision_generate', lambda *a, **kw: cleaned)
+    result = ai.describe_image_structured(b'image')
+    assert result['automatic_write_blocked'] is True
+    assert result['reason_code'] == 'incomplete_description'
