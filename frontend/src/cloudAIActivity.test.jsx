@@ -39,3 +39,15 @@ it('preserves disabled AI and scopes usage to the exact current run', async () =
  expect(container.textContent).toBe('')
  expect(useMetrics).toHaveBeenLastCalledWith(expect.objectContaining({scanId:'s',batchId:'r',enabled:false}))
 })
+
+it('shows measured latency distribution and validation coverage without claiming verified fixes', async () => {
+ const {root,container}=createTestRoot()
+ await act(async () => root.render(<AIActivityCharts data={{models:{rows:[{id:'local:m',label:'local · m',value:3,median_seconds:3,p95_seconds:10,usable_percent:50,validated_attempts:2,validation_unavailable:1,provider_timing:{model_load_ms:{average:12,measured_attempts:1},inference_ms:{average:80,measured_attempts:1}}}]}}}/>))
+ expect(container.textContent).toContain('Median / P95')
+ expect(container.textContent).toContain('3 / 10 s')
+ expect(container.textContent).toContain('50%')
+ expect(container.textContent).toContain('12 / 80 ms')
+ expect(container.textContent).toContain('1 load · 1 inference measurements')
+ expect(container.textContent).toContain('2 validated · 1 unavailable')
+ expect(container.textContent).toContain('not pure model latency')
+})
