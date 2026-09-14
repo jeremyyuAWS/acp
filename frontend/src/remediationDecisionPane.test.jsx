@@ -178,7 +178,7 @@ describe('Guided pane — auto-fix rows get an obvious, honestly-labelled decisi
     await renderInbox({ queue: [CONTRAST_AUTO], decisions,
       onDecide: (f, d) => writes.push([f.id, d]), legacyApprovalControls: true, onPublish: () => destinations.push('publish') })
     const publish = btnByText('Skip inspection and publish')
-    expect(container.querySelector('.rinbox-wrap').firstElementChild.contains(publish)).toBe(true)
+    expect(container.querySelector('.rinbox-wrap > div').firstElementChild.contains(publish)).toBe(true)
     expect([...container.querySelectorAll('button')].filter(button => button.textContent.includes('Skip inspection and publish'))).toHaveLength(1)
     await click(publish)
     expect(destinations).toEqual(['publish'])

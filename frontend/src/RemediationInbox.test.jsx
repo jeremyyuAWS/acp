@@ -701,3 +701,22 @@ it('shows a prose PDF tagging outline as manual guidance rather than an executab
   expect(container.textContent).toContain('PDF accessibility editor')
   expect(container.textContent).toContain('approving it does not write a PDF structure tree')
 })
+
+
+it('can collapse and reopen the card without saving a decision', async () => {
+ await render({queue: QUEUE, onDecide: () => { throw new Error('Must not save') }})
+ const toggle = btnByText('Collapse remediation card')
+ await click(toggle)
+ expect(toggle.getAttribute('aria-expanded')).toBe('false')
+ expect(container.querySelector('.rinbox-wrap > div').hidden).toBe(true)
+ await click(toggle)
+ expect(toggle.getAttribute('aria-expanded')).toBe('true')
+ expect(container.querySelector('.rinbox-wrap > div').hidden).toBe(false)
+})
+
+it('does not offer apply for an unsupported PDF outline with a stale applied flag', async () => {
+ await render({queue: [{id: 900, file: 'untagged.pdf', rule_id: 'WCAG 1.3.1', hasProposal: true, applied: true, validated: false, after: 'Heading 1 · Introduction (p.1)', status: 'pending'}], legacyApprovalControls: false, initialTab: 'all'})
+ expect(btnByText('Review and apply')).toBeUndefined()
+ expect(btnByText('Apply this fix')).toBeUndefined()
+ expect(btnByText('Open in Word')).toBeTruthy()
+})

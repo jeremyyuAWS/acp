@@ -477,4 +477,21 @@ describe('unified idempotent workflow integration', () => {
     expect(mounts).toBe(1)
     await act(async () => { root.unmount() })
   })
+  it('lets the user minimize an attention card across refresh', async () => {
+    const { container, root } = createTestRoot()
+    const lineage = { workflow_id: 'attention-collapse', workflow_revision: 7, stages: [stage('remediate', 'failed', 4)] }
+    const render = async () => act(async () => root.render(createElement(WorkflowStageStack, { lineage })))
+    await render()
+    const toggle = container.querySelector('[data-stage="remediate"] .workflow-stage-stack__summary')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    await act(async () => toggle.click())
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    await render()
+    expect(container.querySelector('[data-stage="remediate"] .workflow-stage-stack__body').hidden).toBe(true)
+    expect(container.querySelector('[data-stage="remediate"]').classList.contains('needs-attention')).toBe(true)
+    await act(async () => toggle.click())
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    await act(async () => root.unmount())
+  })
+
 })

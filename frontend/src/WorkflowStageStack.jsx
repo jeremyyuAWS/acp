@@ -71,7 +71,7 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
         // attention/error cards open, and scope manual reopening to this execution and phase.
         const defaultOpen = attention || (isCompleted ? false : isCurrent)
         const overrideKey = `${stage}:${snapshot.execution_id}:${isCompleted ? 'complete' : 'live'}`
-        const open = attention || (overrides[overrideKey] ?? defaultOpen)
+        const open = overrides[overrideKey] ?? defaultOpen
         const detail = isCurrent ? stageDetails[stage] : null
         const bodyId = `workflow-stage-${stage}`
         return (

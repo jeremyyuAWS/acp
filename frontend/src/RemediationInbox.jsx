@@ -382,7 +382,7 @@ function DetailPane({ f, decisions, readOnly = false, automaticMode = false, onD
   // "Mark as assigned" action — so it shares the manual detail treatment.
   const isHandoff = lane.key === 'handoff'
   const responsibility = automaticMode ? automaticReviewResponsibility(f, decisions) : null
-  const isManual = requiresPdfSourceEditing(f) && !f.applied || (lane.key === 'manual' || isHandoff) && (!automaticMode || responsibility === 'human')
+  const isManual = requiresPdfSourceEditing(f) || (lane.key === 'manual' || isHandoff) && (!automaticMode || responsibility === 'human')
   // A deterministic fix ACP already applied. Its decision is a plain approve / "this looks wrong",
   // not an edit-and-apply — the change is already written, so we don't offer an editable draft.
   const isAutoFix = lane.key === 'review'
@@ -713,6 +713,7 @@ export default function RemediationInbox({
   const readOnlyRef = useRef(readOnly)
   readOnlyRef.current = readOnly
   const [selectedId, setSelectedId] = useState(null)
+  const [cardCollapsed, setCardCollapsed] = useState(false)
   const [tab, setTab] = useState(initialTab)
   const [sort, setSort] = useState(initialSort)
   const [search, setSearch] = useState('')
@@ -913,7 +914,7 @@ export default function RemediationInbox({
     if (readOnlyRef.current || !f || savingId != null) return
     // Recheck the current server-projected row: an old pane callback must not
     // manually approve a proposal admitted automatically since it rendered.
-    if (decision?.state === 'accepted' && currentQueueRef.current.find(row => row.id === f.id)?.automaticQueued) return
+    if (decision?.state === 'accepted' && (currentQueueRef.current.find(row => row.id === f.id)?.automaticQueued || requiresPdfSourceEditing(f))) return
     // The parent removes the row from `queue` optimistically and puts it back only if the write
     // fails, so hold our own reference to keep the pane rendering THIS finding while it is in flight.
     heldRef.current.set(f.id, f)
@@ -1022,6 +1023,10 @@ export default function RemediationInbox({
   )
   return (
     <div className="rinbox-wrap">
+      <button type="button" className="ghost small" aria-expanded={!cardCollapsed} onClick={() => setCardCollapsed(value => !value)} style={{ margin: 12 }}>
+        {cardCollapsed ? 'Expand remediation card' : 'Collapse remediation card'}
+      </button>
+      <div hidden={cardCollapsed}>
       {/* Retired skip-inspection entry is retained only for legacy restoration. Q3 authorizes automatic publishing. */}
       {legacyApprovalControls && !bulkPreviewOpen && !readOnly && onPublish && <div style={{ padding: '14px 22px', borderBottom: '1px solid var(--line)' }}>
         <button type="button" className="primary" disabled={savingId != null} onClick={onPublish}>Skip inspection and publish →</button>
@@ -1278,6 +1283,7 @@ export default function RemediationInbox({
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
       {!bulkPreviewOpen && <WorkspaceFooter position={position} total={visIds.length} onPrev={goPrev} onNext={goNext}
                        activeStep={selected && !optionalInspectionOf(selected) && !recordedReviewDecision(selected, decisions) ? workflowStepIndex(selected, decisions) : null} />}
+      </div>
     </div>
   )
 }
