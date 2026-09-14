@@ -43,7 +43,9 @@ export function remainingWorkStatus({ events = [], rows = [], decisions = {}, sn
   }), decisions, blockedCaptionFiles)
   const descriptions = [
     ['missing-proposals', 'Suggestion not ready', 'need a usable proposal before a fix can be applied. Check AI activity for generation status; no application job is confirmed.', 'waiting'],
-    ['blocked-ai', 'AI request blocked', 'cannot obtain a new AI suggestion until the saved AI permission, required endpoint, verified pricing, or available spending is resolved. Existing rule-based fixes can continue.', 'waiting'],
+    ['blocked-ai', 'AI request blocked', snapshot?.ai_policy?.zone === 'local'
+      ? 'cannot obtain a new local AI suggestion until the saved local permission, private endpoint, and configured models are checked. Existing rule-based fixes can continue.'
+      : 'cannot obtain a new AI suggestion until the saved AI permission, required endpoint, verified pricing, or available spending is resolved. Existing rule-based fixes can continue.', 'waiting'],
     ['failed-checks', 'Saved fix needs recovery', 'have a recorded application or verification failure. Check the failed criterion and reason before retrying that operation.', 'review'],
     ['status-checks', 'Recorded status needs checking', 'have a blocker without a confirmed failure reason. Check saved evidence; these are not automatically classified as human decisions.', 'waiting'],
     ['review', 'Your review needed', 'need a decision on an available suggestion. Auto-apply does not bypass requirements for individual judgment.', 'review'],
