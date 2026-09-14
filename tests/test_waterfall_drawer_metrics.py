@@ -196,3 +196,11 @@ def test_measured_provider_timings_have_field_specific_coverage_and_numeric_allo
     assert model['provider_timing']['model_load_ms'] == {'average': 100, 'measured_attempts': 1}
     assert model['provider_timing']['inference_ms'] == {'average': 300, 'measured_attempts': 2}
     assert 'SECRET' not in json.dumps(model)
+
+
+def test_queue_wait_projection_preserves_observed_measurement_coverage():
+    row = chart([record(measured_timing=json.dumps({'queue_wait_ms': 100})),
+                 record(attempt_id='b', measured_timing=json.dumps({'queue_wait_ms': 300})),
+                 record(attempt_id='legacy')])['models']['rows'][0]
+    assert row['provider_timing']['queue_wait_ms'] == {'average': 200, 'measured_attempts': 2}
+    assert chart([record()])['models']['rows'][0]['provider_timing'] == {}
