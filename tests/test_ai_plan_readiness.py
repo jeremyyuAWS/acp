@@ -56,3 +56,28 @@ def test_local_access_denied_is_not_endpoint_failure_or_cloud_budget(monkeypatch
         monkeypatch.setattr(httpx, 'get', Mock(return_value=response))
         readiness = plan_ai_readiness({'ai': 1, 'ai_zone': 'local', 'ai_budget_usd': '0.00'})
         assert readiness == {'state': 'local_endpoint_access_denied' if status in (401, 403) else 'local_endpoint_unreachable', 'blocked': True}
+
+
+def test_local_readiness_retries_transient_timeout_without_generation(monkeypatch):
+    import ai
+    import httpx
+    monkeypatch.setattr(ai, '_maybe_refresh_endpoint', lambda: None)
+    monkeypatch.setattr(ai, 'OLLAMA_BASE_URL', 'https://ollama.internal.example.com')
+    response = Mock()
+    response.json.return_value = {'models': [{'name': ai.OLLAMA_MODEL}, {'name': ai.OLLAMA_VISION_MODEL}]}
+    probe = Mock(side_effect=[httpx.ReadTimeout('starting'), response])
+    monkeypatch.setattr(httpx, 'get', probe)
+    assert plan_ai_readiness({'ai': 1, 'ai_zone': 'local'})['blocked'] is False
+    assert probe.call_count == 2
+    assert all(call.kwargs['timeout'] == 3.0 for call in probe.call_args_list)
+
+
+def test_local_readiness_retry_is_bounded(monkeypatch):
+    import ai
+    import httpx
+    monkeypatch.setattr(ai, '_maybe_refresh_endpoint', lambda: None)
+    monkeypatch.setattr(ai, 'OLLAMA_BASE_URL', 'https://ollama.internal.example.com')
+    probe = Mock(side_effect=httpx.ReadTimeout('unavailable'))
+    monkeypatch.setattr(httpx, 'get', probe)
+    assert plan_ai_readiness({'ai': 1, 'ai_zone': 'local'})['blocked'] is True
+    assert probe.call_count == 2
