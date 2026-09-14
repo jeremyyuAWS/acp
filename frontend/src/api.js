@@ -747,9 +747,33 @@ export const getMe = () => (SIM ? sim(simIdentity()) : fetch(`${BASE}/me`, { hea
 export const getMyAccess = () => (SIM
   ? sim(null)
   : fetch(`${BASE}/me/access`, { headers: headers() }).then(j).catch(() => null))
-export const getAdminAnalytics = (period = '30d', source = null) =>
-  fetch(`${BASE}/admin/analytics/overview?period=${period}${source ? `&source=${encodeURIComponent(source)}` : ''}`,
-        { headers: headers() }).then(j)
+const analyticsQuery = (period, source, options = {}) => {
+  const query = new URLSearchParams({ period })
+  if (source) query.set('source', source)
+  for (const key of ['owner', 'status', 'start', 'end', 'timezone', 'search', 'page', 'page_size', 'basis']) {
+    if (options[key] != null && options[key] !== '') query.set(key, String(options[key]))
+  }
+  return query
+}
+export const getAdminAnalytics = (period = '30d', source = null, options = {}) =>
+  fetch(`${BASE}/admin/analytics/overview?${analyticsQuery(period, source, options)}`,
+        { headers: headers(), signal: options.signal, cache: 'no-store' }).then(j)
+export const getAdminAnalyticsScan = (scanId, options = {}) =>
+  fetch(`${BASE}/admin/analytics/scans/${encodeURIComponent(scanId)}`,
+        { headers: headers(), signal: options.signal, cache: 'no-store' }).then(j)
+const downloadAnalytics = async (endpoint, filename, period, source, options) => {
+  const response = await fetch(`${BASE}/admin/analytics/${endpoint}?${analyticsQuery(period, source, options)}`,
+    { headers: headers(), signal: options.signal, cache: 'no-store' })
+  if (!response.ok) return j(response)
+  const url = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a')
+  anchor.href = url; anchor.download = filename; anchor.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+export const downloadAdminAnalyticsExport = (period, source, options = {}) =>
+  downloadAnalytics('export', 'scan-register.csv', period, source, options)
+export const downloadAdminAnalyticsMethodology = (period, source, options = {}) =>
+  downloadAnalytics('methodology', 'scan-methodology.json', period, source, options)
 export const getSources = () => (SIM ? sim(simGetSources()) : fetch(`${BASE}/sources`, { headers: headers() }).then(j))
 export const getRubric = () => (SIM
   ? sim({ name: 'WCAG 2.1 AA', version: '1', hash: 'e85fcf7e14f9040c', target: 'WCAG 2.1 AA', threshold: 90, criteria: {} })

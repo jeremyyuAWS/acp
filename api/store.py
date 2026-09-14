@@ -5248,6 +5248,27 @@ class Store:
             rows = self._db.fetchall(cur)
             return [self._fill_run_aggregate(cur, r) for r in rows]
 
+    def list_scan_attempts_admin(self) -> list[dict]:
+        """All recorded attempts across owner-email tenants; platform-admin analytics only.
+
+        Nullable counters remain unavailable rather than implying a zero-result assessment.
+        The completed-scan compatibility reader is deliberately unchanged.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id,started_at,completed_at,source,rubric_name,rubric_hash,files,"
+                "certifiable,uncertain,error,avg_score,assessed_at,scope,status,owner_email "
+                "FROM scan_runs ORDER BY started_at DESC,id DESC", ())
+            return self._db.fetchall(cur)
+
+    def get_scan_attempt_admin(self, scan_id: str) -> dict | None:
+        """Raw nullable metadata for one attempt; callers must enforce platform admin access."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT id,started_at,completed_at,source,rubric_name,rubric_hash,"
+                "files,certifiable,uncertain,error,avg_score,assessed_at,scope,status,owner_email "
+                "FROM scan_runs WHERE id=%s", (scan_id,))
+            return self._db.fetchone(cur)
+
     def list_scans_including_discovered(self, owner: str | None = None) -> list[dict]:
         """Every scan, newest-first, INCLUDING an ADR 0020 Discover-only run that has never been
         assessed — the one case `list_scans` exists specifically to hide.

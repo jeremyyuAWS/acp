@@ -1,121 +1,53 @@
-/**
- * The Recent scans table (AdminInsights.jsx) renders Docs/Certifiable/Score straight off
- * scan_runs — but "0" there is ambiguous: a scan cancelled or interrupted before assessment
- * ran leaves those fields at 0 exactly the way a scan that WAS assessed and found nothing
- * certifiable does. Reported live 2026-08-29 ("are these because they weren't assessed or
- * remediated?") looking at three same-looking rows in that state.
- *
- * The backend rides `status` along on each recent_scans row (api/routes/analytics.py). Rather
- * than a separate badge column, the Docs/Certifiable cells themselves swap the bare "0" for the
- * status word when the scan never reached assessment — asked for directly ("instead of a 0 can
- * we put cancelled or error instead so we distinguish from true 0") — so the two cases never
- * render as the identical digit.
- */
+/** All-status analytics must distinguish unavailable partial results from measured zeros. */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
-const ROW_DONE = {
-  id: 's-done', completed_at: '2026-08-27T10:00:00Z', source: 'local',
-  files: 5, certifiable: 1, uncertain: 0, avg_score: 71, status: 'done',
-  owner_email: 'jeremy_acp@fgxlxj.onmicrosoft.com',
-}
-const ROW_DONE_REAL_ZERO = {
-  id: 's-real-zero', completed_at: '2026-08-26T10:00:00Z', source: 'local',
-  files: 5, certifiable: 0, uncertain: 0, avg_score: 40, status: 'done',
-  owner_email: 'jeremy_acp@fgxlxj.onmicrosoft.com',
-}
-const ROW_CANCELLED = {
-  id: 's-cancelled', completed_at: '2026-08-29T04:00:00Z', source: 'drive',
-  files: 0, certifiable: 0, uncertain: 0, avg_score: null, status: 'cancelled',
-  owner_email: 'jeremyyu.movate@gmail.com',
-}
-const ROW_INTERRUPTED = {
-  id: 's-interrupted', completed_at: '2026-08-28T04:00:00Z', source: 'drive',
-  files: 0, certifiable: 0, uncertain: 0, avg_score: null, status: 'interrupted',
-  owner_email: 'devamovate@gmail.com',
-}
-const ROW_FAILED = {
-  id: 's-failed', completed_at: '2026-08-28T05:00:00Z', source: 'drive',
-  files: 0, certifiable: 0, uncertain: 0, avg_score: null, status: 'failed',
-  owner_email: 'devamovate@gmail.com',
-}
-
-const getAdminAnalytics = vi.fn(async () => ({
-  scans: 5, docs: 10, certifiable: 1, uncertain: 0, error_docs: 0, scan_exceptions: 1,
-  review_pending: 0, certifiable_rate: 20, avg_score: 71, by_source: {},
-  trend: { summary: {}, points: [] },
-  recent_scans: [ROW_CANCELLED, ROW_INTERRUPTED, ROW_FAILED, ROW_DONE_REAL_ZERO, ROW_DONE],
+const rows = [
+  { id: 's-cancelled', status: 'cancelled', files: null, certifiable: null, avg_score: null },
+  { id: 's-interrupted', status: 'interrupted', files: null, certifiable: null, avg_score: null },
+  { id: 's-failed', status: 'failed', files: null, certifiable: null, avg_score: null },
+  { id: 's-real-zero', status: 'done', files: 5, certifiable: 0, avg_score: 40 },
+  { id: 's-done', status: 'done', files: 5, certifiable: 1, avg_score: 71 },
+].map(r => ({ ...r, started_at: '2026-09-10T10:00:00Z', owner_email: 'alice@example.com', source: 'local' }))
+vi.mock('./api.js', () => ({
+  getAdminAnalytics: vi.fn(async () => ({ attempts: 5, by_source: {}, by_status: {},
+    successful_results: { docs: 10, certifiable: 1, certifiable_rate: 10 },
+    register: { rows, total: 5, page: 1, pages: 1 }, reporting: {}, filter_options: {} })),
+  getAdminAnalyticsScan: vi.fn(), downloadAdminAnalyticsExport: vi.fn(), downloadAdminAnalyticsMethodology: vi.fn(),
 }))
-
-vi.mock('./api.js', () => ({ getAdminAnalytics }))
-
 const { AdminInsights } = await import('./AdminInsights.jsx')
-
 afterEach(unmountAll)
-
-const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
-
 async function mount() {
   const { root, container } = createTestRoot()
-  await act(async () => { root.render(createElement(AdminInsights, { me: { email: 'admin@example.com' } })) })
-  await flush()
+  await act(async () => root.render(createElement(AdminInsights, { me: { email: 'admin@example.com' } })))
   return container
 }
-
-function rowFor(container, id) {
-  const rows = [...container.querySelectorAll('.panel table tbody tr')]
-  const idx = [ROW_CANCELLED, ROW_INTERRUPTED, ROW_FAILED, ROW_DONE_REAL_ZERO, ROW_DONE]
-    .findIndex((r) => r.id === id)
-  // Recent scans is the only table with more than 4 columns — Coverage by source has 4.
-  const scansTable = [...container.querySelectorAll('table')].find((t) => t.rows[0]?.cells.length === 6)
-  return scansTable.rows[idx + 1]
+function cells(c, id) {
+  const button = [...c.querySelectorAll('button')].find(b => b.textContent === id)
+  expect(button).toBeTruthy()
+  return button.closest('tr').cells
 }
-
-describe('the recent-scans table', () => {
-  it('shows "Cancelled" in Docs/Certifiable instead of a bare 0', async () => {
-    const c = await mount()
-    const row = rowFor(c, 's-cancelled')
-    const [, , docs, certifiable] = row.cells
-    expect(docs.textContent).toBe('Cancelled')
-    expect(certifiable.textContent).toBe('Cancelled')
+describe('scan register outcome evidence', () => {
+  for (const [id, label] of [['s-cancelled','Cancelled'], ['s-interrupted','Interrupted'], ['s-failed','Failed']]) {
+    it(`shows ${label} and unavailable counts for an attempt without assessment results`, async () => {
+      const row = cells(await mount(), id)
+      expect(row[5].textContent).toBe(label)
+      expect(row[6].textContent).toBe('—')
+      expect(row[7].textContent).toBe('—')
+      expect(row[8].textContent).toBe('—')
+    })
+  }
+  it('preserves a measured zero on a successfully assessed run', async () => {
+    const row = cells(await mount(), 's-real-zero')
+    expect(row[5].textContent).toBe('Successful')
+    expect(row[6].textContent).toBe('5')
+    expect(row[7].textContent).toBe('0 (0%)')
   })
-
-  it('shows "Interrupted" in Docs/Certifiable instead of a bare 0', async () => {
-    const c = await mount()
-    const row = rowFor(c, 's-interrupted')
-    const [, , docs, certifiable] = row.cells
-    expect(docs.textContent).toBe('Interrupted')
-    expect(certifiable.textContent).toBe('Interrupted')
-  })
-
-  // 'failed' is deliberately NOT in SCAN_STATUS_LABEL — every backend path that sets it
-  // (set_scan_status, the dead-letter sweep) never stamps completed_at, and this table's own
-  // query requires completed_at IS NOT NULL, so a real 'failed' row can never actually reach
-  // this component. A label here would be dead code implying a case that can't fire. This test
-  // exists so a future re-add doesn't slip back in unnoticed.
-  it('renders a plain 0 for a (backend-unreachable) failed-status row, not a status word', async () => {
-    const c = await mount()
-    const row = rowFor(c, 's-failed')
-    const [, , docs, certifiable] = row.cells
-    expect(docs.textContent).toBe('0')
-    expect(certifiable.textContent).toBe('0 (—%)')
-  })
-
-  it('leaves a real, fully-assessed zero as an actual 0 — status is done', async () => {
-    const c = await mount()
-    const row = rowFor(c, 's-real-zero')
-    const [, , docs, certifiable] = row.cells
-    expect(docs.textContent).toBe('5')
-    expect(certifiable.textContent).toBe('0 (0%)')
-  })
-
-  it('renders ordinary numbers for a normally completed scan', async () => {
-    const c = await mount()
-    const row = rowFor(c, 's-done')
-    const [, , docs, certifiable] = row.cells
-    expect(docs.textContent).toBe('5')
-    expect(certifiable.textContent).toBe('1 (20%)')
+  it('renders normal successful counts and rate', async () => {
+    const row = cells(await mount(), 's-done')
+    expect(row[6].textContent).toBe('5')
+    expect(row[7].textContent).toBe('1 (20%)')
   })
 })
