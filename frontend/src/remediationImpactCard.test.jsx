@@ -25,6 +25,37 @@ const managedChoices = () => getRemediationImpact.mockImplementation(async (_id,
   return {...result(resolved),capabilities:{...result().capabilities,ai_budget:true}}
 })
 describe('RemediationImpactCard', () => {
+  it.each([false, true])('offers an explicit rules-only recovery with automatic publishing=%s', async automaticRelease => {
+    const local = { rule_based: 2, ai: 1, ai_zone: 'local', ai_budget_usd: '0.00' }
+    getRemediationImpact.mockImplementation(async (_id, policy) => ({
+      ...result(policy || local), ai_readiness: { state: 'local_endpoint_required', blocked: (policy || local).ai > 0 },
+    }))
+    const onRun = vi.fn()
+    const { container } = await mount({ onRun, automaticRelease })
+    expect(button(container, 'Approve plan and start').disabled).toBe(true)
+    await act(async () => button(container, 'Continue With Rules Only').click())
+    expect(onRun).not.toHaveBeenCalled()
+    expect(button(container, 'Approve plan and start').disabled).toBe(false)
+    await act(async () => button(container, 'Approve plan and start').click())
+    expect(onRun.mock.calls[0][0]).toMatchObject({ ai: 0, ai_zone: 'local', ai_budget_usd: '0.00' })
+  })
+  it('recovers on the publishing wizard step without losing answered questions', async () => {
+    const local = { rule_based: 2, ai: 1, ai_zone: 'local', ai_budget_usd: '0.00' }
+    getRemediationImpact.mockImplementation(async (_id, policy) => ({ ...result(policy || local), capabilities: { ...result().capabilities, ai_budget: true },
+      ai_readiness: { state: 'local_endpoint_required', blocked: (policy || local).ai > 0 } }))
+    const onRun = vi.fn()
+    const { container } = await mount({ onRun, requireAnswers: true, releaseAnswered: true })
+    const choice = text => [...container.querySelectorAll('label')].find(node => node.textContent.includes(text)).querySelector('input')
+    await act(async () => choice('Apply rule-based fixes automatically').click())
+    await act(async () => button(container, 'Next').click())
+    await act(async () => choice('Local models').click())
+    await act(async () => button(container, 'Next').click())
+    expect(button(container, 'Approve plan and start').disabled).toBe(true)
+    await act(async () => button(container, 'Continue With Rules Only').click())
+    expect(container.textContent).toContain('Step 3 of 3 · Publishing')
+    expect(button(container, 'Approve plan and start').disabled).toBe(false)
+    expect(onRun).not.toHaveBeenCalled()
+  })
   it('blocks a local-only plan before start and retries readiness without changing consent', async () => {
     const policy = { rule_based: 2, ai: 1, ai_zone: 'local', ai_budget_usd: '0.00' }
     getRemediationImpact.mockResolvedValue({ ...result(policy), ai_readiness: { state: 'local_endpoint_required', blocked: true } })

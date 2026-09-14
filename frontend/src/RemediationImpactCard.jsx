@@ -291,6 +291,8 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       {data.policy?.ai_zone === 'local' && <p>Endpoint: {data.ai_readiness.state === 'local_endpoint_required' ? 'outside the local zone' : data.ai_readiness.state === 'local_endpoint_access_denied' ? 'access denied' : data.ai_readiness.state === 'local_endpoint_unreachable' ? 'unavailable' : ['local_endpoint_reachable', 'local_models_missing'].includes(data.ai_readiness.state) ? 'reachable' : 'not checked'} · Cloud spending: not used.</p>}
       {['local_endpoint_reachable', 'local_models_missing'].includes(data?.ai_readiness?.state) && <p>Text model: {data.ai_readiness.text_model_available ? 'available' : 'unavailable'} · Vision model: {data.ai_readiness.vision_model_available ? 'available' : 'unavailable'}. Unavailable models cannot generate their suggestions.</p>}
       {aiBlocked && <button type="button" disabled={loading || runBusy || readOnly} onClick={() => setReload(current => current + 1)}>Retry readiness check</button>}
+      {aiBlocked && <button type="button" disabled={loading || runBusy || readOnly || saving} onClick={() => change('ai', 0)}>Continue With Rules Only</button>}
+      {aiBlocked && <p>Starting is paused because AI is unavailable, regardless of your publishing choice. Continue With Rules Only to update the preview, then start the plan. Your publishing choice stays selected.</p>}
     </div>}
     {requireAnswers && <h3 ref={stepHeading} tabIndex={-1} className="plan-step-heading">Step {step + 1} of 3 · {stepNames[step]}</h3>}
     <div className="remediation-impact__split"><div className="remediation-impact__settings">
