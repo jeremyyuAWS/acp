@@ -166,3 +166,22 @@ it('does not toast an already completed stage on initial connection', async () =
     expect(host.textContent).toBe('')
   }finally{await act(async()=>root.unmount());host.remove()}
 })
+
+
+it('does not pre-mark future waiting stages and announces their real start after assessment completion', async () => {
+  const host=document.createElement('div');document.body.appendChild(host);const root=createRoot(host);let push
+  vi.mocked(openAdminActivityStream).mockImplementation(({onMessage})=>{push=onMessage;return{close:vi.fn()}})
+  const snapshot=(assessment, started=false)=>({workflows:[{scan_id:'future-scan',stages:[
+    {stage:'assess',stage_run_id:'assess-future',status:assessment==='succeeded'?'completed':'running',active:0,waiting:0,canonical:{state:assessment}},
+    {stage:'remediate',stage_run_id:'rem-future',status:'waiting',active:started?1:0,waiting:0,canonical:{state:started?'processing':'pending'}},
+  ]}]})
+  try {
+    await act(async()=>root.render(<LiveOperationsNotifier />))
+    await act(async()=>push(snapshot('processing_complete')))
+    expect(host.textContent).toBe('')
+    await act(async()=>push(snapshot('succeeded')))
+    expect(host.textContent).toContain('Assessment complete')
+    await act(async()=>push(snapshot('succeeded',true)))
+    expect(host.textContent).toContain('Remediation started')
+  } finally {await act(async()=>root.unmount());host.remove()}
+})

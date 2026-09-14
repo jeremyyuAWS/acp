@@ -5,6 +5,7 @@ const LABEL = { discover: 'Discovery', assess: 'Assessment', remediate: 'Remedia
 
 const STAGE_ORDER = { discover: 0, assess: 1, remediate: 2, release: 3 }
 const stageKey = (run) => `${run.scan_id}:${run.stage}:${run.stage_run_id || ''}`
+const observedStart = (run) => Number(run.running) > 0 || Number(run.queued) > 0 || run.executionStarted === true
 
 // Queue tails include assessment trace work. Canonical workflow completion is
 // the assessment result boundary; trace settlement cannot announce it again.
@@ -23,12 +24,13 @@ export function notificationRuns(snapshot) {
       total: stage.total ?? counts.total ?? 0, completed: stage.completed ?? counts.completed ?? 0,
       completion_recorded: complete, terminal_outcome: complete ? 'completed' : stage.terminal_outcome,
       notification_source: canonical ? 'canonical' : 'lifecycle',
+      executionStarted: canonical && ['processing', 'processing_complete', 'running'].includes(canonical.state),
     }
   }))
 }
 
 export function newStageStarts(previous = [], current = []) {
-  const prior = new Set(previous.filter((run) => run.status !== 'recent').map((run) => stageKey(run)))
+  const prior = new Set(previous.filter((run) => run.status !== 'recent' && observedStart(run)).map((run) => stageKey(run)))
   return current.filter((run) => LABEL[run.stage] && run.status !== 'recent' && (Number(run.running) > 0 || Number(run.queued) > 0))
     .filter((run) => !prior.has(stageKey(run)))
 }
@@ -39,7 +41,7 @@ export function newStageCompletions(previous = [], current = []) {
     const before = prior.get(stageKey(run))
     const laterAlreadyStarted = previous.some((other) => other.scan_id === run.scan_id
       && STAGE_ORDER[other.stage] > STAGE_ORDER[run.stage]
-      && ['active', 'recent'].includes(other.status))
+      && (other.completion_recorded === true || observedStart(other)))
     return LABEL[run.stage] && run.status === 'recent' && run.completion_recorded === true
       && run.terminal_outcome === 'completed' && before && before.status === 'active'
       && !laterAlreadyStarted
@@ -107,7 +109,7 @@ export default function LiveOperationsNotifier({ onOpen }) {
       const current = notificationRuns(snapshot)
       if (previous.current === null) {
         current.forEach((item) => {
-          seen.current.add(stageKey(item))
+          if (observedStart(item) || item.completion_recorded === true) seen.current.add(stageKey(item))
           if (item.completion_recorded === true) completedSeen.current.add(stageKey(item))
         })
         previous.current = current
@@ -121,7 +123,7 @@ export default function LiveOperationsNotifier({ onOpen }) {
       current.forEach((item) => {
         if (item.completion_recorded === true) completedSeen.current.add(stageKey(item))
       })
-      current.forEach((item) => seen.current.add(stageKey(item)))
+      current.forEach((item) => { if (observedStart(item) || item.completion_recorded === true) seen.current.add(stageKey(item)) })
       previous.current = current
       if (!starts.length && !completions.length) return
       const kind = starts.length ? 'started' : 'completed'
