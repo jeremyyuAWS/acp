@@ -1,7 +1,9 @@
 import { useEffect, useState, useRef } from 'react'
-import { getAdminAnalytics, getAdminAnalyticsScan, downloadAdminAnalyticsExport, downloadAdminAnalyticsMethodology } from './api.js'
+import { getAdminAnalytics, getAdminAnalyticsScan, downloadAdminAnalyticsExport, downloadAdminAnalyticsMethodology, getScanInventory } from './api.js'
 import './operations-typography.css'
 import './scan-analytics.css'
+import BalancedSummary, { ScanActivityCalendar } from './BalancedSummary.jsx'
+import { loadDiscoveryInventory } from './discoveryInventory.js'
 
 const PERIODS = [['today', 'Today'], ['7d', 'Last 7 days'], ['30d', 'Last 30 days'], ['90d', 'Last 90 days'], ['all', 'All time'], ['custom', 'Custom dates']]
 const SOURCES = { drive: 'Google Drive', sharepoint: 'SharePoint', local: 'Local', unknown: 'Unknown' }
@@ -52,7 +54,16 @@ function RateChart({ points, onSelect }) {
   </svg><ChartTable caption="Assessment results over time" headings={['Completed at', 'Observations', 'Certifiable rate', 'Records']}>{points.map((p, i) => <tr key={p.id || i}><td>{date(p.at)}</td><td>{number(p.files ?? p.docs)}</td><td>{p.certifiable_pct == null ? 'Unavailable' : `${number(p.certifiable_pct, 1)}%`}</td><td>{p.id ? <button className="sa-link" onClick={() => onSelect(p.id)}>View scan {p.id}</button> : 'Run ID unavailable'}</td></tr>)}</ChartTable></>
 }
 
-export function AdminInsights({ me }) {
+export function AdminInsights({ me, run, files = [], cap, assessment, scanList = [], onPickScan }) {
+  const [estateInventory, setEstateInventory] = useState(null)
+  useEffect(() => {
+    let live = true
+    setEstateInventory(null)
+    if (run?.id) loadDiscoveryInventory(run.id, getScanInventory).then(inventory => {
+      if (live) setEstateInventory({ scanId: run.id, inventory })
+    })
+    return () => { live = false }
+  }, [run?.id])
   const [filters, setFilters] = useState(() => {
     const q = new URLSearchParams(window.location.search)
     return { period: q.get('analytics_period') || '30d', source: q.get('analytics_source') || '', owner: q.get('analytics_owner') || '', status: q.get('analytics_status') || '', search: q.get('analytics_search') || '', start: q.get('analytics_start') || '', end: q.get('analytics_end') || '', timezone: 'UTC', page: 1, page_size: 20 }
@@ -137,6 +148,17 @@ export function AdminInsights({ me }) {
     {data && <div aria-busy={loading} className={loading || error ? 'sa-retained' : ''}>
       {reporting.partial_data && <p className="sa-notice" role="status">{number(reporting.missing_started_at)} retained runs have no valid start timestamp. All-time reporting keeps them inspectable; dated activity excludes them.</p>}
       {results.missing_results > 0 && <p className="sa-notice" role="status">{number(results.missing_results)} successful completions have unavailable or inconsistent result counters and are excluded from observation and rate totals.</p>}
+      {onPickScan && scanList.length > 0 && <label className="balanced-scan-choice">Estate chart scan
+        <select value={run?.id || ''} onChange={event => onPickScan(event.target.value)}>
+          {!run?.id && <option value="">Select a scan</option>}
+          {scanList.map(scan => <option key={scan.id} value={scan.id}>{scan.id}{scan.completed_at ? ` · ${scan.completed_at}` : ''}</option>)}
+        </select>
+      </label>}
+      <BalancedSummary run={run} files={files} cap={cap} assessment={assessment}
+        inventory={estateInventory && estateInventory.scanId === run?.id ? estateInventory.inventory : null}
+        calendar={<ScanActivityCalendar activity={activity} disabled={loading || !!error} stale={!!error}
+          onDay={day => select({ period: 'custom', start: `${day.date}T00:00:00Z`, end: new Date(Date.parse(`${day.date}T00:00:00Z`) + 86400000).toISOString() })} />} />
+      <details className="balanced-legacy"><summary>Additional scan reporting</summary>
       <div className="ops-kpi-grid ops-kpi-grid--analytics sa-kpis">{[
         ['Scan attempts', data.attempts ?? data.scans, 'Distinct started runs; all recorded statuses', {}],
         ['Successful runs', data.successful_runs, 'Recorded successful terminal outcome', { status: '__successful__' }],
@@ -158,6 +180,7 @@ export function AdminInsights({ me }) {
         <Panel title="Attempts by source" subtitle="Start-time activity across all statuses. Select a source to inspect contributing scan attempts."><RankChart rows={entries(data.activity_by_source).map(([key,r]) => ({key,label:SOURCES[key] || key,count:r.attempts}))} onSelect={source => select({source})} /><ChartTable caption="Source scan activity" headings={['Source','Attempts','Successful','Unsuccessful']}>{entries(data.activity_by_source).map(([source,r]) => <tr key={source}><td><button className="sa-link" onClick={() => select({source})}>{SOURCES[source] || source}</button></td><td>{number(r.attempts)}</td><td>{number(r.successful_runs)}</td><td>{number(r.unsuccessful_runs)}</td></tr>)}</ChartTable></Panel>
         <Panel title="User activity" subtitle="Initiators are not necessarily document owners or remediation assignees."><RankChart rows={users.map(u => ({key:u.owner_email || 'unknown',label:u.owner_email || 'Unknown actor',count:u.attempts}))} onSelect={owner => select({owner})} /><ChartTable caption="User activity" headings={['Initiating actor','Attempts','Successful','Unsuccessful','Last activity']}>{users.map(u => <tr key={u.owner_email || 'unknown'}><td><button className="sa-link" onClick={() => select({owner:u.owner_email || 'unknown'})}>{u.owner_email || 'Unknown actor'}</button></td><td>{number(u.attempts)}</td><td>{number(u.successful_runs)}</td><td>{number(u.unsuccessful_runs)}</td><td>{date(u.last_activity)}</td></tr>)}</ChartTable></Panel>
       </div>
+      </details>
       <section className="panel sa-panel" ref={registerRef} tabIndex="-1"><h2>Scan register</h2><p className="sa-muted">Reporting snapshot generated {date(reporting.generated_at)}. Export uses a fresh server snapshot and records its own generation time.</p><div className="sa-actions"><button className="sa-link" onClick={() => { setRegisterBasis('attempts'); setFilters(f => ({...f,page:1})) }}>Attempt activity</button><button className="sa-link" onClick={() => { setRegisterBasis('results'); setFilters(f => ({...f,page:1})) }}>Assessment completions</button></div><p className="sa-muted">{number(register.total)} matching {registerBasis === 'results' ? 'successful completion results' : 'attempts'} · page {register.page || 1} of {register.pages || 1}. Select a run for recorded evidence.</p><div className="sa-scroll"><table><caption>{registerBasis === 'results' ? 'Successful assessment completions in the interval' : 'All filtered scan attempts'}</caption><thead><tr>{['Run ID','Initiating actor','Source','Started','Completed','Status','Observations','Certifiable','Mean scan score'].map(h => <th scope="col" key={h}>{h}</th>)}</tr></thead><tbody>{register.rows.map(s => <tr key={s.id}><td><button className="sa-link" onClick={() => setDetailId(s.id)}>{s.id}</button></td><td>{s.owner_email || 'Unknown actor'}</td><td>{SOURCES[s.source] || s.source || 'Unknown'}</td><td>{date(s.created_at || s.started_at)}</td><td>{date(s.completed_at)}</td><td><span className={`sa-status sa-status-${s.status}`}>{statusName(s.status)}</span></td><td>{number(s.files)}</td><td>{number(s.certifiable)}{s.status === 'done' && s.files > 0 && s.certifiable != null ? ` (${number(s.certifiable / s.files * 100, 1)}%)` : ''}</td><td>{number(s.avg_score,1)}</td></tr>)}</tbody></table></div>{!register.rows.length && <p className="sa-empty">No matching records for this time basis. Clear filters or choose a wider interval.</p>}<div className="sa-pagination"><button className="chip" disabled={loading || (register.page || 1) <= 1} onClick={() => setFilters(f => ({...f,page:f.page-1}))}>Previous page</button><span>Page {register.page || 1} of {register.pages || 1}</span><button className="chip" disabled={loading || (register.page || 1) >= (register.pages || 1)} onClick={() => setFilters(f => ({...f,page:f.page+1}))}>Next page</button></div></section>
       {detailId && <section className="panel sa-panel sa-detail" aria-label="Scan detail"><div className="sa-header"><h2>Scan detail · {detailId}</h2><button className="chip" onClick={() => setDetailId(null)}>Close detail</button></div>{detailError ? <p role="alert">{detailError}</p> : !detail ? <p role="status">Loading scan evidence…</p> : <><dl className="sa-detail-grid">{[['Initiating actor',detail.owner_email || 'Unknown actor'],['Source',SOURCES[detail.source] || detail.source || 'Unknown'],['Status',statusName(detail.status)],['Started',date(detail.created_at || detail.started_at)],['Completed',date(detail.completed_at)],['Document observations',number(detail.files)],['Certifiable',number(detail.certifiable)],['Mean scan score',number(detail.avg_score,1)]].map(([k,v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>{detail.error && <p className="sa-error">Recorded error: {typeof detail.error === 'string' ? detail.error : JSON.stringify(detail.error)}</p>}<p>Only recorded evidence is shown. Historical departments and rubric versions may be unavailable.</p>
         <h3>Recorded stage events</h3><p>{detailEvidence.reporting?.events_note}</p>{detailEvidence.events?.length ? <ol>{detailEvidence.events.map((event,i) => <li key={event.id || i}>{date(event.timestamp || event.created_at || event.at)} · {event.stage || event.event_type || event.type || 'Recorded event'} · {event.message || event.status || ''}</li>)}</ol> : <p>No stage history recorded for this run.</p>}
