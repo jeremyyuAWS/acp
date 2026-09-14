@@ -20,7 +20,9 @@ def generate(prompt, endpoint, primary, *, headers=None, local_only=False, on_at
         started = time.monotonic()
         data = {}
         try:
-            response = httpx.post(endpoint.rstrip('/') + '/api/generate',
+            from ai_request_activity import send
+            response = send(httpx.post, endpoint.rstrip('/') + '/api/generate',
+                provider='ollama', model=model, zone=zone, surface='text',
                 json={'model': model, 'prompt': prompt, 'stream': False,
                       'options': {'temperature': 0.4, 'num_predict': 800}},
                 headers=headers, timeout=timeout_seconds)

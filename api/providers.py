@@ -521,8 +521,10 @@ class OllamaVisionProvider:
             import httpx
             b64 = base64.b64encode(image_bytes).decode("ascii")
             import ai as _ai
-            r = httpx.post(
+            from ai_request_activity import send
+            r = send(httpx.post,
                 f"{self.base_url}/api/generate",
+                provider=self.name, model=mdl, zone=self.zone, surface="vision",
                 json={"model": mdl, "prompt": prompt, "images": [b64],
                       "stream": False, "keep_alive": keep_alive(),
                       "options": {"temperature": 0.2, "num_predict": 200}},
