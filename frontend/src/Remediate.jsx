@@ -47,7 +47,7 @@ import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, getRemediationExceptions, downloadRemediated, listAllHitl, updateHitlItem, assignHitlItem, suggestFix, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate, getReleaseStatus, verifySavedCopy } from './api.js'
+import { remediateScan, getRemediationStatus, getRemediationExceptions, downloadRemediated, listAllHitl, updateHitlItem, assignHitlItem, suggestFix, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate, getReleaseStatus, getScan, verifySavedCopy } from './api.js'
 import { stageExecutionNotice } from './stageExecutionNotice.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
@@ -953,7 +953,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   }
   const draftAi = (item) => { if (reviewReadOnlyRef.current) return Promise.reject(new Error('Historical scans are available for results browsing only.')); return suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion) }
   const verifySaved = async (item) => {
-    const result = await verifySavedRemediation({ runId, item, canAct: () => !reviewReadOnlyRef.current && verificationRunRef.current === runId, getReleaseStatus, verifySavedCopy })
+    const result = await verifySavedRemediation({ runId, item, canAct: () => !reviewReadOnlyRef.current && verificationRunRef.current === runId, getReleaseStatus, getScan, verifySavedCopy })
     onRefresh?.()
     return result
   }
