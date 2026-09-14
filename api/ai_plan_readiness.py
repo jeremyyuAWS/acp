@@ -22,8 +22,13 @@ def plan_ai_readiness(policy, ai_enabled=True):
         response = httpx.get(f'{ai.OLLAMA_BASE_URL.rstrip("/")}/api/tags',
                              headers=ai._OLLAMA_HEADERS, timeout=3.0)
         response.raise_for_status()
-        if not isinstance(response.json().get('models'), list):
+        models = response.json().get('models')
+        if not isinstance(models, list):
             return {'state': 'local_endpoint_unreachable', 'blocked': True}
+        text_available = ai._tags_have(models, ai.OLLAMA_MODEL)
+        vision_available = ai._tags_have(models, ai.OLLAMA_VISION_MODEL)
     except Exception:
         return {'state': 'local_endpoint_unreachable', 'blocked': True}
-    return {'state': 'local_endpoint_ready', 'blocked': False}
+    return {'state': 'local_endpoint_reachable' if text_available or vision_available else 'local_models_missing',
+            'blocked': not (text_available or vision_available),
+            'text_model_available': text_available, 'vision_model_available': vision_available}

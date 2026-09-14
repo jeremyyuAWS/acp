@@ -62,6 +62,28 @@ def test_explicit_policy_seals_only_server_eligible_rules(route):
     assert job["remediation_impact_policy"] == sealed
 
 
+def test_direct_local_plan_rechecks_endpoint_before_enqueue_and_rules_still_work(route, monkeypatch):
+    import ai
+    import httpx
+    from unittest.mock import Mock
+    client, captured, _ = route
+    monkeypatch.setattr(ai, '_maybe_refresh_endpoint', lambda: None)
+    monkeypatch.setattr(ai, 'OLLAMA_BASE_URL', 'https://public.example.com')
+    probe = Mock(side_effect=AssertionError('no public network request'))
+    monkeypatch.setattr(httpx, 'get', probe)
+    response = client.post('/scans/scan/remediate', json={'remediation_policy': {
+        'rule_based': 2, 'ai': 1, 'ai_zone': 'local', 'ai_budget_usd': '0.00'}})
+    assert response.status_code == 409, response.text
+    assert response.json()['detail']['code'] == 'local_endpoint_required'
+    assert captured == []
+    probe.assert_not_called()
+    response = client.post('/scans/scan/remediate', json={'remediation_policy': {
+        'rule_based': 2, 'ai': 0, 'ai_zone': 'local', 'ai_budget_usd': '0.00'}})
+    assert response.status_code == 200, response.text
+    assert len(captured) == 1
+    probe.assert_not_called()
+
+
 @pytest.mark.parametrize("ai", [2, 3])
 def test_unsupported_ai_application_rejected_before_queue(route, ai):
     client, captured, _ = route

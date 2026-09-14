@@ -20,11 +20,13 @@ def test_private_endpoint_readiness_and_zero_budget(monkeypatch):
     monkeypatch.setattr(ai, '_maybe_refresh_endpoint', lambda: None)
     monkeypatch.setattr(ai, 'OLLAMA_BASE_URL', 'http://10.0.1.2:11434')
     response = Mock()
-    response.json.return_value = {'models': []}
+    response.json.return_value = {'models': [{'name': ai.OLLAMA_MODEL}, {'name': ai.OLLAMA_VISION_MODEL}]}
     probe = Mock(return_value=response)
     monkeypatch.setattr(httpx, 'get', probe)
-    assert plan_ai_readiness({'ai': 1, 'ai_zone': 'local', 'ai_budget_usd': '0.00'}) == {'state': 'local_endpoint_ready', 'blocked': False}
+    assert plan_ai_readiness({'ai': 1, 'ai_zone': 'local', 'ai_budget_usd': '0.00'}) == {'state': 'local_endpoint_reachable', 'blocked': False, 'text_model_available': True, 'vision_model_available': True}
     assert probe.call_args.kwargs['timeout'] == 3.0
+    response.json.return_value = {'models': []}
+    assert plan_ai_readiness({'ai': 1, 'ai_zone': 'local'}) == {'state': 'local_models_missing', 'blocked': True, 'text_model_available': False, 'vision_model_available': False}
     monkeypatch.setattr(httpx, 'get', Mock(side_effect=httpx.ConnectError('unreachable')))
     assert plan_ai_readiness({'ai': 1, 'ai_zone': 'local'})['blocked'] is True
 
