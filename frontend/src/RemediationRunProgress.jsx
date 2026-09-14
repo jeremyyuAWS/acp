@@ -1,3 +1,4 @@
+import { titleCaseStep, remediationStep } from './processingActivity.js'
 import { useThroughput } from './useThroughput.js'
 import LiveThroughput from './LiveThroughput.jsx'
 import SourceVisibility from './SourceVisibility.jsx'
@@ -114,16 +115,16 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle', 
         {!finished && activity?.text && (
           <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 10, marginTop: 12,
                         fontSize: 12.5, lineHeight: 1.5 }}>
-            <div className="muted" style={{ marginBottom: 4 }}>Processing now</div>
+            <div className="muted" style={{ marginBottom: 4 }}>Processing Now</div>
             {activity.file && <strong style={{ fontFamily: 'var(--font-mono)' }}>{activity.file}</strong>}
             <div aria-live="polite" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-              {activity.sc && <span className="fmtchip">WCAG {activity.sc}{activity.sc_name ? ` · ${activity.sc_name}` : ''}</span>}
-              {activity.action && <span>{activity.action}</span>}
-              {activity.detail && <span className="muted">· {activity.detail}</span>}
-              {activity.in_flight > 1 && <span className="muted">· {n(activity.in_flight)} files in parallel</span>}
+              {activity.sc && <span className="fmtchip">WCAG {activity.sc}{activity.sc_name ? ` · ${titleCaseStep(activity.sc_name)}` : ''}</span>}
+              {activity.action && <span>{remediationStep(activity)}</span>}
+              {activity.detail && <span className="muted">· {titleCaseStep(activity.detail)}</span>}
+              {activity.in_flight > 1 && <span className="muted">· {n(activity.in_flight)} Files In Parallel</span>}
             </div>
             <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
-              <li>{n(Math.max(0, total - done))} document{total - done === 1 ? '' : 's'} remaining</li>
+              <li>{n(Math.max(0, total - done))} Document{total - done === 1 ? '' : 's'} Remaining</li>
             </ul>
           </div>
         )}

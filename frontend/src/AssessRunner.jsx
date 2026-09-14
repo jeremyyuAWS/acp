@@ -1,3 +1,4 @@
+import { titleCaseStep } from './processingActivity.js'
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
 import { WCAG } from './wcagCatalog.js'
@@ -788,11 +789,11 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                   const active = activeFiles.entries().next().value
                   const shownFile = active?.[0] || currentFile
                   return <>
-                    {shownFile && <span className="assessfilelabel muted">{active ? 'Processing now:' : 'Awaiting result:'}</span>}
+                    {shownFile && <span className="assessfilelabel muted">{active ? 'Processing Now:' : 'Awaiting result:'}</span>}
                     {shownFile && <span className="assessfname" title={active
                       ? `${shownFile} — claimed by an assessment worker.`
                       : `${shownFile} — the first document with no result yet.`}>{shownFile}</span>}
-                    {active && <span className="assess-live-stage">{active[1]}</span>}
+                    {active && <span className="assess-live-stage">{titleCaseStep(active[1])}</span>}
                   </>
                 })()}
                 {currentFile && <span className="assessengine" title={`The ${ruleCount} criteria in your ${SCOPE_LABEL} that block at level ${level} — the same list the result below is scored over`}>{ruleCount} criteria in scope</span>}
@@ -821,7 +822,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                                 : <span className="alclean">no failures</span>}
                           </>
                         : <span className={activeStage ? 'alscs assess-live-stage' : 'muted alscs'}>
-                            {activeStage || (f.status === 'analysed' ? 'Processing now' : 'Waiting')}
+                            {titleCaseStep(activeStage || (f.status === 'analysed' ? 'Processing Now' : 'Waiting'))}
                           </span>}
                     </li>
                   )

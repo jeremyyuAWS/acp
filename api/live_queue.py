@@ -37,6 +37,8 @@ def compose(run: dict | None, activity: dict | None, *, pool_max: int | None = N
     now = time.time() if now is None else now
     run = run or {}
     act = activity or {}
+    if act.get("stage") == "remediate" or act.get("phase") in {"remediating", "downloading", "storing", "verifying", "publishing"}:
+        act = {}
 
     total = _nonneg(run.get("files"))
     done = min(_nonneg(run.get("files_done")), total) if total else _nonneg(run.get("files_done"))
@@ -58,6 +60,8 @@ def compose(run: dict | None, activity: dict | None, *, pool_max: int | None = N
             "criterion": act.get("sc"),
             "criterion_name": act.get("sc_name"),
             "action": act.get("action"),
+            "phase": act.get("phase"),
+            "stage": "assess",
         }
 
     workers = {"busy": in_flight}
@@ -94,7 +98,7 @@ def for_scan(store, scan_id: str, *, pool_max: int | None = None, now: float | N
         run = None
     try:
         import activity as _activity
-        act = _activity.current(scan_id)
+        act = _activity.current(scan_id, stage="assess")
     except Exception:
         act = None
     capacity_scope = None

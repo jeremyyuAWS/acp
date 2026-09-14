@@ -15,7 +15,7 @@ const SNAP = {
   kpis: { completed: 8, need_attention: 3, unable_to_assess: 1, processing: 1 },
   queue: {
     current: { file: 'Finance/Q3 Board Pack.pdf', criterion: '1.1.1',
-               criterion_name: 'Non-text content', action: 'Describing 6 images that have no alt text' },
+               criterion_name: 'Non-Text Content', action: 'Checking Image Alternatives' },
     in_flight: 1, queued: 13, workers: { busy: 1, max: 4 },
   },
 }
@@ -47,7 +47,7 @@ describe('the assessment running screen focuses on the document in flight', () =
       ],
     } })
     expect(html).toContain('Document activity')
-    expect(html).toContain('Latest 2 of 51 completed')
+    expect(html).toContain('Latest 2 Of 51 Completed')
     expect(html).toContain('Clinical/History.pdf')
     expect(html).not.toContain('/100')
     expect(html).not.toContain('alscore')
@@ -87,8 +87,8 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('8 of 22 complete · 1 processing')
     expect(html).toContain('Finalized conformance results')
     expect(html).toContain('Finance/Q3 Board Pack.pdf')
-    expect(html).toContain('Describing 6 images that have no alt text')
-    expect(html).toContain('Checking Non-text content')
+    expect(html).toContain('Checking Image Alternatives')
+    expect(html).toContain('Checking Non-Text Content')
     expect(html).toContain('successful canonical snapshot refresh')
     expect(html).toContain('about 1 min 50s left')
     expect(html).toMatch(/Results appear when the run finishes/)
@@ -128,7 +128,7 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toMatch(/<details class="assess-live-details"/)
     expect(html).not.toMatch(/<details open="" class="assess-live-details"/)
     expect(html).toContain('Live processing details')
-    expect(html).toContain('Processing now')
+    expect(html).toContain('Processing Now')
     expect(html).not.toContain('Assessment throughput')
     expect(html.match(/live-heartbeat-bars/g)).toHaveLength(1)
   })
@@ -151,7 +151,7 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('22 of 22 complete')
     expect(html).toContain('Updates complete')
     expect(html).toContain('Assessment finished for 22 documents')
-    expect(html).not.toContain('Processing now:')
+    expect(html).not.toContain('Processing Now:')
   })
 
   it('adds measured result detail to the completed assessment card', () => {
@@ -241,9 +241,9 @@ describe('Stop — board-exact placement, inline with what stopping does', () =>
     const html = render({ ...SNAP, documents: { completed: 8, displayed: 1, truncated: false, items: [
       { file: 'Finished.pdf', score: 19, criteria: ['1.3.1'] },
     ] } })
-    expect(html).toContain('Processing now:')
+    expect(html).toContain('Processing Now:')
     expect(html).toContain('Finance/Q3 Board Pack.pdf')
-    expect(html).toContain('Completed 8 of 22')
+    expect(html).toContain('Completed 8 Of 22')
     expect(html).toContain('max-height:420px')
     expect(html).toContain('Finished.pdf')
     expect(html).toContain('1.3.1')
@@ -252,7 +252,7 @@ describe('Stop — board-exact placement, inline with what stopping does', () =>
   })
   it('shows the current-document banner before any file finishes', () => {
     const html = render({ ...SNAP, kpis: { completed: 0, processing: 1 }, documents: { completed: 0, displayed: 0, items: [] } })
-    expect(html).toContain('Processing now:')
-    expect(html).toContain('Completed 0 of 22')
+    expect(html).toContain('Processing Now:')
+    expect(html).toContain('Completed 0 Of 22')
   })
  })

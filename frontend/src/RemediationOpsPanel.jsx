@@ -1,3 +1,4 @@
+import { isRemediationActivity, remediationStep } from './processingActivity.js'
 import useRemediationFreshness from './useRemediationFreshness.js'
 import { useEffect, useRef, useState } from 'react'
 import useConfirmedRemediationActivity from './useConfirmedRemediationActivity.js'
@@ -332,12 +333,27 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   </section>
 }
 
-export function RemediationActivityPanel({ snapshot, rows = [], decisions = {}, events = [], connected = false, receivedAt = null, activityStatus = 'ready', updateMode = 'idle' }) {
+export function RemediationActivityPanel({ activity = null, snapshot, rows = [], decisions = {}, events = [], connected = false, receivedAt = null, activityStatus = 'ready', updateMode = 'idle' }) {
   const fresh = useRemediationFreshness({snapshot, connected, receivedAt})
   if (!snapshot?.batch_id && !events.length) return null
   return <section className="panel remops" aria-label="Remediation live activity">
     <div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /></div>
+    <RemediationProcessingNow activity={activity} terminal={snapshot?.terminal} />
     <RemainingWorkStatus snapshot={snapshot} events={events} rows={rows} decisions={decisions} />
     <Activity key={`${snapshot?.scan_id || snapshot?.run_id}:${snapshot?.batch_id || "legacy"}`} events={events} status={activityStatus} terminal={snapshot?.terminal} />
   </section>
+}
+
+export function RemediationProcessingNow({ activity, terminal = false }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  if (terminal || !isRemediationActivity(activity) || !activity?.file || !activity?.action ||
+      !Number.isFinite(activity.at) || now - activity.at * 1000 > 120000) return null
+  return <div className="remops-processing-now" role="status" style={{padding: '12px 16px', margin: '12px 0', background: '#eef5ff', borderRadius: 8, fontFamily: 'var(--font-mono, monospace)'}}>
+    <span className="muted">Processing Now: </span><strong>{activity.file}</strong>{' · '}
+    <span>{remediationStep(activity)}</span>
+  </div>
 }

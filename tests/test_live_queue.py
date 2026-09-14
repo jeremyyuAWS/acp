@@ -121,3 +121,12 @@ def test_stale_assess_heartbeat_is_not_presented_as_current_capacity(monkeypatch
     import core
     monkeypatch.setattr(core, "WORKERS", 0)
     assert lq.for_scan(_Store(), "scan1", now=NOW)["workers"] == {"busy": 0}
+
+
+def test_remediation_activity_never_becomes_an_assessment_lane():
+    s = lq.compose({'files': 10, 'files_done': 3}, _act(
+        phase='remediating', file='original-name.docx', in_flight=1,
+        action='describing image 1 of 1'), now=NOW)
+    assert s['current'] is None
+    assert s['in_flight'] == 0
+    assert s['processing'] is False

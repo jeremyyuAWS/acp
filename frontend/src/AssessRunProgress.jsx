@@ -1,3 +1,4 @@
+import { titleCaseStep } from './processingActivity.js'
 import { useState, useEffect } from 'react'
 import { normalizeLive } from './liveAssessment.js'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
@@ -29,11 +30,12 @@ import AssessmentEvidenceDetails from './AssessmentEvidenceDetails.jsx'
 
 function stepLabel(cur) {
   if (!cur) return null
-  if (cur.action) return cur.action
-  if (cur.criterionName) return `Checking ${cur.criterionName}`
-  if (cur.criterion) return `Checking ${cur.criterion}`
-  if (cur.text) return cur.text
-  return 'Assessing this document'
+  if (cur.action) return titleCaseStep(cur.action)
+  if (cur.criterionName) return titleCaseStep(`Checking ${cur.criterionName}`)
+  if (cur.criterion) return titleCaseStep(`Checking ${cur.criterion}`)
+  // A rendered shared-feed sentence may contain a filename or remediation language.
+  // Use the stage-safe fallback when structured action telemetry is unavailable.
+  return 'Assessing This Document'
 }
 
 function activityLines(cur, completed, total, processing) {
@@ -45,7 +47,7 @@ function activityLines(cur, completed, total, processing) {
   } else if (cur?.criterion) lines.push(`Checking WCAG ${cur.criterion}`)
   if (processing > 0) lines.push(`${processing.toLocaleString()} document${processing === 1 ? '' : 's'} processing in parallel`)
   if (!lines.length) lines.push(`Opening and assessing document ${Math.min(total, completed + 1).toLocaleString()} of ${total.toLocaleString()}`)
-  return [...new Set(lines)]
+  return [...new Set(lines.map(titleCaseStep))]
 }
 
 export function criterionTag(criterion) {
@@ -286,13 +288,13 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
                 <strong className="vh">Document activity</strong>
                 <div className="assessfile" style={{ margin: '0 0 8px', padding: '10px 12px', background: 'var(--info-bg,#eff6ff)', border: '1px solid var(--info-border,#cfe0f9)', borderRadius: 8 }}>
                   {!isFinished && cur?.file && <>
-                    <span className="assessfilelabel muted">Processing now:</span>
+                    <span className="assessfilelabel muted">Processing Now:</span>
                     <span className="assessfname">{cur.file}</span>
                     <span className="assess-live-stage">{stepLabel(cur)}</span>
                   </>}
                   <span className="muted assessphase">{documents?.truncated
-                    ? `Latest ${documents.displayed.toLocaleString()} of ${(documents.completed ?? completed).toLocaleString()} completed`
-                    : `Completed ${completed.toLocaleString()} of ${total.toLocaleString()}`}</span>
+                    ? `Latest ${documents.displayed.toLocaleString()} Of ${(documents.completed ?? completed).toLocaleString()} Completed`
+                    : `Completed ${completed.toLocaleString()} Of ${total.toLocaleString()}`}</span>
                 </div>
                 <ul className="assesslist" aria-label="Durable per-document assessment progress"
                     style={{ maxHeight: 420, overflowY: 'auto', margin: 0, padding: '7px 11px' }}>
@@ -394,7 +396,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
               <AssessmentEvidenceDetails scope={m.scope} activity={snapshot?.ai_activity} />
               {!isFinished && (cur || m.queue?.laneLabel) && (
                 <div style={{ paddingTop: 7, fontSize: 12.5, lineHeight: 1.5 }}>
-                  <div className="muted" style={{ marginBottom: 4 }}>Processing now</div>
+                  <div className="muted" style={{ marginBottom: 4 }}>Processing Now</div>
                   {cur ? (
                     <>
                       {cur.file && <strong style={{ fontFamily: 'var(--font-mono)' }}>{cur.file}</strong>}
@@ -402,7 +404,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
                         {activityLines(cur, completed, total, processing).map((line) => <li key={line}>{line}</li>)}
                       </ul>
                     </>
-                  ) : <span className="muted">{m.queue?.laneLabel || 'Waiting for a worker'}</span>}
+                  ) : <span className="muted">{titleCaseStep(m.queue?.laneLabel || 'Waiting For A Worker')}</span>}
                 </div>
               )}
 
