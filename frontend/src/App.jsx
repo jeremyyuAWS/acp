@@ -2515,7 +2515,7 @@ export default function App() {
 
         {/* Visible to every signed-in user under the temporary open-tab policy. The analytics
             API remains the authority for the underlying estate-wide data. */}
-        {view === 'analytics' && <AdminInsights me={me} />}
+        {view === 'analytics' && <AdminInsights me={me} run={run} files={files} cap={cap} assessment={assessment} scanList={scanList} onPickScan={switchScan} />}
 
         {/* Live Azure traffic is read-only and payload-sanitized. Its API and SSE endpoints still
             require an authenticated user, and the stream starts only when this tab is opened. */}

@@ -10,6 +10,7 @@ import { IDENTITY, SIM, remediableCount, recommendationSummary } from './sim.js'
 import { openReport, getScanInventory } from './api.js'
 import { loadPublished } from './ontology.js'
 import EstateProgressPanel from './EstateProgressPanel.jsx'
+import BalancedSummary from './BalancedSummary.jsx'
 import { reconcileBuckets, assessmentEligible } from './estateFunnel.js'
 import { reconciliationInputs } from './reconciliationInputs.js'
 import { assessMetrics, coverageSentence, SEVERITIES, SEVERITY_LABEL } from './assessMetrics.js'
@@ -58,7 +59,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
     let live = true
     setInv(null)      // a new scan invalidates the previous read the instant the id changes
     if (!run?.id) return undefined
-    loadDiscoveryInventory(run.id, getScanInventory).then((r) => { if (live) setInv(r) })
+    loadDiscoveryInventory(run.id, getScanInventory).then((r) => { if (live) setInv(r ? { ...r, scanId: run.id } : null) })
     return () => { live = false }
   }, [run?.id])
   // `files` plus the estate-only rows the inventory adds — read by `byType`/`byPages` and their
@@ -392,6 +393,9 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
              the reconciliation panel above uses so the numbers stay consistent. Grows in when there
              is any estate data (discovered or files). Hidden behind null-return inside the component
              when neither inventory nor files exist yet. */}
+      <BalancedSummary run={run} files={files} inventory={inv?.scanId === run.id ? inv : null}
+        cap={cap} assessment={assessment} onOpenFile={file => file._estateOnly ? setEstOnlyFile(file) : setSelFile(file)} />
+      <details className="balanced-legacy"><summary>Workflow and assessment details</summary>
       <EstateProgressPanel
         inventory={run.scope?.inventory}
         analysed={analysed}
@@ -473,6 +477,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         </AccordionSection>
       )}
 
+      </details>
       </div>
 
       {/* An estate-only row (image/video/unsupported — never opened, see inventoryOnlyRows) has no
