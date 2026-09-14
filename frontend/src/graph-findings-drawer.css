@@ -19,3 +19,8 @@
 .graph-findings-footer { border-top: 1px solid var(--line); padding-top: 12px; }
 
 .graph-finding-pill.is-edit-needed { background: var(--error-bg); color: var(--error-fg-strong); }
+.graph-findings-preview:focus-visible { outline: 2px solid var(--plum); outline-offset: 3px; }
+.graph-finding-select[aria-pressed=true] { color: var(--plum); }
+.graph-finding-select .graph-finding-sc { color: inherit; font-size: inherit; }
+.graph-finding-next { background: var(--warn-bg); border-radius: 6px; padding: 8px; }
+.graph-finding-locations { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

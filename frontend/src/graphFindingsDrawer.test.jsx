@@ -43,3 +43,23 @@ it('wires supported review actions to the durable decision callback',async()=>{
  await act(async()=>[...c.querySelectorAll('button')].find(b=>b.textContent==='Apply recorded suggestion').click())
  expect(onAct).toHaveBeenCalledWith(1,'approved')
 })
+it('shows criterion and actionable source-edit guidance before opening a suggestion', async () => {
+ const c=await mount({file:{file:'untagged.pdf'},items:[{id:2,file:'untagged.pdf',rule_id:'WCAG_1_3_1',rule_name:'Info and Relationships',suggested_value:'Heading map'}]})
+ expect(c.textContent).toContain('SC 1.3.1')
+ expect(c.textContent).toContain('Next step:')
+ expect(c.textContent).toContain('ACP cannot write this PDF heading or table structure')
+})
+it('lets reviewers choose each real evidence location and focuses its preview', async () => {
+ const c=await mount({items:[{id:2,file:'sample.docx',rule_id:'1.1.1',evidence:[{page:2,locator:'word/document.xml#rId2'},{page:7,locator:'word/document.xml#rId7'}]}]})
+ await act(async()=>[...c.querySelectorAll('button')].find(b=>b.textContent==='Show page 7').click())
+ expect(c.querySelector('[data-testid="preview"]').dataset.page).toBe('7')
+ expect(c.querySelector('[data-testid="preview"]').dataset.locator).toBe('word/document.xml#rId7')
+ expect(document.activeElement).toBe(c.querySelector('.graph-findings-preview'))
+})
+it('does not mark duplicate change rows selected together', async () => {
+ const {getFileRemediationDiffs}=await import('./api.js')
+ getFileRemediationDiffs.mockResolvedValueOnce([{rule_id:'1.3.1',before:'First',after:'Heading 1'},{rule_id:'1.3.1',before:'Second',after:'Heading 2'}])
+ const c=await mount()
+ await act(async()=>c.querySelectorAll('.graph-finding-select')[1].click())
+ expect([...c.querySelectorAll('.graph-finding-select')].map(b=>b.getAttribute('aria-pressed'))).toEqual(['false','true'])
+})
