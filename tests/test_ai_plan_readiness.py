@@ -27,6 +27,13 @@ def test_private_endpoint_readiness_and_zero_budget(monkeypatch):
     assert probe.call_args.kwargs['timeout'] == 3.0
     response.json.return_value = {'models': []}
     assert plan_ai_readiness({'ai': 1, 'ai_zone': 'local'}) == {'state': 'local_models_missing', 'blocked': True, 'text_model_available': False, 'vision_model_available': False}
+    response.json.return_value = {'models': [{'name': 'unrelated-model:latest'}]}
+    assert plan_ai_readiness({'ai': 1, 'ai_zone': 'local'})['blocked'] is True
+    response.json.return_value = {'models': [{'name': ai.OLLAMA_MODEL}]}
+    readiness = plan_ai_readiness({'ai': 1, 'ai_zone': 'local'})
+    assert readiness['text_model_available'] is True
+    assert readiness['vision_model_available'] is False
+    assert readiness['blocked'] is True
     monkeypatch.setattr(httpx, 'get', Mock(side_effect=httpx.ConnectError('unreachable')))
     assert plan_ai_readiness({'ai': 1, 'ai_zone': 'local'})['blocked'] is True
 

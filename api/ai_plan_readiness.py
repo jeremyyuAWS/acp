@@ -29,6 +29,9 @@ def plan_ai_readiness(policy, ai_enabled=True):
         vision_available = ai._tags_have(models, ai.OLLAMA_VISION_MODEL)
     except Exception:
         return {'state': 'local_endpoint_unreachable', 'blocked': True}
-    return {'state': 'local_endpoint_reachable' if text_available or vision_available else 'local_models_missing',
-            'blocked': not (text_available or vision_available),
+    # Local drafting includes text and image proposals. A reachable endpoint with
+    # unrelated tags, or only one configured model, cannot fulfill that permission.
+    models_ready = text_available and vision_available
+    return {'state': 'local_endpoint_reachable' if models_ready else 'local_models_missing',
+            'blocked': not models_ready,
             'text_model_available': text_available, 'vision_model_available': vision_available}

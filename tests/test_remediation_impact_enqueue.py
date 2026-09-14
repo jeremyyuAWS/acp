@@ -84,6 +84,23 @@ def test_direct_local_plan_rechecks_endpoint_before_enqueue_and_rules_still_work
     probe.assert_not_called()
 
 
+def test_direct_local_plan_rejects_missing_configured_vision_model(route, monkeypatch):
+    import ai
+    import httpx
+    from unittest.mock import Mock
+    client, captured, _ = route
+    monkeypatch.setattr(ai, '_maybe_refresh_endpoint', lambda: None)
+    monkeypatch.setattr(ai, 'OLLAMA_BASE_URL', 'http://10.0.1.2:11434')
+    metadata = Mock()
+    metadata.json.return_value = {'models': [{'name': ai.OLLAMA_MODEL}]}
+    monkeypatch.setattr(httpx, 'get', Mock(return_value=metadata))
+    response = client.post('/scans/scan/remediate', json={'remediation_policy': {
+        'rule_based': 2, 'ai': 1, 'ai_zone': 'local', 'ai_budget_usd': '0.00'}})
+    assert response.status_code == 409, response.text
+    assert response.json()['detail']['code'] == 'local_models_missing'
+    assert captured == []
+
+
 @pytest.mark.parametrize("ai", [2, 3])
 def test_unsupported_ai_application_rejected_before_queue(route, ai):
     client, captured, _ = route
