@@ -19,6 +19,7 @@ export default function DiscoverySourceProgressTiles({ source, scope, progress, 
   const mode = modes.size > 1 ? 'Mixed enumeration' : modes.has('delta') ? 'Incremental enumeration'
     : modes.has('search') ? 'Search-index enumeration' : modes.has('full') ? 'Full enumeration' : null
   const isFinished = finished(progress?.phase)
+  const readingScope = Array.isArray(scope?.folders) && scope.folders.some(Boolean) ? 'Reading selected folders' : 'Reading document inventory'
   const signal = freshness ?? progress?.freshness
   const live = signal === 'live' && ['discovering', 'reading', 'tagging', 'saving'].includes(progress?.phase)
   const updateLabel = signal === 'live' ? 'Live discovery updates connected' : signal === 'reconnecting' ? 'Live updates reconnecting'
@@ -37,7 +38,8 @@ export default function DiscoverySourceProgressTiles({ source, scope, progress, 
         {live && <span className="discovery-source-progress__signal" aria-hidden="true"/>}
       </div>)}
     </dl>
-    {activeLibrary && !isFinished && <p>Reading <strong>{activeSite.name || 'SharePoint'}</strong> / {activeLibrary.name || activeLibrary.id}</p>}
+    {activeLibrary && !isFinished ? <p>Reading <strong>{activeSite.name || 'SharePoint'}</strong> / {activeLibrary.name || activeLibrary.id}</p>
+      : !isFinished && (files > 0 || folders > 0) && <p>{readingScope}</p>}
     {sites.length > 0 && <details><summary>Site and library coverage</summary><p>{sites.filter(site => site.status === 'complete').length} of {sites.length} sites read{libraries.length > 0 && <> · {libraries.filter(library => library.status === 'complete').length} of {libraries.length} libraries complete</>}</p>
       {mode && <p>{mode}</p>}{throttles > 0 && <p>{throttles.toLocaleString()} Graph retr{throttles === 1 ? 'y' : 'ies'}</p>}
       {sites.some(site => ['partial', 'blocked', 'skipped'].includes(site.status)) && <p>{sites.filter(site => ['partial', 'blocked', 'skipped'].includes(site.status)).length} sites need attention</p>}
