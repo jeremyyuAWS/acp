@@ -33,7 +33,7 @@ export default function ReleaseCompletionDocuments({ files = [], states = [], pr
       {filtered && <button className="ghost" onClick={clear}>Clear filters</button>}
     </div>
     <p className="release-documents-count" role="status">{visible.length} of {rows.length} documents shown{filter !== 'all' ? ' · Selected file queue' : ''}</p>
-    <div className="release-documents-scroll" role="region" aria-label="Publication documents" tabIndex={0}><table><thead><tr><th scope="col">Document</th><th scope="col">Corrected copy</th><th scope="col">Verification</th><th scope="col">Publication and remaining work</th><th scope="col">Action</th></tr></thead>
+    <div className="release-documents-scroll" role="region" aria-label="Publication documents" tabIndex={0}><table><thead><tr><th scope="col">Document</th><th scope="col">Corrected copy</th><th scope="col">Saved-copy verification</th><th scope="col">Publication and remaining work</th><th scope="col">Action</th></tr></thead>
       <tbody>{visible.map(({ file, state, result, verificationState }) => <tr key={file.file}>
         <th scope="row">{file.file}</th>
         <td>{file.remediated_at ? 'Saved in ACP' : 'Not saved yet'}</td>

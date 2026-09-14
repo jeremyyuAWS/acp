@@ -6,8 +6,9 @@ from release_artifacts import ReleaseArtifactError
 _UNSET = object()
 
 
-def current_assessment(store, scan_id, owner, file, *, evaluator=_UNSET):
-    record = store.get_file_records(scan_id, files=[file], owner=owner).get(file)
+def current_assessment(store, scan_id, owner, file, *, evaluator=_UNSET, record=_UNSET):
+    if record is _UNSET:
+        record = store.get_file_records(scan_id, files=[file], owner=owner).get(file)
     if not record or not record.get('corrected_sha256') or not record.get('remediated_at'):
         return None
     evidence = saved_assessment(store, scan_id, owner, file, record['corrected_sha256'])
@@ -30,7 +31,7 @@ def project_documents(store, scan_id, owner, documents):
     records = store.get_file_records(scan_id, files=[row['file'] for row in documents], owner=owner)
     return [{**row, 'corrected_sha256': records.get(row['file'], {}).get('corrected_sha256'),
              'remediated_at': records.get(row['file'], {}).get('remediated_at'),
-             'corrected_copy_assessment': current_assessment(store, scan_id, owner, row['file'], evaluator=evaluator)}
+             'corrected_copy_assessment': current_assessment(store, scan_id, owner, row['file'], evaluator=evaluator, record=records.get(row['file']))}
             for row in documents]
 
 

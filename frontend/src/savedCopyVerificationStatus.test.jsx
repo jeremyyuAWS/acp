@@ -16,3 +16,8 @@ it('never uses stale or malformed checks or delivery checksums as accessibility 
 })
 
 it("does not call unavailable checks passed",()=>expect(status(file,result({skipped_rules:2}))).toMatchObject({key:"unconfirmed",label:"Checks incomplete"}))
+
+it('does not apply an old delivered-copy assessment to newer saved bytes',()=>{
+ const oldReceipt = {...result({artifact_sha256:'old'}), status:'published', artifact_digest:'sha256:old'}
+ expect(status(file,oldReceipt).key).toBe('unconfirmed')
+})
