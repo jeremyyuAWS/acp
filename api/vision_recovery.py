@@ -83,6 +83,8 @@ def _recovery_block(context):
     # Settled, rejected output is not evidence of missing consent or funds.
     if 'attempts_exhausted' in reasons:
         return 'vision_generated_output_unusable'
+    if reasons & {'provider_access_denied', 'budget_admission_denied'}:
+        return 'vision_permission_or_budget_blocked'
     if any(reason not in TRANSIENT for reason in reasons):
         return 'vision_recovery_unresolved' if getattr(context, 'local_drafting', False) else 'vision_permission_or_budget_blocked'
     return None
