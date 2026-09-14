@@ -1,6 +1,7 @@
 // User-facing projection of the durable remediation lifecycle log. The event is narration, not
 // state: counters and terminality continue to come only from the reconciled run snapshot.
-export const MAX_VISIBLE_REMEDIATION_EVENTS = 10
+// Retained server history is not truncated in the browser. Explicit limits remain supported.
+export const MAX_VISIBLE_REMEDIATION_EVENTS = Infinity
 
 const n = (value, noun) => {
   const amount = Number(value)
@@ -41,6 +42,15 @@ export function verificationFailureLabel(detail = {}) {
 export function remediationEventLine(event) {
   const detail = event?.detail || {}
   switch (event?.kind) {
+    case 'remediate.ai_request_started':
+    case 'remediate.ai_request_finished': {
+      const zone = ['local', 'cloud'].includes(detail.processing_zone) ? `${detail.processing_zone === 'local' ? 'Local' : 'Cloud'} AI` : 'AI'
+      const safe = value => typeof value === 'string' && /^[a-zA-Z0-9_.:/@+ -]{1,100}$/.test(value) && !/https?:|@/.test(value) ? value : null
+      const model = safe(detail.model) || 'Model not recorded'
+      const provider = safe(detail.provider)
+      const action = event.kind.endsWith('_started') ? 'Request sent' : detail.status === 'failed' ? 'Request failed' : 'Response received'
+      return `${zone} · ${model}${provider ? ` (${provider})` : ''} · ${action} for ${file(event)}`
+    }
     case 'remediate.accepted':
       return `Remediation accepted${Number.isFinite(Number(detail.documents)) ? ` for ${n(detail.documents, 'document')}` : ''}`
     case 'remediate.fix_applied':
@@ -99,6 +109,7 @@ export function remediationEventLine(event) {
 }
 
 export function eventTone(kind, detail = {}) {
+  if (kind === 'remediate.ai_request_finished' && detail.status === 'failed') return 'attention'
   if (kind === 'remediate.delivery_failed' && detail.delivery_status === 'saved_in_acp') return 'neutral'
   if (kind === 'remediate.verification_failed' || kind === 'remediate.delivery_failed') return 'error'
   if (kind === 'remediate.delivery_retry_requested' || kind === 'remediate.review_requested' || kind === 'remediate.delivery_retry_refused'

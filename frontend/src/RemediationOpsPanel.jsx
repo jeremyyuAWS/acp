@@ -1,6 +1,6 @@
 import { isRemediationActivity, remediationStep } from './processingActivity.js'
 import useRemediationFreshness from './useRemediationFreshness.js'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useId } from 'react'
 import useConfirmedRemediationActivity from './useConfirmedRemediationActivity.js'
 import LiveCounter from './LiveCounter.jsx'
 import PlannedRemediationWaterfall from './PlannedRemediationWaterfall.jsx'
@@ -237,6 +237,34 @@ function ActivityLine({ line = '' }) {
 }
 
 export function Activity({ events = [], status = 'ready', terminal = false, compact = false }) {
+  const listRef = useRef(null)
+  const anchorRef = useRef(null)
+  const listId = useId()
+  const [grouped, setGrouped] = useState(false)
+  const [scroll, setScroll] = useState({top: 0, max: 0})
+  const groups = grouped ? activityGroups(events) : events.map(event => ({key: event.key, lead: event, rows: [event]}))
+  const rememberScroll = () => {
+    const list = listRef.current
+    if (!list) return
+    const top = list.getBoundingClientRect().top
+    const first = [...list.children].find(row => row.getBoundingClientRect().bottom > top)
+    anchorRef.current = list.scrollTop > 0 && first ? {key: first.dataset.activityKey, offset: first.getBoundingClientRect().top - top} : null
+    setScroll({top: list.scrollTop, max: Math.max(0, list.scrollHeight - list.clientHeight)})
+  }
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (!list) return
+    const anchor = anchorRef.current
+    const row = anchor && [...list.children].find(item => item.dataset.activityKey === anchor.key)
+    if (row) list.scrollTop += row.getBoundingClientRect().top - list.getBoundingClientRect().top - anchor.offset
+    rememberScroll()
+  }, [events, grouped])
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined' || !listRef.current) return undefined
+    const observer = new ResizeObserver(rememberScroll)
+    observer.observe(listRef.current)
+    return () => observer.disconnect()
+  }, [events.length > 0])
   const seen = useRef(events.length || status !== 'loading' ? new Set(events.map(event => event.key)) : null)
   const [fresh, setFresh] = useState(new Set())
   const timer = useRef(null)
@@ -253,7 +281,7 @@ export function Activity({ events = [], status = 'ready', terminal = false, comp
     timer.current = setTimeout(() => setFresh(new Set()), 1500)
   }, [events, status])
   useEffect(() => () => clearTimeout(timer.current), [])
-  return <section className="remops-activity">{!compact && <h3>Live activity</h3>}{events.length ? <ol aria-label="Recent remediation activity" tabIndex={0}>{activityGroups(events.slice(0, 100)).map((group) => { const event = group.lead; const retry = ['scan.retrying', 'scan.interrupted', 'remediate.delivery_retry_requested', 'remediate.vision_retry_pending'].includes(event.kind); return <li key={group.key} className={`remops-activity-${event.tone}${retry ? ' remops-activity-retry' : ''}${fresh.has(event.key) ? ' remops-activity-fresh' : ''}`}><div className="remops-activity-event"><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{event.kind === 'remediate.accepted' ? <svg data-activity-icon="accepted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3h10M7 7h10M4 11h5l2 3h2l2-3h5v9H4z" /></svg> : event.kind === 'remediate.fix_applied' || (event.kind === 'remediate.delivery_failed' && event.tone === 'neutral') ? <svg data-activity-icon="saved-copy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 15l3 3 5-5" /></svg> : retry ? '↻' : event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span><ActivityLine line={event.line} /></span></div>{group.rows.length > 1 && <details><summary>{group.rows.length - 1} other updates for this document</summary><ul>{group.rows.filter(row => row !== event).map(row => <li key={row.key}><ActivityLine line={row.line} /></li>)}</ul></details>}</li> })}</ol> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
+  return <section className="remops-activity">{!compact && <h3>Live activity</h3>}{events.length ? <><div className="remops-history-tools"><span>{events.length.toLocaleString()} recorded updates · Newest first</span><button type="button" aria-pressed={grouped} onClick={() => {anchorRef.current = null; setGrouped(value => !value)}}>{grouped ? "Show all activity" : "Group by document"}</button><button type="button" onClick={() => {if (listRef.current) listRef.current.scrollTop = 0; rememberScroll()}}>Latest activity ↑</button></div><div className="remops-history-scroll"><ol id={listId} ref={listRef} onScroll={rememberScroll} onToggle={rememberScroll} aria-label="Recent remediation activity" tabIndex={0}>{groups.map((group) => { const event = group.lead; const retry = ['scan.retrying', 'scan.interrupted', 'remediate.delivery_retry_requested', 'remediate.vision_retry_pending'].includes(event.kind); return <li key={group.key} data-activity-key={group.key} className={`remops-activity-${event.tone}${retry ? ' remops-activity-retry' : ''}${fresh.has(event.key) ? ' remops-activity-fresh' : ''}`}><div className="remops-activity-event"><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Time unavailable'}</time><span aria-hidden="true">{event.kind === 'remediate.accepted' ? <svg data-activity-icon="accepted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3h10M7 7h10M4 11h5l2 3h2l2-3h5v9H4z" /></svg> : event.kind === 'remediate.fix_applied' || (event.kind === 'remediate.delivery_failed' && event.tone === 'neutral') ? <svg data-activity-icon="saved-copy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 15l3 3 5-5" /></svg> : retry ? '↻' : event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span><ActivityLine line={event.line} /></span></div>{group.rows.length > 1 && <details><summary>{group.rows.length - 1} other updates for this document</summary><ul>{group.rows.filter(row => row !== event).map(row => <li key={row.key}><ActivityLine line={row.line} /></li>)}</ul></details>}</li> })}</ol><input className="remops-history-scrollbar" type="range" min="0" max={Math.max(1, scroll.max)} value={scroll.top} aria-label="Scroll activity history" aria-controls={listId} aria-valuetext={`${Math.round(scroll.top)} of ${Math.round(scroll.max)} pixels`} onChange={event => {if (listRef.current) listRef.current.scrollTop = Number(event.target.value); rememberScroll()}} /></div></> : <p className="muted">{status === 'loading' ? 'Loading saved activity…' : status === 'unavailable' ? 'Saved activity could not be loaded. Updates will retry automatically.' : terminal ? 'No recent remediation activity is recorded for this run.' : 'No recent remediation activity is recorded yet. New updates appear as work is saved.'}</p>}</section>
 }
 
 // The stub this replaces summed four numbers into "Needs attention · N" and offered nothing to do
