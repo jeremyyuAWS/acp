@@ -20,7 +20,7 @@ def test_managed_target_avoids_cluster_redirects_and_credential_eviction():
     assert database['properties']['persistence'] == {'aofEnabled': False, 'rdbEnabled': False}
 
 
-@pytest.mark.parametrize('url', ['redis://cache:6379/1', 'https://cache', 'rediss://cache/2'])
+@pytest.mark.parametrize('url', ['redis://cache:6379/1', 'https://cache', 'rediss://cache/2', 'rediss://cache/0?db=1', 'redis://cache?db=2'])
 def test_unsupported_database_is_refused_without_repeating_url(url):
     with pytest.raises(migration.MigrationRefused, match='database-zero'):
         migration.validate_url(url)

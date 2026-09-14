@@ -17,7 +17,8 @@ class MigrationRefused(RuntimeError):
 
 def validate_url(url, *, target=False):
     parts = urlsplit(url)
-    if parts.scheme not in {'redis', 'rediss'} or not parts.hostname or parts.path not in {'', '/', '/0'}:
+    if (parts.scheme not in {'redis', 'rediss'} or not parts.hostname
+            or parts.path not in {'', '/', '/0'} or parts.query or parts.fragment):
         raise MigrationRefused('A Redis database-zero URL is required.')
     if target and parts.scheme != 'rediss':
         raise MigrationRefused('The managed target must use TLS.')
@@ -141,7 +142,9 @@ def main():
         validate_url(source_url)
         validate_url(target_url, target=True)
         options = dict(decode_responses=False, socket_connect_timeout=5, socket_timeout=5)
-        source, target = redis.Redis.from_url(source_url, **options), redis.Redis.from_url(target_url, **options)
+        source = redis.Redis.from_url(source_url, **options,
+            **({'ssl_check_hostname': True} if urlsplit(source_url).scheme == 'rediss' else {}))
+        target = redis.Redis.from_url(target_url, ssl_check_hostname=True, **options)
         result = copy_database(source, target, source_quiesced=args.source_quiesced) if args.copy else preflight(source, target)
         print(json.dumps(result, sort_keys=True))
         return 0
