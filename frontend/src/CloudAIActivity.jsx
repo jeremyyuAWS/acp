@@ -29,14 +29,32 @@ export function AIActivityCharts({ data }) {
     </section>
   </div>
 }
+export function LocalAIRequestActivity({ data }) {
+  if (!data?.rows?.length) return null
+  return <section className="wd-chart wd-model-details" aria-label="Local AI requests linked to this run">
+    <h3>Local AI requests</h3>
+    <p>Requests linked to this run by the worker. A successful response is not a verified repair. Unlinked calls and requests still running are excluded.</p>
+    {!data.complete && <p>Partial retained request coverage; these are not whole-run totals.</p>}
+    <div className="wd-model-scroll" tabIndex={0} role="region" aria-label="Scrollable local AI requests table">
+      <table><thead><tr><th>Model</th><th>Requests</th><th>Successful responses</th><th>Unsuccessful requests</th><th>Average request time</th><th>Admission wait</th><th>Model load / inference</th></tr></thead>
+        <tbody>{data.rows.map(row => <tr key={row.model}>
+          <th scope="row">{row.model}</th><td>{number(row.requests)}</td><td>{number(row.successful_responses)}</td><td>{number(row.unsuccessful_requests)}</td>
+          <td>{number(row.average_request_ms)}{row.average_request_ms != null ? ' ms' : ''}<br /><small>{number(row.measured_requests)} measured requests</small></td>
+          <td>{number(row.timings?.queue_wait_ms?.average)}{row.timings?.queue_wait_ms?.average != null ? ' ms' : ''}<br /><small>{number(row.timings?.queue_wait_ms?.measured_requests)} measured waits</small></td>
+          <td>{number(row.timings?.model_load_ms?.average)} / {number(row.timings?.inference_ms?.average)} ms<br /><small>{number(row.timings?.model_load_ms?.measured_requests)} load · {number(row.timings?.inference_ms?.measured_requests)} inference measurements</small></td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+  </section>
+}
 export default function CloudAIActivity({ scanId, batchId, live, paused, aiEnabled }) {
   const metrics = useWaterfallDrawerMetrics({ scanId, batchId, scope: {}, live: live && !paused, enabled: aiEnabled !== false })
   if (aiEnabled === false) return null
   return <section className="wd-ai-usage" aria-label="AI usage for this remediation run">
     <h3>AI usage · this run</h3>
-    <p>Recorded model attempts linked to this run, including fallback attempts. Calls without a run link are excluded, including some local AI activity. Select a waterfall model below for its individual evidence.</p>
+    <p>Governed model attempts appear in the charts; linked local AI requests appear below. Calls without a run link are excluded, including some local AI activity. Select a waterfall model below for its individual evidence.</p>
     {metrics.loading && !metrics.data && <p role="status">Loading AI usage…</p>}
     {metrics.error && <p role="status">{metrics.data ? 'Refresh delayed; showing the last recorded usage.' : 'AI usage unavailable.'} <button type="button" onClick={metrics.refresh}>Retry usage</button></p>}
-    {metrics.data && <><p>{metrics.data.mode === 'recorded' ? 'Saved activity' : 'Live activity'} · {metrics.data.complete ? 'Complete retained attempt coverage' : 'Partial retained coverage; charts are not whole-run totals'}</p><AIActivityCharts data={metrics.data} /></>}
+    {metrics.data && <><p>{metrics.data.mode === 'recorded' ? 'Saved activity' : 'Live activity'} · {metrics.data.complete ? 'Complete retained attempt coverage' : 'Partial retained coverage; charts are not whole-run totals'}</p><AIActivityCharts data={metrics.data} /><LocalAIRequestActivity data={metrics.data.local_activity} /></>}
   </section>
 }

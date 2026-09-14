@@ -100,18 +100,22 @@ def test_real_schema_and_http_route_are_owner_scoped(tmp_path, monkeypatch):
     ledger.create_budget('owner@example.test', 'r', 10000)
     history = AttemptHistory(db)
     history.init_schema()
+    from ai_local_activity import SCHEMA as LOCAL_ACTIVITY_SCHEMA
     with db.cursor() as cur:
-        db.execute(cur, 'CREATE TABLE ai_calls (id TEXT PRIMARY KEY, scan_id TEXT, file TEXT, provider TEXT, model TEXT, timing TEXT)')
+        for stmt in LOCAL_ACTIVITY_SCHEMA:
+            db.execute(cur,stmt)
+    with db.cursor() as cur:
+        db.execute(cur, 'CREATE TABLE ai_calls (id TEXT PRIMARY KEY, scan_id TEXT, file TEXT, provider TEXT, model TEXT, timing TEXT, zone TEXT, cost_usd REAL, ok INT, ts TEXT, latency_ms INT)')
     history.begin('owner@example.test', 's', 'r', 'op', 'a', file='PRIVATE.pdf', input_sha256='a' * 64,
                   provider='openai', model='model', purpose='draft')
     with db.cursor() as cur:
         db.execute(cur, 'UPDATE ai_attempt_history SET status=%s,result_json=%s,created_at=%s,updated_at=%s',
                    ('drafted', record()['result_json'], record()['created_at'], record()['updated_at']))
-        db.execute(cur, 'INSERT INTO ai_calls VALUES(%s,%s,%s,%s,%s,%s)',
+        db.execute(cur, 'INSERT INTO ai_calls(id,scan_id,file,provider,model,timing) VALUES(%s,%s,%s,%s,%s,%s)',
                    ('call', 's', 'PRIVATE.pdf', 'openai', 'model', '{"model_load_ms": 12, "inference_ms": 80}'))
         db.execute(cur, 'INSERT INTO ai_attempt_trace_links VALUES(%s,%s,%s,%s)',
                    ('owner@example.test', 'r', 'a', 'call'))
-        db.execute(cur, 'INSERT INTO ai_calls VALUES(%s,%s,%s,%s,%s,%s)',
+        db.execute(cur, 'INSERT INTO ai_calls(id,scan_id,file,provider,model,timing) VALUES(%s,%s,%s,%s,%s,%s)',
                    ('wrong-scan', 'another-scan', 'PRIVATE.pdf', 'openai', 'model', '{"model_load_ms": 9999}'))
         db.execute(cur, 'INSERT INTO ai_attempt_trace_links VALUES(%s,%s,%s,%s)',
                    ('owner@example.test', 'r', 'a', 'wrong-scan'))

@@ -1,7 +1,7 @@
 import { act } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createTestRoot, unmountAll } from './testRoots.js'
-import CloudAIActivity, { AIActivityCharts, observedPaceScale } from './CloudAIActivity.jsx'
+import CloudAIActivity, { AIActivityCharts, LocalAIRequestActivity, observedPaceScale } from './CloudAIActivity.jsx'
 import { readFileSync } from 'node:fs'
 vi.mock('./useWaterfallDrawerMetrics.js', () => ({ default: vi.fn(() => ({})) }))
 import useMetrics from './useWaterfallDrawerMetrics.js'
@@ -69,4 +69,21 @@ it('keeps absent admission measurements unavailable rather than zero', async () 
  expect(index).toBeGreaterThan(0)
  expect(container.querySelector('tbody tr').children[index].textContent).toContain('Unavailable')
  expect(container.querySelector('tbody tr').children[index].textContent).not.toContain('0 ms')
+})
+
+it('shows explicitly bound local requests without claiming spending or verified output', async () => {
+ const {root,container}=createTestRoot()
+ await act(async () => root.render(<LocalAIRequestActivity data={{complete:true,rows:[{model:'local-vision',requests:2,successful_responses:1,unsuccessful_requests:1,average_request_ms:225,measured_requests:2,timings:{queue_wait_ms:{average:250,measured_requests:2}}}]}}/>))
+ expect(container.textContent).toContain('local-vision')
+ expect(container.textContent).toContain('250 ms')
+ expect(container.textContent).toContain('2 measured waits')
+ expect(container.textContent).toContain('A successful response is not a verified repair')
+ expect(container.textContent).toContain('Unavailable')
+ expect(container.textContent).not.toContain('Settled spend')
+ expect(container.querySelector('[role="region"]').tabIndex).toBe(0)
+})
+it('does not show an empty local activity table or imply missing requests were zero', async () => {
+ const {root,container}=createTestRoot()
+ await act(async () => root.render(<LocalAIRequestActivity data={{complete:true,rows:[]}}/>))
+ expect(container.textContent).toBe('')
 })
