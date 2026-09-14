@@ -27,6 +27,10 @@ class DriveReconnectRequired(ValueError):
     pass
 
 
+class DeliveryPreflightBlocked(ValueError):
+    pass
+
+
 def current_run(store, sid, owner):
     with store._db.cursor() as cur:
         store._db.execute(cur, "SELECT * FROM stage_executions WHERE scan_id=%s AND owner_email=%s AND stage='remediate' AND is_current=1 ORDER BY created_at DESC LIMIT 1", (sid, owner))
@@ -162,7 +166,7 @@ def public(row, store=None):
                 include_reports=row['intent'].get('include_reports', False),
                 requires_reconnect=any(e.get('requires_reconnect') for e in details.values()),
                 can_resume=row['intent']['destination']['provider'] in {'drive', 'sharepoint'} and row['status'] in ACTIVE and any(
-                    e.get('state') == 'blocked' and e.get('artifact_digest') and e.get('failure_category') != 'admitted_copy_changed' for e in details.values()),
+                    e.get('state') == 'blocked' and e.get('artifact_digest') and e.get('failure_category') not in {'admitted_copy_changed', 'delivery_record_missing'} for e in details.values()),
                 needs_attention=stalled_files > 0,
                 attention_reason=row['progress'].get('_delivery_watch', {}).get('reason') if stalled_files else None,
                 last_progress_at=row['progress'].get('_delivery_watch', {}).get('last_progress_at'))
@@ -483,6 +487,15 @@ def resume_sharepoint_job(store, row, file, digest):
             store._db.execute(cur, "UPDATE stage_executions SET state='processing',revision=revision+1,updated_at=%s WHERE execution_id=%s", (now, job['batch_id']))
 
 
+def delivery_preflight(row):
+    """Read provider readiness before freezing a new delivery admission."""
+    from routes.scans import _preflight_release_destination
+    destination = row['intent']['destination']
+    if destination['provider'] == 'local':
+        return {'ready': True}
+    return _preflight_release_destination(request_for(row['owner_email'], row['scan_id']), destination)
+
+
 def dispatch(store, row, file, digest):
     from routes.scans import publish_files
     request = request_for(row['owner_email'], row['scan_id'])
@@ -574,6 +587,7 @@ def advance(store, payload, job):
     if not row or row['status'] not in ACTIVE or payload['revision'] != row['progress'].get('_tick_revision', 0):
         return
     dispatched = 0
+    preflight = None
     pending_jobs = {}
     with store._db.cursor() as cur:
         store._db.execute(cur,"SELECT payload,status FROM jobs WHERE scan_id=%s AND type='publish_file'",(row['scan_id'],))
@@ -604,7 +618,7 @@ def advance(store, payload, job):
                 saved = receipt(store, row, file, entry['artifact_digest'])
                 if saved:
                     persistence.update_file(store,row['id'],row['owner_email'],file,
-                        dict(state='published',receipt=saved,message='Delivered',requires_reconnect=False,resume_requested=False))
+                        dict(state='published',receipt=saved,message='Delivered',requires_reconnect=False,resume_requested=False,failure_category=None))
                 elif pending_jobs.get(file) and all(s in {'dead','cancelled'} for s in pending_jobs[file]):
                     # A dead request for older bytes is not a connection problem.
                     # Keep its frozen identity and consume receipts first, but do
@@ -642,6 +656,14 @@ def advance(store, payload, job):
                     dispatched += 1
                     persistence.update_file(store,row['id'],row['owner_email'],file,
                         dict(state='publishing', resume_requested=False, requires_reconnect=False, message='Checking the saved delivery before resuming.'))
+                elif row['intent']['destination']['provider'] == 'sharepoint' and not pending_jobs.get(file):
+                    # An admitted artifact without a durable delivery job is an uncertain
+                    # delivery, not a worker still publishing. Preserve its frozen identity;
+                    # creating another upload here could duplicate a provider-side result.
+                    persistence.update_file(store,row['id'],row['owner_email'],file,
+                        dict(state='blocked', failure_category='delivery_record_missing',
+                             requires_reconnect=False, resume_requested=False,
+                             message='No delivery job or receipt is recorded for this saved copy. Inspect the destination before retrying; a copy may already exist.'))
                 else:
                     persistence.update_file(store,row['id'],row['owner_email'],file,
                         dict(state='publishing', message='Delivery not yet confirmed. Waiting for a recorded receipt; a copy may already exist.'))
@@ -669,6 +691,10 @@ def advance(store, payload, job):
                     persistence.update_file(store,row['id'],row['owner_email'],file,
                         dict(state='waiting', waiting_for_delivery=True, message='Corrected copy is ready. Waiting for the current delivery to finish.'))
                     continue
+            if preflight is None:
+                preflight = delivery_preflight(row)
+            if not preflight.get('ready'):
+                raise DeliveryPreflightBlocked(preflight.get('message') or 'The authorized delivery destination is not ready. Check its access before delivery.')
             row = publish_admission(store, row['id'], row['owner_email'], row['scan_id'], file, digest)
             dispatched += 1
             result = dispatch(store, row, file, digest)
@@ -681,15 +707,20 @@ def advance(store, payload, job):
             continue
         except FileRemediationFinishedWithoutCopy as exc:
             persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='failed',message=str(exc),failure_category='no_corrected_copy'))
+        except DeliveryPreflightBlocked as exc:
+            persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc),failure_category='delivery_preflight_blocked',waiting_for_delivery=False))
         except DriveReconnectRequired as exc:
             persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc),requires_reconnect=True,waiting_for_delivery=False))
         except (ValueError, ReleaseArtifactError) as exc:
             persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc),waiting_for_delivery=False))
-        except Exception:
+        except Exception as exc:
+            # Retain bounded diagnostic metadata; never serialize provider credentials.
+            diagnostic = {'error_type': type(exc).__name__, 'http_status': getattr(exc, 'status_code', None)}
+            store.log_decision(row['owner_email'], 'release.dispatch_outcome_unknown', scan_id=row['scan_id'], file=file, detail=json.dumps(diagnostic))
             persistence.update_file(store,row['id'],row['owner_email'],file,
                 # A lost response is not proof of failure. Retain admission and
                 # continue receipt checks without dispatching the artifact again.
-                dict(state='blocked',
+                dict(state='blocked', dispatch_error=diagnostic,
                      message='Delivery outcome is unknown. Reconcile its receipt before retrying.'))
     with store.transaction():
         row = persistence.get(store,row['id'],row['owner_email'],lock=True)
