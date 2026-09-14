@@ -152,6 +152,8 @@ _map_many([("PUT", "/rubric")], {"settings.view"})
 # ── Remediate ─────────────────────────────────────────────────────────────────
 _map_many([
     ("POST", "/scans/{sid}/remediate"),
+    # Running real saved-copy detectors records verification evidence, not a content decision.
+    ("POST", "/scans/{sid}/verify-saved-copy"),
     ("POST", "/scans/{scan_id}/files/{filename:path}/remediate"),
     ("POST", "/scans/{sid}/files/{filename:path}/undo-fix"),
     # Scoped recovery and run controls. `remediate.run` rather than `remediate.review`, and the

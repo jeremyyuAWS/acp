@@ -4289,6 +4289,8 @@ def get_release_status(sid: str, request: Request):
                 "failed": 0, "remaining": 0, "roots": [], "documents": []}
     from missing_corrected_copy import project_documents
     documents = project_documents(core.store, sid, owner, status['documents'])
+    from saved_copy_verification import project_documents as verification_documents
+    documents = verification_documents(core.store, sid, owner, documents)
     return {"release_id": status["id"], "release_folder_name": status["folder_name"],
             "created_at": status["created_at"], "status": status["status"],
             "parent_folder_id": status.get("parent_folder_id"),
@@ -4296,6 +4298,27 @@ def get_release_status(sid: str, request: Request):
             "documents_total": status["documents_total"], "published": status["published"],
             "failed": status["failed"], "remaining": status["remaining"],
             "roots": status["roots"], "documents": documents}
+
+
+class SavedCopyVerificationRequest(BaseModel):
+    file: str
+    corrected_sha256: str
+    remediated_at: str
+
+
+@router.post("/scans/{sid}/verify-saved-copy")
+def retry_saved_copy_verification(sid: str, body: SavedCopyVerificationRequest, request: Request):
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    from saved_copy_verification import verify_saved_copy
+    from release_artifacts import ReleaseArtifactError
+    try:
+        evidence = verify_saved_copy(core.store, sid, owner, body.file,
+                                     body.corrected_sha256, body.remediated_at)
+    except ReleaseArtifactError as error:
+        raise HTTPException(409, detail={"category": error.category, "message": str(error)})
+    return {"scan_id": sid, "file": body.file, "corrected_copy_assessment": evidence}
 
 
 class ReleasePreviewRequest(BaseModel):
