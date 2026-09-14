@@ -25,6 +25,19 @@ const managedChoices = () => getRemediationImpact.mockImplementation(async (_id,
   return {...result(resolved),capabilities:{...result().capabilities,ai_budget:true}}
 })
 describe('RemediationImpactCard', () => {
+  it('blocks a local-only plan before start and retries readiness without changing consent', async () => {
+    const policy = { rule_based: 2, ai: 1, ai_zone: 'local', ai_budget_usd: '0.00' }
+    getRemediationImpact.mockResolvedValue({ ...result(policy), ai_readiness: { state: 'local_endpoint_required', blocked: true } })
+    const onRun = vi.fn()
+    const { container } = await mount({ onRun })
+    expect(button(container, 'Approve plan and start').disabled).toBe(true)
+    expect(container.textContent).toContain('increasing the spending limit will not fix this local-only plan')
+    getRemediationImpact.mockResolvedValue({ ...result(policy), ai_readiness: { state: 'local_endpoint_ready', blocked: false } })
+    await act(async () => button(container, 'Retry readiness check').click())
+    expect(button(container, 'Approve plan and start').disabled).toBe(false)
+    await act(async () => button(container, 'Approve plan and start').click())
+    expect(onRun.mock.calls[0][0]).toEqual(policy)
+  })
   it('passes every findings lane to the assessment and opens blocked details', async () => {
     const data = result()
     data.open.findings = 11
