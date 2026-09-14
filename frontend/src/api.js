@@ -2615,9 +2615,13 @@ export const resumeReleaseContinuation = (scanId, intentId) => fetch(
   { method: 'POST', headers: headers() }).then(j)
 
 
-export const getRecentRemediationActivity = (scanId) => {
+export const getRecentRemediationActivity = (scanId, { afterSeq = null, limit = null } = {}) => {
   if (SIM || !scanId) return sim({ available: false, events: [] })
-  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/activity`, { headers: headers() }).then(j)
+  const query = new URLSearchParams()
+  if (afterSeq != null) query.set('after_seq', String(afterSeq))
+  if (limit != null) query.set('limit', String(limit))
+  const suffix = query.size ? `?${query}` : ''
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/activity${suffix}`, { headers: headers() }).then(j)
 }
 
 // Separate per-run release consent. AI approval settings never enable publication.
