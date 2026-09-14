@@ -1,5 +1,5 @@
 import { progressBar, etaGate, runHeadline, shouldShowCard } from './remediationRunCard.js'
-import { freshness } from './remediationSnapshot.js'
+import { freshness, counterRows, secondaryRows, partitionSums } from './remediationSnapshot.js'
 import LiveCounter from './LiveCounter.jsx'
 import ActivityPulse from './ActivityPulse.jsx'
 
@@ -19,28 +19,27 @@ const FRESHNESS_WORDS = {
   unknown: 'Unavailable', stalled: 'Stalled',
 }
 
-function ProgressBar({ bar }) {
+function ProgressBar({ bar, rows }) {
   if (!bar) return null
+  const visible = rows.filter(row => row.value > 0).map(row => ({ ...row, fill: bar.segments.find(segment => segment.key === row.key)?.fill || (row.key === 'review' || row.key === 'skipped' ? '#7B4EA8' : 'var(--line)') }))
   return (
     <div>
       {/* The track. `waiting` is its unfilled tail rather than a fifth fill — that is what those
           documents are, and it is what let the palette pass its adjacent-pair checks. */}
       <div role="img"
            aria-label={`${bar.total} documents: ` +
-             bar.segments.map((s) => `${s.value} ${s.label.toLowerCase()}`).join(', ') +
-             (bar.waiting ? `, ${bar.waiting} waiting` : '')}
+             visible.map((s) => `${s.value} ${s.label.toLowerCase()}`).join(', ')}
            style={{ display: 'flex', gap: 2, height: 10, borderRadius: 5, overflow: 'hidden',
                     background: 'var(--line)' }}>
         {bar.segments.map((s) => (
           <div key={s.key} style={{ width: `${s.pct}%`, background: s.fill }} />
         ))}
       </div>
-      {/* Legend — always present, because there is more than one band and identity must never
-          rest on colour alone. The count beside each swatch is also the direct label, so no
-          separate number sits on the bar itself. */}
+      {/* The legend uses the detailed panel's six server-owned buckets. Review
+          and skipped share a bar fill, but retain their separate meanings and counts. */}
       <ul style={{ listStyle: 'none', display: 'flex', flexWrap: 'wrap', gap: '4px 14px',
                    margin: '7px 0 0', padding: 0, fontSize: 12 }}>
-        {bar.segments.map((s) => (
+        {visible.map((s) => (
           <li key={s.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: 2,
                                               background: s.fill, flex: '0 0 auto' }} />
@@ -49,16 +48,7 @@ function ProgressBar({ bar }) {
             </span>
           </li>
         ))}
-        {bar.waiting > 0 && (
-          <li style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: 2,
-                                              background: 'var(--line)', border: '1px solid var(--muted)',
-                                              flex: '0 0 auto' }} />
-            <span className="muted">
-              <b style={{ fontVariantNumeric: 'tabular-nums' }}>{bar.waiting.toLocaleString()}</b> waiting
-            </span>
-          </li>
-        )}
+
       </ul>
     </div>
   )
@@ -99,7 +89,7 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
   // person PRD §6C is written for. The count is useful and stays; the claim attached to it does
   // not. See the segment legend directly below for what the twelve actually are.
   const throughAutomatic = typeof snapshot.total_documents === 'number'
-    && ['processing', 'waiting'].every((key) => typeof documents[key] === 'number')
+    && partitionSums(snapshot) === true
     ? snapshot.total_documents - documents.processing - documents.waiting
     : null
 
@@ -141,7 +131,7 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
             <LiveCounter value={throughAutomatic} /> of {snapshot.total_documents.toLocaleString()} documents through automatic processing
           </p>
         )}
-        <ProgressBar bar={bar} />
+        <ProgressBar bar={bar} rows={counterRows(snapshot)} />
       </div>
 
       {findings && <section aria-label="Finding reconciliation" style={{ marginTop: 10,
@@ -161,18 +151,15 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
         </p>}
       </section>}
 
+      {partitionSums(snapshot) === false && <p className="muted">These counters do not add up to the documents in scope. ACP is reconciling them.</p>}
+
       {/* Secondary facts, each naming its unit. `Corrected copies` and `Documents verified` are
           deliberately separate numbers: a corrected copy that was stored but not delivered, or
           delivered but not verified, is exactly the case these must not merge. */}
       <dl style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 20px', margin: '10px 0 0' }}>
-        {[
-          ['Fixes applied', fixes.applied, true],
-          ['Fixes verified', fixes.verified, true],
-          ['Documents verified', fixes.documents_verified, true],
-          ['Corrected copies delivered', delivery.delivered, true],
-          ['Awaiting Release', delivery.awaiting_release, false],
-          ['Pending delivery', delivery.pending, false],
-        ].filter(([, v]) => typeof v === 'number').map(([label, value, positive]) => (
+        {secondaryRows(snapshot).map(({ key, label, value }) => {
+          const positive = ['fixesApplied', 'fixesVerified', 'documentsVerified', 'delivered'].includes(key)
+          return (
           <div key={label}>
             <dt className="muted" style={{ fontSize: 10.5, textTransform: 'uppercase',
                                            letterSpacing: '0.02em' }}>{label}</dt>
@@ -180,7 +167,7 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
                          fontVariantNumeric: 'tabular-nums' }}>{positive
                 ? <LiveCounter value={value} /> : value.toLocaleString()}</dd>
           </div>
-        ))}
+        ) })}
       </dl>
 
       <p className="muted" style={{ margin: '8px 0 0', fontSize: 12 }}>

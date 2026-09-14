@@ -1,3 +1,4 @@
+import { partitionSums } from './remediationSnapshot.js'
 // The persistent run card's model. Pure: no React, no fetch, no clock of its own — the card
 // renders what this returns, and this decides nothing the server already decided.
 //
@@ -38,10 +39,9 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 export function progressBar(snapshot) {
   const documents = snapshot?.documents
   const total = num(snapshot?.total_documents)
-  if (!documents || !total || total <= 0) return null
-  // `blocked` is review + skipped: both are in scope, neither is moving on its own, and both
-  // need a person. The snapshot counts them apart (they route to different queues); the BAR
-  // shows one blocked band because a reader asking "how much is stuck" wants one number.
+  if (!documents || !total || total <= 0 || partitionSums(snapshot) !== true) return null
+  // Review and skipped share a visual band only. The compact legend preserves
+  // their separate server-owned counts: skipped does not imply human work.
   const review = num(documents.review)
   const skipped = num(documents.skipped)
   const counted = {
@@ -54,15 +54,13 @@ export function progressBar(snapshot) {
   const segments = SEGMENTS.map((s) => ({
     ...s, value: counted[s.key], pct: (counted[s.key] / total) * 100,
   })).filter((s) => s.value > 0)
-  const accounted = Object.values(counted).reduce((a, b) => a + b, 0)
   return {
     total,
     segments,
-    // The track's unfilled tail. Clamped at zero rather than allowed to go negative: a negative
-    // remainder means the counters disagree with the scope, which the snapshot's own integrity
-    // check reports — the bar must not render the disagreement as a shape.
-    waiting: Math.max(0, total - accounted),
-    waitingPct: Math.max(0, ((total - accounted) / total) * 100),
+    // Use the same explicit waiting bucket as the detailed panel. A mismatched
+    // or incomplete partition was withheld above, rather than filled by inference.
+    waiting: documents.waiting,
+    waitingPct: (documents.waiting / total) * 100,
   }
 }
 
