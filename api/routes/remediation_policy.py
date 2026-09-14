@@ -63,6 +63,8 @@ def remediation_impact_preview(sid: str, body: ImpactPreviewRequest, request: Re
     try:
         result = build_run_impact(core.store, sid, _impact_owner(request), selected or None, scope=body.scope)
         result['providers'] = provider_summary(result['capabilities']['ai_enabled'])
+        from ai_plan_readiness import plan_ai_readiness
+        result['ai_readiness'] = plan_ai_readiness(result.get('policy'), result['capabilities']['ai_enabled'])
         from ai_review_policy import capabilities
         result['capabilities']['ai_review'] = capabilities(core.store, _impact_owner(request))
         from ai_standing_approval import capabilities as standing_capabilities

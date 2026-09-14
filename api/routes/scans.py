@@ -751,6 +751,14 @@ async def remediate_scan(sid: str, request: Request):
                                   scope=sorted(scope_set) if scope_set is not None else None)
         if not impact["integrity"]["complete"] or not impact["capabilities"]["execute"]:
             raise HTTPException(409, "The remediation forecast is incomplete or this policy cannot execute.")
+        # Recheck the exact server-derived policy at acceptance: a stale preview
+        # or direct API caller must not bypass local-only endpoint readiness.
+        if impact_snapshot.get('ai') and impact_snapshot.get('ai_zone') == 'local':
+            from ai_plan_readiness import plan_ai_readiness
+            readiness = plan_ai_readiness(impact_snapshot, core.store.get_ai_enabled())
+            if readiness['blocked']:
+                raise HTTPException(409, {'code': readiness['state'],
+                    'message': 'Local AI is not ready. Check the private endpoint and configured models, retry readiness, or choose Rules only. This plan does not authorize cloud AI.'})
         for finding in impact["findings"]:
             if finding["lane"] == "automatic":
                 impact_allowed.setdefault(finding["file"], set()).add(finding["criterion"])
