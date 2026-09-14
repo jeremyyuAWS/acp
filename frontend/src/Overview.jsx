@@ -65,6 +65,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const estateFiles = useMemo(() => [...files, ...inventoryOnlyRows(files, inv)], [files, inv])
   const reportRef = useRef(null)
   const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState(null)
   const [scanExporting, setScanExporting] = useState(false)
   const doScanExport = async () => {
     setScanExporting(true)
@@ -75,6 +76,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
     finally { setTimeout(() => setScanExporting(false), 600) }
   }
   const doExport = async () => {
+    setExportError(null)
     setExporting(true)
     try {
       const now = new Date()
@@ -94,7 +96,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       // A verdict needs a measurement. With nothing analysed there is no evidence for
       // "ACTION REQUIRED" either — say so rather than let null fall through the comparisons.
       const verdict = auditReady == null ? ['NOT YET ASSESSED', '#5F5E5A']
-        : auditReady >= 80 ? ['ON TRACK TO COMPLIANT', 'var(--success-fg)'] : auditReady >= 45 ? ['DEVELOPING', 'var(--warn-fg)'] : ['ACTION REQUIRED', 'var(--info-fg)']
+        : auditReady >= 80 ? ['ON TRACK TO COMPLIANT', '#3B6D11'] : auditReady >= 45 ? ['DEVELOPING', '#854F0B'] : ['ACTION REQUIRED', '#175CD3']
       const criteria = wm.map((c) => ({ sc: c.sc, label: c.name, count: c.count }))
       const { exportGovernanceReport } = await import('./pdfReport.js')
       await exportGovernanceReport({
@@ -102,12 +104,17 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         total: n, score: run.avg_score, certifiable: run.certifiable, needFix, auditReady,
         uncertain: run.uncertain, error: run.error,
         summary: `Estate accessibility score ${run.avg_score ?? '—'}/100, with ${auditReadyLabel} of documents audit-ready${analysed < n ? ` (${analysed.toLocaleString()} of ${n.toLocaleString()} documents analysed)` : ''}. ${needFix} documents are in the remediation backlog and ${n.toLocaleString()} are under continuous monitoring across ${(trend && trend.length) || 4} scans.`,
-        severity, deptScores, topViolations, byLevel, rec, topRisk, criteria,
+        severity, deptScores, topViolations,
+        // Native PDF colors must be concrete values; jsPDF cannot resolve CSS variables.
+        byLevel: byLevel.map(item => ({ ...item, color: item.lvl === 'A' ? '#175CD3' : item.color })),
+        rec, topRisk, criteria,
         legal: { publicCritical, total: n }, lift: { before, after }, verdict,
         ontology: { ver: ontVer, classified: ontDocs.length, crit: ontCrit, high: ontHigh },
       })
-    } catch (e) { console.error('PDF export failed', e) }
-    finally { setTimeout(() => setExporting(false), 600) }
+    } catch (e) {
+      console.error('PDF export failed', e)
+      setExportError('The quarterly governance report could not be generated. Please try again.')
+    } finally { setExporting(false) }
   }
 
   // Raw findings grid for analysts — every issue flattened to a row.
@@ -356,6 +363,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           </div>
         </details>
       </div>
+      {exportError && <p role="alert">{exportError}</p>}
       {!hasEstateProgress && scopePanel}
       <div ref={reportRef}>
       {/* Process health banners — rendered above the findings summary so a degraded run is
