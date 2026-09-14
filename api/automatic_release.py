@@ -715,7 +715,9 @@ def advance(store, payload, job):
             persistence.update_file(store,row['id'],row['owner_email'],file,dict(state='blocked',message=str(exc),waiting_for_delivery=False))
         except Exception as exc:
             # Retain bounded diagnostic metadata; never serialize provider credentials.
-            diagnostic = {'error_type': type(exc).__name__, 'http_status': getattr(exc, 'status_code', None)}
+            status = getattr(exc, 'status_code', None)
+            diagnostic = {'error_type': type(exc).__name__[:80],
+                          'http_status': status if type(status) is int and 100 <= status <= 599 else None}
             store.log_decision(row['owner_email'], 'release.dispatch_outcome_unknown', scan_id=row['scan_id'], file=file, detail=json.dumps(diagnostic))
             persistence.update_file(store,row['id'],row['owner_email'],file,
                 # A lost response is not proof of failure. Retain admission and

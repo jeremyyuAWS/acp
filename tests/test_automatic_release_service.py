@@ -556,3 +556,18 @@ def test_unknown_dispatch_keeps_bounded_diagnostic_after_missing_job_reconciliat
         prepared.store._db.execute(cur, "SELECT detail FROM decision_log WHERE scan_id=%s AND action='release.dispatch_outcome_unknown'", (SID,))
         audit = prepared.store._db.fetchone(cur)
     assert json.loads(audit['detail'])['http_status'] == 403
+
+
+@pytest.mark.parametrize('status', [object(), '403', True, 99, 600])
+def test_unknown_dispatch_diagnostic_rejects_non_http_status(prepared, monkeypatch, status):
+    from routes import scans
+    error = type('SyntheticError' * 20, (Exception,), {})('private provider payload')
+    error.status_code = status
+    def unavailable(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(scans, 'publish_files', unavailable)
+    row = tick(prepared, authorize(prepared))
+    diagnostic = row['progress']['files'][FILE]['dispatch_error']
+    assert diagnostic['http_status'] is None
+    assert len(diagnostic['error_type']) == 80
+    assert 'private provider payload' not in json.dumps(diagnostic)
