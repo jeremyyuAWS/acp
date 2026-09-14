@@ -106,8 +106,8 @@ def _recovery_block(context, misses=()):
     if getattr(context, 'local_drafting', False):
         if set(misses) & {'empty', 'empty_response'}:
             return 'vision_response_empty'
-        if 'reply_unusable' in misses:
-            return 'vision_generated_output_unusable'
+    if set(misses) & OUTPUT_FAILURES:
+        return 'vision_generated_output_unusable'
     if any(reason not in TRANSIENT for reason in reasons):
         return 'vision_recovery_unresolved' if getattr(context, 'local_drafting', False) else 'vision_permission_or_budget_blocked'
     return None

@@ -321,3 +321,10 @@ def test_empty_local_recovery_preserves_review_and_emits_specific_safe_cause(iso
     recovery.process(isolated_store, payload)
     assert isolated_store.get_hitl_item(payload['item_id'])['proposals'] == json.loads(payload['proposals_before'])
     assert isolated_store.list_scan_events(SID)[-1]['detail'] == {'reason_code': 'vision_response_empty'}
+
+
+def test_cloud_empty_output_does_not_buy_an_extra_recovery_attempt():
+    from types import SimpleNamespace
+    context = SimpleNamespace(enabled=True, local_drafting=False, deferred=[], owner_id=OWNER, run_id='run',
+        ledger=SimpleNamespace(snapshot=lambda *_: {'blocked': False, 'available_units': 100}))
+    assert recovery._recovery_block(context, ['empty_response']) == 'vision_generated_output_unusable'
