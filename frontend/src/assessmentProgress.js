@@ -14,7 +14,7 @@
 const PHASE_LABEL = {
   queued: 'Queued', connecting: 'Connecting to source', discovering: 'Discovering files',
   reading: 'Retrieving files', tagging: 'Classifying documents', analysing: 'Evaluating checks',
-  scoring: 'Saving results', done: 'Complete', error: 'Error',
+  scoring: 'Saving results', blocked: 'Assessment blocked', done: 'Assessment results saved', error: 'Error',
 }
 
 // Phases where the outcome-oriented "N of M files" line is the right primary message. The earlier
@@ -86,7 +86,8 @@ export function assessmentProgress(p) {
   const percent = total ? Math.round((completed / total) * 100) : 0
   const elapsed = typeof p.elapsed === 'number' && p.elapsed > 0 ? p.elapsed : null
 
-  const ratePerMin = (elapsed && completed > 0) ? (completed / elapsed) * 60 : null
+  const active = !['queued', 'blocked', 'error', 'done'].includes(p.phase)
+  const ratePerMin = (active && elapsed && completed > 0) ? (completed / elapsed) * 60 : null
   const etaSeconds = remaining === 0
     ? (total ? 0 : null)                                   // total known and all done → 0; unknown → null
     : (ratePerMin ? Math.round((remaining / ratePerMin) * 60) : null)
@@ -114,7 +115,7 @@ export function assessmentLine(p) {
   if (!vm) return ''
   if (!vm.counted) {
     let s = vm.phaseLabel
-    if (typeof p.elapsed === 'number') s += ` · still working (${p.elapsed}s)`
+    if (!['queued', 'blocked', 'error', 'done'].includes(vm.phase) && typeof p.elapsed === 'number') s += ` · still working (${p.elapsed}s)`
     return s
   }
   const verb = vm.phase === 'reading' ? 'Retrieving' : vm.phase === 'scoring' ? 'Saving' : 'Assessing'

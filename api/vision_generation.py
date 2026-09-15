@@ -187,8 +187,18 @@ class _CaptionGenerator:
 
 def generate(prompt, image_bytes, *, clean=True, model=None):
     ctx = managed_context()
-    def deferred(reason):
-        return {'deferred': True, 'ok': False, 'reason': reason, 'text': None}
+    def deferred(reason, *, admission_started=None):
+        result = {'deferred': True, 'ok': False, 'reason': reason, 'text': None}
+        if admission_started is not None:
+            # Only pre-dispatch admission failures enter this branch. Never label an
+            # attempted paid call as free or not-dispatched, or duplicate its ledger.
+            timing = {'queue_wait_ms': round(max(0, time.monotonic() - admission_started) * 1000, 3)}
+            from ai import _trace_ai
+            _trace_ai('vision', prompt, None, admission_started, ok=False, reason=reason,
+                model='not-dispatched', provider='managed_vision', zone='cloud', cost_usd=0.0,
+                scan_id=ctx.scan_id, file=ctx.file, timing=timing)
+            result['timing'] = timing
+        return result
     if ctx is None or not ctx.enabled or ctx.policy.get('ai_zone') == 'local':
         return deferred('vision_cloud_consent_required')
     if not ctx.scan_id or not ctx.file:
@@ -233,10 +243,11 @@ def generate(prompt, image_bytes, *, clean=True, model=None):
         return deferred('assessment_vision_budget_exhausted')
     queue_wait = VISION_QUEUE_TIMEOUT if remaining is None else min(VISION_QUEUE_TIMEOUT, remaining)
     if not _CLOUD_VISION_GATE.acquire(timeout=queue_wait):
-        return deferred('assessment_vision_budget_exhausted' if _remaining() == 0 else 'cloud_capacity_busy')
+        return deferred('assessment_vision_budget_exhausted' if _remaining() == 0 else 'cloud_capacity_busy',
+                        admission_started=started)
     try:
         if _remaining() == 0:
-            return deferred('assessment_vision_budget_exhausted')
+            return deferred('assessment_vision_budget_exhausted', admission_started=started)
         # Measure semaphore admission separately from provider/validation time.
         measured_queue_ms = round(max(0, time.monotonic() - started) * 1000, 3)
         result = managed_generate_attempts(bounded_prompt, ctx, generator, tier_indices=tiers, image_prefix=image_prefix)
@@ -249,7 +260,7 @@ def generate(prompt, image_bytes, *, clean=True, model=None):
             # admission/unknown-usage failures retain their exact ledger reason.
             if ctx.deferred and ctx.deferred[-1].get('reason') == 'request_rejected_before_dispatch':
                 ctx.deferred[-1]['reason'] = 'assessment_vision_budget_exhausted'
-        return {**result, 'ok': False, 'text': None}
+        return {**result, 'ok': False, 'text': None, 'timing': {'queue_wait_ms': measured_queue_ms}}
     from ai import _trace_ai
     call_id = _trace_ai('vision', bounded_prompt, result['text'], started, ok=True,
         model=result['model'], provider=result['provider'], zone=result['zone'],

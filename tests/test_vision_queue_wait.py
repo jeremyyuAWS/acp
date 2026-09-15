@@ -82,3 +82,29 @@ def test_managed_image_queue_wait_reaches_exact_attempt_trace(setup, monkeypatch
     row = store.list_ai_calls('scan')[0]
     assert json.loads(row['timing'])['queue_wait_ms'] == 2000
     assert row['latency_ms'] == 102000
+
+
+@pytest.mark.parametrize('exhausted', [False, True])
+def test_managed_blocked_admission_retains_durable_zero_dispatch_timing(setup, monkeypatch, exhausted):
+    import ai, vision_generation as vision
+    from ai_run_policy import run_context
+    store, job, calls, outputs = setup
+    now = [10.0]
+    monkeypatch.setattr(vision.time, 'monotonic', lambda: now[0])
+    class Gate:
+        def acquire(self, timeout):
+            now[0] += timeout if exhausted else .25
+            return False
+        def release(self):
+            pytest.fail('Unowned semaphore released')
+    monkeypatch.setattr(ai, '_CLOUD_VISION_GATE', Gate())
+    with run_context(store, job['payload'], job), ai.assessment_vision_budget(.5):
+        result = vision.generate('Describe', image())
+    assert result['reason'] == ('assessment_vision_budget_exhausted' if exhausted else 'cloud_capacity_busy')
+    assert result['timing']['queue_wait_ms'] == (500 if exhausted else 250)
+    assert not calls
+    row = store.list_ai_calls('scan')[0]
+    assert row['ok'] == 0 and row['model'] == 'not-dispatched'
+    assert row['reason'] == result['reason']
+    assert json.loads(row['timing']) == result['timing']
+    assert float(row['cost_usd']) == 0
