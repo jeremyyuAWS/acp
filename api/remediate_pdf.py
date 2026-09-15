@@ -845,7 +845,7 @@ def apply_pdf_figure_alt(data: bytes, values: dict) -> tuple[bytes, list[dict], 
     return out.getvalue(), applied, unresolved
 
 
-def _pdf_figure_drafts(pdf, *, ai_enabled, scan_id, file):
+def _pdf_figure_drafts(pdf, *, ai_enabled, scan_id, file, skip_locators=()):
     """Pure proposals from exact pixels, with independent semantic approval attached."""
     import ai
     import proposals as proposal_api
@@ -860,7 +860,7 @@ def _pdf_figure_drafts(pdf, *, ai_enabled, scan_id, file):
     locators = _figure_locators(figures, pdf)
     drafts, budget = [], _VISION_MAX_FIGURES
     for figure in figures:
-        if _fig_alt(figure) is not None:
+        if locators[id(figure)] in skip_locators or _fig_alt(figure) is not None:
             continue
         image, association, response = None, None, None
         validation = {"approved": False, "status": "needs_manual", "reason_codes": ["figure_image_association_unavailable"]}
@@ -913,14 +913,14 @@ def _pdf_figure_drafts(pdf, *, ai_enabled, scan_id, file):
     return drafts
 
 
-def alt_proposals_for_pdf(data: bytes, *, scan_id=None, context_file="") -> list[dict]:
+def alt_proposals_for_pdf(data: bytes, *, scan_id=None, context_file="", skip_locators=()) -> list[dict]:
     """Proposal-only exact-image recovery; never modifies tags or page/source bytes."""
     import io
     import pikepdf
     import ai
     with pikepdf.open(io.BytesIO(data)) as pdf, ai.assessment_vision_budget(60):
         drafts = [proposal for _figure, proposal in _pdf_figure_drafts(
-            pdf, ai_enabled=True, scan_id=scan_id, file=context_file)]
+            pdf, ai_enabled=True, scan_id=scan_id, file=context_file, skip_locators=skip_locators)]
         import hashlib
         for proposal in drafts:
             proposal["source_sha256"] = hashlib.sha256(data).hexdigest()
