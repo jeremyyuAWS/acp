@@ -844,7 +844,9 @@ def _vision_prompt(filename: str, context: str, style: str = "", guidance: str =
         "image conveys. First READ any text inside the image — a headline, labels, axis names, "
         "legend, or data values are often the whole point and must not be lost. If it is a chart, "
         "graph, or diagram, name the type and state what it compares and the single most important "
-        "figure or takeaway. If it is a photo or illustration, describe the content and its meaning. "
+        "figure or takeaway. Preserve the association of each series with its year, sign, value and units; "
+        "never swap legend entries or infer unreadable values. If the association is unclear, say so "
+        "instead of guessing. If it is a photo or illustration, describe the content and its meaning. "
         f"{length}"
         "Do not begin with 'image of', 'picture of', or 'this image shows'."
         # ADR 0021 — org house style, injected only when review memory is active for this org.
@@ -1141,6 +1143,8 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
     if escalation:
         out["escalation"] = escalation["steps"]      # the transparent numbered path
         out["cost_usd"] = escalation["cost_usd"]
+    from chart_caption_review import quality_first_review
+    out.update(quality_first_review(alt, context=context))
     return out
 
 
@@ -1250,7 +1254,10 @@ def _structured_vision_prompt(filename: str, ocr_text: str, context: str,
         "type (e.g. bar chart, line graph, table, screenshot), and the single key takeaway. "
         "State the takeaway as a COMPARISON or TREND in words. Do NOT state specific numeric values "
         "or pair numbers with categories (e.g. 'North at 150') — reading a chart's exact values is "
-        "unreliable, a wrong figure is worse than none, and a human confirms the specifics. Do not "
+        "unreliable, a wrong figure is worse than none, and a human confirms the specifics. Preserve "
+        "series and year associations, signs and units. OCR text alone does not establish which "
+        "series a value belongs to. If the legend or association is unclear, say so rather than "
+        "inventing a trend. Do not "
         "begin with 'image of', 'picture of', or 'this image shows'."
         f"{where}{read}{near}{house}\nAlt text:"
     )
@@ -1343,8 +1350,9 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     surfaces it as a Medium proposal for human confirmation rather than auto-applying, since
     a machine cannot judge whether a guessed description conveys the author's intent.
 
-    OCR presence is not semantic certification of colors, shapes, or chart
-    relationships. An explicit denial of numeric values when OCR read digits
+    Recognized Quality-first chart drafts need individual review: OCR presence is not
+    semantic certification of colors, shapes, or chart relationships. An explicit
+    denial of numeric values when OCR read digits
     clears `grounded` and sets `automatic_write_blocked`; the draft is retained
     for individual review rather than given automatic write credit.
 
@@ -1372,7 +1380,9 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     grounded = len(re.findall(r"[A-Za-z]{2,}", ocr_txt)) >= 2
     # An image of text: the text IS the alt text, and no model needs to see it. Returning here
     # is both more accurate and cheaper than a paraphrase — see _looks_like_an_image_of_text.
-    if allow_transcription and grounded and _looks_like_an_image_of_text(ocr_txt):
+    from chart_caption_review import quality_first_review
+    chart_needs_review = quality_first_review("", ocr_text=ocr_txt, context=context)
+    if allow_transcription and grounded and not chart_needs_review and _looks_like_an_image_of_text(ocr_txt):
         transcribed = _transcribed_alt(ocr_txt)
         if transcribed:
             return {"alt": transcribed, "grounded": True,
@@ -1438,6 +1448,9 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
         out.update(automatic_write_blocked=True, reason_code=quality_failure)
     elif numeric_denial:
         out.update(automatic_write_blocked=True, reason_code="ocr_numeric_values_denied")
+    review = quality_first_review(alt, ocr_text=ocr_txt, context=context)
+    if review and not quality_failure and not numeric_denial:
+        out.update(review)
     call_id = escalation.get("ai_call_id") if escalation else getattr(alt, "ai_call_id", None)
     if call_id:
         out["ai_call_id"] = call_id
@@ -1706,7 +1719,9 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
             # numbered `escalation` steps and cost_usd only when a cloud escalation actually
             # occurred. No secret is carried — a provider name, a 'local'/'customer_cloud' zone,
             # and the numbered path only.
-            for k in ("provider", "processing_zone", "escalation", "cost_usd", "ai_call_id"):
+            for k in ("provider", "processing_zone", "escalation", "cost_usd", "ai_call_id",
+                      "chart_review", "review_status", "approval_required", "automatic_write_blocked",
+                      "reason_code", "evidence"):
                 if res.get(k) is not None:
                     out[k] = res[k]
             return out

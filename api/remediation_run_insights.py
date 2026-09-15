@@ -16,7 +16,7 @@ from remediation_impact_estimates import build_impact_estimate
 
 MAX_PROPOSAL_BYTES = 128 * 1024
 PROPOSAL_KEYS = frozenset({'locator', 'before', 'proposed_value', 'rationale', 'source', 'model', 'model_call_id', 'document_wide_request_id', 'requires_semantic_review',
-                           'kind', 'automatic_write_blocked', 'reason_code', 'caption_validation', 'figure_image_sha256', 'figure_association_method',
+                           'kind', 'chart_review', 'review_status', 'approval_required', 'automatic_write_blocked', 'reason_code', 'caption_validation', 'figure_image_sha256', 'figure_association_method',
                            'source_sha256', 'assessment_revision', 'finding_ids', 'baseline_finding_ids'})
 SCHEMA = RUN_INSIGHTS_SCHEMA = (
     """CREATE TABLE IF NOT EXISTS ai_proposal_snapshots (
