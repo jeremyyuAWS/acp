@@ -100,7 +100,7 @@ def main():
     blob_roles = [r for r in roles if r['roleDefinitionId'].lower().endswith('/ba92f5b4-2d11-453d-a403-e96b0029c9fe')]
     if not blob_roles:
         raise ValueError('Source has no explicit Blob Data Contributor grant; verify storage access before provisioning')
-    print(f'{a.name}: private Release worker, 1 CPU/2Gi, two reserved slots, one replica maximum.')
+    print(f'{a.name}: private Release worker, 1 CPU/2Gi, three slots (two delivery, one report), one replica maximum.')
     if not a.apply:
         print('Validation only. No Azure resources changed.'); return
     # Delete secrets-bearing material even on a failed request.

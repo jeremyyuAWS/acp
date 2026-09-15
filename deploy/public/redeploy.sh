@@ -392,8 +392,8 @@ READY_BEFORE="$(curl -s --max-time 20 "https://$FQDN/readyz" || echo '{}')"
 if [ "$DEDICATED_RELEASE" = 1 ]; then
   python3 -c 'import json,sys
 r=json.load(sys.stdin).get("workers", {}).get("roles", {}).get("release", {})
-if not r.get("alive") or int(r.get("pool_size") or 0) < 2:
- sys.exit("Release worker must report a live two-slot heartbeat before dedicated routing is enabled")' <<<"$READY_BEFORE" \
+if not r.get("alive") or int(r.get("pool_size") or 0) < 3:
+ sys.exit("Release worker must report a live three-slot heartbeat before dedicated routing is enabled")' <<<"$READY_BEFORE" \
     || die "Release capacity is not ready; existing routing has not been changed"
 fi
 read -r QUEUE_AVAILABLE ACTIVE_JOBS REDIS_REPORTED REDIS_CONFIGURED REDIS_REACHABLE REDIS_TOPOLOGY <<EOF

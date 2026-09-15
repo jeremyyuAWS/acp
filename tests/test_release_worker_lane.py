@@ -175,3 +175,9 @@ def test_provisioning_cannot_start_jobs_before_storage_grant(monkeypatch, capsys
     else:
         worker.main()
     assert 'DO-NOT-PRINT' not in capsys.readouterr().out
+
+
+def test_rollout_preflight_requires_three_live_release_slots():
+    script = (ROOT / 'deploy/public/redeploy.sh').read_text()
+    assert 'int(r.get("pool_size") or 0) < 3' in script
+    assert 'live three-slot heartbeat' in script
