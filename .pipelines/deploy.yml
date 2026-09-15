@@ -1,0 +1,64 @@
+# Deploy the exact commit accepted by acp-ci. GitHub credentials are not used.
+trigger: none
+pr: none
+parameters:
+- name: verifyOnly
+  displayName: Check deployment access without changing running apps
+  type: boolean
+  default: false
+resources:
+  pipelines:
+  - pipeline: ci
+    source: acp-ci
+    trigger:
+      branches:
+        include: [refs/heads/main]
+variables:
+  ACP_AZURE_CI_DEFINITION_ID: '10'
+  ACP_SUBSCRIPTION: 8fab0f8f-b577-45d7-a485-ec32f73b22be
+pool:
+  vmImage: ubuntu-latest
+lockBehavior: sequential
+stages:
+- stage: VerifyAccess
+  jobs:
+  - job: verify
+    steps:
+    - checkout: none
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: acp-azure-deploy
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          az group show -n mdk-accessibility --query name -o tsv
+          az acr show -n mdkaccessibilityacr --query loginServer -o tsv
+          for app in acp-app acp-discovery acp-assess acp-remediate; do
+            az containerapp show -g mdk-accessibility -n "$app" --query name -o tsv
+          done
+- ${{ if not(parameters.verifyOnly) }}:
+  - stage: Staging
+    dependsOn: VerifyAccess
+    condition: and(succeeded(), eq(variables['resources.pipeline.ci.sourceBranch'], 'refs/heads/main'))
+    jobs:
+    - template: deploy-job.yml
+      parameters:
+        environment: staging
+        app: acp-app-staging
+        discovery: acp-discovery-staging
+        assess: acp-assess-staging
+        remediate: acp-remediate-staging
+        fqdn: acp-app-staging.purplebeach-80e1296b.westus2.azurecontainerapps.io
+  - stage: Production
+    dependsOn: Staging
+    condition: and(succeeded(), eq(variables['resources.pipeline.ci.sourceBranch'], 'refs/heads/main'))
+    jobs:
+    - template: deploy-job.yml
+      parameters:
+        environment: production
+        app: acp-app
+        discovery: acp-discovery
+        assess: acp-assess
+        remediate: acp-remediate
+        fqdn: acp-app.greenwater-4bf2c997.eastus2.azurecontainerapps.io

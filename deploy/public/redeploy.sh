@@ -155,7 +155,10 @@ say "pinning ${PIN:0:7}"
 # Skipped, loudly, when gh is unavailable or unauthenticated: a local operator without gh should
 # still be able to ship, and a gate that silently passes is worse than one that says it was not
 # run. ACP_SKIP_CI_GATE=1 is the deliberate override for a commit CI cannot see (a local-only pin).
-if [ "${ACP_SKIP_CI_GATE:-0}" = 1 ]; then
+if [ "${ACP_CI_PROVIDER:-github}" = azure ]; then
+  python3 "$SRC_ROOT/scripts/check_azure_ci.py" "$PIN" \
+    || die "Azure CI did not authorize this exact deployment"
+elif [ "${ACP_SKIP_CI_GATE:-0}" = 1 ]; then
   echo "  ⚠ CI gate SKIPPED by ACP_SKIP_CI_GATE=1"
 elif ! command -v gh >/dev/null 2>&1; then
   echo "  ⚠ CI gate NOT CHECKED — gh is not installed on this host"
