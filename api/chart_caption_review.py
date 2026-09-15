@@ -11,9 +11,9 @@ _UNCERTAIN = re.compile(r'\b(?:unclear|illegible|unreadable|uncertain|cannot (?:
 CHECKS = ('series', 'year', 'sign', 'value', 'units')
 
 
-def quality_first_review(alt, *, ocr_text='', context=''):
+def quality_first_review(alt, *, ocr_text='', context='', run_context=None):
     from llm_waterfall_provider import managed_context
-    run = managed_context()
+    run = run_context if run_context is not None else managed_context()
     if not run or not getattr(run, 'policy', {}).get('quality_first'):
         return {}
     chart = bool(_CHART.search(' '.join((alt or '', ocr_text or '', context or ''))))

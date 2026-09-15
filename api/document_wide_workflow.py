@@ -69,6 +69,47 @@ def _saved_input(store, context, digest):
     return None
 
 
+
+def _quality_image_proposals(proposals, context, manifest, data):
+    """Apply review policy to fresh AND replayed drafts, after preserving human decisions.
+
+    This checks draft claims, not model confidence. Exact matched image evidence
+    is shown for human verification; its presence never certifies chart facts.
+    """
+    if not context.policy.get('quality_first'):
+        return proposals
+    from chart_caption_review import quality_first_review
+    from document_wide_manifest import package_images
+    from proposals import thumb_b64
+    by_id = {f.finding_id: f for f in manifest.findings}
+    images = None
+    enriched = []
+    for original in proposals:
+        proposal = dict(original)
+        findings = [by_id[fid] for fid in proposal.get('finding_ids', []) if fid in by_id]
+        locations = {finding.locator.key() for finding in findings}
+        evidence = [e for e in manifest.evidence if e.source_locator.key() in locations]
+        nearby = ' '.join([proposal.get('rationale') or ''] +
+                          [f.evidence_text for f in findings] + [e.text or '' for e in evidence])
+        review = quality_first_review(proposal.get('proposed_value', ''), context=nearby,
+                                      run_context=context)
+        if review:
+            proposal.update({k: v for k, v in review.items() if k not in ('grounded', 'evidence')})
+            proposal['why_review'] = review['evidence']
+        refs = {e.image_ref for e in evidence if e.kind.value == 'image' and e.image_ref}
+        # Never choose arbitrarily between multiple target images.
+        if len(locations) == 1 and len(refs) == 1:
+            if images is None:
+                images = package_images(data, manifest)
+            image = images.get(next(iter(refs)))
+            if image:
+                thumb = thumb_b64(image, max_edge=480)
+                if thumb:
+                    proposal['thumb'] = thumb
+        enriched.append(proposal)
+    return enriched
+
+
 def process_file(store, context, *, _artifact=None):
     """Generate only from the durable corrected artifact. Never apply or grant credit here."""
     if not enabled(context, context.file):
@@ -215,4 +256,6 @@ def process_file(store, context, *, _artifact=None):
             if not count:
                 _record(store, context, 'deferred', {'request_id': request_id, 'reason': 'Canonical finding count unavailable.', 'sc': sc})
                 continue
+            if sc == "1.1.1":
+                proposals = _quality_image_proposals(proposals, context, manifest, data)
             store.enqueue_proposals(sid, filename, sc, proposals, validated=False, finding_count=count)
