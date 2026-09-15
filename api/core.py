@@ -1892,6 +1892,22 @@ REMEDIATE_LANE_JOB_TYPES = (
 )
 
 
+RELEASE_LANE_JOB_TYPES = (
+    "publish_file", "prepare_release_package", "release_continue", "publish_release_reports",
+)
+RELEASE_REPORT_JOB_TYPES = ("publish_release_reports",)
+
+
+def dedicated_release_enabled():
+    """Explicit cutover; older installations keep release work in remediation."""
+    return os.environ.get("ACP_DEDICATED_RELEASE_WORKERS", "0") == "1"
+
+
+def remediation_job_types():
+    return tuple(kind for kind in REMEDIATE_LANE_JOB_TYPES
+                 if not dedicated_release_enabled() or kind not in RELEASE_LANE_JOB_TYPES)
+
+
 def _replica_id() -> str:
     """This replica's identity, for a globally unique worker id.
 
@@ -1932,16 +1948,25 @@ def _worker_job_types(index, pool_size):
     if role == "assess":
         return ASSESS_LANE_JOB_TYPES
     if role == "remediate":
-        return REMEDIATE_LANE_JOB_TYPES
+        return remediation_job_types()
+    if role == "release":
+        if pool_size < 3:
+            raise ValueError("Release workers require at least three slots: two delivery and one report")
+        # One reserved report slot; reports cannot occupy all delivery capacity.
+        return RELEASE_REPORT_JOB_TYPES if index == 0 else tuple(
+            kind for kind in RELEASE_LANE_JOB_TYPES if kind not in RELEASE_REPORT_JOB_TYPES)
     if role == "processing":
         # Excludes the WHOLE Discovery stage, not just its entry job. Otherwise "isolate
         # Discovery and processing by role" leaks: processing workers claim the scan_folder
         # jobs the discovery service just fanned out, which is both a breach of the isolation
         # and the reason a dedicated discovery service would sit idle mid-scan.
-        return tuple(sorted(n for n in HANDLERS if n not in DISCOVERY_LANE_JOB_TYPES))
+        return tuple(sorted(n for n in HANDLERS if n not in DISCOVERY_LANE_JOB_TYPES and
+                            (not dedicated_release_enabled() or n not in RELEASE_LANE_JOB_TYPES)))
     if role != "mixed":
-        raise ValueError("ACP_WORKER_ROLE must be mixed, discovery, assess, remediate, or processing")
-    return DISCOVERY_LANE_JOB_TYPES if index < _discovery_reservation(pool_size) else None
+        raise ValueError("ACP_WORKER_ROLE must be mixed, discovery, assess, remediate, release, or processing")
+    if index < _discovery_reservation(pool_size):
+        return DISCOVERY_LANE_JOB_TYPES
+    return tuple(sorted(n for n in HANDLERS if n not in RELEASE_LANE_JOB_TYPES)) if dedicated_release_enabled() else None
 
 
 def _spawn_worker() -> None:

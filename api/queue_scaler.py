@@ -109,5 +109,6 @@ def lane_job_types() -> dict:
     return {
         "discovery": core.DISCOVERY_LANE_JOB_TYPES,
         "assess": core.ASSESS_LANE_JOB_TYPES,
-        "remediate": core.REMEDIATE_LANE_JOB_TYPES,
+        "remediate": core.remediation_job_types(),
+        **({"release": core.RELEASE_LANE_JOB_TYPES} if core.dedicated_release_enabled() else {}),
     }

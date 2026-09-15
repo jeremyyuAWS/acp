@@ -23,7 +23,7 @@ const STAGE = {
   release: { label: 'Release', color: '#A66A16' },
 }
 
-const workerLabel = (stage) => stage === 'remediate' ? 'Remediate & Release' : (STAGE[stage]?.label || stage)
+const workerLabel = (stage, sharedRelease = true) => stage === 'remediate' && sharedRelease ? 'Remediate & Release' : (STAGE[stage]?.label || stage)
 
 // Colours are TOKENS, not literals, so the high-contrast toggle reaches them. Every consumer
 // below puts these in a CSS property context — `color`, and a `border-left` shorthand — where
@@ -138,7 +138,7 @@ export function workerServiceRows(summary = {}) {
   const capacity = summary.worker_capacity_by_role || {}
   const load = summary.by_stage || {}
   const attribution = summary.worker_instance_attribution || {}
-  return ['discovery', 'assess', 'remediate'].filter((role) => roles[role] || capacity[role]).map((role) => {
+  return ['discovery', 'assess', 'remediate', ...(summary.dedicated_release_workers ? ['release'] : [])].filter((role) => roles[role] || capacity[role]).map((role) => {
     const heartbeat = roles[role] || {}
     const measured = capacity[role]
     const stage = role === 'discovery' ? 'discover' : role
@@ -148,7 +148,7 @@ export function workerServiceRows(summary = {}) {
     const active = measured ? Number(measured.busy_slots || 0) : null
     const slots = measured ? Number(measured.worker_slots || 0) : null
     return {
-      role, stage, active, slots, available: measured ? Math.max(0, slots - active) : null,
+      role, stage, active, slots, ...(summary.dedicated_release_workers ? { sharedRelease: false } : {}), available: measured ? Math.max(0, slots - active) : null,
       alive: measured ? Number(measured.healthy_replicas || 0) > 0 : Boolean(heartbeat.alive),
       age_s: heartbeat.age_s, version: heartbeat.version,
       status: measured?.status || 'unavailable',
@@ -175,7 +175,7 @@ export function workerServiceRows(summary = {}) {
         freshness_threshold_seconds: measured.freshness_threshold_seconds,
       } : {
         jobs_in_flight: Number(load[stage]?.running || 0)
-          + (stage === 'remediate' ? Number(load.release?.running || 0) : 0),
+          + (stage === 'remediate' && !summary.dedicated_release_workers ? Number(load.release?.running || 0) : 0),
         utilization_pct: null,
         capacity_source: heartbeat.alive ? 'legacy_role_heartbeat' : 'unavailable',
         measured_at: heartbeat.heartbeat_at || null,
@@ -790,6 +790,7 @@ export function flowEdge({ id, source, target, color, active = false, detail, ..
 export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = null, connection = 'connecting') {
   const runs = workflowStageRuns(snapshot)
   const services = workerServiceRows(snapshot?.summary || {})
+  const stages = ['discover', 'assess', 'remediate', ...(snapshot?.summary?.dedicated_release_workers ? ['release'] : [])]
   const serviceByStage = new Map(services.map((service) => [service.stage, service]))
   const sourceKinds = ['drive', 'sharepoint']
   const sourceLabel = { drive: 'Google Drive', sharepoint: 'SharePoint' }
@@ -833,10 +834,10 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
       status: `${snapshot?.summary?.queued || 0} waiting`, detail: 'Durable · tenant-fair scheduling', color: '#A66A16',
       gauge: nodeGauge({ kind: 'queue' }, snapshot?.summary || {}),
       outputPorts: [
-        { id: 'discover', top: '22%' }, { id: 'assess', top: '50%' }, { id: 'remediate', top: '78%' },
+        ...stages.map((id, index) => ({ id, top: stages.length === 3 ? ['22%', '50%', '78%'][index] : `${(index + 1) * 20}%` })),
       ] } },
   )
-  ;['discover', 'assess', 'remediate'].forEach((stage, index) => {
+  ;stages.forEach((stage, index) => {
     const service = serviceByStage.get(stage) || { stage, active: 0, available: 0, slots: 0, alive: false }
     const serviceCapacity = capacityForService(capacity, service)
     // ariaLabel sits on the NODE, not in `data` — ReactFlow reads node.ariaLabel when it renders
@@ -844,7 +845,7 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
     // which is how this was first written and what the announcement test caught.
     nodes.push({ id: `stage:${stage}`, type: 'infra',
       position: { x: 720, y: WORKER_LANE_TOP + index * WORKER_LANE_GAP },
-      ariaLabel: `${workerLabel(stage)} workers, ${service.status || (service.alive ? 'online' : 'standby')}, `
+      ariaLabel: `${workerLabel(stage, !snapshot?.summary?.dedicated_release_workers)} workers, ${service.status || (service.alive ? 'online' : 'standby')}, `
         + (service.capacity_source === 'worker_instances'
           ? `${service.active} busy of ${service.slots} slots. `
           : `slot utilization unavailable. ${service.jobs_in_flight || 0} jobs recorded in flight. `)
@@ -854,7 +855,7 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
           ? `${service.jobs_in_flight} jobs recorded in flight. ` : ''}`
         + 'Select for details.',
       data: { kind: 'worker',
-      label: `${workerLabel(stage)} workers`, status: service.status || (service.alive ? 'online' : 'standby'),
+      label: `${workerLabel(stage, !snapshot?.summary?.dedicated_release_workers)} workers`, status: service.status || (service.alive ? 'online' : 'standby'),
       detail: service.capacity_source === 'worker_instances' ? `${service.active} / ${service.slots} slots busy`
         + `${service.healthy_replicas != null ? ` · ${service.healthy_replicas} healthy replicas` : ''}`
         + `${service.jobs_in_flight != null ? ` · ${service.jobs_in_flight} jobs recorded in flight` : ''}`
@@ -872,7 +873,7 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
     data: { kind: 'output', label: 'Durable outputs',
     status: 'protected', detail: 'Results · corrected copies · audit trail', color: '#287C45', hasOutput: false, wide: true,
     inputPorts: [
-      { id: 'discover', top: '22%' }, { id: 'assess', top: '50%' }, { id: 'remediate', top: '78%' },
+      ...stages.map((id, index) => ({ id, top: stages.length === 3 ? ['22%', '50%', '78%'][index] : `${(index + 1) * 20}%` })),
     ] } })
   const edges = [
     ...sourceKinds.map((source) => flowEdge({ id: `${source}:intake`, source: `source:${source}`,
@@ -881,7 +882,7 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
       detail: `source:${source}` })),
     flowEdge({ id: 'intake:queue', source: 'infra:intake', target: 'infra:queue', color: '#51404E',
       active: Boolean(snapshot?.summary?.active_runs), detail: 'infra:queue' }),
-    ...['discover', 'assess', 'remediate'].flatMap((stage) => [
+    ...stages.flatMap((stage) => [
       flowEdge({ id: `queue:${stage}`, source: 'infra:queue', sourceHandle: stage,
         target: `stage:${stage}`, color: STAGE[stage].color,
         active: Boolean(serviceByStage.get(stage)?.active || serviceByStage.get(stage)?.jobs_in_flight),
@@ -1171,7 +1172,7 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
       {services.map((service) => <div key={service.role} style={{ display: 'grid',
         gridTemplateColumns: 'minmax(110px,1fr) minmax(180px,2fr) minmax(130px,1fr)', gap: 12,
         alignItems: 'center', padding: '8px 12px', borderTop: '1px solid var(--line)', fontSize: 12 }}>
-        <span><b>{workerLabel(service.stage) || service.role}</b><br />
+        <span><b>{workerLabel(service.stage, service.sharedRelease) || service.role}</b><br />
           <span style={{ color: service.alive ? PRESSURE.healthy.color : PRESSURE.stalled.color }}>
             ● {service.alive ? 'Online' : 'Offline'}
           </span>

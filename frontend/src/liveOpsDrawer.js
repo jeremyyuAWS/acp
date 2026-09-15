@@ -2240,7 +2240,7 @@ export function queueRoleLoad(summary = {}) {
     if (!queued) continue
     // Release's publish/package/continuation jobs are claimed by the Remediate lane.
     // Aggregate demand BEFORE comparing it with capacity: these stages share one pool.
-    const workerRole = stage === 'release' ? 'remediate' : stage
+    const workerRole = stage === 'release' && !summary.dedicated_release_workers ? 'remediate' : stage
     const pool = pools.get(workerRole) || { stage: workerRole, queued: 0, stages: [] }
     pool.queued += queued
     pool.stages.push(stage)
@@ -2254,7 +2254,7 @@ export function queueRoleLoad(summary = {}) {
     const slots = measured
       ? (measured.capacity_source === 'worker_instances' ? num(measured.worker_slots) : null)
       : (role && role.alive ? num(role.pool_size) : null)
-    return { ...pool, label: pool.stages.includes('release') ? 'Remediate & Release' : pool.stage,
+    return { ...pool, label: pool.stages.includes('release') && !summary.dedicated_release_workers ? 'Remediate & Release' : pool.stage,
       slots, over: slots != null && pool.queued > slots, unknown: slots == null }
   })
   // Worst first: a role over its slots leads, then by how much work is stuck behind how little

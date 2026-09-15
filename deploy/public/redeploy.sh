@@ -32,6 +32,7 @@ APP="${ACP_APP:-acp-app}"
 DISCOVERY_WORKER="${ACP_DISCOVERY_WORKER:-acp-discovery}"
 ASSESS_WORKER="${ACP_ASSESS_WORKER:-acp-assess}"
 REMEDIATE_WORKER="${ACP_REMEDIATE_WORKER:-acp-remediate}"
+RELEASE_WORKER="${ACP_RELEASE_WORKER:-}"
 GPU_APP="${ACP_GPU_APP:-acp-ollama}"
 LANE_WORKERS=("$DISCOVERY_WORKER" "$ASSESS_WORKER" "$REMEDIATE_WORKER")
 DEPLOY_TARGET_ENV="${ACP_DEPLOY_TARGET_ENV:-production}"
@@ -45,6 +46,13 @@ DEPLOY_TARGET_ENV="${ACP_DEPLOY_TARGET_ENV:-production}"
 # repo cannot verify end to end — which is exactly why step 9b checks that each named role
 # actually reported, instead of trusting whichever roles happen to appear.
 LANE_ROLES=("discovery" "assess" "remediate")
+DEDICATED_RELEASE=0
+if [ -n "$RELEASE_WORKER" ]; then
+  LANE_WORKERS+=("$RELEASE_WORKER")
+  LANE_ROLES+=("release")
+  DEDICATED_RELEASE=1
+fi
+export ACP_DEDICATED_RELEASE_WORKERS="$DEDICATED_RELEASE"
 BUILD_TZ="${BUILD_TZ:-America/Los_Angeles}"
 MIN_MODULES=41                  # engine/pdf-analyser is tracked; this guards against truncation
 DRY="${ACP_DRY_RUN:-0}"
@@ -82,8 +90,8 @@ case "$DEPLOY_TARGET_ENV" in
     done ;;
   *) die "ACP_DEPLOY_TARGET_ENV must be 'production' or 'staging', got '$DEPLOY_TARGET_ENV'" ;;
 esac
-[ "$(printf '%s\n' "$APP" "${LANE_WORKERS[@]}" | sort -u | wc -l | tr -d ' ')" = 4 ] \
-  || die "app and discovery/assess/remediate worker targets must be four distinct names"
+[ "$(printf '%s\n' "$APP" "${LANE_WORKERS[@]}" | sort -u | wc -l | tr -d ' ')" = "$(( ${#LANE_WORKERS[@]} + 1 ))" ] \
+  || die "app and all worker targets must have distinct names"
 
 # Capacity application is an API control-plane capability, so these settings are stamped only
 # onto the API revision. Either environment may opt in, but only with its exact role-worker names
@@ -114,7 +122,8 @@ fi
 API_ENV_VARS=(
   "ACP_DEPLOY_ENV=$DEPLOY_TARGET_ENV"
   "ACP_CAPACITY_APPLY_ENABLED=$CAPACITY_APPLY_ENABLED"
-  "WORKER_APP_NAMES=$DISCOVERY_WORKER,$ASSESS_WORKER,$REMEDIATE_WORKER"
+  "WORKER_APP_NAMES=$DISCOVERY_WORKER,$ASSESS_WORKER,$REMEDIATE_WORKER${RELEASE_WORKER:+,$RELEASE_WORKER}"
+  "ACP_DEDICATED_RELEASE_WORKERS=$DEDICATED_RELEASE"
   "CAPACITY_APPLY_APP_NAMES=$APP,$DISCOVERY_WORKER,$ASSESS_WORKER,$REMEDIATE_WORKER,$GPU_APP"
 )
 if [ "$CAPACITY_APPLY_ENABLED" = 1 ]; then
@@ -380,6 +389,13 @@ fi
 # run later. Refuse routine releases before any Container App mutation. The explicit override is
 # for an emergency security/correctness release whose operator accepts that interruption risk.
 READY_BEFORE="$(curl -s --max-time 20 "https://$FQDN/readyz" || echo '{}')"
+if [ "$DEDICATED_RELEASE" = 1 ]; then
+  python3 -c 'import json,sys
+r=json.load(sys.stdin).get("workers", {}).get("roles", {}).get("release", {})
+if not r.get("alive") or int(r.get("pool_size") or 0) < 3:
+ sys.exit("Release worker must report a live three-slot heartbeat before dedicated routing is enabled")' <<<"$READY_BEFORE" \
+    || die "Release capacity is not ready; existing routing has not been changed"
+fi
 read -r QUEUE_AVAILABLE ACTIVE_JOBS REDIS_REPORTED REDIS_CONFIGURED REDIS_REACHABLE REDIS_TOPOLOGY <<EOF
 $(python3 -c 'import json,sys
 try:
@@ -556,7 +572,7 @@ if [ "$BG" = 1 ]; then
   done
 
   _verify_remediation_scaler
-  python3 "$SRC_ROOT/deploy/public/repair_queue_connection.py" "$RG" "$ASSESS_WORKER" "$REMEDIATE_WORKER"
+  python3 "$SRC_ROOT/deploy/public/repair_queue_connection.py" "$RG" "$ASSESS_WORKER" "$REMEDIATE_WORKER" ${RELEASE_WORKER:+"$RELEASE_WORKER"}
 
   # Verified through the PUBLIC url, not green's. Green being healthy proves green is healthy;
   # only the public url proves traffic actually moved.
@@ -626,7 +642,7 @@ for a in "$APP" "${LANE_WORKERS[@]}"; do
 done
 
 _verify_remediation_scaler
-python3 "$SRC_ROOT/deploy/public/repair_queue_connection.py" "$RG" "$ASSESS_WORKER" "$REMEDIATE_WORKER"
+python3 "$SRC_ROOT/deploy/public/repair_queue_connection.py" "$RG" "$ASSESS_WORKER" "$REMEDIATE_WORKER" ${RELEASE_WORKER:+"$RELEASE_WORKER"}
 
 # ── 8b. single-revision mode, so the new revision actually holds traffic ──────────────────────
 # The whole normal path assumes Single mode — where the update above makes its new revision the

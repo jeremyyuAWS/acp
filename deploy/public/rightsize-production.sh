@@ -64,6 +64,24 @@ apply_remediation_autoscale() {
       "query=SELECT count(*) FROM jobs WHERE status='queued' AND type IN ('vision_proposal_retry', 'remediate_file', 'deliver_corrected_copy', 'rescore_file', 'apply_approved_values', 'publish_file', 'prepare_release_package', 'release_continue', 'publish_release_reports') AND run_after::timestamptz <= now() AND attempts < max_attempts"
       "targetQueryValue=4"
     --scale-rule-auth "connection=database-url")
+  local dedicated="${ACP_DEDICATED_RELEASE_WORKERS:-}"
+  if [[ -z "$dedicated" ]] && ! $DRY_RUN; then
+    dedicated="$(az containerapp show --subscription "$SUBSCRIPTION" --resource-group "$RESOURCE_GROUP" \
+      --name acp-remediate --query "properties.template.containers[0].env[?name=='ACP_DEDICATED_RELEASE_WORKERS'].value | [0]" -o tsv)"
+  fi
+  if [[ "$dedicated" == 1 ]]; then
+    local query i
+    query="$(python3 - "$(dirname "$0")" <<'PYQUERY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from remediation_scaler import remediation_query
+print(remediation_query(dedicated=True))
+PYQUERY
+)"
+    for i in "${!args[@]}"; do
+      if [[ "${args[$i]}" == query=* ]]; then args[$i]="query=$query"; fi
+    done
+  fi
   if $DRY_RUN; then
     printf 'az'
     printf ' %q' "${args[@]}"

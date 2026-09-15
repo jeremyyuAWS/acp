@@ -126,7 +126,7 @@ def test_the_role_set_matches_what_core_actually_accepts(isolated_store):
     """If core learns a new role and this list does not, that service becomes invisible here —
     which is precisely the failure mode the whole module is about."""
     import core
-    accepted = {"mixed", "discovery", "assess", "remediate", "processing"}
+    accepted = {"mixed", "discovery", "assess", "remediate", "release", "processing"}
     assert set(store_mod.Store.WORKER_ROLES) == accepted
     # And core really does reject anything outside it.
     assert "ACP_WORKER_ROLE must be" in Path(core.__file__).read_text()
@@ -170,3 +170,19 @@ def test_a_failing_role_read_cannot_500_readyz(isolated_store, monkeypatch):
     out = system.readyz()
     assert out["ready"] is True
     assert "error" in out["workers"]["roles"]
+
+
+def test_dedicated_release_readiness_requires_its_own_heartbeat(isolated_store, monkeypatch):
+    import core
+    from routes import system
+    monkeypatch.setattr(core, 'store', isolated_store)
+    monkeypatch.setattr(core, 'WORKERS', 1)
+    monkeypatch.setattr(system, 'pdf_engine_status', lambda: {'available': True, 'path': '/x', 'reason': None})
+    monkeypatch.setenv('ACP_DEDICATED_RELEASE_WORKERS', '1')
+    _write(isolated_store, 'remediate', _beat(pool=2, version='new'))
+    assert 'release_worker_unavailable' in system.readyz()['degraded']
+    _write(isolated_store, 'release', _beat(pool=2, version='new'))
+    assert 'release_worker_unavailable' not in system.readyz()['degraded']
+    assert 'release_worker_capacity_insufficient' in system.readyz()['degraded']
+    _write(isolated_store, 'release', _beat(pool=3, version='new'))
+    assert 'release_worker_capacity_insufficient' not in system.readyz()['degraded']

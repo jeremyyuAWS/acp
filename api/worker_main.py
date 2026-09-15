@@ -49,6 +49,8 @@ def run(poll_seconds: float = 2.0, _install_signals: bool = True) -> None:
     # this exact fallback intending to prevent that.
     if not os.environ.get("ACP_WORKERS"):
         os.environ["ACP_WORKERS"] = "12"
+        if os.environ.get("ACP_WORKER_ROLE") == "release":
+            os.environ["ACP_WORKERS"] = "3"
 
     import core
 

@@ -2677,3 +2677,15 @@ describe('shared Remediate and Release queue capacity', () => {
     expect(queueCapacityGauge(summary).fraction).toBeNull()
   })
 })
+
+describe('dedicated Release queue', () => {
+  it('measures Release against its own worker pool after explicit cutover', () => {
+    const summary = { dedicated_release_workers: true, queued: 9,
+      by_stage: { remediate: { queued: 6 }, release: { queued: 3 } },
+      worker_roles: { remediate: { alive: true, pool_size: 10 }, release: { alive: true, pool_size: 2 } } }
+    const rows = queueRoleLoad(summary).rows
+    expect(rows).toHaveLength(2)
+    expect(rows.find(r => r.stage === 'release')).toMatchObject({ queued: 3, slots: 2, over: true })
+    expect(rows.find(r => r.stage === 'remediate')).toMatchObject({ queued: 6, slots: 10, over: false })
+  })
+})

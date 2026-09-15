@@ -11983,7 +11983,7 @@ class Store:
     # set). Enumerated rather than discovered by scanning app_settings for a key prefix: the set
     # is closed and small, and a prefix scan would silently start reporting any future key that
     # happened to share the namespace.
-    WORKER_ROLES = ("mixed", "discovery", "assess", "remediate", "processing")
+    WORKER_ROLES = ("mixed", "discovery", "assess", "remediate", "release", "processing")
 
     def worker_roles_status(self, window_s: int = 120) -> dict:
         """Per-ROLE heartbeat, keyed by role. The shared key cannot answer this.
@@ -15238,6 +15238,14 @@ class Store:
                        request_fingerprint=request_fingerprint,
                        input_manifest_id=input_manifest_id)
 
+    def enqueue_automatic_sharepoint_release(self, scan_id, payloads, *, snapshot_id,
+                                             request_fingerprint, input_manifest_id=None):
+        """Append exact SharePoint work under the same immutable automatic permission."""
+        from automatic_drive_queue import enqueue
+        return enqueue(self, scan_id, payloads, snapshot_id=snapshot_id,
+                       request_fingerprint=request_fingerprint,
+                       input_manifest_id=input_manifest_id, provider="sharepoint")
+
     def enqueue_stage_batch(self, scan_id: str, stage: str, job_type: str,
                             payloads: list[dict], *, snapshot_id: str,
                             request_fingerprint: str,
@@ -15925,6 +15933,10 @@ class Store:
         else:
             self.publish_worker_stage_event(job_id, worker_id, attempt, "attempt.completed")
             self._record_stage_completed_if_ready(job)
+            if job and job.get("scan_id") and job.get("type") in {
+                    "remediate_file", "rescore_file", "apply_approved_values", "publish_file"}:
+                import automatic_release_store
+                automatic_release_store.wake(self, job["scan_id"])
         return won
 
     def request_job_cancellation(self, job_id: str) -> bool:
@@ -16609,6 +16621,20 @@ class Store:
             self._db.execute(cur, "SELECT status, COUNT(*) AS n FROM jobs" + scope + " GROUP BY status",
                              (owner,) if owner else ())
             return {r["status"]: r["n"] for r in self._db.fetchall(cur)}
+
+    def worker_lane_queue(self, job_types) -> dict:
+        """Claimable count and oldest queued timestamp without document/user payloads."""
+        kinds = tuple(job_types)
+        if not kinds:
+            return {"claimable": 0, "oldest_created_at": None}
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM jobs "
+                "WHERE status='queued' AND run_after<=%s AND attempts < max_attempts "
+                "AND type IN (" + ",".join(["%s"] * len(kinds)) + ")",
+                (self._now(), *kinds))
+            row = self._db.fetchone(cur) or {}
+            return {"claimable": int(row.get("n") or 0), "oldest_created_at": row.get("oldest")}
 
     def running_jobs_by_type(self) -> dict[str, int]:
         """Global durable running rows grouped by bounded job type; never reads payloads."""

@@ -9,12 +9,16 @@ from release_artifacts import ReleaseArtifactError, artifact_tag, require_curren
 
 ACTIVE = {'active', 'waiting', 'blocked'}
 MAX_FILES = 500
-MAX_DISPATCH_PER_TICK = 1
+MAX_DISPATCH_PER_TICK = 2
 STALL_AFTER_SECONDS = 600
 STALLED_CHECK_SECONDS = 300
 
 
 class DeliveryAlreadyAdmitted(ValueError):
+    pass
+
+
+class DeliveryCapacityFull(ValueError):
     pass
 
 
@@ -365,6 +369,20 @@ def publish_admission(store, authorization_id, owner, sid, file, digest, *, queu
             raise ValueError('Queued delivery has no prior exact automatic admission.')
         if frozen and frozen != digest:
             raise ValueError('This authorization already admitted a different artifact. Confirm a new authorization.')
+        if not queued and not frozen:
+            with store._db.cursor() as cur:
+                store._db.execute(cur, "SELECT payload,status FROM jobs WHERE scan_id=%s "
+                    "AND type='publish_file' AND status IN ('queued','running','processing','retry')", (sid,))
+                outstanding = set()
+                for item in store._db.fetchall(cur):
+                    data = json.loads(item['payload']) if isinstance(item['payload'], str) else item['payload']
+                    if data.get('automatic_release_id') == row['id']:
+                        outstanding.add(data.get('file'))
+            # Admission itself occupies a slot before a queue/response exists.
+            outstanding.update(name for name, entry in row['progress'].get('files', {}).items()
+                if entry.get('artifact_digest') and (entry.get('state') == 'publishing' or entry.get('dispatch_error')))
+            if len(outstanding) >= MAX_DISPATCH_PER_TICK:
+                raise DeliveryCapacityFull('Corrected copy is ready. Waiting for a delivery slot.')
         if digest != record['corrected_sha256']:
             raise ValueError('The verified artifact changed after dispatch was requested.')
         return persistence.update_file(store, row['id'], owner, file, dict(state='publishing', artifact_digest=digest, waiting_for_delivery=False,
@@ -595,6 +613,10 @@ def advance(store, payload, job):
             data = json.loads(item['payload']) if isinstance(item['payload'],str) else item['payload']
             if data.get('automatic_release_id') == row['id']:
                 pending_jobs.setdefault(data.get('file'),[]).append(item['status'])
+    # Provider retry/backoff still occupies an admitted slot. Never bypass it.
+    outstanding = sum(any(s in {'queued', 'running', 'processing', 'retry'} for s in states)
+                      for states in pending_jobs.values())
+    dispatch_limit = max(0, MAX_DISPATCH_PER_TICK - outstanding)
     for file in row['intent']['files']:
         check_cancel()
         row = persistence.get(store, row['id'], row['owner_email'])
@@ -631,7 +653,7 @@ def advance(store, payload, job):
                                  message='The corrected copy changed after delivery was queued. Check the original delivery result, then review a new release plan for the current copy.'))
                         continue
                     if row['intent']['destination']['provider'] == 'drive':
-                        if entry.get('resume_requested') and dispatched < MAX_DISPATCH_PER_TICK:
+                        if entry.get('resume_requested') and dispatched < dispatch_limit:
                             dispatch(store, row, file, entry['artifact_digest'])
                             dispatched += 1
                             persistence.update_file(store,row['id'],row['owner_email'],file,
@@ -640,7 +662,7 @@ def advance(store, payload, job):
                             persistence.update_file(store,row['id'],row['owner_email'],file,
                                 dict(state='blocked', message='Delivery job stopped or failed. Reconnect Google Drive and resume to check its receipt safely.'))
                     else:
-                        if entry.get('resume_requested') and dispatched < MAX_DISPATCH_PER_TICK:
+                        if entry.get('resume_requested') and dispatched < dispatch_limit:
                             resume_sharepoint_job(store, row, file, entry['artifact_digest'])
                             dispatched += 1
                             persistence.update_file(store,row['id'],row['owner_email'],file,
@@ -649,7 +671,7 @@ def advance(store, payload, job):
                         else:
                             persistence.update_file(store,row['id'],row['owner_email'],file,
                                 dict(state='blocked',message='SharePoint delivery stopped. Restore access and resume the saved release to check its receipt safely.'))
-                elif row['intent']['destination']['provider'] == 'drive' and not pending_jobs.get(file) and dispatched < MAX_DISPATCH_PER_TICK:
+                elif row['intent']['destination']['provider'] == 'drive' and not pending_jobs.get(file) and dispatched < dispatch_limit:
                     # Legacy synchronous delivery has no durable worker. The queue helper
                     # retains its stage/reservation identities and only admits frozen bytes.
                     dispatch(store, row, file, entry['artifact_digest'])
@@ -683,12 +705,15 @@ def advance(store, payload, job):
             if entry.get('state') == 'publishing':
                 # A queued or possibly-dispatched request is never blindly bought again.
                 continue
-            if dispatched >= MAX_DISPATCH_PER_TICK:
+            if dispatched >= dispatch_limit:
                 continue
             with store._db.cursor() as cur:
-                store._db.execute(cur, "SELECT execution_id FROM stage_executions WHERE scan_id=%s AND stage='release' AND is_current=1 AND state IN ('accepted','queued','processing','paused')",(row['scan_id'],))
-                if store._db.fetchone(cur) and row['intent']['destination']['provider'] != 'drive':
-                    persistence.update_file(store,row['id'],row['owner_email'],file,
+                store._db.execute(cur, "SELECT j.payload FROM stage_executions e JOIN jobs j "
+                    "ON j.batch_id=e.execution_id WHERE e.scan_id=%s AND e.stage='release' "
+                    "AND e.is_current=1 AND e.state IN ('accepted','queued','processing','paused')", (row['scan_id'],))
+                active = store._db.fetchall(cur)
+                if any((json.loads(item['payload']) if isinstance(item['payload'], str) else item['payload']).get('automatic_release_id') != row['id'] for item in active):
+                    persistence.update_file(store, row['id'], row['owner_email'], file,
                         dict(state='waiting', waiting_for_delivery=True, message='Corrected copy is ready. Waiting for the current delivery to finish.'))
                     continue
             if preflight is None:
@@ -706,6 +731,9 @@ def advance(store, payload, job):
             state = 'published' if confirmed else 'publishing' if outcome.get('status') in {'queued','published'} else 'failed'
             persistence.update_file(store,row['id'],row['owner_email'],file,dict(state=state,artifact_digest=digest,requires_reconnect=False,failure_category=None,
                 message='Delivered' if state=='published' else 'Waiting for delivery receipt' if state=='publishing' else 'Delivery was not confirmed. Inspect the receipt before retrying.',receipt=outcome))
+        except DeliveryCapacityFull as exc:
+            persistence.update_file(store, row['id'], row['owner_email'], file,
+                dict(state='waiting', waiting_for_delivery=True, message=str(exc)))
         except DeliveryAlreadyAdmitted:
             continue
         except FileRemediationFinishedWithoutCopy as exc:
@@ -755,6 +783,7 @@ def advance(store, payload, job):
                 # Freeze reports and enqueue delivery in the same transaction as completion.
                 queue_release_reports(store, row['scan_id'], row['owner_email'], release['id'])
         progress = {**row['progress'], '_delivery_watch': delivery_watch(row['progress'], pending_jobs)}
+        wake_requested = progress.pop('_wake_requested', False)
         if terminal and row['intent']['destination']['provider'] == 'local' and not progress.get('_package_job_id'):
             published = {f: e['artifact_digest'] for f, e in progress.get('files', {}).items() if e.get('state') == 'published'}
             if published:
@@ -781,7 +810,7 @@ def advance(store, payload, job):
         paused = _permanent_delivery_pause(row, job_states)
         stalled = progress['_delivery_watch']['needs_attention']
         persistence.save(store,row,status='completed' if completed else 'failed' if terminal or expired else 'blocked' if stalled or paused or 'blocked' in states else 'waiting',
-                         progress=progress,schedule=not terminal and not expired and not paused,delay=STALLED_CHECK_SECONDS if stalled else 20)
+                         progress=progress,schedule=not terminal and not expired and not paused,delay=0 if wake_requested else (STALLED_CHECK_SECONDS if stalled else 20))
 
 
 def validate_publish_request(store, sid, owner, files, body):
