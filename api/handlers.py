@@ -5693,6 +5693,18 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             crop_description_plans = reviewed_plans(core.store, scan_id, filename)
         def alt_write_fn(data, values):
             fixed, written, unresolved = apply_alt_text(data, values, decorative=deco_locators)
+            # Verify the narrow description write before any separately approved crop
+            # transform or provenance stamp. A presence-only re-scan cannot see lost
+            # worksheet values, image bytes, formatting, or the wrong approved text.
+            if written and not deco_locators:
+                from office_alt_integrity import verify_alt_write
+                expected = {item['locator']: values[item['locator']] for item in written
+                            if item.get('locator') in values}
+                if not verify_alt_write(data, fixed, expected):
+                    core.store.log_decision('system', 'apply.integrity_failed', scan_id=scan_id,
+                        file=filename, rule_id='1.1.1',
+                        detail='Office description readback or package preservation failed; previous copy retained. No visual or semantic certification was granted.')
+                    return data, [], list(values)
             if crop_description_plans and written and not unresolved:
                 from word_crop_description import write_descriptions
                 from apply_office_image_of_text import resolve_media_locators

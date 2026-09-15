@@ -31,6 +31,9 @@ _SCHEMA = '''Return JSON only: {"contract_version":"document-wide-ai.v1",
 "reason":<specific reason>}]}. Cover every response-allowlisted finding exactly once. Never include advisory-only
 items or extraction diagnostics in edits or unresolved. Do not invent
 visual details not present in evidence; use unresolved when evidence is insufficient.
+For chart descriptions, preserve the association between each series, year, sign,
+value and units. Never swap legend entries or infer unreadable values. If those
+associations are unclear, use unresolved instead of inventing a trend.
 For PDF form-field names, use a visible label outside the input widget and its
 section context. Text inside a widget is an existing field value, not evidence of
 its accessible name. Internal field IDs, nearby unrelated prose and document
