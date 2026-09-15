@@ -3,6 +3,7 @@ import copy
 from hashlib import sha256
 from pathlib import Path
 import json
+import re
 import zipfile
 
 import pikepdf
@@ -68,7 +69,7 @@ def test_duplicate_facts_cannot_hide_a_conflicting_value():
 def test_column_swap_and_reading_order_interleave_are_rejected():
     row = answer(CASES[1]); row['header_row'] = ['Region', '2025', '2024']
     assert 'header_row_mismatch' in result(CASES[1], row)['issues']
-    row = answer(CASES[3]); row['reading_order'] = ['title', 'left-1', 'right-1', 'left-2', 'right-2']
+    row = answer(CASES[3]); row['reading_order'] = ['c7', 'a2', 'b4', 'e9', 'd1']
     assert 'reading_order_mismatch' in result(CASES[3], row)['issues']
 
 
@@ -94,6 +95,10 @@ def test_prepare_real_sources_no_gold_answers_in_requests(tmp_path):
         assert '-12' not in req['prompt'] and '125.50' not in req['prompt']
     with Image.open(tmp_path / 'chart-series-sign.png') as image:
         assert image.size == (1000, 560)
+    order_request = next(r for r in manifest['requests'] if r['case_id'] == 'two-column-order')
+    assert 'left' not in order_request['prompt'] and 'top-to-bottom' not in order_request['prompt']
+    assert not any(re.search(r'\b' + re.escape(block) + r'\b', order_request['prompt'])
+                   for block in CASES[3]['reading_order'])
     with zipfile.ZipFile(tmp_path / 'table-header-associations.docx') as doc:
         xml = doc.read('word/document.xml')
         assert b'125' in xml and b'2024' in xml

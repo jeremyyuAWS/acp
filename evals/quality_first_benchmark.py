@@ -31,8 +31,8 @@ CASES = (
      'task': 'Transcribe all visible text in reading order. Do not invent hidden or clipped content.',
      'decision': 'propose', 'transcript': 'Invoice 2047\nTotal: EUR 125.50\nDue: 30 September 2026'},
     {'id': 'two-column-order', 'kind': 'reading_order', 'source': 'two-column-order.pdf',
-     'task': 'Return block IDs in reading order: title, left column top-to-bottom, then right column top-to-bottom.',
-     'decision': 'propose', 'reading_order': ['title', 'left-1', 'left-2', 'right-1', 'right-2']},
+     'task': 'Inspect the document and return its visible block IDs in a coherent reading order, preserving its sections.',
+     'decision': 'propose', 'reading_order': ['c7', 'a2', 'e9', 'b4', 'd1']},
     {'id': 'ambiguous-chart', 'kind': 'uncertainty', 'source': 'ambiguous-chart.png',
      'task': 'Describe the values and series only if the source identifies them. Otherwise explain what is missing and request review.',
      'decision': 'needs_review'},
@@ -151,9 +151,9 @@ def prepare(output):
     canvas.showPage(); canvas.save()
 
     canvas = Canvas(str(output / CASES[3]['source']), pagesize=(612, 792))
-    for x, y, text in [(40, 740, 'title: Patient information'),
-                       (40, 670, 'left-1: Before your visit'), (40, 590, 'left-2: Bring your documents'),
-                       (330, 670, 'right-1: After your visit'), (330, 590, 'right-2: Arrange follow-up')]:
+    for x, y, text in [(40, 740, 'c7: Patient information'),
+                       (40, 670, 'a2: Before your visit'), (40, 590, 'e9: Bring your documents'),
+                       (330, 670, 'b4: After your visit'), (330, 590, 'd1: Arrange follow-up')]:
         canvas.drawString(x, y, text)
     canvas.showPage(); canvas.save()
 
