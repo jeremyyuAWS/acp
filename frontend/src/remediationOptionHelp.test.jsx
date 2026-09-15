@@ -13,11 +13,11 @@ it('offers separate accessible help without changing radio selection or budget',
     budgetSupported: true, onChange: changed,
   })))
   const buttons = [...container.querySelectorAll('.remediation-option-help button')]
-  expect(buttons).toHaveLength(4)
-  expect(container.querySelectorAll('.remediation-plan-option')).toHaveLength(4)
+  expect(buttons).toHaveLength(5)
+  expect(container.querySelectorAll('.remediation-plan-option')).toHaveLength(5)
   expect(buttons.map(button => button.getAttribute('aria-label'))).toEqual([
     'About review before applying', 'About apply and verify automatically',
-    'About local models', 'About local and cloud models',
+    'About local models', 'About local and cloud models', 'About quality-first cloud AI',
   ])
   for (const button of buttons) {
     expect(button.closest('label')).toBeNull()

@@ -245,6 +245,11 @@ def build_run_impact(store, scan_id, owner, policy=None, scope=None):
                or step['provider'] != catalog[i]['provider']
                for i, step in enumerate(selected['generation_chain']['steps'])):
             result['capabilities'].update(execute=False, reason='The approved generation models are unavailable in current settings.')
+    if selected.get('quality_first') and selected['ai'] > 0:
+        from ai_plan_readiness import plan_ai_readiness
+        readiness = plan_ai_readiness(selected, result['capabilities']['ai_enabled'])
+        if readiness['blocked']:
+            result['capabilities'].update(execute=False, reason='Quality-first cloud models are unavailable. Check the approved cloud connections and current pricing, or choose another model option.')
     if selected['ai'] > 1:
         result['capabilities'].update(execute=False, reason=CAPABILITIES['ai_automatic_reason'])
     if (selected.get('document_wide_model_profile') == 'native-pdf-quality.v1'

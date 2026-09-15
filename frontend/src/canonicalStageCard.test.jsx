@@ -142,7 +142,7 @@ describe('canonical stage card', () => {
       stages: [{ ...SNAPSHOT, stage: 'discover', state: 'succeeded' },
         { ...SNAPSHOT, stage: 'assess', execution_id: 'assess-1', state: 'processing' }] }
     await act(async () => { root.render(createElement(WorkflowStageStack, {
-      lineage, view: 'assess', receivedAt: Date.now(),
+      lineage, activeStage: 'assess', receivedAt: Date.now(),
     })) })
     expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(1)
     const summary = container.querySelector('[data-stage="discover"] .workflow-stage-stack__summary')
@@ -355,7 +355,7 @@ describe('unified idempotent workflow integration', () => {
     const lineage = { workflow_id: 'restore', workflow_revision: 7, stages: [
       stage('discover', 'succeeded', 3), stage('assess', 'processing', 4),
     ] }
-    await act(async () => { root.render(createElement(WorkflowStageStack, { lineage })) })
+    await act(async () => { root.render(createElement(WorkflowStageStack, { lineage, activeStage: 'assess' })) })
     expect(container.querySelectorAll('[data-current="true"]')).toHaveLength(1)
     expect(container.querySelector('[data-current="true"]').dataset.stage).toBe('assess')
     expect(container.querySelector('[data-stage="discover"] .workflow-stage-stack__body').hidden).toBe(true)
@@ -462,7 +462,7 @@ describe('unified idempotent workflow integration', () => {
     const lineage = { workflow_id: 'retained', workflow_revision: 7,
       stages: [stage('discover', 'processing', 2)] }
     await act(async () => { root.render(createElement(WorkflowStageStack, {
-      lineage, stageDetails: { discover: <Detail /> },
+      lineage, activeStage: 'discover', stageDetails: { discover: <Detail /> },
     })) })
     const summary = container.querySelector('[data-stage="discover"] .workflow-stage-stack__summary')
     const detailButton = container.querySelector('.workflow-stage-stack__live-detail button')
@@ -483,6 +483,8 @@ describe('unified idempotent workflow integration', () => {
     const render = async () => act(async () => root.render(createElement(WorkflowStageStack, { lineage })))
     await render()
     const toggle = container.querySelector('[data-stage="remediate"] .workflow-stage-stack__summary')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    await act(async () => toggle.click())
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
     await act(async () => toggle.click())
     expect(toggle.getAttribute('aria-expanded')).toBe('false')

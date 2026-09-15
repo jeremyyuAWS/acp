@@ -114,6 +114,7 @@ class _ValidatedGenerator:
         self.models = generator.models[:2]
         self.specs = generator.specs
         self.pricing_refs = generator.pricing_refs
+        self.zones = getattr(generator, 'zones', {})
 
     def generate_text(self, model, prompt):
         result = self.generator.generate_text(model, prompt)

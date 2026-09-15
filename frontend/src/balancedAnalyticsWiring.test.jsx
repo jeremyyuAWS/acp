@@ -41,7 +41,7 @@ describe('balanced Scan Analytics integration', () => {
   })
   it('keeps selected-scan data wired through the actual app entry point', () => {
     const source = readFileSync(`${import.meta.dirname}/App.jsx`, 'utf8')
-    expect(source).toContain("defaultCollapsed={['overview', 'analytics'].includes(view)}")
+    expect(source).toContain("{view !== 'overview' && <WorkflowStageStack activeTab={view}")
     expect(source).toMatch(/<AdminInsights[^>]*run=\{run\}[^>]*files=\{files\}[^>]*cap=\{cap\}[^>]*assessment=\{assessment\}/)
     const overview = readFileSync(`${import.meta.dirname}/Overview.jsx`, 'utf8')
     expect(overview).toContain('<BalancedSummary run={run} files={files}')
