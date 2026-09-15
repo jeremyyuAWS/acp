@@ -945,11 +945,11 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     # worker path; unscoped interactive calls and startup probes remain independent diagnostics.
     circuit_enabled = bool(endpoint and scan_id)
 
-    # Ollama exposes installed models through /api/tags. The primary model used this gate, but
-    # per-call overrides (notably ACP_ALT_VALIDATOR_MODEL) did not, causing a guaranteed 404 for
-    # every image. If the tags probe itself is unavailable, allow the call: absence of evidence is
-    # not evidence that the model is absent.
-    if getattr(prov, "name", "") == "ollama" and model and model != getattr(prov, "model", None):
+    # Gate the configured primary as well as per-call validator overrides. The cached
+    # tags belong to OLLAMA_BASE_URL, so do not apply them to a different primary endpoint.
+    # An unavailable probe does not establish model absence and still permits dispatch.
+    if getattr(prov, "name", "") == "ollama" and (
+            endpoint == OLLAMA_BASE_URL or (model and model != getattr(prov, "model", None))):
         tags = _tags_cached()
         if tags is not None and not _tags_have(tags, mdl):
             missing_key = (str(endpoint), str(mdl))

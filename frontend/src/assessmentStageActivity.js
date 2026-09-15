@@ -10,9 +10,11 @@ export function assessmentStageActivity(snapshot, activity, scanId) {
   const pending = (buckets.waiting || 0) + (buckets.processing || 0)
   // Preserve durable failures and cancellation; a local running callback cannot erase them.
   if (['failed', 'cancelled', 'superseded', 'integrity_failed'].includes(snapshot.state)) return null
+  const liveComplete = live?.phase === 'done' && Number.isFinite(live.completed)
+    && Number.isFinite(live.total) && live.total > 0 && live.completed >= live.total
   if (live && (live.phase !== 'done' || ['succeeded', 'processing_complete'].includes(snapshot.state))) return {
-    state: live.phase === 'done' ? 'succeeded' : 'processing',
-    label: live.phase === 'done' ? 'Complete' : live.phase === 'starting' ? 'Starting' : 'Assessing',
+    state: liveComplete ? 'succeeded' : 'processing',
+    label: liveComplete ? 'Complete' : live.phase === 'starting' ? 'Starting' : 'Assessing',
     count: `${live.completed} assessed of ${live.total} eligible documents`,
   }
   if (pending > 0 && ['succeeded', 'processing_complete'].includes(snapshot.state)) {

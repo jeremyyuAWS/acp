@@ -49,3 +49,9 @@ describe('assessment header and runner completion', () => {
     expect(assessmentStageActivity({ ...snapshot, state: 'cancelled' }, { ...activity, runId: 'scan-1' })).toBeNull()
   })
 })
+
+it('a done callback with incomplete saved results remains assessing', () => {
+  const result = assessmentStageActivity(snapshot, { runId: 'scan-1', executionId: 'assess-1', phase: 'done', completed: 16, total: 39 }, 'scan-1')
+  expect(result.state).toBe('processing')
+  expect(result.label).toBe('Assessing')
+})

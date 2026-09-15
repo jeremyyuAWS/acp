@@ -108,3 +108,10 @@ describe('outcomeChips', () => {
     expect(outcomeChips(null)).toEqual([])
   })
 })
+
+it.each(['queued', 'blocked', 'error', 'done'])('does not predict throughput or still-working status for %s', (phase) => {
+  const progress = { phase, files_found: 10, files_done: 4, elapsed: 20 }
+  expect(assessmentProgress(progress).ratePerMin).toBeNull()
+  expect(assessmentProgress(progress).etaText).toBeNull()
+  expect(assessmentLine(progress)).not.toContain('still working')
+})
