@@ -84,6 +84,25 @@ def test_exact_source_hash_mismatch_invalidates_contract():
     assert not score['valid_contract'] and saved is None
 
 
+@pytest.mark.parametrize('wrapper', ['```json\n{}\n```', '```\n{}\n```'])
+def test_complete_json_fence_scores_like_production(wrapper):
+    case = eval.synthetic_cases()[0]; req = request(case)
+    plain, _ = eval.evaluate_response(req, response(req, case), case)
+    fenced, saved = eval.evaluate_response(req, wrapper.format(response(req, case)), case)
+    assert fenced['valid_contract'] and saved
+    for field in ('useful_applied_fixes', 'semantic_errors', 'saved_integrity'):
+        assert fenced[field] == plain[field]
+
+
+def test_fence_does_not_hide_unsupported_action_or_allow_surrounding_prose():
+    case = eval.synthetic_cases()[0]; req = request(case)
+    raw = json.loads(response(req, case)); raw['edits'][0]['operation'] = 'delete_pages'
+    score, saved = eval.evaluate_response(req, '```json\n' + json.dumps(raw) + '\n```', case)
+    assert score['unsupported_requests'] == 1 and saved is None
+    score, saved = eval.evaluate_response(req, 'Here is your answer:\n' + response(req, case), case)
+    assert not score['valid_contract'] and saved is None
+
+
 def test_governance_snapshot_requires_fresh_exact_enabled_provider_binding(monkeypatch):
     from datetime import datetime, timezone, timedelta
     from types import SimpleNamespace

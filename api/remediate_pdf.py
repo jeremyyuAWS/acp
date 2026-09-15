@@ -898,6 +898,11 @@ def _pdf_figure_drafts(pdf, *, ai_enabled, scan_id, file):
             model_call_id=response.get("ai_call_id") if response else None)
         if response and response.get("model"):
             proposal["model"] = response["model"]
+        if response and response.get("review_status"):
+            for key in ("chart_review", "review_status", "approval_required", "reason_code"):
+                if key in response:
+                    proposal[key] = response[key]
+            proposal["why_review"] = response.get("evidence")
         proposal["caption_validation"] = validation
         proposal["automatic_write_blocked"] = not approved
         proposal["requires_semantic_review"] = not approved

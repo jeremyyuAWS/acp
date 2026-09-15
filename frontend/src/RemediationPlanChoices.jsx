@@ -269,7 +269,7 @@ export default function RemediationPlanChoices({step = null, answers, policy, di
             <input type="radio" name={`${id}-models`} disabled={!budgetSupported}
               checked={answered && policy.quality_first === true}
               onChange={() => onChange('ai_mode', 'quality')} />
-            <span><strong>Quality-first · cloud AI</strong><span>Use higher-capability cloud models directly, with no local model fallback.</span></span>
+            <span><strong>Quality-first · cloud AI</strong><span>Uses stronger cloud models to prioritize remediation quality. May take longer and cost more. Review is still required for uncertain fixes.</span></span>
           </label>
           <RemediationOptionHelp label="quality-first cloud AI">Uses the approved cloud quality profile and document context for supported fixes. Cloud AI receives document content. Spending limits, verification, and your approval choices still apply. May cost more and take longer; unresolved issues remain for review.</RemediationOptionHelp>
         </div>

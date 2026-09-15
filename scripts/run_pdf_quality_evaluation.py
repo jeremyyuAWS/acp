@@ -15,6 +15,7 @@ from hashlib import sha256
 from io import BytesIO
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -139,7 +140,10 @@ def evaluate_response(request, text, case):
               'correct_unresolved': 0, 'semantic_errors': 0, 'unsupported_requests': 0,
               'useful_applied_fixes': 0, 'saved_integrity': None, 'saved_sha256': None}
     try:
-        raw = json.loads(text)
+        # Production accepts one complete JSON fence. Count unsupported operations
+        # from that same envelope, not a stricter parser which rejects valid drafts.
+        fenced = re.fullmatch(r'\s*```(?:json)?[ \t]*\r?\n(.*?)\r?\n```\s*', text, re.DOTALL)
+        raw = json.loads(fenced.group(1) if fenced else text)
         result['unsupported_requests'] = sum(e.get('operation') not in {'set_pdf_field_accessible_name'}
                                              for e in raw.get('edits', []) if isinstance(e, dict))
         envelope, _ = _decode(request, text)

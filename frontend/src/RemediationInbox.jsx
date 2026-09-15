@@ -1,3 +1,4 @@
+import QualityReviewEvidence from './QualityReviewEvidence.jsx'
 import { matchesAutomaticReview, automaticReviewResponsibility } from './automaticReviewResponsibility.js'
 import { isPdfStructuralRow, pdfStructuralSummary, proposalsFor, requiresPdfSourceEditing } from './pdfStructuralProposal.js'
 import { automaticReviewQueue } from './automaticReviewQueue.js'
@@ -609,6 +610,7 @@ function DetailPane({ f, decisions, readOnly = false, automaticMode = false, pre
           </div>
         ) : (
           <>
+            <QualityReviewEvidence finding={f} editedValue={canEdit ? draftValue : undefined} />
             <div className="remediation-comparison" aria-label="Current and proposed values">
               <div><b>{currentValue.length > EXCERPT_LIMIT ? 'Current excerpt' : 'Current'}</b><span>{excerptOf(currentValue)}</span><button type="button" className="linklike remediation-copy-value" onClick={() => copyValue('current', currentValue)}>{copiedValue === 'current' ? 'Copied' : 'Copy current'}</button></div>
               <div><b>{proposedValue.length > EXCERPT_LIMIT ? 'Proposed excerpt' : 'Proposed'}</b><span>{proposedValue.length > EXCERPT_LIMIT ? excerptOf(proposedValue) : <ChangedValue from={currentValue} to={proposedValue} />}</span><button type="button" className="linklike remediation-copy-value" onClick={() => copyValue('proposed', proposedValue)}>{copiedValue === 'proposed' ? 'Copied' : 'Copy proposed'}</button></div>
@@ -634,7 +636,7 @@ function DetailPane({ f, decisions, readOnly = false, automaticMode = false, pre
                           aria-label="Edit the proposed fix" rows={2}
                           style={{ width: '100%', fontSize: 13.5, padding: '8px 10px', borderRadius: 8,
                                    border: '1px solid var(--line,#e2dce4)', fontFamily: 'inherit', resize: 'vertical' }} />
-                {edited && <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>Edited — “Save edited fix” writes your version instead of the AI’s.</p>}
+                {edited && <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>Edited — applying this fix writes your version instead of the AI’s.</p>}
               </div>
             )}
           </>

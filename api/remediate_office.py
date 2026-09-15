@@ -631,6 +631,9 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
         if automatic_write_blocked:
             p.update(automatic_write_blocked=True, reason_code=res.get("reason_code"),
                      why_review=res.get("evidence") or "The draft contradicts visible image evidence; review it individually.")
+        for key in ("chart_review", "review_status", "approval_required"):
+            if key in res:
+                p[key] = res[key]
         if agreement:
             p["agreement"] = agreement          # {verdict, second_opinion, validator_model}
         proposals.append(p)
