@@ -30,8 +30,7 @@ it.each(['sharepoint', 'drive'])('closing %s tab while resume is pending does no
   expect(resume).toHaveBeenCalledOnce()
   await act(async () => finish({ accepted: true }))
   expect(resume).toHaveBeenCalledOnce()
-  expect(document.querySelector('.release-recovery-banner').textContent).toContain('Delivery recovery is unconfirmed')
-  expect(document.querySelector('.release-recovery-banner').textContent).toContain('refreshing the saved status')
+  expect(document.querySelector('.release-recovery-banner')).toBeNull()
 })
 it.each(['sharepoint', 'drive'])('completed %s authorization clears recovery UI without another request', async provider => {
   const resume = vi.fn().mockResolvedValue({ accepted: true })

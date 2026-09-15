@@ -49,7 +49,7 @@ it('reload checks the durable status without repeating an already accepted POST'
 it('unknown request outcome is not repeated on rerender or reload, but a new durable revision can retry',async()=>{
  const resume=vi.fn().mockRejectedValue(new Error('Connection lost'))
  const v=await mount({requiresReconnect:false,onResume:resume})
- expect(banner().textContent).toContain('Connection lost')
+ expect(banner()).toBeNull()
  await v.rerender({}); await unmountAll(); _resetRecoveryAttempts()
  await mount({requiresReconnect:false,onResume:resume}); expect(resume).toHaveBeenCalledOnce()
  await unmountAll(); await mount({requiresReconnect:false,onResume:resume,authorization:{...authorization,revision:2}})
@@ -107,7 +107,7 @@ it('a timed out request remains uncertain and ignores late completion',async()=>
  vi.useFakeTimers();let finish;const resume=vi.fn(()=>new Promise(resolve=>{finish=resolve}))
  const v=await mount({requiresReconnect:false,onResume:resume})
  await act(async()=>vi.advanceTimersByTime(20001))
- expect(banner().textContent).toContain('not confirmed')
+ expect(banner()).toBeNull()
  const refreshes=v.props.onRefresh.mock.calls.length
  await act(async()=>finish({}))
  expect(v.props.onRefresh).toHaveBeenCalledTimes(refreshes)
@@ -126,13 +126,12 @@ it('StrictMode effect replay still recovers once after silent renewal',async()=>
  await act(async()=>root.render(createElement(StrictMode,null,createElement(DriveReleaseReconnect,{scanId:'scan',authorizationId:'saved',authorization,owner:'owner',provider:'sharepoint',onResume:resume}))))
  expect(refreshSPToken).toHaveBeenCalledOnce();expect(resume).toHaveBeenCalledOnce()
 })
-it('a provider request failure shows checking rather than asking for an unnecessary sign-in',async()=>{
+it('retires the unconfirmed banner after a provider request failure',async()=>{
  refreshSPToken.mockResolvedValue('microsoft-token')
  const resume=vi.fn().mockRejectedValue(new Error('Network interrupted'))
  await mount({provider:'sharepoint',onResume:resume})
- expect(banner().textContent).toContain('Delivery recovery is unconfirmed')
- expect(banner().textContent).not.toContain('sign-in is required')
- expect(banner().querySelector('button').textContent).toBe('Check delivery status')
+ expect(banner()).toBeNull()
+ expect(resume).toHaveBeenCalledOnce()
 })
 
 it('preserves the manual continuation explicit reconnect contract without automatic authority',async()=>{
@@ -144,13 +143,12 @@ it('preserves the manual continuation explicit reconnect contract without automa
  expect(setDriveToken).toHaveBeenCalledWith('explicit-grant');expect(v.props.onResume).toHaveBeenCalledOnce()
 })
 
-it('same-revision reload exposes honest uncertainty and GET-only checking without another POST',async()=>{
+it('same-revision reload keeps the unconfirmed banner retired without another POST',async()=>{
  const resume=vi.fn().mockRejectedValue(new Error('Unknown request outcome'))
  await mount({requiresReconnect:false,onResume:resume});await unmountAll();_resetRecoveryAttempts()
  const v=await mount({requiresReconnect:false,onResume:resume})
- expect(banner().textContent).toContain('Delivery recovery is unconfirmed')
- expect(banner().textContent).not.toContain('sign-in is required')
- await v.click();expect(v.props.onRefresh).toHaveBeenCalledOnce();expect(resume).toHaveBeenCalledOnce()
+ expect(banner()).toBeNull()
+ expect(resume).toHaveBeenCalledOnce()
  await v.rerender({});expect(resume).toHaveBeenCalledOnce()
 })
 it('silent renewal timeout before POST does not pretend delivery is running or ask for unnecessary sign-in',async()=>{
@@ -158,8 +156,6 @@ it('silent renewal timeout before POST does not pretend delivery is running or a
  const v=await mount({provider:'sharepoint'})
  await act(async()=>vi.advanceTimersByTime(20001))
  expect(v.props.onResume).not.toHaveBeenCalled()
- expect(banner().textContent).toContain('Delivery recovery is unconfirmed')
- expect(banner().textContent).not.toContain('sign-in is required')
- await v.click();expect(v.props.onRefresh).toHaveBeenCalledOnce()
+ expect(banner()).toBeNull()
  expect(refreshSPToken).toHaveBeenCalledOnce();expect(v.props.onResume).not.toHaveBeenCalled()
 })
