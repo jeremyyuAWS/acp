@@ -71,3 +71,12 @@ it('does not call a blocked caption independently verified', async () => {
   }]}})
   expect(container.textContent).toContain('Source meaning: not independently verified')
 })
+
+it('labels source-grounded AI approval as judgment rather than verification', async () => {
+  const {container} = await render(QualityReviewEvidence, {finding: {rule_id:'1.1.1', proposals:[{
+    proposed_value:'A brown dog beside a tree', quality_source_review:{status:'ai_reviewed'},
+  }]}})
+  expect(container.textContent).toContain('AI reviewed against the source with supported claims')
+  expect(container.textContent).toContain('not proof of semantic correctness or full accessibility')
+  expect(container.textContent).not.toContain('Source meaning: independently checked')
+})

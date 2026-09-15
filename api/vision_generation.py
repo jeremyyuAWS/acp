@@ -185,7 +185,7 @@ class _CaptionGenerator:
         return result
 
 
-def generate(prompt, image_bytes, *, clean=True, model=None):
+def generate(prompt, image_bytes, *, clean=True, model=None, purpose="draft"):
     ctx = managed_context()
     def deferred(reason, *, admission_started=None):
         result = {'deferred': True, 'ok': False, 'reason': reason, 'text': None}
@@ -250,7 +250,7 @@ def generate(prompt, image_bytes, *, clean=True, model=None):
             return deferred('assessment_vision_budget_exhausted', admission_started=started)
         # Measure semaphore admission separately from provider/validation time.
         measured_queue_ms = round(max(0, time.monotonic() - started) * 1000, 3)
-        result = managed_generate_attempts(bounded_prompt, ctx, generator, tier_indices=tiers, image_prefix=image_prefix)
+        result = managed_generate_attempts(bounded_prompt, ctx, generator, purpose=purpose, tier_indices=tiers, image_prefix=image_prefix)
     finally:
         _CLOUD_VISION_GATE.release()
     if result.get('deferred'):

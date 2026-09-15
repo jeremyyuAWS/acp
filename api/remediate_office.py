@@ -544,7 +544,8 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
     if not res:
         return None
     automatic_write_blocked = res.get("automatic_write_blocked") is True
-    if res.get("grounded") and not automatic_write_blocked:
+    source_policy_review = bool(res.get("quality_source_review"))
+    if res.get("grounded") and not automatic_write_blocked and not source_policy_review:
         # An image of text is transcribed, not described — no model ran, so the provenance must
         # not claim one (it used to interpolate res['model'], which is None on that path and
         # rendered as "AI vision model (None)").
@@ -572,7 +573,7 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
     # still decides whether the criterion actually cleared.
     try:
         import core as _core
-        if not automatic_write_blocked and _core.store.get_auto_apply_validated():
+        if not automatic_write_blocked and not source_policy_review and _core.store.get_auto_apply_validated():
             v = _ai.validate_alt_text(img, res["alt"], filename=context_file,
                                       scan_id=scan_id, file=context_file)
             if v and v.get("verdict") == "consistent":
@@ -598,7 +599,7 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
     # second model agrees — automatic transparency, no reviewer click. Real model agreement,
     # never a fabricated score (ADR 0016). Best-effort: no validator / a failure → no badge.
     agreement = None
-    if not automatic_write_blocked and getattr(_ai, "_ALT_VALIDATOR_MODEL", ""):
+    if not automatic_write_blocked and not source_policy_review and getattr(_ai, "_ALT_VALIDATOR_MODEL", ""):
         try:
             v = _ai.validate_alt_text(img, res["alt"], filename=context_file,
                                       scan_id=scan_id, file=context_file)
@@ -633,7 +634,7 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
         if automatic_write_blocked:
             p.update(automatic_write_blocked=True, reason_code=res.get("reason_code"),
                      why_review=res.get("evidence") or "The draft contradicts visible image evidence; review it individually.")
-        for key in ("chart_review", "review_status", "approval_required"):
+        for key in ("chart_review", "review_status", "approval_required", "caption_validation", "quality_source_review"):
             if key in res:
                 p[key] = res[key]
         if agreement:
@@ -1377,6 +1378,10 @@ def alt_proposals_for_office(doc_bytes: bytes, ext: str, *, ai_enabled: bool = T
                     'proposed_value': fix['value'], 'rationale': 'Recovered image description; save and verify through the existing review workflow.',
                     'source': fix.get('source'), 'thumb': fix.get('thumb'),
                     'model': fix.get('model'), 'model_call_id': fix.get('model_call_id')})
+    import hashlib
+    for proposal in proposals:
+        if proposal.get('quality_source_review'):
+            proposal['source_sha256'] = hashlib.sha256(doc_bytes).hexdigest()
     return proposals, evidence
 
 

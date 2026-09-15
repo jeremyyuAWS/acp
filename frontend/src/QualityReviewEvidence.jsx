@@ -12,6 +12,7 @@ export default function QualityReviewEvidence({ finding, editedValue }) {
     {proposals.map((proposal, index) => {
       const needsReview = proposal.review_status === 'needs_review' || proposal.chart_review?.status === 'needs_review'
       const imageFinding = !!proposal.thumb || /image|chart|figure|picture/i.test(proposal.kind || '') || /1[.]1[.]1/.test(finding.rule_id || finding.ruleId || '')
+      const aiSourceReviewed = proposal.quality_source_review?.status === 'ai_reviewed' && !needsReview && !proposal.automatic_write_blocked
       const sourceValidated = proposal.caption_validation?.approved === true && proposal.caption_validation?.status === 'validated' && !needsReview && !proposal.automatic_write_blocked
       const disagreement = proposal.agreement && proposal.agreement.verdict !== 'consistent'
       const value = index === 0 && editedValue != null ? editedValue : proposal.proposed_value
@@ -27,7 +28,7 @@ export default function QualityReviewEvidence({ finding, editedValue }) {
           {typeof proposal.subject_text === 'string' && proposal.subject_text && <p>{proposal.subject_text}</p>}
         </div>
         <div><strong>Proposed fix {proposals.length > 1 ? index + 1 : ''}</strong>
-          <p className="muted">{sourceValidated ? 'Source meaning: independently checked against exact image pixels. Saved document verification is tracked separately.' : 'Source meaning: not independently verified. Model agreement or saved text alone does not establish accuracy.'}</p>
+          <p className="muted">{aiSourceReviewed ? 'Source meaning: AI reviewed against the source with supported claims. This is an approval judgment, not proof of semantic correctness or full accessibility.' : sourceValidated ? 'Source meaning: independently checked against exact image pixels. Saved document verification is tracked separately.' : 'Source meaning: not independently verified. Model agreement or saved text alone does not establish accuracy.'}</p>
           <p>{pdfStructuralSummary(proposal) || (typeof value === 'string' && value ? value : 'No proposed value recorded.')}</p>
           {needsReview && <p className="quality-review-notice"><strong>Needs review:</strong> {typeof proposal.why_review === 'string' && proposal.why_review ? proposal.why_review : 'Check the chart’s series, years, signs, values and units before approving. These relationships have not been verified.'}</p>}
           {disagreement && <p className="quality-review-notice"><strong>Needs review:</strong> A second model did not confirm this description.{typeof proposal.agreement.second_opinion === 'string' && proposal.agreement.second_opinion ? ` Second opinion: ${proposal.agreement.second_opinion}` : ''}</p>}

@@ -114,6 +114,39 @@ def _quality_image_proposals(proposals, context, manifest, data):
                 thumb = thumb_b64(image, max_edge=480)
                 if thumb:
                     proposal['thumb'] = thumb
+        from quality_source_review import enabled as source_review_enabled, review_proposals
+        if source_review_enabled(context.policy):
+            from quality_source_review import pdf_image, review_image
+            pdf_association = pdf_image(data, proposal.get('locator', '')) if context.file.lower().endswith('.pdf') else None
+            if pdf_association:
+                proposal.update(kind='pdf-figure-alt', figure_image_sha256=pdf_association['image_sha256'],
+                                figure_association_method=pdf_association['method'],
+                                caption_validation=review_image(proposal.get('proposed_value', ''), pdf_association['image_bytes'])['validation'])
+                exact_thumb = thumb_b64(pdf_association['image_bytes'], max_edge=480)
+                if exact_thumb:
+                    proposal['thumb'] = exact_thumb
+            source_review = review_proposals(data, context.file, '1.1.1', [proposal],
+                                             manifest.source_sha256)
+            proposal['quality_source_review'] = source_review
+            source_image = None
+            if not source_review['passed']:
+                from quality_source_review import office_image, cloud_review
+                source_image = office_image(data, proposal.get('locator', '')) if not context.file.lower().endswith('.pdf') else pdf_association['image_bytes'] if pdf_association else None
+                if source_image:
+                    source_review['cloud_review'] = cloud_review(proposal.get('proposed_value', ''),
+                                                               source_image, proposal.get('model'))
+            from quality_source_review import supported_review
+            assisted = (not source_review['passed'] and source_image is not None
+                        and supported_review(proposal.get('proposed_value', ''), source_image, source_review.get('cloud_review') or {})
+                        and all(c['validation']['evidence']['method'] != 'exact_flat_raster' for c in source_review['checks']))
+            if assisted and not proposal.get('automatic_write_blocked'):
+                source_review.update(passed=True, status='ai_reviewed', semantic_certification=False)
+            if source_review['passed']:
+                proposal['requires_semantic_review'] = False
+            elif not proposal.get('automatic_write_blocked'):
+                proposal.update(automatic_write_blocked=True, approval_required=True,
+                    review_status='needs_review', reason_code='quality_source_meaning_unverified',
+                    why_review='Automatic source review could not independently verify this image meaning. The draft remains unapplied; OCR and model agreement are insufficient.')
         enriched.append(proposal)
     return enriched
 
@@ -276,4 +309,17 @@ def process_file(store, context, *, _artifact=None):
                 continue
             if sc == "1.1.1":
                 proposals = _quality_image_proposals(proposals, context, manifest, data)
+            # Source review may itself dispatch a metered cloud call. Fence again
+            # after it returns, not just after the original document generation.
+            current = store.get_stage_execution(context.run_id, owner=context.owner_id) or {}
+            if (current.get('owner_email') != context.owner_id or current.get('scan_id') != sid
+                    or current.get('stage') != 'remediate' or not current.get('is_current')
+                    or current.get('cancel_requested_at')
+                    or current.get('state') not in {'accepted','queued','processing'}
+                    or current.get('input_snapshot_id') != revision
+                    or store.remediation_source_revision(sid) != revision
+                    or (store.get_file_record(sid,filename) or {}).get('corrected_sha256') != digest):
+                _record(store, context, 'deferred', {'request_id':request_id,
+                    'reason':'The authorized run or corrected artifact changed during automatic source review.'})
+                return
             store.enqueue_proposals(sid, filename, sc, proposals, validated=False, finding_count=count)
