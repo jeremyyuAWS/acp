@@ -22,6 +22,9 @@ export default function DriveReleaseReconnect({ scanId, authorizationId, authori
   })
   if (!authorization && scanId && authorizationId && typeof onResume === 'function' && requiresReconnect)
     return <ManualReleaseReconnect {...{ scanId, authorizationId, onResume, readOnly, microsoft }} />
+  // Retired the unconfirmed top-of-page notice; keep recovery running and the
+  // banner implementation available for explicit sign-in and active recovery.
+  if (recovery.status === 'unconfirmed') return null
   return <ReleaseRecoveryBanner status={enabled ? recovery.status : 'idle'}
     providerName={microsoft ? 'SharePoint' : 'Google Drive'} error={recovery.error}
     onReconnect={recovery.reconnect} onCheckStatus={recovery.checkStatus} disabled={readOnly} />
