@@ -162,5 +162,7 @@ _verify_remediation_scaler
         assert 'live scale differs' in result.stderr
         return
     patch = json.loads(output.read_text())
-    assert patch == helper.worker_patch(live['properties']['template'], 'new:image', 600, 540, helper.remediation_query())
+    expected = helper.worker_patch(live['properties']['template'], 'new:image', 600, 540, helper.remediation_query())
+    expected['properties']['template']['containers'][0]['env'].append({'name': 'ACP_DEDICATED_RELEASE_WORKERS', 'value': '0'})
+    assert patch == expected
     assert list(tmp_path.glob('remediation-*')) == []

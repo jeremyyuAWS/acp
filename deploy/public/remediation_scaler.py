@@ -10,13 +10,14 @@ import ast
 from copy import deepcopy
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def remediation_query(root=ROOT):
+def remediation_query(root=ROOT, dedicated=False):
     # Deploy runners intentionally do not install the application's Python stack.
     # Read the authoritative literal without importing core or starting its store.
     tree = ast.parse((root / 'api/core.py').read_text())
@@ -30,7 +31,13 @@ def remediation_query(root=ROOT):
     module_spec = importlib.util.spec_from_file_location('target_queue_scaler', root / 'api/queue_scaler.py')
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
-    return module.depth_query(values[0])
+    kinds = values[0]
+    if dedicated:
+        release = next(ast.literal_eval(node.value) for node in tree.body
+                       if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and
+                       t.id == 'RELEASE_LANE_JOB_TYPES' for t in node.targets))
+        kinds = tuple(kind for kind in kinds if kind not in release)
+    return module.depth_query(kinds)
 
 
 def worker_patch(template, image, grace, drain, query):
@@ -72,7 +79,12 @@ def worker_patch(template, image, grace, drain, query):
 def main():
     source, dest, image, grace, drain = sys.argv[1:]
     data = json.loads(Path(source).read_text())
-    patch = worker_patch(data['properties']['template'], image, grace, drain, remediation_query(Path.cwd()))
+    dedicated = os.environ.get('ACP_DEDICATED_RELEASE_WORKERS') == '1'
+    patch = worker_patch(data['properties']['template'], image, grace, drain,
+                         remediation_query(Path.cwd(), dedicated=dedicated))
+    env = patch['properties']['template']['containers'][0].setdefault('env', [])
+    env[:] = [entry for entry in env if entry.get('name') != 'ACP_DEDICATED_RELEASE_WORKERS']
+    env.append({'name': 'ACP_DEDICATED_RELEASE_WORKERS', 'value': '1' if dedicated else '0'})
     Path(dest).write_text(json.dumps(patch))
 
 

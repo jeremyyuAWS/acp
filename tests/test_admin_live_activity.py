@@ -481,6 +481,7 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
         "worker_slots": 7, "available_slots": 3, "utilization_pct": None,
         "pressure": "busy", "worker_tier_alive": True,
         "scheduling_policy": "tenant_fair_least_loaded",
+        "dedicated_release_workers": False,
         "worker_roles": {
             "discovery": {"alive": True, "pool_size": 3, "age_s": 1, "version": "v10"},
             "assess": {"alive": True, "pool_size": 2, "age_s": 2, "version": "v10"},

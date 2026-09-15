@@ -935,3 +935,18 @@ describe('role-specific infrastructure hardware', () => {
     }
   })
 })
+
+describe('dedicated Release workers', () => {
+  it('keeps release jobs and graph capacity separate after cutover', () => {
+    const summary = { dedicated_release_workers: true,
+      worker_roles: { remediate: { alive: true, pool_size: 10 }, release: { alive: true, pool_size: 2 } },
+      by_stage: { remediate: { running: 2 }, release: { running: 1 } } }
+    const services = workerServiceRows(summary)
+    expect(services.find(s => s.role === 'remediate').jobs_in_flight).toBe(2)
+    expect(services.find(s => s.role === 'release').jobs_in_flight).toBe(1)
+    const graph = buildTrafficGraph({ summary, runs: [] })
+    expect(graph.nodes.find(n => n.id === 'stage:release').data.label).toBe('Release workers')
+    expect(graph.nodes.find(n => n.id === 'stage:remediate').data.label).toBe('Remediate workers')
+    expect(graph.edges.some(e => e.target === 'stage:release')).toBe(true)
+  })
+})

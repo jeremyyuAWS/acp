@@ -11983,7 +11983,7 @@ class Store:
     # set). Enumerated rather than discovered by scanning app_settings for a key prefix: the set
     # is closed and small, and a prefix scan would silently start reporting any future key that
     # happened to share the namespace.
-    WORKER_ROLES = ("mixed", "discovery", "assess", "remediate", "processing")
+    WORKER_ROLES = ("mixed", "discovery", "assess", "remediate", "release", "processing")
 
     def worker_roles_status(self, window_s: int = 120) -> dict:
         """Per-ROLE heartbeat, keyed by role. The shared key cannot answer this.
@@ -16609,6 +16609,20 @@ class Store:
             self._db.execute(cur, "SELECT status, COUNT(*) AS n FROM jobs" + scope + " GROUP BY status",
                              (owner,) if owner else ())
             return {r["status"]: r["n"] for r in self._db.fetchall(cur)}
+
+    def worker_lane_queue(self, job_types) -> dict:
+        """Claimable count and oldest queued timestamp without document/user payloads."""
+        kinds = tuple(job_types)
+        if not kinds:
+            return {"claimable": 0, "oldest_created_at": None}
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM jobs "
+                "WHERE status='queued' AND run_after<=%s AND attempts < max_attempts "
+                "AND type IN (" + ",".join(["%s"] * len(kinds)) + ")",
+                (self._now(), *kinds))
+            row = self._db.fetchone(cur) or {}
+            return {"claimable": int(row.get("n") or 0), "oldest_created_at": row.get("oldest")}
 
     def running_jobs_by_type(self) -> dict[str, int]:
         """Global durable running rows grouped by bounded job type; never reads payloads."""

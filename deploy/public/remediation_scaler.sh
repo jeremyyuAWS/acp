@@ -18,7 +18,7 @@ _update_lane_worker() {
   if [ "$app" != "$REMEDIATE_WORKER" ]; then
     _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$app" --image "$IMG" \
       --termination-grace-period "$WORKER_TERMINATION_GRACE_SECONDS" \
-      --set-env-vars "ACP_SHUTDOWN_DRAIN_SECONDS=$WORKER_DRAIN_SECONDS" --no-wait -o none
+      --set-env-vars "ACP_SHUTDOWN_DRAIN_SECONDS=$WORKER_DRAIN_SECONDS" "ACP_DEDICATED_RELEASE_WORKERS=${DEDICATED_RELEASE:-0}" --no-wait -o none
     return
   fi
   # One PATCH preserves the full scale configuration and worker settings.

@@ -631,6 +631,8 @@ def readyz():
         capacity_state = "unavailable"
 
     degraded: list[str] = []
+    if core.dedicated_release_enabled() and not (role_status.get("release") or {}).get("alive"):
+        degraded.append("release_worker_unavailable")
     if not can_run_scans:
         degraded.append("no_workers" if workers["ever_seen"] else "worker_tier_never_started")
     pdf = pdf_engine_status()
@@ -1959,10 +1961,18 @@ def _admin_activity_snapshot() -> dict:
         elif role == "assess":
             jobs = sum(running_by_type.get(kind, 0) for kind in core.ASSESS_LANE_JOB_TYPES)
         elif role == "remediate":
-            jobs = sum(running_by_type.get(kind, 0) for kind in core.REMEDIATE_LANE_JOB_TYPES)
+            jobs = sum(running_by_type.get(kind, 0) for kind in core.remediation_job_types())
+        elif role == "release":
+            jobs = sum(running_by_type.get(kind, 0) for kind in core.RELEASE_LANE_JOB_TYPES)
         else:
             jobs = sum(running_by_type.values())
         row["jobs_in_flight"] = jobs
+        if role == "release":
+            try:
+                row["queue"] = core.store.worker_lane_queue(core.RELEASE_LANE_JOB_TYPES)
+                row["queue"]["available"] = True
+            except Exception:
+                row["queue"] = {"available": False, "claimable": None, "oldest_created_at": None}
         reported_busy = row["busy_slots"]
         row["reported_busy_slots"] = reported_busy
         row["busy_slots"] = min(row["worker_slots"], reported_busy)
@@ -2091,6 +2101,7 @@ def _admin_activity_snapshot() -> dict:
             "scheduling_policy": "tenant_fair_least_loaded",
             "worker_tier_alive": bool(wt.get("alive")),
             "worker_roles": worker_roles,
+            "dedicated_release_workers": core.dedicated_release_enabled(),
             "worker_capacity_by_role": per_role,
             "by_stage": by_stage,
             "active_workflows": sum(1 for row in workflows if row["status"] != "completed"),
