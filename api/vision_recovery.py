@@ -240,6 +240,31 @@ def _validate(store, payload):
     return parent, durable
 
 
+def usable_draft(proposal):
+    """A retained draft, not semantic certification or permission to apply."""
+    value = proposal.get('proposed_value')
+    return (isinstance(value, str) and bool(value.strip())
+            and not proposal.get('automatic_write_blocked')
+            and not proposal.get('is_template')
+            and proposal.get('review_status') != 'needs_review')
+
+
+def merge_recovered(prior, proposals):
+    # Never replace a usable caption just because a neighboring image failed.
+    # Duplicate generated locators are ambiguous and do not replace any draft.
+    from collections import Counter
+    counts = Counter(p.get('locator') for p in proposals)
+    replacements = {p['locator']: p for p in proposals
+                    if p.get('locator') and counts[p['locator']] == 1
+                    and isinstance(p.get('proposed_value'), str) and p['proposed_value'].strip()}
+    merged = []
+    for proposal in prior:
+        replacement = replacements.pop(proposal.get('locator'), None)
+        merged.append(proposal if usable_draft(proposal) or replacement is None else replacement)
+    merged.extend(replacements.values())
+    return merged
+
+
 def process(store, payload):
     import blob
     import ai
@@ -273,13 +298,15 @@ def process(store, payload):
                 resumed = {k: v for k, v in payload.items() if k not in {'waiting_spending', 'wait_check'}}
                 _enqueue(store, resumed)
                 return  # Paid generation uses the normal deterministic retry job.
+            prior = json.loads(payload['proposals_before'] or '[]')
+            retained = {p['locator'] for p in prior if p.get('locator') and usable_draft(p)}
             with ai.assessment_vision_budget(60), capture() as misses:
                 if file.lower().endswith('.pdf'):
                     from remediate_pdf import alt_proposals_for_pdf
-                    proposals = alt_proposals_for_pdf(data, scan_id=sid, context_file=file)
+                    proposals = alt_proposals_for_pdf(data, scan_id=sid, context_file=file, skip_locators=retained)
                 else:
                     proposals, _ = alt_proposals_for_office(data, file.rsplit('.', 1)[-1],
-                        scan_id=sid, context_file=file, include_grounded=True)
+                        scan_id=sid, context_file=file, include_grounded=True, skip_locators=retained)
             blocked = _recovery_block(context, misses, check_admission=False)
             if blocked:
                 raise RecoveryBlocked(blocked)
@@ -297,10 +324,7 @@ def process(store, payload):
                     raise ValueError('The exact saved PDF changed while vision was recovering; drafts remain unresolved.')
             # Preserve non-image proposals and unresolved instances. Never silently
             # shrink the criterion's finding population to the recovered subset.
-            prior = json.loads(payload['proposals_before'] or '[]')
-            by_locator = {p.get('locator'): p for p in proposals if p.get('proposed_value')}
-            merged = [by_locator.pop(p.get('locator'), p) for p in prior]
-            merged.extend(by_locator.values())
+            merged = merge_recovered(prior, proposals)
             with store.transaction():
                 from store import _PgAdapter
                 if isinstance(store._db, _PgAdapter):

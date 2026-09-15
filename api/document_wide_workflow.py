@@ -236,7 +236,6 @@ def process_file(store, context, *, _artifact=None):
                   'rejected': [{'edit_id': e.edit_id, 'reason': e.reason} for e in validation.rejected_edits],
                   'extraction_issues': [{'kind': e.kind, 'detail': e.detail, 'finding_ids': list(e.related_finding_ids)} for e in manifest.extraction_issues]}
         _record(store, context, 'generated', result)
-    canonical_rows = store.list_finding_dispositions(sid, context.run_id)
     with store.transaction():
         # A provider call can outlive cancellation or a replacement run. Re-check
         # the accepted execution at the persistence boundary, including cached replies.
@@ -254,13 +253,24 @@ def process_file(store, context, *, _artifact=None):
             _record(store, context, 'deferred', {'request_id': request_id, 'reason': 'The assessment or corrected artifact changed during generation.'})
             return
         rows = store.list_hitl_queue(scan_id=sid, owner=context.owner_id)
+        canonical_rows = store.list_finding_dispositions(sid, context.run_id)
+        remaining = {r['finding_id'] for r in canonical_rows
+                     if r.get('file') == filename and r.get('disposition') not in
+                     {'resolved_verified', 'excluded_by_policy', 'superseded_by_reassessment'}}
         for sc, proposals in result['proposals'].items():
             existing = next((r for r in rows if r.get('file') == filename and r.get('rule_id') == sc), None)
             if existing and (existing.get('status') != 'pending' or existing.get('applied') or
                              (sc == '1.1.1' and exact_ids)):
                 _record(store, context, 'deferred', {'request_id': request_id, 'reason': 'An existing review decision was preserved.', 'sc': sc})
                 continue
-            count = len({r['finding_id'] for r in canonical_rows if r.get('file') == filename and r.get('rule_id') == sc})
+            proposals = [p for p in proposals if p.get('finding_ids')
+                         and set(p['finding_ids']) <= remaining]
+            if not proposals:
+                _record(store, context, 'deferred', {'request_id': request_id,
+                    'reason': 'No proposed targets remain unresolved in the current run.', 'sc': sc})
+                continue
+            count = len({r['finding_id'] for r in canonical_rows if r.get('file') == filename
+                         and r.get('rule_id') == sc and r['finding_id'] in remaining})
             if not count:
                 _record(store, context, 'deferred', {'request_id': request_id, 'reason': 'Canonical finding count unavailable.', 'sc': sc})
                 continue

@@ -54,3 +54,20 @@ describe('Source comparison', () => {
     expect(onDecide).toHaveBeenCalledWith(expect.objectContaining({ id: 4 }), expect.objectContaining({ state: 'accepted', value: 'Revenue decreased in 2024' }))
   })
 })
+
+it('distinguishes independently checked pixels from saved document verification', async () => {
+  const {container} = await render(QualityReviewEvidence, {finding: {rule_id: '1.1.1', proposals: [{
+    locator: 'pdf:fig:0:0', proposed_value: 'A blue circle',
+    caption_validation: {approved: true, status: 'validated'},
+  }]}})
+  expect(container.textContent).toContain('Source meaning: independently checked')
+  expect(container.textContent).toContain('Saved document verification is tracked separately')
+})
+
+it('does not call a blocked caption independently verified', async () => {
+  const {container} = await render(QualityReviewEvidence, {finding: {rule_id: '1.1.1', proposals: [{
+    locator: 'pdf:fig:0:0', proposed_value: 'Chart', automatic_write_blocked: true,
+    caption_validation: {approved: true, status: 'validated'},
+  }]}})
+  expect(container.textContent).toContain('Source meaning: not independently verified')
+})

@@ -320,7 +320,7 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                   applied_fixes: list | None = None,
                   proposals: list | None = None,
                   evidence: list | None = None,
-                  guidance: str = "") -> tuple[str, list[tuple[str, str]], int]:
+                  guidance: str = "", skip_locators=()) -> tuple[str, list[tuple[str, str]], int]:
     """Add descr= to every <tag …> lacking one, from a faithful source or (when
     vision_enabled) a genuine vision description of the image bytes.
 
@@ -450,7 +450,7 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
             if src is None:
                 src = _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name,
                                   vision_enabled, context_file, caption, scan_id, vision_budget,
-                                  applied_fixes, proposals, guidance=guidance)
+                                  applied_fixes, proposals, guidance=guidance, skip_locators=skip_locators)
             # xlsx chart with no vision draft (no GPU / no key / model down): compose a keyless draft
             # from the sheet's OWN adjacent data table — the numbers a chart plots live in cells right
             # beside it. Offered as a PROPOSAL so the reviewer confirms it against the visible chart;
@@ -499,7 +499,7 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
 
 def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_enabled,
                 context_file, caption, scan_id, vision_budget, applied_fixes=None,
-                proposals=None, *, guidance: str = "") -> tuple[str, str] | None:
+                proposals=None, *, guidance: str = "", skip_locators=()) -> tuple[str, str] | None:
     """Structured, OCR-anchored alt text for an unlabelled image from the local vision model.
 
     Finds this drawing's r:embed (the blip follows the docPr/cNvPr within the same
@@ -522,6 +522,8 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
     if not found:
         return None
     rid, img = found
+    if f"{part_name}#{rid}" in skip_locators:
+        return None
     # Degenerate images (1x1 spacers etc.) have nothing for a vision model to describe. The
     # floor lives here rather than in the lookup, because the decorative heuristic wants them.
     if len(img) < _MIN_IMG_BYTES:
@@ -1310,7 +1312,7 @@ def _remediate_xlsx_structure(entries: dict, diffs=None, in_scope=None) -> list[
 
 def alt_proposals_for_office(doc_bytes: bytes, ext: str, *, ai_enabled: bool = True,
                              scan_id: str | None = None, context_file: str = "",
-                             guidance: str = "", include_grounded: bool = False) -> tuple[list, list]:
+                             guidance: str = "", include_grounded: bool = False, skip_locators=()) -> tuple[list, list]:
     """Assess-time WCAG 1.1.1: enumerate every unlabelled image and return
     (proposals, evidence) WITHOUT writing the file — so the review card can show a per-image
     thumbnail and, when a vision model is reachable, a PRE-FILLED AI description for each
@@ -1363,7 +1365,7 @@ def alt_proposals_for_office(doc_bytes: bytes, ext: str, *, ai_enabled: bool = T
                               context_file=context_file or name, scan_id=scan_id,
                               vision_budget=vision_budget, applied_fixes=_throwaway_fixes,
                               proposals=proposals, evidence=evidence,
-                              guidance=guidance)  # rewritten XML discarded
+                              guidance=guidance, skip_locators=skip_locators)  # rewritten XML discarded
             except Exception:
                 continue
     if include_grounded:
