@@ -8,7 +8,7 @@ it('offers only application and local/cloud model choices, with no input or spen
   const {root,container} = createTestRoot(), changed = vi.fn()
   await act(async () => root.render(createElement(Choices,{policy:{rule_based:2,ai:1,ai_zone:'local'},budgetSupported:true,onChange:changed})))
   expect([...container.querySelectorAll('legend')].map(n=>n.textContent)).toEqual(['1. Which changes may ACP apply?','2. Which models may ACP use?'])
-  expect(container.querySelectorAll('input[type=radio]')).toHaveLength(4)
+  expect(container.querySelectorAll('input[type=radio]')).toHaveLength(5)
   expect(container.querySelector('input[type=number]')).toBeNull()
   expect(container.textContent).not.toContain('How should AI review')
   expect(container.textContent).not.toContain('What should Cloud AI receive')

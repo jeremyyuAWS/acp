@@ -317,6 +317,8 @@ def managed_generate_attempts(prompt, ctx, generator, *, purpose='draft',
     from ai_generation_chain import normalize_chain, STEP_IDS, ELIGIBLE
     if type(image_prefix) is not bool:
         raise ValueError('explicit image prefix mode required')
+    if ctx.policy.get('quality_first') and any(getattr(generator, 'zones', {}).get(model.name) != 'cloud' for model in generator.models):
+        return defer_managed('quality_first_cloud_endpoint_required')
     chain = getattr(ctx, 'policy', {}).get('generation_chain')
     if chain is not None:
         try:
@@ -592,6 +594,10 @@ def _history_attempt(row):
 
 
 def configured_generator() -> StrictTextGenerator:
+    ctx = managed_context()
+    if ctx is not None and ctx.policy.get('quality_first'):
+        from quality_first import configured_quality_generator
+        return configured_quality_generator()
     raw = os.environ.get('ACP_BOUNDED_TEXT_MODELS_JSON')
     if raw is None and os.environ.get('ACP_BOUNDED_TEXT_PROFILE'):
         from ai_model_profiles import model_config

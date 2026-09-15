@@ -256,13 +256,22 @@ export default function RemediationPlanChoices({step = null, answers, policy, di
           <RemediationOptionHelp label="local models">AI uses the configured self-hosted service. Cloud models and cloud fallbacks are off. Unsupported work remains in the follow-up checklist.</RemediationOptionHelp>
         </div>
         <div className="remediation-plan-option">
-          <label className={answered && policy.ai > 0 && policy.ai_zone !== 'local' ? 'is-selected' : ''}>
+          <label className={answered && policy.ai > 0 && policy.ai_zone !== 'local' && !policy.quality_first ? 'is-selected' : ''}>
             <input type="radio" name={`${id}-models`} disabled={!budgetSupported}
-              checked={answered && policy.ai > 0 && policy.ai_zone !== 'local'}
+              checked={answered && policy.ai > 0 && policy.ai_zone !== 'local' && !policy.quality_first}
               onChange={() => onChange('ai_mode', 'any')} />
             <span><strong>Local + cloud models</strong><span>Let ACP use cloud AI when it helps produce a better fix.</span></span>
           </label>
           <RemediationOptionHelp label="local and cloud models">ACP selects the document context, supported images, or full supported file needed for the task, and uses configured models and fallbacks. Your application and verification choices still apply.</RemediationOptionHelp>
+        </div>
+        <div className="remediation-plan-option">
+          <label className={answered && policy.quality_first ? 'is-selected' : ''}>
+            <input type="radio" name={`${id}-models`} disabled={!budgetSupported}
+              checked={answered && policy.quality_first === true}
+              onChange={() => onChange('ai_mode', 'quality')} />
+            <span><strong>Quality-first · cloud AI</strong><span>Use higher-capability cloud models directly, with no local model fallback.</span></span>
+          </label>
+          <RemediationOptionHelp label="quality-first cloud AI">Uses the approved cloud quality profile and document context for supported fixes. Cloud AI receives document content. Spending limits, verification, and your approval choices still apply. May cost more and take longer; unresolved issues remain for review.</RemediationOptionHelp>
         </div>
       </div>
       <p>ACP chooses how to review each document. Cloud AI may receive document content, images, or the full supported file. Selecting models previews the plan; starting remediation begins processing.</p>

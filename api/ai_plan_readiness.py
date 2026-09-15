@@ -6,6 +6,13 @@ def plan_ai_readiness(policy, ai_enabled=True):
         return {'state': 'not_required', 'blocked': False}
     if not ai_enabled:
         return {'state': 'ai_disabled', 'blocked': True}
+    if policy.get('quality_first'):
+        try:
+            from quality_first import configured_quality_generator
+            configured_quality_generator()
+        except Exception:
+            return {'state': 'quality_first_cloud_unavailable', 'blocked': True}
+        return {'state': 'quality_first_cloud_ready', 'blocked': False}
     if policy.get('ai_zone') != 'local':
         return {'state': 'governed_cloud', 'blocked': False}
     import ai

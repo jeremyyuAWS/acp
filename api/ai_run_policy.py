@@ -73,6 +73,8 @@ def normalize_run_policy(snapshot):
     if not isinstance(snapshot, dict):
         raise BudgetError("invalid remediation policy snapshot")
     if "ai_budget_usd" not in snapshot:
+        if snapshot.get('quality_first'):
+            raise BudgetError('Quality-first requires a managed spending limit')
         if 'cloud_input_strategy' in snapshot:
             raise BudgetError('Automatic cloud input requires a frozen run spending limit')
         if "document_wide_model_profile" in snapshot:
@@ -103,6 +105,12 @@ def normalize_run_policy(snapshot):
                 or any(key in snapshot for key in ('document_wide_input_mode', 'document_wide_model_profile'))):
             raise BudgetError('Invalid automatic cloud input snapshot')
         result['cloud_input_strategy'] = 'automatic'
+    if 'quality_first' in snapshot:
+        from quality_first import normalize_quality_first
+        try:
+            result['quality_first'] = normalize_quality_first(snapshot)
+        except ValueError as exc:
+            raise BudgetError(str(exc)) from exc
     if 'ai_zone' in snapshot:
         result['ai_zone'] = _zone(snapshot['ai_zone'])
     if 'document_wide_ai' in snapshot:

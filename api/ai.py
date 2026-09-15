@@ -922,6 +922,8 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
                 text.vision_result = result
                 return text
             return _vision_failed(result.get('reason') or 'vision_generation_failed')
+    if _run is not None and getattr(_run, 'policy', {}).get('quality_first'):
+        return _vision_failed('quality_first_cloud_vision_unavailable')
     import time as _t
     _t0 = _t.monotonic()
     # The transport goes through the provider seam (ADR 0019 §1): today that is always the local

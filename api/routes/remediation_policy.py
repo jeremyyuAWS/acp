@@ -28,6 +28,7 @@ class ImpactPreviewRequest(BaseModel):
     document_wide_input_mode: StrictStr | None = None
     document_wide_model_profile: StrictStr | None = None
     ai_zone: StrictStr | None = None
+    quality_first: StrictBool | None = None
     cloud_input_strategy: StrictStr | None = None
     generation_chain: dict | None = None
     fix_approval_policy: dict | None = None
