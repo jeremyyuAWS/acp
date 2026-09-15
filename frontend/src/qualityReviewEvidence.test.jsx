@@ -1,0 +1,56 @@
+import { createElement } from 'react'
+import { act } from 'react-dom/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createTestRoot, unmountAll } from './testRoots.js'
+import QualityReviewEvidence from './QualityReviewEvidence.jsx'
+import RemediationInbox from './RemediationInbox.jsx'
+afterEach(unmountAll)
+const thumb = 'data:image/png;base64,aGVsbG8='
+async function render(Component, props) {
+  const view = createTestRoot()
+  await act(async () => view.root.render(createElement(Component, props)))
+  return view
+}
+describe('Source comparison', () => {
+  it('pairs each recorded source with its own proposal and displays explicit uncertainty', async () => {
+    const { container } = await render(QualityReviewEvidence, { finding: { proposals: [
+      { locator: 'slide 1 chart', thumb, proposed_value: 'Revenue fell in 2024', review_status: 'needs_review' },
+      { locator: 'slide 2 picture', thumb, proposed_value: 'A tree', agreement: { verdict: 'different', second_opinion: 'A bush' } },
+    ] } })
+    const rows = container.querySelectorAll('article')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].textContent).toContain('Revenue fell in 2024')
+    expect(rows[0].textContent).not.toContain('A tree')
+    expect(rows[0].textContent).toContain('Needs review:')
+    expect(rows[1].textContent).toContain('A bush')
+    expect(container.querySelectorAll('img')).toHaveLength(2)
+    expect(container.textContent).toContain('Recorded thumbnail')
+  })
+  it('rejects remote images and honestly reports missing source evidence', async () => {
+    const { container } = await render(QualityReviewEvidence, { finding: { proposals: [{ kind: 'image', thumb: 'https://tracking.example/image', proposed_value: 'Draft' }] } })
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.textContent).toContain('Image preview unavailable')
+    expect(container.textContent).not.toContain('Needs review:')
+  })
+  it('does not describe a text excerpt as a missing image', async () => {
+    const { container } = await render(QualityReviewEvidence, { finding: { proposals: [{ before: 'Click here', proposed_value: 'Read the report' }] } })
+    expect(container.textContent).toContain('Click here')
+    expect(container.textContent).not.toContain('Image preview unavailable')
+  })
+  it.each([true, false])('is mounted in the real inbox and preserves editing and approval (legacy %s)', async (legacyApprovalControls) => {
+    localStorage.clear(); sessionStorage.clear()
+    const onDecide = vi.fn().mockResolvedValue(undefined)
+    const finding = { id: 4, file: 'chart.docx', title: 'Image description', rule_id: '1.1.1', hasProposal: true, after: 'A chart', proposals: [{ thumb, locator: 'image 1', proposed_value: 'A chart', review_status: 'needs_review' }] }
+    const { container } = await render(RemediationInbox, { queue: [finding], decisions: {}, onDecide, legacyApprovalControls, initialTab: 'needs-review' })
+    expect(container.querySelector('[aria-label="Source evidence and proposed fixes"] img')).not.toBeNull()
+    const editor = container.querySelector('[aria-label="Edit the proposed fix"]')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(editor, 'Revenue decreased in 2024')
+      editor.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.querySelector('[aria-label="Source comparison 1"]').textContent).toContain('Revenue decreased in 2024')
+    const button = [...container.querySelectorAll('button')].find(button => button.textContent.includes(legacyApprovalControls ? 'Yes, apply fix' : 'Apply this fix'))
+    await act(async () => button.click())
+    expect(onDecide).toHaveBeenCalledWith(expect.objectContaining({ id: 4 }), expect.objectContaining({ state: 'accepted', value: 'Revenue decreased in 2024' }))
+  })
+})
