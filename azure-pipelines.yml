@@ -1,289 +1,220 @@
-# ACP CI — the gate between "committed" and "trusted".
-# Runs the full backend suite (incl. the auth route-coverage guard that fails
-# the build if a new router ships unauthenticated) and proves the frontend
-# builds. Kept runnable-on-demand; auto-triggering is OFF (see below).
-#
-# ── Auto-triggers retired 2026-08-10 ─────────────────────────────────────────────────────
-# This file is a byte-for-byte mirror of .github/workflows/ci.yml — same Office-engine build,
-# tesseract, backend suite, the three matrix guards, and both frontend builds — and GitHub
-# Actions runs all of it on every PR and push, fast and reliably. The Azure org has ONE parallel
-# job (#183), and two pipelines fed by this file (acp-ci-github and jeremyyuAWS.acp) both ran on
-# every PR/push, serialising through that single slot: runs sat in `notStarted` for ~50 minutes
-# and every PR read UNSTABLE on two checks that gate nothing (main is not branch-protected). No
-# coverage is lost by silencing them — ci.yml already is the gate.
-#
-# `trigger: none` / `pr: none` (NOT deleting the blocks — an ABSENT trigger defaults to CI on
-# every branch, which is the opposite of retiring it). The pipeline can still be run manually
-# from the Azure DevOps UI. To fully stop it, also disable/delete the acp-ci-github and
-# jeremyyuAWS.acp pipelines in Azure DevOps — this YAML cannot, and a UI "override the YAML
-# trigger" toggle would defeat these two lines. To bring auto-CI back, restore the
-# `branches: include: [main]` blocks this replaced.
-trigger: none
-
+# Azure Repos CI. PR validation is enforced through an Azure branch build policy.
+# The PDF engine is vendored in engine/pdf-analyser/ since ADR 0029.
+name: $(Date:yyyyMMdd).$(Rev:r)
+trigger:
+  batch: false
+  branches:
+    include:
+    - main
 pr: none
-
 pool:
   vmImage: ubuntu-latest
-
-# ── Switching to the self-hosted agent ───────────────────────────────────────────────────
-# Replace the two lines above with:
-#
-#   pool:
-#     name: acp-local
-#
-# deploy/agent/ builds an agent that runs this file; deploy/agent/README.md has the pool and
-# token steps. Do BOTH before flipping this, in this order — a `name:` naming a pool with no
-# online agent does not fail fast, it leaves every queued run sitting in `notStarted` until
-# someone notices, and CI looks slow rather than broken.
-#
-# Left commented rather than parameterised on purpose. `pool.name` does accept a runtime
-# variable, but then the pool this repo gates on becomes a setting in the Azure DevOps UI —
-# invisible in review, changeable without a commit, and not something `git log` can answer.
-# For the one line that decides where the gate runs, two lines of diff is the better trade.
-#
-# Keep the hosted pool reachable in history: the agent is one laptop, and the honest fallback
-# when it is off or away is to put these two lines back.
-
-# Office engine: BUILT AND EXERCISED HERE (was a known gap until ADR 0012).
-# The old note said AcpScan.Cli.csproj referenced DigitalA11y.* from the sibling
-# _review-digital-accessibility checkout, so CI agents could never have it. ADR 0012
-# vendored those projects into engine/office-analysers/ and repointed the csproj, so
-# the CLI now builds standalone from a fresh clone — verified by building this repo
-# with no sibling checkout present. The comment outlived the constraint by ~3 weeks
-# and cost every CI run the engine-gated suites.
-#
-# PDF engine: vendored in engine/pdf-analyser/ since ADR 0029, and needs no build step —
-# it is imported from the checkout (api/scanner.py's WP, env-overridable via ACP_PDF_ENGINE).
-#
-# This block used to read "REMAINING GAP — the PDF analyser (worker-python) is still NOT
-# vendored", and named tests/test_scan.py and test_remediation_capability.py as expected skips.
-# True when written, false since ADR 0029 — and note that the paragraph directly above records
-# the Office comment outliving ITS constraint by three weeks and costing every CI run the
-# engine-gated suites. The same thing happened again, in the same file, to the other engine.
-#
-# A stale comment pointing this direction is the expensive one: it tells a reader that skipped
-# PDF suites are normal, so a checkout that really had lost the engine would look exactly like
-# a correct one. Neither engine is trusted to a comment any more — the "Fail if an analysis
-# engine is missing" step below asserts all three against the same availability checks the
-# tests' own skips use.
-steps:
-  # The matrix guards below read commit bodies and diff against the target branch, so they
-  # need real history — the default shallow fetch would make both silently useless.
+variables:
+  CI: 'true'
+  NUGET_PACKAGES: $(Pipeline.Workspace)/.nuget/packages
+jobs:
+- job: backend
+  displayName: Backend suite
+  timeoutInMinutes: 60
+  steps:
   - checkout: self
     fetchDepth: 0
-
+    persistCredentials: true
   - task: UsePythonVersion@0
     inputs:
       versionSpec: '3.12'
-    displayName: Python 3.12
-
   - task: UseDotNet@2
     inputs:
       packageType: sdk
-      version: '10.0.x'
-    displayName: .NET 10 SDK (Office analyser engine)
-
-  - script: dotnet build spike/dotnet/AcpScan.Cli/AcpScan.Cli.csproj -c Release --nologo
+      version: 10.0.x
+  - task: Cache@2
+    inputs:
+      key: '"nuget" | "$(Agent.OS)" | **/*.csproj'
+      path: $(NUGET_PACKAGES)
+    displayName: Cache .NET (NuGet) packages
+  - bash: dotnet build spike/dotnet/AcpScan.Cli/AcpScan.Cli.csproj -c Release --nologo
+    displayName: Build the Office analyser CLI
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
-    displayName: Build the Office analyser CLI
-    # Produces spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll — the exact
-    # path the tests' capability gates probe. bin/ stays gitignored; this is built, not
-    # committed.
-
-  - script: bash scripts/install_tesseract.sh
+  - bash: bash scripts/install_tesseract.sh
     displayName: Install tesseract (OCR)
-    # Shares ci.yml's install script, which is the point of it being a script. This step was
-    # the ONLY remaining copy of the unhardened `apt-get update -qq && apt-get install -qq`:
-    # no timeout, no retry, no fallback mirror. That is the exact form that stalled for up to
-    # an hour on 2026-08-18 and that failed half of all runners on 2026-08-19 — so the pipeline
-    # least likely to be watched was carrying the most fragile version of the dependency.
-    #
-    # Kept in step with ci.yml, and this is the pipeline that proved why. The corpus
-    # regression gate landed with tesseract added to ci.yml only; THIS pipeline runs the same
-    # suite without it, ocr.is_available() went false, and 1.4.5 reported "found 0 of 1" —
-    # a red build describing an environment gap as a product regression.
-    #
-    # Two CI pipelines running one suite need the same dependencies or the suite means
-    # different things in each. The gate degrades honestly without OCR (see
-    # tests/test_docx_corpus_regression_gate.py), but degrading is a fallback, not the plan:
-    # 1.4.5 and 1.4.9 are only actually exercised where tesseract exists.
-
-  - script: python -m pip install --quiet -r api/requirements.txt -r tests/requirements.txt
+    continueOnError: true
+    name: tesseract
+  - bash: python -m pip install --quiet -r api/requirements.txt -r tests/requirements.txt
     displayName: Install API + test dependencies
-    # tests/requirements.txt carries the OOXML authoring libs (python-docx/pptx/openpyxl)
-    # that ~12 test modules use to build fixtures on the fly. They were undeclared and
-    # only ever present ambiently on dev machines — harmless while the engine-gated tests
-    # skipped here, load-bearing now that the engine is built.
-
-  - script: bash scripts/install_verapdf.sh
+  # OCR installation above may continue so the test results remain available when apt fails.
+  # The always-running engine guard still fails that shard if OCR could not load. veraPDF is
+  # different: this step must succeed before the report suite can establish PDF/UA conformance.
+  # Keep its installation independent of the OCR outcome, with no continuation on error here.
+  # A missing PDF/UA validator must never produce a green conformance result by skipping checks.
+  - bash: bash scripts/install_verapdf.sh
     displayName: Install veraPDF (PDF/UA-1 conformance gate)
-    # The same step ci.yml runs, and here for the same reason the tesseract note above gives:
-    # two CI pipelines running one suite need the same dependencies or the suite means different
-    # things in each. That note was written about OCR landing in ci.yml only; veraPDF landed in
-    # ci.yml only too (#1199), so this file ran the report suites with the conformance half
-    # silently skipped — tests/verapdf.py degrades to a stated skip when veraPDF is absent, which
-    # is right on a developer machine and wrong in a gate. A skipped PDF/UA check is a compliance
-    # claim nothing evaluated, and the conformance report is now the document ACP hands a
-    # customer as audit evidence: api/report_weasy.py serves /scans/{sid}/report.pdf as of #1201.
-    #
-    # NOT continueOnError, matching ci.yml and differing from the tesseract step above for the
-    # reason ci.yml states: OCR degrades to fewer criteria covered, while this is the only thing
-    # between "we render an accessible PDF" and "we render a PDF". veraPDF has no wheel, so it
-    # gets a step rather than a requirements line.
-    #
-    # No apt step for WeasyPrint's native stack (pango/harfbuzz/fontconfig), deliberately: this
-    # pool is ubuntu-latest, the same hosted-runner image family ci.yml uses, where those
-    # libraries are already present — #1199 verified the report suites executing there with no
-    # such step. The environment that genuinely lacks them is deploy/test/Dockerfile, which
-    # builds from mcr.microsoft.com/dotnet/sdk:10.0-noble — Ubuntu 24.04 like the runners, but a
-    # plain SDK image rather than a hosted runner's heavily pre-provisioned one, so it gets an
-    # explicit apt line that this pool does not need.
-
-  # -n auto --dist loadfile, mirroring ci.yml — see the long note there. loadfile is load-bearing
-  # rather than a tuning choice: test_check_actually_fails_on_drift corrupts the real generated
-  # scopePresets.js and restores it, so plain -n auto lets other workers read the corrupted
-  # window and fail with a stale-file message that names the wrong cause.
-  - script: python -m pytest tests/ -q -n auto --dist loadfile --junitxml=test-results.xml
-    displayName: Backend suite (incl. auth-coverage guard)
-
-  - task: PublishTestResults@2
-    condition: always()
-    inputs:
-      testResultsFiles: test-results.xml
-      testRunTitle: acp backend
-    displayName: Publish test results
-
-  # ── WCAG-matrix guards ────────────────────────────────────────────────────────────────
-  # The matrix (jeremyyuAWS/wcag-matrix) mirrors this repo's capability claims. Both guards
-  # run here, in the pipeline that actually gates main, rather than in the notification
-  # workflow — a check that only runs after a merge cannot stop the drift it detects.
-
-  # Every source a capability ceiling is derived from is parsed structurally. When one moves,
-  # the generator raises rather than quietly producing a wrong ceiling — so running it IS the
-  # check, and it fails here instead of in the matrix's PR job where nobody would see it.
-  - script: python scripts/gen_matrix_coverage.py --check
+  - bash: bash scripts/install_helm.sh
+    displayName: Install helm (packaging chart render gate)
+  - bash: python -m pytest tests/ -q -n auto --dist loadfile --splits 4 --group $(group) --junitxml=test-results-$(group).xml
+    displayName: Backend suite (shard $(group)/4)
+  - bash: python scripts/gen_matrix_coverage.py --check
     displayName: Matrix guard — capability ceiling still derivable
-
-  # Four KEDA scaler queries live in this tree and none of them is where the truth lives. Until
-  # 2026-09-06 every one counted `status='queued'` while store.claim_job also requires
-  # run_after <= now and attempts < max_attempts — so a job in retry backoff, or one waiting for
-  # the reaper, asked for a replica no worker was allowed to use. api/queue_scaler.py owns the
-  # predicate; this holds the four copies to it.
-  - script: python scripts/gen_queue_scalers.py --check
+    condition: and(succeeded(), eq(variables['group'], '1'))
+  - bash: python scripts/gen_queue_scalers.py --check
     displayName: Scaler guard — the queue scalers count claimable jobs
-
-  # docs/TODO.md carries generated coverage facts alongside its authored backlog. Those facts
-  # went 387 commits stale because nothing checked them, and the stalest part was the headline.
-  # This is the thing that stops it recurring; it is cheap and it fails loudly.
-  - script: python scripts/gen_todo_status.py --check
+    condition: and(succeeded(), eq(variables['group'], '1'))
+  - bash: python scripts/gen_todo_status.py --check
     displayName: Backlog guard — docs/TODO.md coverage block is current
-
-  # A RATCHET, not a threshold: fails on a DROP in ground-truth fixture coverage, not on falling
-  # short of 100%. 15 of 62 pairs are covered today, so a guard demanding full coverage would be
-  # red on every commit — and a red that is always red stops being read, which is how the
-  # docs/TODO.md block above went 387 commits stale in the first place.
-  #
-  # Added to BOTH pipelines in the same commit, deliberately. ci.yml's header calls step-for-step
-  # parity "a live invariant, not a description", and it has drifted twice — the three matrix
-  # guards landing there first, and the OCR fail-closed step (fixed in #1005). Adding a guard to
-  # one pipeline is how the third drift starts.
-  - script: python scripts/gen_fixture_coverage.py --check
-    displayName: Corpus guard — ground-truth fixture coverage has not regressed
-
-  # config/section-508.json is the denominator of a 508-edition report: 120 requirements a human
-  # must decide and that print in the exported tables. A row lost in a hand-edit is invisible. The
-  # generator shipped with --check in #1539 and nothing ever ran it.
-  #
-  # In BOTH pipelines in this commit, per the note directly above: "Adding a guard to one pipeline
-  # is how the third drift starts", and that note names two occasions it already has.
-  - script: python scripts/gen_section_508_catalog.py --check
+    condition: and(succeeded(), eq(variables['group'], '1'))
+  - bash: python scripts/gen_section_508_catalog.py --check
     displayName: Standards guard — the Section 508 catalog matches the regulation
-
-  # Fails when a commit changed rule code without declaring its matrix impact. Add a
-  # `Matrix-Note:` (+ `WCAG:`) trailer, or `Matrix-Note: none` to record a deliberate omission.
-  # Merge commits are skipped by check() itself, explicitly and by parent count: a merge authors
-  # nothing, and the commits it joins are single-parent and judged individually. Do not "simplify"
-  # that back to relying on a merge's combined diff being empty — that only holds while the two
-  # sides touch disjoint files, and #38 is what it looks like when they don't (see #32).
-  - script: |
+    condition: and(succeeded(), eq(variables['group'], '1'))
+  - bash: python scripts/gen_fixture_coverage.py --check
+    displayName: Corpus guard — ground-truth fixture coverage has not regressed
+    condition: and(succeeded(), eq(variables['group'], '1'))
+  - bash: |
       set -euo pipefail
       if [ -n "${SYSTEM_PULLREQUEST_TARGETBRANCH:-}" ]; then
-        target="origin/${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
-        git fetch --quiet origin "${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
-        python scripts/gen_progress_log.py --check --since "$target"
+        target="${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
+        git fetch --quiet origin "$target"
+        python scripts/gen_progress_log.py --check --since "origin/$target"
       else
         python scripts/gen_progress_log.py --check
       fi
     displayName: Matrix guard — rule changes declare their matrix impact
-
-  # ── engine fail-closed gate ───────────────────────────────────────────────────────────
-  # A missing analysis engine degrades SILENTLY: the tests that need it self-skip, the suite
-  # goes green, and the tick sits over criteria that never ran. ci.yml has refused to let that
-  # happen for OCR since 2026-08-19; THIS pipeline installed tesseract and then never checked
-  # whether it worked.
-  #
-  # That is the second parity drift, and the same asymmetry as the first: ci.yml's header calls
-  # step-for-step parity with this file "a live invariant, not a description" and records that
-  # the three matrix guards landed there while this ran without them. The pipeline least likely
-  # to be watched carried the weaker gate both times — and this one is described in ci.yml as
-  # the pipeline mova-io/acp may still build from, so its result is somebody's evidence.
-  #
-  # `condition: always()` matches ci.yml's OCR step: run after the suite so the real pass/fail
-  # is visible first and this explains the red, rather than dying early with a job that says
-  # nothing about the change under review. tests/test_check_engines.py asserts both pipelines
-  # carry this step and that both run it after pytest.
-  - script: python scripts/check_engines.py --require office,pdf,ocr
+    condition: and(succeeded(), eq(variables['group'], '1'))
+  - task: PublishTestResults@2
+    inputs:
+      testResultsFormat: JUnit
+      testResultsFiles: test-results-$(group).xml
+      failTaskOnFailedTests: true
+      failTaskOnMissingResultsFile: true
     condition: always()
+    displayName: Publish test results
+  - bash: python scripts/check_engines.py --require office,pdf,ocr
     displayName: Fail if an analysis engine is missing
-
-  # UseNode@1, not NodeTool@0. The first real run of this pipeline against the GitHub repo
-  # (acp-ci-github #20260808.1) warned twice at Initialize job: "Task 'Node.js tool installer'
-  # version 0 (NodeTool@0) is deprecated" and "will no longer receive updates. Please use
-  # UseNodeV1 as a replacement."
-  #
-  # Same installer, same version, same result — a task-version bump, not a change of behaviour.
-  # The input is renamed, though: NodeTool@0 took `versionSpec`, UseNode@1 takes `version`. Left
-  # as `versionSpec` it would not fail loudly; the task would install whatever it defaults to,
-  # which is the sort of green build that is quietly testing the wrong Node.
-  #
-  # Worth taking now rather than later: a deprecated task keeps working right up until it does
-  # not, and this file has just become the gate that matters.
+    condition: always()
+  strategy:
+    matrix:
+      group1:
+        group: '1'
+      group2:
+        group: '2'
+      group3:
+        group: '3'
+      group4:
+        group: '4'
+- job: postgres
+  displayName: Postgres integration (schema/lock regressions)
+  timeoutInMinutes: 60
+  steps:
+  - checkout: self
+    fetchDepth: 0
+    persistCredentials: true
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.12'
+  - bash: python -m pip install --quiet -r api/requirements.txt -r tests/requirements.txt
+    displayName: Install API + test dependencies
+  - bash: |
+      python -m pytest tests/test_schema_boot_locks.py tests/test_pg_job_queue.py \
+        tests/test_pg_result_fencing.py tests/test_db_mutation_reserve.py \
+        tests/test_pg_hitl_idempotency.py \
+        -v --no-header -p no:warnings
+    displayName: Schema, lock and job-queue regressions against a real PostgreSQL
+    env:
+      DATABASE_URL: postgresql://postgres:acp-ci-throwaway@localhost:5432/acp_ci
+      ACP_REQUIRE_PG: '1'
+      ACP_PG_TEST_DESTRUCTIVE: '1'
+  - bash: |
+      set -euo pipefail
+      python -m pytest tests/test_schema_boot_locks.py tests/test_pg_job_queue.py \
+        tests/test_pg_result_fencing.py tests/test_pg_hitl_idempotency.py \
+        -q --no-header -p no:warnings > /tmp/pg.txt 2>&1 || { cat /tmp/pg.txt; exit 1; }
+      cat /tmp/pg.txt
+      if grep -qE '[0-9]+ skipped' /tmp/pg.txt; then
+        echo "::error::tests skipped in the Postgres job — they did not exercise the server"
+        exit 1
+      fi
+      grep -qE '[0-9]+ passed' /tmp/pg.txt || {
+        echo "::error::no tests ran in the Postgres job"; exit 1; }
+    displayName: Fail if anything in this job skipped instead of running
+    env:
+      DATABASE_URL: postgresql://postgres:acp-ci-throwaway@localhost:5432/acp_ci
+      ACP_REQUIRE_PG: '1'
+      ACP_PG_TEST_DESTRUCTIVE: '1'
+  services:
+    postgres: ci_postgres
+- job: frontend
+  displayName: Frontend tests + build
+  timeoutInMinutes: 60
+  steps:
+  - checkout: self
+    fetchDepth: 0
+    persistCredentials: true
   - task: UseNode@1
     inputs:
-      version: '22.x'
-    displayName: Node 22 (pdfjs-dist requires >=22.13)
-
-  - script: npm install -g npm@11 --no-audit --no-fund
-    displayName: npm 11 (lockfile is npm-11 authored; npm 10 rejects its nested entries)
-
-  - script: npm ci --no-audit --no-fund
+      version: 22.x
+  - bash: npm install -g npm@11 --no-audit --no-fund
+    displayName: npm 11
+  - bash: npm ci --no-audit --no-fund
     workingDirectory: frontend
     displayName: Install frontend dependencies
-
-  - script: npx vitest run
+  - bash: npx vitest run
     workingDirectory: frontend
     displayName: Frontend unit tests (rule round-trips + WCAG coverage contract)
-
-  - script: npx vite build
+  - bash: npx vite build
     workingDirectory: frontend
     displayName: Frontend build
-
-  # Mirrors ci.yml's `e2e` job (see this file's header — the two gates stay step for step).
-  # This pipeline is one flat job, so the API deps installed above are already on the system
-  # interpreter; ACP_E2E_PYTHON points scripts/e2e-api.sh at it instead of a .venv-e2e.
-  - script: npx playwright install --with-deps chromium
+- job: e2e
+  displayName: Playwright E2E (browser + local API)
+  timeoutInMinutes: 60
+  steps:
+  - checkout: self
+    fetchDepth: 0
+    persistCredentials: true
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.12'
+  - task: UseNode@1
+    inputs:
+      version: 22.x
+  - bash: npm install -g npm@11 --no-audit --no-fund
+    displayName: npm 11
+  - bash: npm ci --no-audit --no-fund
+    workingDirectory: frontend
+    displayName: Install frontend dependencies
+  - bash: npx playwright install --with-deps chromium
     workingDirectory: frontend
     displayName: Install browser
-
-  # continueOnError mirrors ci.yml's `continue-on-error: true` — a soft launch while the
-  # suite earns a track record. Playwright's webServer config starts both the API
-  # (scripts/e2e-api.sh) and vite, with VITE_SIM=false so the browser drives the real
-  # backend rather than sim.js.
-  - script: npx playwright test
+  - bash: |
+      python -m venv .venv-e2e
+      .venv-e2e/bin/pip install --quiet -r api/requirements.txt
+    displayName: Install API dependencies
+  # Preserve the GitHub browser suite's advisory status without making all CI partially succeeded.
+  - bash: |
+      if ! npx playwright test; then
+        echo "##vso[task.logissue type=warning]Playwright reported failures; inspect the browser artifacts."
+      fi
     workingDirectory: frontend
-    continueOnError: true
+    displayName: Playwright E2E
+  - bash: mkdir -p frontend/test-results frontend/playwright-report
+    condition: always()
+    displayName: Prepare browser artifacts
+  - task: PublishPipelineArtifact@1
+    inputs:
+      targetPath: frontend/test-results
+      artifact: playwright-results
+    condition: always()
+  - task: PublishPipelineArtifact@1
+    inputs:
+      targetPath: frontend/playwright-report
+      artifact: playwright-report
+    condition: always()
+resources:
+  containers:
+  - container: ci_postgres
+    image: postgres:16
     env:
-      ACP_E2E_PYTHON: python
-    displayName: Playwright E2E (browser + local API)
+      POSTGRES_PASSWORD: acp-ci-throwaway
+      POSTGRES_DB: acp_ci
+    ports:
+    - 5432:5432
+    options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10

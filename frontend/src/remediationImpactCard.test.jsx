@@ -642,3 +642,38 @@ it.each(['Local models'])('clears document-wide consent when choosing %s', async
   expect(getRemediationImpact.mock.calls.at(-1)[1]).not.toHaveProperty('document_wide_input_mode')
   expect(getRemediationImpact.mock.calls.at(-1)[1]).not.toHaveProperty('document_wide_model_profile')
 })
+
+it('freezes quality-first on the plan passed to execution', async () => {
+    managedChoices()
+  const onRun = vi.fn()
+  const { container } = await mount({ onRun, requireAnswers: true })
+  const choice = text => [...container.querySelectorAll('label')].find(node => node.textContent.includes(text)).querySelector('input')
+  await act(async () => choice('Apply rule-based fixes automatically').click())
+  await act(async () => button(container, 'Next').click())
+  await act(async () => choice('Quality-first').click())
+  await act(async () => button(container, 'Next').click())
+  expect(container.textContent).not.toContain('I confirm the AI providers')
+  expect([...container.querySelectorAll('.remediation-plan-choices input[type=checkbox]')].filter(node => !node.closest('[hidden]'))).toHaveLength(0)
+  expect(button(container, 'Approve plan and start').disabled).toBe(false)
+  await act(async () => button(container, 'Approve plan and start').click())
+  expect(onRun.mock.calls[0][0]).toMatchObject({quality_first:true,auto_approve_ai:false,cloud_input_strategy:'automatic',document_wide_ai:true,ai_budget_usd:'25.00'})
+})
+
+it('can leave an unavailable quality-first plan for Rules only without carrying cloud consent', async () => {
+  const initial = {rule_based:2,ai:1,ai_zone:'any',quality_first:true,cloud_input_strategy:'automatic',document_wide_ai:true,ai_budget_usd:'25.00'}
+  getRemediationImpact.mockImplementation(async (_id, requested) => {
+    const chosen = requested || initial
+    if(chosen.ai === 0) {
+      expect(chosen.quality_first).toBeUndefined()
+      expect(chosen.cloud_input_strategy).toBeUndefined()
+    }
+    return {...result(chosen), capabilities:{...result().capabilities,ai_budget:true}, ai_readiness:{state:chosen.ai ? 'quality_first_cloud_unavailable':'not_required',blocked:!!chosen.ai}}
+  })
+  const onRun = vi.fn()
+  const {container} = await mount({onRun})
+  expect(button(container,'Approve plan and start').disabled).toBe(true)
+  await act(async () => button(container,'Continue With Rules Only').click())
+  expect(button(container,'Approve plan and start').disabled).toBe(false)
+  await act(async () => button(container,'Approve plan and start').click())
+  expect(onRun.mock.calls[0][0].ai).toBe(0)
+})

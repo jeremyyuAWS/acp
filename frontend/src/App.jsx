@@ -2285,7 +2285,7 @@ export default function App() {
         onViewPrevious={(scanId) => { switchScan(scanId); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
         onLiveOps={() => { goToView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
       />
-      <WorkflowStageStack defaultCollapsed={['overview', 'analytics'].includes(view)} releaseReviewWorkspace={<ReleaseReviewWorkspace scanId={canonicalRun.lineage?.scan_id} remediationRunId={remediationStage?.execution_id} refreshRevision={remRun.snapshot?.revision}
+      {view !== 'overview' && <WorkflowStageStack activeTab={view} defaultCollapsed={false} releaseReviewWorkspace={<ReleaseReviewWorkspace scanId={canonicalRun.lineage?.scan_id} remediationRunId={remediationStage?.execution_id} refreshRevision={remRun.snapshot?.revision}
         onOpenReview={() => { const url=new URL(window.location.href);url.searchParams.set('tab','remediate');url.searchParams.set('mode','review');history.replaceState({},'',url);goToView('remediate') }} />}
         lineage={canonicalRun.lineage} receivedAt={canonicalRun.receivedAt} progressHostId={remediationProgressHostId}
         assessmentActivity={assessmentActivity}
@@ -2322,7 +2322,7 @@ export default function App() {
         onNavigate={(next) => {
           setView(next)
           window.scrollTo({ top: 0, behavior: 'smooth' })
-        }} />
+        }} />}
 
       <main id="main-content" tabIndex={-1}>
       <div id="workflow-panel" role="tabpanel" aria-labelledby={`workflow-tab-${view}`}>

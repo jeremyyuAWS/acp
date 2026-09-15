@@ -98,6 +98,8 @@ def selected_document_context(context, data, *, frozen_decision=None):
 
 def try_local_text_draft(prompt, context):
     """One optional local attempt only when a fresh capability already exists."""
+    if context.policy.get('quality_first'):
+        return None
     import time
     import ai
     from providers import zone_for_url

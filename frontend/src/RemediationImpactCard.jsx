@@ -188,7 +188,9 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       return
     }
     if (key === 'ai_mode') {
-      const next = { ...selected, ai: 1, ai_zone: value, auto_approve_ai: false }
+      const next = { ...selected, ai: 1, ai_zone: value === 'quality' ? 'any' : value, auto_approve_ai: false }
+      if (value === 'quality') next.quality_first = true
+      else delete next.quality_first
       if (value === 'local') {
         if (Object.hasOwn(next, 'document_wide_ai')) next.document_wide_ai = false
         delete next.cloud_input_strategy
@@ -215,6 +217,8 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
           || (key === 'ai_budget_usd' && !(Number(value) > 0))) {
         delete next.document_wide_input_mode
         delete next.document_wide_model_profile
+        delete next.quality_first
+        delete next.cloud_input_strategy
       }
       return next
     }) }
@@ -268,6 +272,8 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     ai_disabled: 'AI is disabled by the administrator. Choose Rules only or ask the administrator to enable AI.',
     local_models_missing: 'The private endpoint is reachable, but a configured AI model is unavailable. Local drafting needs the configured text and vision models. Ask an administrator to install the missing model, retry readiness, or choose Rules only.',
     local_endpoint_reachable: 'Local AI endpoint is reachable. No cloud AI charges. Suggestions and applied fixes are checked during processing.',
+    quality_first_cloud_unavailable: 'Quality-first needs both approved cloud provider connections with current model pricing. Ask an administrator to check these connections, or choose another model option.',
+    quality_first_cloud_ready: 'Cloud quality models are configured. Account access and spending are checked before each request. No local model fallback will run.',
     governed_cloud: 'Cloud AI availability is checked when a request is admitted. This preview has not verified provider access, current pricing, or remaining spending. Permission and spending checks still apply before each request.',
   }[data?.ai_readiness?.state]
   const startButton = <button type="button" className="remediation-impact__run" disabled={aiBlocked || !questionsComplete || readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
@@ -282,12 +288,12 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       <div className="remediation-impact__start-summary">
         <strong>{ready ? `${number(data.open?.findings)} findings · ${number(data.open?.files)} files` : 'Preview not ready'}</strong>
         <span>{ready ? `${number(data.lanes?.automatic?.findings)} automatic · ${number(data.lanes?.review?.findings)} to approve · ${number(data.lanes?.manual?.findings)} manual · ${number(data.lanes?.blocked?.findings)} blocked` : 'Review the current preview before starting.'}</span>
-        <span>{selected.ai > 0 && selected.ai_zone === 'local' ? `Ollama only · ${savedApprovalLabel(data?.policy || selected)} · No cloud AI charges` : selected.ai > 0 ? `${savedApprovalLabel(data?.policy || selected)} · Up to ${generationSteps(selected, data?.capabilities?.generation_chain).length || 2} models` : 'Rules only · No new AI suggestions'}</span>
+        <span>{selected.ai > 0 && selected.ai_zone === 'local' ? `Ollama only · ${savedApprovalLabel(data?.policy || selected)} · No cloud AI charges` : selected.ai > 0 ? `${selected.quality_first ? 'Quality-first cloud AI · ' : ''}${savedApprovalLabel(data?.policy || selected)} · Up to ${generationSteps(selected, data?.capabilities?.generation_chain).length || 2} models` : 'Rules only · No new AI suggestions'}</span>
       </div>
       {!requireAnswers && startButton}
     </div>
     {ready && readinessText && <div role={aiBlocked ? 'alert' : 'status'} className="remediation-impact__note">
-      <strong>{data.ai_readiness.state === 'local_endpoint_required' ? 'Endpoint Outside Local Zone' : aiBlocked ? 'AI readiness needs attention' : data.ai_readiness.state === 'governed_cloud' ? 'Cloud AI checks pending' : 'Local AI readiness checked'}</strong><p>{readinessText}</p>
+      <strong>{data.ai_readiness.state === 'local_endpoint_required' ? 'Endpoint Outside Local Zone' : aiBlocked ? 'AI readiness needs attention' : data.policy?.quality_first ? 'Quality-first cloud readiness' : data.ai_readiness.state === 'governed_cloud' ? 'Cloud AI checks pending' : 'Local AI readiness checked'}</strong><p>{readinessText}</p>
       {data.policy?.ai_zone === 'local' && <p>Endpoint: {data.ai_readiness.state === 'local_endpoint_required' ? 'outside the local zone' : data.ai_readiness.state === 'local_endpoint_access_denied' ? 'access denied' : data.ai_readiness.state === 'local_endpoint_unreachable' ? 'unavailable' : ['local_endpoint_reachable', 'local_models_missing'].includes(data.ai_readiness.state) ? 'reachable' : 'not checked'} · Cloud spending: not used.</p>}
       {['local_endpoint_reachable', 'local_models_missing'].includes(data?.ai_readiness?.state) && <p>Text model: {data.ai_readiness.text_model_available ? 'available' : 'unavailable'} · Vision model: {data.ai_readiness.vision_model_available ? 'available' : 'unavailable'}. Unavailable models cannot generate their suggestions.</p>}
       {aiBlocked && <button type="button" disabled={loading || runBusy || readOnly} onClick={() => setReload(current => current + 1)}>Retry readiness check</button>}

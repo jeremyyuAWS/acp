@@ -19,8 +19,9 @@ def policy(ctx, **overrides):
         'document_wide_model_profile': quality.PROFILE_ID, **overrides}))
 
 
+@pytest.mark.parametrize('quality_mode', [False, True])
 @pytest.mark.parametrize('mode', ['success', 'fallback', 'unknown', 'both_invalid'])
-def test_exact_native_primary_fallback_and_accounted_replay(setup, pdf_request, specs, monkeypatch, mode):
+def test_exact_native_primary_fallback_and_accounted_replay(setup, pdf_request, specs, monkeypatch, mode, quality_mode):
     store, job, calls, _ = setup
     request, data = pdf_request
     monkeypatch.setattr(quality, 'profile_specs', lambda: tuple(replace(specs[0], provider=p, model=m,
@@ -28,6 +29,9 @@ def test_exact_native_primary_fallback_and_accounted_replay(setup, pdf_request, 
     class Providers(FakeProviders):
         selected = 'anthropic'  # Global default must remain Anthropic.
         fallbacks = ('openai',)
+        @staticmethod
+        def zone_for_url(url):
+            return 'cloud'
     def post(url, **kwargs):
         calls.append((url, kwargs['json']))
         if mode == 'unknown':
@@ -46,7 +50,7 @@ def test_exact_native_primary_fallback_and_accounted_replay(setup, pdf_request, 
     monkeypatch.setattr(quality, 'configured_native_pdf_generator', lambda ctx: factory(ctx, provider_module=Providers, post=post))
     monkeypatch.setattr(provider, 'configured_generator', lambda: pytest.fail('native profile must not use global model factory'))
     with run_context(store, job['payload'], job) as ctx:
-        native = policy(ctx)
+        native = policy(ctx, quality_first=quality_mode)
         monkeypatch.setattr(provider, 'managed_context', lambda: native)
         result = provider.generate_document(request, pdf_bytes=data)
         if mode in ('success', 'fallback'):

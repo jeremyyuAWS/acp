@@ -1,0 +1,80 @@
+parameters:
+- name: environment
+  type: string
+- name: app
+  type: string
+- name: discovery
+  type: string
+- name: assess
+  type: string
+- name: remediate
+  type: string
+- name: fqdn
+  type: string
+jobs:
+- deployment: deploy
+  displayName: Deploy ACP to ${{ parameters.environment }}
+  environment: acp-${{ parameters.environment }}
+  timeoutInMinutes: 60
+  strategy:
+    runOnce:
+      deploy:
+        steps:
+        - checkout: self
+          fetchDepth: 0
+          persistCredentials: true
+        - task: UseDotNet@2
+          inputs:
+            packageType: sdk
+            version: 10.0.x
+        - task: UsePythonVersion@0
+          inputs:
+            versionSpec: '3.12'
+        - bash: python3 -m pip install 'psycopg2-binary>=2.9,<3'
+          displayName: Install PostgreSQL scaler parser
+        - task: AzureCLI@2
+          displayName: Verify CI and deploy the pinned commit
+          inputs:
+            azureSubscription: acp-azure-deploy
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              set -euo pipefail
+              git fetch --quiet origin main
+              if [ "$(git rev-parse origin/main)" != "$ACP_PIN" ]; then
+                echo "A newer main commit exists; refusing to roll back an automatic deployment."
+                exit 1
+              fi
+              bash deploy/public/redeploy.sh
+          env:
+            SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+            ACP_AZURE_CI_RUN_ID: $(resources.pipeline.ci.runID)
+            ACP_AZURE_CI_DEFINITION_ID: $(ACP_AZURE_CI_DEFINITION_ID)
+            ACP_CI_PROVIDER: azure
+            ACP_PIN: $(resources.pipeline.ci.sourceCommit)
+            ACP_SUBSCRIPTION: $(ACP_SUBSCRIPTION)
+            ACP_DEPLOY_TARGET_ENV: ${{ parameters.environment }}
+            ACP_RG: mdk-accessibility
+            ACP_APP: ${{ parameters.app }}
+            ACP_DISCOVERY_WORKER: ${{ parameters.discovery }}
+            ACP_ASSESS_WORKER: ${{ parameters.assess }}
+            ACP_REMEDIATE_WORKER: ${{ parameters.remediate }}
+        - bash: |
+            set -euo pipefail
+            python3 - <<'PY'
+            import json, os, urllib.request
+            base = 'https://' + os.environ['ACP_VERIFY_FQDN']
+            def get(path):
+                with urllib.request.urlopen(base + path, timeout=30) as response:
+                    return json.load(response)
+            health = get('/healthz')
+            if health.get('version_stamped') is not True:
+                raise SystemExit('Deployed image is not version stamped')
+            for path in ['/readyz', '/probe/readyz']:
+                if get(path).get('ready') is not True:
+                    raise SystemExit(path + ' is not ready')
+            print('Deployment health and readiness verified')
+            PY
+          displayName: Independently verify live readiness
+          env:
+            ACP_VERIFY_FQDN: ${{ parameters.fqdn }}

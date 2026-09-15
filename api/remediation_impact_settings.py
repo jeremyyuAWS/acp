@@ -43,6 +43,9 @@ def normalize_policy(policy):
         result[key] = value
     if 'cloud_input_strategy' in policy:
         result['cloud_input_strategy'] = 'automatic'
+    if 'quality_first' in policy:
+        from quality_first import normalize_quality_first
+        result['quality_first'] = normalize_quality_first(policy)
     if "ai_budget_usd" in policy:
         amount = policy["ai_budget_usd"]
         if not isinstance(amount, str) or not re.fullmatch(r"\d{1,7}(?:\.\d{1,2})?", amount):

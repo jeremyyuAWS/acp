@@ -31,13 +31,13 @@ function primaryOutcome(model) {
 /** The sole outer shell for all four workflow stages. Detail nodes stay mounted under `hidden`
  * so disclosure changes do not end live subscriptions or reset rolling heartbeat history. */
 export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = null,
-  stageDetails = {}, stageAfter = {}, defaultCollapsed = false, progressHostId = null, activeStage = null, assessmentActivity = null, assessmentFindings = null, discoveryScope = null, releaseReviewWorkspace = null }) {
+  activeTab = null, stageDetails = {}, stageAfter = {}, defaultCollapsed = false, progressHostId = null, activeStage = null, assessmentActivity = null, assessmentFindings = null, discoveryScope = null, releaseReviewWorkspace = null }) {
   const snapshots = useMemo(() => canonicalWorkflowStages(lineage), [lineage])
   const current = useMemo(() => currentCanonicalStage(lineage), [lineage])
   const key = storageKey(lineage)
   const [overrides, setOverrides] = useState({})
 
-  useEffect(() => { setOverrides({}) }, [key, activeStage, defaultCollapsed])
+  useEffect(() => { setOverrides({}) }, [key, activeStage, activeTab, defaultCollapsed])
 
   if (!snapshots.length) return null
   const assessStage = snapshots.find(snapshot => snapshot.stage === 'assess')
@@ -67,10 +67,10 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
         const assessment = assessmentStageActivity(snapshot, assessmentActivity, lineage?.scan_id)
         const displayState = assessment?.state || batch?.state || snapshot.state
         const isCompleted = completed(displayState)
-        // Completed stages collapse so the report below gets the user's attention. Keep
-        // attention/error cards open, and scope manual reopening to this execution and phase.
-        const defaultOpen = !defaultCollapsed && (attention || (isCompleted ? false : isCurrent))
-        const overrideKey = `${stage}:${snapshot.execution_id}:${isCompleted ? 'complete' : 'live'}`
+        // Only running work on its own tab opens automatically. Other tabs retain
+        // live status in the collapsed header; users can still open details.
+        const defaultOpen = !defaultCollapsed && activeStage === stage && ['processing', 'running'].includes(displayState)
+        const overrideKey = `${stage}:${snapshot.execution_id}:${isCompleted ? 'complete' : terminal(displayState) ? 'stopped' : 'live'}`
         const open = overrides[overrideKey] ?? defaultOpen
         const detail = isCurrent ? stageDetails[stage] : null
         const bodyId = `workflow-stage-${stage}`
