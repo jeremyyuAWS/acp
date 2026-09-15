@@ -845,7 +845,7 @@ def apply_pdf_figure_alt(data: bytes, values: dict) -> tuple[bytes, list[dict], 
     return out.getvalue(), applied, unresolved
 
 
-def _pdf_figure_drafts(pdf, *, ai_enabled, scan_id, file, skip_locators=()):
+def _pdf_figure_drafts(pdf, *, ai_enabled, scan_id, file, skip_locators=(), guidance=""):
     """Pure proposals from exact pixels, with independent semantic approval attached."""
     import ai
     import proposals as proposal_api
@@ -870,7 +870,7 @@ def _pdf_figure_drafts(pdf, *, ai_enabled, scan_id, file, skip_locators=()):
             if ai_enabled and budget > 0:
                 budget -= 1  # attempts, including provider misses, consume capacity
                 response = ai.describe_image_structured(image, filename=file, scan_id=scan_id,
-                    file=file, allow_transcription=True)
+                    file=file, allow_transcription=True, guidance=guidance)
                 if response:
                     validation = validate_caption(response["alt"], image)
                     current = exact_figure_image(pdf, figure)
@@ -882,8 +882,13 @@ def _pdf_figure_drafts(pdf, *, ai_enabled, scan_id, file, skip_locators=()):
             validation["reason_codes"] = [str(error)]
         except Exception:
             validation = {"approved": False, "status": "needs_manual", "reason_codes": ["figure_caption_unavailable"]}
-        approved = (validation.get("approved") is True and validation.get("status") == "validated"
-                    and response is not None and not response.get("automatic_write_blocked"))
+        from quality_source_review import supported_review
+        source_review = (response or {}).get('quality_source_review') or {}
+        assisted = (association is not None and response is not None
+                    and source_review.get('status') == 'ai_reviewed'
+                    and supported_review(response['alt'], image, source_review.get('cloud_review') or {}))
+        approved = (response is not None and not response.get('automatic_write_blocked')
+                    and ((validation.get('approved') is True and validation.get('status') == 'validated') or assisted))
         value = ((validation.get("canonical_caption") or response["alt"]) if approved
                  else response.get("alt", "") if response else "")
         proposal = proposal_api.proposal(locator=locators[id(figure)],
@@ -903,6 +908,10 @@ def _pdf_figure_drafts(pdf, *, ai_enabled, scan_id, file, skip_locators=()):
                 if key in response:
                     proposal[key] = response[key]
             proposal["why_review"] = response.get("evidence")
+        proposal['quality_source_review'] = source_review
+        if assisted:
+            proposal['source'] = 'AI reviewed against exact source pixels; semantic correctness is not certified'
+            proposal['rationale'] = 'Independent source observations support this caption; exact saved output and regressions are checked separately.'
         proposal["caption_validation"] = validation
         proposal["automatic_write_blocked"] = not approved
         proposal["requires_semantic_review"] = not approved
@@ -913,14 +922,14 @@ def _pdf_figure_drafts(pdf, *, ai_enabled, scan_id, file, skip_locators=()):
     return drafts
 
 
-def alt_proposals_for_pdf(data: bytes, *, scan_id=None, context_file="", skip_locators=()) -> list[dict]:
+def alt_proposals_for_pdf(data: bytes, *, scan_id=None, context_file="", skip_locators=(), guidance="") -> list[dict]:
     """Proposal-only exact-image recovery; never modifies tags or page/source bytes."""
     import io
     import pikepdf
     import ai
     with pikepdf.open(io.BytesIO(data)) as pdf, ai.assessment_vision_budget(60):
         drafts = [proposal for _figure, proposal in _pdf_figure_drafts(
-            pdf, ai_enabled=True, scan_id=scan_id, file=context_file, skip_locators=skip_locators)]
+            pdf, ai_enabled=True, scan_id=scan_id, file=context_file, skip_locators=skip_locators, guidance=guidance)]
         import hashlib
         for proposal in drafts:
             proposal["source_sha256"] = hashlib.sha256(data).hexdigest()
@@ -975,7 +984,9 @@ def bind_exact_pdf_findings(store, owner, sid, run_id, filename, data, proposals
     if not proposals or not filename.lower().endswith('.pdf') or any(p.get('kind') != 'pdf-figure-alt' for p in proposals):
         raise ValueError('Exact PDF finding binding requires only figure captions')
     artifact = (store.get_file_record(sid, filename) or {}).get('corrected_sha256')
-    if not artifact or hashlib.sha256(data).hexdigest() != artifact or not validate_exact_figure_proposals(data, proposals):
+    from quality_source_review import reviewed_pdf_allowed
+    quality_pdf = reviewed_pdf_allowed(store, owner, sid, run_id, filename, data, proposals, applied=applied)
+    if not artifact or hashlib.sha256(data).hexdigest() != artifact or not (validate_exact_figure_proposals(data, proposals) or quality_pdf):
         raise ValueError('Exact PDF caption evidence is stale or unproved')
     with store._db.cursor() as cur:
         store._db.execute(cur, 'SELECT snapshot_id,baseline_json FROM remediation_contribution_runs WHERE owner_id=%s AND scan_id=%s AND run_id=%s', (owner, sid, run_id))
@@ -1001,7 +1012,7 @@ def bind_exact_pdf_findings(store, owner, sid, run_id, filename, data, proposals
         fid = matches[0]['finding_id']; seen.add(fid)
         if not applied and dispositions.get(fid) in {'resolved_verified', 'excluded_by_policy', 'superseded_by_reassessment'}:
             raise ValueError('Exact PDF finding is no longer outstanding')
-        result.append({**proposal, 'finding_ids': [fid], 'baseline_finding_ids': [fid], 'assessment_revision': baseline['snapshot_id']})
+        result.append({**proposal, 'source_sha256': artifact, 'finding_ids': [fid], 'baseline_finding_ids': [fid], 'assessment_revision': baseline['snapshot_id']})
     return result
 
 
@@ -1027,7 +1038,7 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
     with ai.assessment_vision_budget(60):
         drafts = _pdf_figure_drafts(pdf, ai_enabled=ai_enabled, scan_id=scan_id, file=file)
     for figure, proposal in drafts:
-        if proposal["automatic_write_blocked"]:
+        if proposal["automatic_write_blocked"] or proposal.get("quality_source_review"):
             deferred += 1
             if proposals is not None:
                 proposals.append(proposal)

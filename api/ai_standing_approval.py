@@ -142,10 +142,12 @@ def eligible_item(store, owner, sid, run_id, item, *, approved=False):
         from remediate_pdf import validate_exact_figure_proposals
         artifact = (store.get_file_record(sid, row['file']) or {}).get('corrected_sha256')
         data = blob.download_remediated(owner, sid, row['file'])
+        from quality_source_review import reviewed_pdf_allowed
+        quality_pdf = reviewed_pdf_allowed(store, owner, sid, run_id, row['file'], data, pdf_figures, applied=bool(row.get('applied'))) if data is not None else False
         if (not row['file'].lower().endswith('.pdf') or row['rule_id'] != '1.1.1'
                 or data is None or not artifact or hashlib.sha256(data).hexdigest() != artifact
                 or any(not row.get('applied') and p.get('source_sha256') != artifact for p in pdf_figures)
-                or not validate_exact_figure_proposals(data, pdf_figures)):
+                or not (validate_exact_figure_proposals(data, pdf_figures) or quality_pdf)):
             raise ValueError('PDF figure caption needs current exact pixels and independent canonical validation')
     for p in row['proposals']:
         if (p.get('explain_only') or p.get('companion_file') or (p.get('kind') and p.get('kind') != 'pdf-figure-alt')
@@ -175,6 +177,18 @@ def eligible_item(store, owner, sid, run_id, item, *, approved=False):
                         or (not row.get('applied') and proposal.get('source_sha256') != artifact)
                         or not proposal.get('finding_ids')):
                     raise ValueError('Document-wide automatic approval requires a current document-wide suggestion')
+        from quality_source_review import enabled as source_review_enabled, review_proposals, REQUIRED
+        if source_review_enabled(saved_policy) and not row.get('applied'):
+            import blob
+            source_record = store.get_file_record(sid, row['file']) or {}
+            current_bytes = blob.download_remediated(owner, sid, row['file'])
+            if current_bytes is None:
+                raise ValueError(REQUIRED)
+            source_review = review_proposals(current_bytes, row['file'], row['rule_id'],
+                                             row['proposals'], source_record.get('corrected_sha256'),
+                                             store=store, owner=owner, sid=sid, run_id=run_id)
+            if not source_review['passed']:
+                raise ValueError(REQUIRED)
         for i, (snapshot_id, p) in enumerate(zip(row['proposal_snapshot_ids'], row['proposals'])):
             store._db.execute(cur, 'SELECT * FROM ai_proposal_snapshots WHERE snapshot_id=%s', (snapshot_id,))
             snapshot = store._db.fetchone(cur)

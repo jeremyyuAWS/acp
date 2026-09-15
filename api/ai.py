@@ -1382,7 +1382,11 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     # is both more accurate and cheaper than a paraphrase — see _looks_like_an_image_of_text.
     from chart_caption_review import quality_first_review
     chart_needs_review = quality_first_review("", ocr_text=ocr_txt, context=context)
-    if allow_transcription and grounded and not chart_needs_review and _looks_like_an_image_of_text(ocr_txt):
+    from quality_source_review import enabled as source_review_enabled
+    from llm_waterfall_provider import managed_context
+    quality_run = managed_context()
+    automatic_quality = bool(quality_run and source_review_enabled(quality_run.policy))
+    if allow_transcription and grounded and not automatic_quality and not chart_needs_review and _looks_like_an_image_of_text(ocr_txt):
         transcribed = _transcribed_alt(ocr_txt)
         if transcribed:
             return {"alt": transcribed, "grounded": True,
@@ -1451,6 +1455,25 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     review = quality_first_review(alt, ocr_text=ocr_txt, context=context)
     if review and not quality_failure and not numeric_denial:
         out.update(review)
+    if automatic_quality:
+        from quality_source_review import review_image
+        source_review = review_image(str(alt), image_bytes)
+        out['quality_source_review'] = source_review
+        out['caption_validation'] = source_review['validation']
+        if not source_review['passed'] and not quality_failure and not numeric_denial:
+            from quality_source_review import cloud_review
+            out['quality_source_review']['cloud_review'] = cloud_review(str(alt), image_bytes, model_used)
+        from quality_source_review import supported_review
+        review_assisted = (not source_review['passed'] and source_review['validation']['status'] != 'rejected'
+                           and source_review['validation']['evidence']['method'] != 'exact_flat_raster'
+                           and supported_review(str(alt), image_bytes, source_review.get('cloud_review') or {}))
+        out.update(grounded=False, approval_required=True)
+        if review_assisted:
+            source_review.update(passed=True, status='ai_reviewed', semantic_certification=False)
+        if not source_review['passed'] and not review_assisted:
+            out.update(grounded=False, automatic_write_blocked=True, approval_required=True,
+                       review_status='needs_review', reason_code='quality_source_meaning_unverified',
+                       evidence='Automatic source review could not independently verify this image meaning. The draft remains unapplied; OCR and model agreement are insufficient.')
     call_id = escalation.get("ai_call_id") if escalation else getattr(alt, "ai_call_id", None)
     if call_id:
         out["ai_call_id"] = call_id
