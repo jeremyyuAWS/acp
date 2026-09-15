@@ -100,7 +100,15 @@ def _quality_image_proposals(proposals, context, manifest, data):
         # Never choose arbitrarily between multiple target images.
         if len(locations) == 1 and len(refs) == 1:
             if images is None:
-                images = package_images(data, manifest)
+                try:
+                    images = package_images(data, manifest)
+                except ValueError as exc:
+                    # Native PDF transport permits more images than the optional
+                    # extracted-image preview. Keep review without that preview;
+                    # source/hash/association failures still fail closed.
+                    if str(exc) != "document_too_large":
+                        raise
+                    images = {}
             image = images.get(next(iter(refs)))
             if image:
                 thumb = thumb_b64(image, max_edge=480)

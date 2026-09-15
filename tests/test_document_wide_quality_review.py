@@ -60,3 +60,33 @@ def test_cached_quality_result_does_not_replace_human_decision(monkeypatch):
     workflow.process_file(store, ctx)
     assert not calls and not queued
     assert any('existing review decision' in detail['detail'].lower() for _, detail in logs)
+
+
+def test_native_pdf_image_packaging_limit_keeps_review_without_thumbnail(monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+    from test_document_wide_workflow import fixture
+    import experiments.document_wide_ai.packaging.pdf_images as pdf_images
+    data, digest, locator, manifest = fixture(monkeypatch, '1.1.1')
+    # Native-PDF transport can carry this document; extracted-image packaging
+    # imposes a separate eight-image limit and must not abort pending review.
+    monkeypatch.setattr(pdf_images, 'render_pdf_page', lambda data, page: bytes([page]))
+    evidence = tuple(Evidence(EvidenceKind.IMAGE, replace(locator, page_index=i), 'exact',
+        image_ref='sha256:' + hashlib.sha256(bytes([i])).hexdigest()) for i in range(9))
+    manifest = replace(manifest, evidence=evidence)
+    ctx = SimpleNamespace(policy={'quality_first': True, 'document_wide_input_mode':'native_pdf'})
+    proposal = {'finding_ids':['real-finding'], 'proposed_value':SWAPPED}
+    result = workflow._quality_image_proposals([proposal], ctx, manifest, data)[0]
+    assert result['automatic_write_blocked'] and result['review_status'] == 'needs_review'
+    assert 'thumb' not in result
+
+
+def test_thumbnail_source_change_still_fails_closed(monkeypatch):
+    from types import SimpleNamespace
+    from test_document_wide_workflow import fixture
+    data, digest, locator, manifest = fixture(monkeypatch, '1.1.1')
+    manifest = replace(manifest, evidence=(Evidence(EvidenceKind.IMAGE, locator, 'exact', image_ref='image'),))
+    ctx = SimpleNamespace(policy={'quality_first': True})
+    with pytest.raises(ValueError, match='document_source_changed'):
+        workflow._quality_image_proposals([{'finding_ids':['real-finding'], 'proposed_value':SWAPPED}],
+                                         ctx, manifest, data + b'changed')
