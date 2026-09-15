@@ -30,7 +30,7 @@ def enqueue(store, sid, payloads, *, snapshot_id, request_fingerprint, input_man
                 p.get('file'): dict(artifact_digest=(p.get('artifact_digest') or '').removeprefix('sha256:'), resume_requested=True) for p in payloads}))
         else:
             row = persistence.get(store, authorization, owner, lock=True)
-            if not row or row['scan_id'] != sid or row['intent']['source'] != provider or release.get('source') != provider:
+            if not row or row['scan_id'] != sid or row['intent']['destination']['provider'] != provider or release.get('source') != provider:
                 raise ValueError('Automatic delivery permission does not match this scan.')
         seen = set()
         for payload in payloads:
