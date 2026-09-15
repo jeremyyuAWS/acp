@@ -153,3 +153,38 @@ def update_file(store, authorization_id, owner, file, update, *, schedule=False,
 def by_request(store, owner, scan, request_id):
     identity = store.canonical_request_fingerprint([owner, scan, request_id])
     return get(store, identity, owner)
+
+
+def wake(store, scan):
+    """Promote the existing recovery tick; events carry no new release authority.
+
+    A running tick consumes the wake flag when saving its next recovery job.
+    Repeated events do not enqueue duplicate continuations or change tick identity.
+    """
+    with store.transaction():
+        with store._db.cursor() as cur:
+            store._db.execute(cur, "SELECT id,owner_email FROM automatic_release_authorizations "
+                "WHERE scan_id=%s AND status IN ('active','waiting','blocked')", (scan,))
+            scopes = store._db.fetchall(cur)
+        for scope in scopes:
+            row = get(store, scope['id'], scope['owner_email'], lock=True)
+            if not row or row['status'] not in ACTIVE:
+                continue
+            revision = row['progress'].get('_tick_revision', 0)
+            with store._db.cursor() as cur:
+                store._db.execute(cur, "SELECT id,payload FROM jobs WHERE scan_id=%s "
+                    "AND type='release_continue' AND status='queued'", (scan,))
+                pending = store._db.fetchall(cur)
+                matching = []
+                for job in pending:
+                    payload = json.loads(job['payload']) if isinstance(job['payload'], str) else job['payload']
+                    if (payload.get('mode') == 'automatic' and payload.get('authorization_id') == row['id']
+                            and payload.get('owner') == row['owner_email'] and payload.get('revision') == revision):
+                        matching.append(job['id'])
+                if matching:
+                    for job_id in matching:
+                        store._db.execute(cur, "UPDATE jobs SET run_after=%s,updated_at=%s "
+                            "WHERE id=%s AND status='queued'", (store._now(), store._now(), job_id))
+                else:
+                    progress = {**row['progress'], '_wake_requested': True}
+                    save(store, row, status=row['status'], progress=progress)

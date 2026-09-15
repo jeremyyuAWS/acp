@@ -183,3 +183,6 @@ def test_dedicated_release_readiness_requires_its_own_heartbeat(isolated_store, 
     assert 'release_worker_unavailable' in system.readyz()['degraded']
     _write(isolated_store, 'release', _beat(pool=2, version='new'))
     assert 'release_worker_unavailable' not in system.readyz()['degraded']
+    assert 'release_worker_capacity_insufficient' in system.readyz()['degraded']
+    _write(isolated_store, 'release', _beat(pool=3, version='new'))
+    assert 'release_worker_capacity_insufficient' not in system.readyz()['degraded']

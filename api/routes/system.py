@@ -633,6 +633,8 @@ def readyz():
     degraded: list[str] = []
     if core.dedicated_release_enabled() and not (role_status.get("release") or {}).get("alive"):
         degraded.append("release_worker_unavailable")
+    elif core.dedicated_release_enabled() and int((role_status.get("release") or {}).get("pool_size") or 0) < 3:
+        degraded.append("release_worker_capacity_insufficient")
     if not can_run_scans:
         degraded.append("no_workers" if workers["ever_seen"] else "worker_tier_never_started")
     pdf = pdf_engine_status()

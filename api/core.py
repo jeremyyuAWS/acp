@@ -1950,8 +1950,8 @@ def _worker_job_types(index, pool_size):
     if role == "remediate":
         return remediation_job_types()
     if role == "release":
-        if pool_size < 2:
-            raise ValueError("Release workers require at least two slots: delivery and reports")
+        if pool_size < 3:
+            raise ValueError("Release workers require at least three slots: two delivery and one report")
         # One reserved report slot; reports cannot occupy all delivery capacity.
         return RELEASE_REPORT_JOB_TYPES if index == 0 else tuple(
             kind for kind in RELEASE_LANE_JOB_TYPES if kind not in RELEASE_REPORT_JOB_TYPES)

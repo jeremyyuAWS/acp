@@ -4,12 +4,14 @@ import hashlib
 import json
 
 
-def enqueue(store, sid, payloads, *, snapshot_id, request_fingerprint, input_manifest_id=None, manual_owner=None):
+def enqueue(store, sid, payloads, *, snapshot_id, request_fingerprint, input_manifest_id=None, manual_owner=None, provider="drive"):
     import automatic_release as flow
     import automatic_release_store as persistence
     import publish
     if not payloads or len(payloads) > flow.MAX_FILES:
         raise ValueError('An exact bounded automatic delivery selection is required.')
+    if provider not in {'drive', 'sharepoint'} or (manual_owner is not None and provider != 'drive'):
+        raise ValueError('Unsupported automatic delivery provider.')
     first = payloads[0]
     owner, authorization = first.get('owner'), first.get('automatic_release_id')
     with store.transaction():
@@ -28,8 +30,8 @@ def enqueue(store, sid, payloads, *, snapshot_id, request_fingerprint, input_man
                 p.get('file'): dict(artifact_digest=(p.get('artifact_digest') or '').removeprefix('sha256:'), resume_requested=True) for p in payloads}))
         else:
             row = persistence.get(store, authorization, owner, lock=True)
-            if not row or row['scan_id'] != sid or row['intent']['source'] != 'drive':
-                raise ValueError('Automatic Drive permission does not match this scan.')
+            if not row or row['scan_id'] != sid or row['intent']['source'] != provider or release.get('source') != provider:
+                raise ValueError('Automatic delivery permission does not match this scan.')
         seen = set()
         for payload in payloads:
             file = payload.get('file')
@@ -91,6 +93,8 @@ def enqueue(store, sid, payloads, *, snapshot_id, request_fingerprint, input_man
                     if not prior or prior.get('automatic_release_id') != authorization or prior.get('release_id') != release['id'] or prior.get('artifact_digest') != 'sha256:' + entry['artifact_digest']:
                         raise ValueError('A different delivery intent owns the current release.')
                 else:
+                    if provider != 'drive':
+                        raise ValueError('A SharePoint reservation without its original job cannot be adopted.')
                     record = store.get_file_record(sid, file) if manual else flow.require_authority(store, row, file)
                     folders, name = publish.normalize_relative_path(record.get('source_relative_path') or record.get('parent_folder') or file, file)
                     destination = f"google:me:{release['id']}:{'/'.join([*folders, name])}"

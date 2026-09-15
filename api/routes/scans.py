@@ -3974,6 +3974,13 @@ def publish_files(sid: str, request: Request, body: dict):
                         request_fingerprint=fingerprint, input_manifest_id=input_manifest_id, **options)
                 except (ValueError, ActiveStageExecutionError) as exc:
                     raise HTTPException(409, str(exc)) from exc
+            elif automatic_release_id:
+                try:
+                    execution = core.store.enqueue_automatic_sharepoint_release(
+                        sid, payloads, snapshot_id=snapshot_id,
+                        request_fingerprint=fingerprint, input_manifest_id=input_manifest_id)
+                except (ValueError, ActiveStageExecutionError) as exc:
+                    raise HTTPException(409, str(exc)) from exc
             else:
                 execution = _enqueue_stage_batch(
                     sid, "release", "publish_file", payloads,

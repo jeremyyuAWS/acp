@@ -43,7 +43,7 @@ def definition(source, secrets, name, image, environment):
         raise ValueError('System-identity registry access requires explicit provisioning first')
     if any(s.get('keyVaultUrl') and s.get('identity') == 'system' for s in secrets):
         raise ValueError('System-identity Key Vault references require explicit access provisioning first')
-    for key, value in {'ACP_WORKER_ROLE': 'release', 'ACP_WORKERS': '2', 'ACP_DB_MAX_CONN': '2',
+    for key, value in {'ACP_WORKER_ROLE': 'release', 'ACP_WORKERS': '3', 'ACP_DB_MAX_CONN': '3',
                        'ACP_DEDICATED_RELEASE_WORKERS': '1', 'ACP_SHUTDOWN_DRAIN_SECONDS': '540'}.items():
         env[key] = {'name': key, 'value': value}
     container.update(name=name, image=image, env=list(env.values()), resources={'cpu': 1.0, 'memory': '2Gi'})

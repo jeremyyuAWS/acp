@@ -17,12 +17,13 @@ def test_dedicated_claims_reserve_delivery_and_reports(monkeypatch, isolated_sto
     assert isolated_store.claim_job('remediate', job_types=types)['id'] == jobs['remediate_file']
     assert isolated_store.claim_job('remediate', job_types=types) is None
     monkeypatch.setenv('ACP_WORKER_ROLE', 'release')
-    reports = core._worker_job_types(0, 2); delivery = core._worker_job_types(1, 2)
+    reports = core._worker_job_types(0, 3); delivery = core._worker_job_types(1, 3)
     assert set(reports).isdisjoint(delivery)
     assert set(reports + delivery) == set(core.RELEASE_LANE_JOB_TYPES)
     assert isolated_store.claim_job('release-report', job_types=reports)['id'] == jobs['publish_release_reports']
     assert isolated_store.claim_job('release-delivery', job_types=delivery)['id'] == jobs['publish_file']
-    with pytest.raises(ValueError, match='at least two'):
+    assert core._worker_job_types(2, 3) == delivery
+    with pytest.raises(ValueError, match='at least three'):
         core._worker_job_types(0, 1)
 
 
@@ -66,8 +67,8 @@ def test_private_bounded_release_template_preserves_dependencies():
     assert container['command'] == ['python', 'worker_main.py']
     env = {e['name']: e for e in container['env']}
     assert env['DATABASE_URL']['secretRef'] == 'database'
-    assert env['ACP_WORKERS']['value'] == '2'
-    assert env['ACP_DB_MAX_CONN']['value'] == '2'
+    assert env['ACP_WORKERS']['value'] == '3'
+    assert env['ACP_DB_MAX_CONN']['value'] == '3'
     query = template['scale']['rules'][0]['custom']['metadata']['query']
     assert 'publish_file' in query and 'remediate_file' not in query
     assert 'run_after' in query and 'attempts < max_attempts' in query
@@ -102,10 +103,10 @@ def test_release_heartbeat_is_visible(monkeypatch, isolated_store):
     from datetime import datetime, timezone
     import json
     isolated_store.set_setting('worker_tier_heartbeat:release', json.dumps({
-        'at': datetime.now(timezone.utc).isoformat(), 'pool_size': 2, 'version': 'release-test'}))
+        'at': datetime.now(timezone.utc).isoformat(), 'pool_size': 3, 'version': 'release-test'}))
     status = isolated_store.worker_roles_status()
     assert status['release']['alive'] is True
-    assert status['release']['pool_size'] == 2
+    assert status['release']['pool_size'] == 3
 
 
 def test_all_release_work_is_claimable_after_cutover(monkeypatch):
@@ -116,8 +117,8 @@ def test_all_release_work_is_claimable_after_cutover(monkeypatch):
     claimed = set()
     for role in ('discovery', 'assess', 'remediate', 'release', 'processing'):
         monkeypatch.setenv('ACP_WORKER_ROLE', role)
-        for index in range(2):
-            claimed.update(core._worker_job_types(index, 2))
+        for index in range(3):
+            claimed.update(core._worker_job_types(index, 3))
     assert set(HANDLERS) <= claimed
 
 

@@ -15238,6 +15238,14 @@ class Store:
                        request_fingerprint=request_fingerprint,
                        input_manifest_id=input_manifest_id)
 
+    def enqueue_automatic_sharepoint_release(self, scan_id, payloads, *, snapshot_id,
+                                             request_fingerprint, input_manifest_id=None):
+        """Append exact SharePoint work under the same immutable automatic permission."""
+        from automatic_drive_queue import enqueue
+        return enqueue(self, scan_id, payloads, snapshot_id=snapshot_id,
+                       request_fingerprint=request_fingerprint,
+                       input_manifest_id=input_manifest_id, provider="sharepoint")
+
     def enqueue_stage_batch(self, scan_id: str, stage: str, job_type: str,
                             payloads: list[dict], *, snapshot_id: str,
                             request_fingerprint: str,
@@ -15925,6 +15933,10 @@ class Store:
         else:
             self.publish_worker_stage_event(job_id, worker_id, attempt, "attempt.completed")
             self._record_stage_completed_if_ready(job)
+            if job and job.get("scan_id") and job.get("type") in {
+                    "remediate_file", "rescore_file", "apply_approved_values", "publish_file"}:
+                import automatic_release_store
+                automatic_release_store.wake(self, job["scan_id"])
         return won
 
     def request_job_cancellation(self, job_id: str) -> bool:

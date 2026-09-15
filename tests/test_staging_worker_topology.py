@@ -49,7 +49,7 @@ def test_redeploy_rejects_duplicate_role_targets_before_azure():
         text=True, capture_output=True, timeout=5,
     )
     assert result.returncode != 0
-    assert "four distinct names" in result.stderr
+    assert "app and all worker targets must have distinct names" in result.stderr
 
 
 def test_redeploy_checks_every_live_environment_stamp_before_build():

@@ -45,7 +45,7 @@ def test_redeploy_stamps_gateway_settings_only_on_both_api_rollout_paths():
     script = (ROOT / "deploy/public/redeploy.sh").read_text()
     assert 'CAPACITY_APPLY_ENABLED=0' in script
     assert '[ "$CAPACITY_APPLY_REQUESTED" = 1 ]' in script
-    assert '"WORKER_APP_NAMES=$DISCOVERY_WORKER,$ASSESS_WORKER,$REMEDIATE_WORKER"' in script
+    assert '"WORKER_APP_NAMES=$DISCOVERY_WORKER,$ASSESS_WORKER,$REMEDIATE_WORKER${RELEASE_WORKER:+,$RELEASE_WORKER}"' in script
     assert '"CAPACITY_APPLY_APP_NAMES=$APP,$DISCOVERY_WORKER,$ASSESS_WORKER,$REMEDIATE_WORKER,$GPU_APP"' in script
     assert script.count('--set-env-vars "${API_ENV_VARS[@]}"') == 2
     assert "ACP_PG_RESERVED_CONNECTIONS must be smaller" in script
