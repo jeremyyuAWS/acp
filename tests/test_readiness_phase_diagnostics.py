@@ -11,6 +11,7 @@ def diagnostics(monkeypatch):
     monkeypatch.setattr(diag, '_start_reporter', lambda: None)
     monkeypatch.setattr(diag, 'ACTIVE', {})
     monkeypatch.setattr(diag, 'RATE_COUNT', 0)
+    monkeypatch.setattr(diag, 'DIAGNOSTIC_FAILURES', 0)
     monkeypatch.setattr(diag, 'RATE_WINDOW', 0.0)
     clock = [100.0]
     monkeypatch.setattr(diag.time, 'monotonic', lambda: clock[0])
@@ -31,7 +32,7 @@ def test_pending_identifies_blocked_phase_without_payloads(diagnostics, phase):
             assert events[-1]['elapsed_ms'] == 3000
     assert not diag.ACTIVE
     assert diag.CURRENT.get() is None
-    assert all(set(e) == {'event', 'kind', 'request_id', 'phase', 'state', 'elapsed_ms', 'request_elapsed_ms'} for e in events)
+    assert all(set(e) == {'event', 'kind', 'request_id', 'phase', 'state', 'elapsed_ms', 'request_elapsed_ms', 'diagnostic_failures'} for e in events)
 
 
 def test_disabled_passthrough_and_unknown_labels(diagnostics, monkeypatch):
@@ -151,3 +152,17 @@ def test_real_adapter_checkout_marker(diagnostics, monkeypatch):
         connection = adapter._getconn(read_only=True)
         adapter._putconn(connection)
     assert not pool.used
+
+
+def test_logging_failure_count_is_visible_on_recovery(diagnostics, monkeypatch):
+    _, events = diagnostics
+    original = diag.LOGGER.info
+    def fail(value):
+        raise RuntimeError('secret logger error')
+    with diag.request('full'):
+        monkeypatch.setattr(diag.LOGGER, 'info', fail)
+        assert diag.run('db_ping', lambda: 42) == 42
+        monkeypatch.setattr(diag.LOGGER, 'info', original)
+        diag.run('db_ping', lambda: 42)
+    assert events[-1]['diagnostic_failures'] == 1
+    assert 'secret' not in json.dumps(events)

@@ -26,10 +26,17 @@ ACTIVE = {}
 REPORTER_STARTED = False
 RATE_WINDOW = 0.0
 RATE_COUNT = 0
+DIAGNOSTIC_FAILURES = 0
 
 
 def enabled():
     return os.environ.get('ACP_READINESS_PHASE_DIAGNOSTICS') == '1'
+
+
+def _record_failure():
+    global DIAGNOSTIC_FAILURES
+    with LOCK:
+        DIAGNOSTIC_FAILURES = min(9999, DIAGNOSTIC_FAILURES + 1)
 
 
 def _emit(record, phase, event, elapsed, now):
@@ -45,11 +52,12 @@ def _emit(record, phase, event, elapsed, now):
         # No caller-provided text, error objects, route parameters or dependency URLs.
         LOGGER.info(json.dumps({'event': 'readiness.phase', 'kind': record['kind'],
             'request_id': record['id'], 'phase': phase, 'state': event,
+            'diagnostic_failures': DIAGNOSTIC_FAILURES,
             'elapsed_ms': round(max(0, elapsed) * 1000, 3),
             'request_elapsed_ms': round(max(0, now - record['started']) * 1000, 3)}, sort_keys=True))
     except Exception:
         # Optional observability must never change readiness or exception behavior.
-        pass
+        _record_failure()
 
 
 def _poll(now=None):
@@ -82,10 +90,11 @@ def _start_reporter():
             try:
                 _poll()
             except Exception:
-                pass
+                _record_failure()
     try:
         threading.Thread(target=report, daemon=True, name='readiness-phase-reporter').start()
     except Exception:
+        _record_failure()
         with LOCK:
             REPORTER_STARTED = False
 
